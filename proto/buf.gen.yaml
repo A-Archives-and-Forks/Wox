@@ -1,0 +1,26 @@
+version: v1
+managed:
+  enabled: true
+plugins:
+  # Go
+  - plugin: go
+    out: ../gen/go
+    opt: paths=source_relative
+  - plugin: go-grpc
+    out: ../gen/go
+    opt: paths=source_relative
+
+  # Python
+  - plugin: python
+    out: ../gen/python
+  - plugin: grpc-python
+    out: ../gen/python
+  # Node.js
+  - plugin: js
+    out: ../gen/js
+    opt: import_style=commonjs,binary
+  - plugin: grpc-js
+    out: ../gen/js
+    opt: grpc_js
+  - plugin: ts
+    out: ../gen/js

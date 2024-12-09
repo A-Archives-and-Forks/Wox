@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package wox.plugin;
+
+option go_package = "wox/plugin";
+
+message Empty {}
+
+message WoxImage {
+  enum ImageType {
+    ABSOLUTE = 0;
+    RELATIVE = 1;
+    BASE64 = 2;
+    SVG = 3;
+    URL = 4;
+    EMOJI = 5;
+    LOTTIE = 6;
+  }
+  ImageType image_type = 1;
+  string image_data = 2;
+}
+
+message WoxPreview {
+  enum PreviewType {
+    MARKDOWN = 0;
+    TEXT = 1;
+    IMAGE = 2;
+    URL = 3;
+    FILE = 4;
+  }
+  PreviewType preview_type = 1;
+  string preview_data = 2;
+}
+
+message Selection {
+  enum SelectionType {
+    TEXT = 0;
+    FILE = 1;
+  }
+  SelectionType type = 1;
+  string text = 2;
+  repeated string file_paths = 3;
+}
+
+message QueryEnv {
+  string active_window_title = 1;
+  int32 active_window_pid = 2;
+  string active_browser_url = 3;
+}
+
+message ResultTail {
+  enum TailType {
+    TEXT = 0;
+    IMAGE = 1;
+  }
+  TailType type = 1;
+  string text = 2;
+  WoxImage image = 3;
+}
+
+message ResultAction {
+  string id = 1;
+  string name = 2;
+  WoxImage icon = 3;
+  bool is_default = 4;
+  bool prevent_hide_after_action = 5;
+  string hotkey = 6;
+}
+
+message MetadataCommand {
+  string command = 1;
+  string description = 2;
+}
+
+message MetadataSetting {
+  string name = 1;
+  string type = 2;
+  string default_value = 3;
+  string description = 4;
+  bool is_required = 5;
+}
+
+message MapString {
+  map<string, string> data = 1;
+} 

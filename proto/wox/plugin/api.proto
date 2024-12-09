@@ -1,0 +1,131 @@
+syntax = "proto3";
+
+package wox.plugin;
+
+option go_package = "wox/plugin";
+
+import "common.proto";
+
+// API interface for plugin to interact with Wox
+service PublicAPI {
+  // Change the query in search box
+  rpc ChangeQuery(ChangeQueryRequest) returns (Empty) {}
+  // Hide Wox window
+  rpc HideApp(Empty) returns (Empty) {}
+  // Show Wox window
+  rpc ShowApp(Empty) returns (Empty) {}
+  // Show notification
+  rpc Notify(NotifyRequest) returns (Empty) {}
+  // Log message
+  rpc Log(LogRequest) returns (Empty) {}
+  // Get translation
+  rpc GetTranslation(TranslationRequest) returns (TranslationResponse) {}
+  // Get setting value
+  rpc GetSetting(SettingRequest) returns (SettingResponse) {}
+  // Save setting value
+  rpc SaveSetting(SaveSettingRequest) returns (Empty) {}
+  // Register query commands
+  rpc RegisterQueryCommands(RegisterQueryCommandsRequest) returns (Empty) {}
+  // AI chat stream
+  rpc AIChatStream(AIChatRequest) returns (stream AIChatResponse) {}
+  // Register setting changed callback
+  rpc OnSettingChanged(Empty) returns (stream SettingChangedEvent) {}
+  // Register dynamic setting callback
+  rpc OnGetDynamicSetting(Empty) returns (stream DynamicSettingEvent) {}
+  // Register deep link callback
+  rpc OnDeepLink(Empty) returns (stream DeepLinkEvent) {}
+  // Register unload callback
+  rpc OnUnload(Empty) returns (stream UnloadEvent) {}
+}
+
+message ChangeQueryRequest {
+  enum QueryType {
+    INPUT = 0;
+    SELECTION = 1;
+  }
+  QueryType query_type = 1;
+  string query_text = 2;
+  Selection query_selection = 3;
+}
+
+message NotifyRequest {
+  string message = 1;
+}
+
+message LogRequest {
+  enum LogLevel {
+    INFO = 0;
+    ERROR = 1;
+    DEBUG = 2;
+    WARNING = 3;
+  }
+  LogLevel level = 1;
+  string message = 2;
+}
+
+message TranslationRequest {
+  string key = 1;
+}
+
+message TranslationResponse {
+  string text = 1;
+}
+
+message SettingRequest {
+  string key = 1;
+}
+
+message SettingResponse {
+  string value = 1;
+}
+
+message SaveSettingRequest {
+  string key = 1;
+  string value = 2;
+  bool is_platform_specific = 3;
+}
+
+message RegisterQueryCommandsRequest {
+  repeated MetadataCommand commands = 1;
+}
+
+message AIChatRequest {
+  string model = 1;
+  repeated Conversation conversations = 2;
+}
+
+message Conversation {
+  enum Role {
+    USER = 0;
+    SYSTEM = 1;
+  }
+  Role role = 1;
+  string content = 2;
+  repeated bytes images = 3;
+}
+
+message AIChatResponse {
+  enum Type {
+    STREAMING = 0;
+    FINISHED = 1;
+    ERROR = 2;
+  }
+  Type type = 1;
+  string content = 2;
+}
+
+message SettingChangedEvent {
+  string key = 1;
+  string value = 2;
+}
+
+message DynamicSettingEvent {
+  string key = 1;
+  MetadataSetting setting = 2;
+}
+
+message DeepLinkEvent {
+  MapString arguments = 1;
+}
+
+message UnloadEvent {} 
