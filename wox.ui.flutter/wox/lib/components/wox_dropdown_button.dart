@@ -1,5 +1,6 @@
 import 'package:chinese_font_library/chinese_font_library.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:wox/utils/colors.dart';
 
 /// Data model for dropdown items with optional tooltip
@@ -8,11 +9,7 @@ class WoxDropdownItem<T> {
   final String label;
   final String? tooltip;
 
-  const WoxDropdownItem({
-    required this.value,
-    required this.label,
-    this.tooltip,
-  });
+  const WoxDropdownItem({required this.value, required this.label, this.tooltip});
 }
 
 /// Wox dropdown button with theme-aware styling
@@ -32,6 +29,8 @@ class WoxDropdownButton<T> extends StatefulWidget {
   final double? width;
   final Widget? underline;
   final bool enableFilter;
+  final FocusNode? focusNode;
+  final bool autofocus;
 
   const WoxDropdownButton({
     super.key,
@@ -50,6 +49,8 @@ class WoxDropdownButton<T> extends StatefulWidget {
     this.width,
     this.underline,
     this.enableFilter = false,
+    this.focusNode,
+    this.autofocus = false,
   });
 
   @override
@@ -91,9 +92,10 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
       if (query.isEmpty) {
         _filteredItems = widget.items;
       } else {
-        _filteredItems = widget.items.where((item) {
-          return item.label.toLowerCase().contains(query.toLowerCase());
-        }).toList();
+        _filteredItems =
+            widget.items.where((item) {
+              return item.label.toLowerCase().contains(query.toLowerCase());
+            }).toList();
       }
     });
     // Rebuild overlay with filtered items
@@ -118,95 +120,105 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
     final size = renderBox.size;
 
     _overlayEntry = OverlayEntry(
-      builder: (context) => GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: _removeOverlay,
-        child: Stack(
-          children: [
-            Positioned(
-              width: size.width,
-              child: CompositedTransformFollower(
-                link: _layerLink,
-                showWhenUnlinked: false,
-                offset: Offset(0, size.height),
-                child: Material(
-                  elevation: 8,
-                  borderRadius: BorderRadius.circular(4),
-                  color: dropdownBg,
-                  child: Container(
-                    constraints: BoxConstraints(
-                      maxHeight: widget.menuMaxHeight ?? 300,
-                    ),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: borderColor),
+      builder:
+          (context) => GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: _removeOverlay,
+            child: Stack(
+              children: [
+                Positioned(
+                  width: size.width,
+                  child: CompositedTransformFollower(
+                    link: _layerLink,
+                    showWhenUnlinked: false,
+                    offset: Offset(0, size.height),
+                    child: Material(
+                      elevation: 8,
                       borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Filter text field
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            border: Border(
-                              bottom: BorderSide(color: borderColor),
-                            ),
-                          ),
-                          child: TextField(
-                            controller: _filterController,
-                            focusNode: _filterFocusNode,
-                            autofocus: true,
-                            style: TextStyle(color: activeTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
-                            decoration: InputDecoration(
-                              hintText: 'Filter...',
-                              hintStyle: TextStyle(color: activeTextColor.withValues(alpha: 0.5), fontSize: widget.fontSize).useSystemChineseFont(),
-                              border: InputBorder.none,
-                              isDense: true,
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                              prefixIcon: Icon(Icons.search, size: 16, color: activeTextColor.withValues(alpha: 0.7)),
-                            ),
-                            onChanged: _filterItems,
-                          ),
-                        ),
-                        // Filtered items list
-                        Flexible(
-                          child: ListView.builder(
-                            shrinkWrap: true,
-                            padding: EdgeInsets.zero,
-                            itemCount: _filteredItems.length,
-                            itemBuilder: (context, index) {
-                              final item = _filteredItems[index];
-                              final isSelected = item.value == widget.value;
-                              return InkWell(
-                                onTap: () {
-                                  widget.onChanged?.call(item.value);
-                                  _removeOverlay();
-                                },
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                  color: isSelected ? activeTextColor.withValues(alpha: 0.1) : null,
-                                  child: DefaultTextStyle(
-                                    style: TextStyle(color: activeTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
-                                    child: _buildDropdownMenuItem(item, activeTextColor),
-                                  ),
+                      color: dropdownBg,
+                      child: Container(
+                        constraints: BoxConstraints(maxHeight: widget.menuMaxHeight ?? 300),
+                        decoration: BoxDecoration(border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(4)),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Filter text field
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: borderColor))),
+                              child: TextField(
+                                controller: _filterController,
+                                focusNode: _filterFocusNode,
+                                autofocus: true,
+                                style: TextStyle(color: activeTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
+                                decoration: InputDecoration(
+                                  hintText: 'Filter...',
+                                  hintStyle: TextStyle(color: activeTextColor.withValues(alpha: 0.5), fontSize: widget.fontSize).useSystemChineseFont(),
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                                  prefixIcon: Icon(Icons.search, size: 16, color: activeTextColor.withValues(alpha: 0.7)),
                                 ),
-                              );
-                            },
-                          ),
+                                onChanged: _filterItems,
+                              ),
+                            ),
+                            // Filtered items list
+                            Flexible(
+                              child: ListView.builder(
+                                shrinkWrap: true,
+                                padding: EdgeInsets.zero,
+                                itemCount: _filteredItems.length,
+                                itemBuilder: (context, index) {
+                                  final item = _filteredItems[index];
+                                  final isSelected = item.value == widget.value;
+                                  return InkWell(
+                                    onTap: () {
+                                      widget.onChanged?.call(item.value);
+                                      _removeOverlay();
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                      color: isSelected ? activeTextColor.withValues(alpha: 0.1) : null,
+                                      child: DefaultTextStyle(
+                                        style: TextStyle(color: activeTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
+                                        child: _buildDropdownMenuItem(item, activeTextColor),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
     );
 
     Overlay.of(context).insert(_overlayEntry!);
     _filterFocusNode.requestFocus();
+  }
+
+  KeyEventResult _handleFilterTriggerKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    if (widget.onChanged == null) {
+      return KeyEventResult.ignored;
+    }
+
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.space || key == LogicalKeyboardKey.arrowDown) {
+      _showFilterableMenu();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
   }
 
   // Build dropdown menu item with optional tooltip icon
@@ -215,23 +227,12 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
       return Text(item.label);
     }
 
-    return Row(
-      children: [
-        Expanded(child: Text(item.label)),
-        Tooltip(
-          message: item.tooltip!,
-          child: Icon(Icons.info_outline, size: 16, color: activeTextColor),
-        ),
-      ],
-    );
+    return Row(children: [Expanded(child: Text(item.label)), Tooltip(message: item.tooltip!, child: Icon(Icons.info_outline, size: 16, color: activeTextColor))]);
   }
 
   // Build selected item (without tooltip icon)
   Widget _buildSelectedItem(WoxDropdownItem<T> item, Color textColor) {
-    return Align(
-      alignment: widget.alignment,
-      child: Text(item.label, style: TextStyle(color: textColor, fontSize: widget.fontSize).useSystemChineseFont()),
-    );
+    return Align(alignment: widget.alignment, child: Text(item.label, style: TextStyle(color: textColor, fontSize: widget.fontSize).useSystemChineseFont()));
   }
 
   @override
@@ -243,12 +244,10 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
 
     if (!widget.enableFilter) {
       // Convert WoxDropdownItem to DropdownMenuItem
-      final dropdownMenuItems = widget.items.map((item) {
-        return DropdownMenuItem<T>(
-          value: item.value,
-          child: _buildDropdownMenuItem(item, activeTextColor),
-        );
-      }).toList();
+      final dropdownMenuItems =
+          widget.items.map((item) {
+            return DropdownMenuItem<T>(value: item.value, child: _buildDropdownMenuItem(item, activeTextColor));
+          }).toList();
 
       // Original non-filterable dropdown
       final dropdown = DropdownButtonHideUnderline(
@@ -256,6 +255,8 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
           items: dropdownMenuItems,
           value: widget.value,
           onChanged: widget.onChanged,
+          focusNode: widget.focusNode,
+          autofocus: widget.autofocus,
           isExpanded: widget.isExpanded,
           style: TextStyle(color: activeTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
           selectedItemBuilder: (BuildContext context) {
@@ -281,51 +282,40 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
       return SizedBox(
         width: widget.width ?? 300.0,
         child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: borderColor),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8.0, 4.0, 8.0, 4.0),
-            child: dropdown,
-          ),
+          decoration: BoxDecoration(border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(4)),
+          child: Padding(padding: const EdgeInsets.fromLTRB(8.0, 4.0, 8.0, 4.0), child: dropdown),
         ),
       );
     }
 
     // Filterable dropdown with custom overlay
-    final selectedItem = widget.items.firstWhere(
-      (item) => item.value == widget.value,
-      orElse: () => widget.items.first,
-    );
+    final selectedItem = widget.items.firstWhere((item) => item.value == widget.value, orElse: () => widget.items.first);
 
     return CompositedTransformTarget(
       link: _layerLink,
       child: SizedBox(
         width: widget.width ?? 300.0,
         child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: borderColor),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: InkWell(
-            onTap: widget.onChanged != null ? _showFilterableMenu : null,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8.0, 4.0, 8.0, 4.0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: DefaultTextStyle(
-                      style: TextStyle(color: textColor, fontSize: widget.fontSize).useSystemChineseFont(),
-                      child: widget.value != null ? Text(selectedItem.label) : (widget.hint ?? const SizedBox.shrink()),
+          decoration: BoxDecoration(border: Border.all(color: borderColor), borderRadius: BorderRadius.circular(4)),
+          child: Focus(
+            focusNode: widget.focusNode,
+            autofocus: widget.autofocus,
+            onKeyEvent: _handleFilterTriggerKey,
+            child: InkWell(
+              onTap: widget.onChanged != null ? _showFilterableMenu : null,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8.0, 4.0, 8.0, 4.0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: DefaultTextStyle(
+                        style: TextStyle(color: textColor, fontSize: widget.fontSize).useSystemChineseFont(),
+                        child: widget.value != null ? Text(selectedItem.label) : (widget.hint ?? const SizedBox.shrink()),
+                      ),
                     ),
-                  ),
-                  Icon(
-                    Icons.arrow_drop_down,
-                    color: widget.onChanged != null ? textColor : textColor.withValues(alpha: 0.5),
-                    size: widget.iconSize ?? 24.0,
-                  ),
-                ],
+                    Icon(Icons.arrow_drop_down, color: widget.onChanged != null ? textColor : textColor.withValues(alpha: 0.5), size: widget.iconSize ?? 24.0),
+                  ],
+                ),
               ),
             ),
           ),

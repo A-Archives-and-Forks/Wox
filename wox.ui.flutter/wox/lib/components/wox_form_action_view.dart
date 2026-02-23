@@ -29,6 +29,7 @@ class WoxFormActionView extends StatefulWidget {
 
 class _WoxFormActionViewState extends State<WoxFormActionView> {
   final FocusNode _firstFocusNode = FocusNode();
+  final FocusNode _formFocusNode = FocusNode();
   int _firstFocusableIndex = -1;
   late Map<String, String> _values;
   final Map<String, TextEditingController> _textControllers = {};
@@ -57,6 +58,7 @@ class _WoxFormActionViewState extends State<WoxFormActionView> {
         if (_firstFocusableIndex == -1) {
           _firstFocusableIndex = i;
         }
+
         final textbox = item.value as PluginSettingValueTextBox;
         _textControllers[textbox.key] = TextEditingController(text: _values[textbox.key] ?? textbox.defaultValue);
         final labelWidth = _measureLabelWidth(widget.translate(textbox.label));
@@ -64,6 +66,9 @@ class _WoxFormActionViewState extends State<WoxFormActionView> {
           _maxLabelWidth = labelWidth;
         }
       } else if (item.type == "select") {
+        if (_firstFocusableIndex == -1) {
+          _firstFocusableIndex = i;
+        }
         final select = item.value as PluginSettingValueSelect;
         final labelWidth = _measureLabelWidth(widget.translate(select.label));
         if (labelWidth > _maxLabelWidth) {
@@ -80,13 +85,18 @@ class _WoxFormActionViewState extends State<WoxFormActionView> {
 
     // Request focus on the first focusable control after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _firstFocusNode.requestFocus();
+      if (_firstFocusableIndex != -1) {
+        _firstFocusNode.requestFocus();
+      } else {
+        _formFocusNode.requestFocus();
+      }
     });
   }
 
   @override
   void dispose() {
     _firstFocusNode.dispose();
+    _formFocusNode.dispose();
     for (var controller in _textControllers.values) {
       controller.dispose();
     }
@@ -114,6 +124,7 @@ class _WoxFormActionViewState extends State<WoxFormActionView> {
     return CallbackShortcuts(
       bindings: {const SingleActivator(LogicalKeyboardKey.enter, control: true): _handleSave, const SingleActivator(LogicalKeyboardKey.escape): widget.onCancel},
       child: Focus(
+        focusNode: _formFocusNode,
         autofocus: true,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -155,7 +166,7 @@ class _WoxFormActionViewState extends State<WoxFormActionView> {
         return _buildTextbox(textbox, isFirstFocusable);
       case "select":
         final select = item.value as PluginSettingValueSelect;
-        return _buildSelect(select);
+        return _buildSelect(select, isFirstFocusable);
       case "head":
         final head = item.value as PluginSettingValueHead;
         return _buildHead(head);
@@ -238,7 +249,7 @@ class _WoxFormActionViewState extends State<WoxFormActionView> {
     );
   }
 
-  Widget _buildSelect(PluginSettingValueSelect item) {
+  Widget _buildSelect(PluginSettingValueSelect item, bool isFirstFocusable) {
     final currentValue = _values[item.key] ?? item.defaultValue;
 
     return Padding(
@@ -256,6 +267,7 @@ class _WoxFormActionViewState extends State<WoxFormActionView> {
                   value: currentValue,
                   isExpanded: true,
                   fontSize: 13,
+                  focusNode: isFirstFocusable ? _firstFocusNode : null,
                   onChanged: (value) {
                     if (value != null) {
                       _updateValue(item.key, value);

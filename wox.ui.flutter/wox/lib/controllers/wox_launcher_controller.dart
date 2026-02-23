@@ -206,8 +206,12 @@ class WoxLauncherController extends GetxController {
     queryBoxFocusNode.addListener(() {
       if (queryBoxFocusNode.hasFocus) {
         var traceId = const UuidV4().generate();
+        if (isShowFormActionPanel.value) {
+          Logger.instance.debug(traceId, "query box gained focus while form action panel is visible, ignore auto hide");
+          return;
+        }
         hideActionPanel(traceId);
-        hideFormActionPanel(traceId);
+        hideFormActionPanel(traceId, reason: "query box gained focus");
 
         // Call API when query box gains focus
         WoxApi.instance.onQueryBoxFocus(traceId);
@@ -663,12 +667,12 @@ class WoxLauncherController extends GetxController {
       currentQuery.value = PlainQuery.emptyInput();
       queryBoxTextFieldController.clear();
       hideActionPanel(traceId);
-      hideFormActionPanel(traceId);
+      hideFormActionPanel(traceId, reason: "hide app clear query");
       await clearQueryResults(traceId);
     }
 
     hideActionPanel(traceId);
-    hideFormActionPanel(traceId);
+    hideFormActionPanel(traceId, reason: "hide app");
 
     // Clean up quick select state
     if (isQuickSelectMode.value) {
@@ -728,7 +732,8 @@ class WoxLauncherController extends GetxController {
     resizeHeight();
   }
 
-  void showFormActionPanel(WoxResultAction action, String resultId) {
+  void showFormActionPanel(String traceId, WoxResultAction action, String resultId) {
+    Logger.instance.debug(traceId, "show form action panel: action=${action.name}, resultId=$resultId, fieldCount=${action.form.length}");
     activeFormAction.value = action;
     activeFormResultId.value = resultId;
     formActionValues.clear();
@@ -744,7 +749,11 @@ class WoxLauncherController extends GetxController {
     resizeHeight();
   }
 
-  void hideFormActionPanel(String traceId) {
+  void hideFormActionPanel(String traceId, {String reason = "unspecified"}) {
+    Logger.instance.debug(
+      traceId,
+      "hide form action panel: reason=$reason, isShow=${isShowFormActionPanel.value}, activeAction=${activeFormAction.value?.name ?? "null"}, resultId=${activeFormResultId.value}",
+    );
     activeFormAction.value = null;
     activeFormResultId.value = "";
     formActionValues.clear();
@@ -844,12 +853,12 @@ class WoxLauncherController extends GetxController {
 
       actionListViewController.clearFilter(traceId);
       hideActionPanel(traceId);
-      hideFormActionPanel(traceId);
+      hideFormActionPanel(traceId, reason: "local action executed");
       return;
     }
 
     if (action.type == WoxResultActionTypeEnum.WOX_RESULT_ACTION_TYPE_FORM.code) {
-      showFormActionPanel(action, result.id);
+      showFormActionPanel(traceId, action, result.id);
       return;
     } else {
       await WoxWebsocketMsgUtil.instance.sendMessage(
@@ -871,7 +880,7 @@ class WoxLauncherController extends GetxController {
     }
 
     hideActionPanel(traceId);
-    hideFormActionPanel(traceId);
+    hideFormActionPanel(traceId, reason: "non-form action executed");
   }
 
   Future<void> submitFormAction(String traceId, Map<String, String> values) async {
@@ -879,7 +888,7 @@ class WoxLauncherController extends GetxController {
     final resultId = activeFormResultId.value;
     final queryId = currentQuery.value.queryId;
     if (action == null || resultId.isEmpty) {
-      hideFormActionPanel(traceId);
+      hideFormActionPanel(traceId, reason: "submit form without active action");
       return;
     }
 
@@ -893,7 +902,7 @@ class WoxLauncherController extends GetxController {
       ),
     );
 
-    hideFormActionPanel(traceId);
+    hideFormActionPanel(traceId, reason: "submit form action");
   }
 
   Future<void> autoCompleteQuery(String traceId) async {

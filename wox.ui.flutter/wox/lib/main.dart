@@ -176,24 +176,33 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
   @override
   void onWindowBlur() async {
     final traceId = UuidV4().generate();
+    Logger.instance.debug(
+      traceId,
+      "onWindowBlur triggered: forceHideOnBlur=${launcherController.forceHideOnBlur}, isShowFormActionPanel=${launcherController.isShowFormActionPanel.value}, isShowActionPanel=${launcherController.isShowActionPanel.value}, isInSettingView=${launcherController.isInSettingView.value}",
+    );
     // if windows is already hidden, return
     // in Windows, when the window is hidden, the onWindowBlur event will be triggered which will cause
     // resize function to be called, and then the focus will be got again.
     // User will not be able to input anything because the focus is lost.
-    if (!(await windowManager.isVisible())) {
+    final isVisible = await windowManager.isVisible();
+    if (!isVisible) {
+      Logger.instance.debug(traceId, "onWindowBlur ignored: window is not visible");
       return;
     }
 
     // if in setting view, return
     if (launcherController.isInSettingView.value) {
+      Logger.instance.debug(traceId, "onWindowBlur ignored: setting view is active");
       return;
     }
 
     if (launcherController.forceHideOnBlur) {
+      Logger.instance.debug(traceId, "onWindowBlur triggers hideApp because forceHideOnBlur is true");
       launcherController.hideApp(traceId);
       return;
     }
 
+    Logger.instance.debug(traceId, "onWindowBlur notify backend focus lost");
     WoxApi.instance.onFocusLost(traceId);
   }
 

@@ -104,7 +104,7 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
               initialValues: controller.formActionValues,
               translate: controller.tr,
               onSave: (values) => controller.submitFormAction(const UuidV4().generate(), values),
-              onCancel: () => controller.hideFormActionPanel(const UuidV4().generate()),
+              onCancel: () => controller.hideFormActionPanel(const UuidV4().generate(), reason: "form cancel button"),
             ),
           ),
         ),
@@ -127,7 +127,7 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
             maxHeight: WoxThemeUtil.instance.getMaxResultListViewHeight(),
             onItemTapped: () {
               controller.hideActionPanel(const UuidV4().generate());
-              controller.hideFormActionPanel(const UuidV4().generate());
+              controller.hideFormActionPanel(const UuidV4().generate(), reason: "grid result item tapped");
             },
             onRowHeightChanged: () => controller.resizeHeight(),
           );
@@ -140,7 +140,7 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
           maxHeight: WoxThemeUtil.instance.getMaxResultListViewHeight(),
           onItemTapped: () {
             controller.hideActionPanel(const UuidV4().generate());
-            controller.hideFormActionPanel(const UuidV4().generate());
+            controller.hideFormActionPanel(const UuidV4().generate(), reason: "list result item tapped");
           },
         );
       }),
