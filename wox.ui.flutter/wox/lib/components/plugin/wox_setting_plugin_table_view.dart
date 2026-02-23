@@ -20,6 +20,10 @@ import 'wox_setting_plugin_table_update_view.dart';
 
 class WoxSettingPluginTable extends WoxSettingPluginItem {
   static const int tableMaxHeightMin = 120;
+  static const double _headerRowHeight = 36;
+  static const double _dataRowHeight = 36;
+  static const double _tableHorizontalMargin = 5;
+  static const ScrollPhysics _tableScrollPhysics = ClampingScrollPhysics();
   final PluginSettingValueTable item;
   static const String rowUniqueIdKey = "wox_table_row_id";
   final double tableWidth;
@@ -28,8 +32,10 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   final columnTooltipWidth = 20.0;
   final bool readonly;
   final Future<String?> Function(Map<String, dynamic> rowValues)? onUpdateValidate;
-  final ScrollController horizontalScrollController = ScrollController();
-  final ScrollController verticalScrollController = ScrollController();
+  final ScrollController horizontalHeaderScrollController = ScrollController();
+  final ScrollController horizontalBodyScrollController = ScrollController();
+  final ScrollController verticalBodyScrollController = ScrollController();
+  final ScrollController verticalPinnedBodyScrollController = ScrollController();
 
   WoxSettingPluginTable({
     super.key,
@@ -40,7 +46,88 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     this.tableWidth = 740.0,
     this.readonly = false,
     this.onUpdateValidate,
-  });
+  }) {
+    _setupScrollSync();
+  }
+
+  void _setupScrollSync() {
+    horizontalBodyScrollController.addListener(() {
+      _syncScrollOffset(horizontalBodyScrollController, horizontalHeaderScrollController);
+    });
+
+    verticalBodyScrollController.addListener(() {
+      _syncScrollOffset(verticalBodyScrollController, verticalPinnedBodyScrollController);
+    });
+
+    verticalPinnedBodyScrollController.addListener(() {
+      _syncScrollOffset(verticalPinnedBodyScrollController, verticalBodyScrollController);
+    });
+  }
+
+  void _syncScrollOffset(ScrollController source, ScrollController target) {
+    if (!source.hasClients || !target.hasClients) {
+      return;
+    }
+
+    final targetPosition = target.position;
+    final clampedOffset = source.offset.clamp(targetPosition.minScrollExtent, targetPosition.maxScrollExtent);
+    if ((target.offset - clampedOffset).abs() < 0.5) {
+      return;
+    }
+
+    target.jumpTo(clampedOffset);
+  }
+
+  PluginSettingValueTableColumn buildOperationColumnDefinition() {
+    return PluginSettingValueTableColumn.fromJson(<String, dynamic>{
+      "Key": "Operation",
+      "Label": tr("ui_operation"),
+      "Tooltip": "",
+      "Width": operationWidth.toInt(),
+      "Type": PluginSettingValueType.pluginSettingValueTableColumnTypeText,
+      "TextMaxLines": 1,
+    });
+  }
+
+  List<PluginSettingValueTableColumn> buildVisibleColumns() {
+    return item.columns.where((column) => !column.hideInTable).toList();
+  }
+
+  double resolveColumnWidth({required PluginSettingValueTableColumn column, required bool isOperation}) {
+    var width = column.width;
+    if (isOperation) {
+      width = operationWidth.toInt();
+    }
+    if (width == 0) {
+      width = calculateColumnWidthForZeroWidth(column).toInt();
+    }
+    if (column.tooltip.isNotEmpty) {
+      width += columnTooltipWidth.toInt();
+    }
+    return width.toDouble();
+  }
+
+  double estimateDataTableWidth(List<PluginSettingValueTableColumn> columns, {required bool includeOperationColumn}) {
+    if (columns.isEmpty && !includeOperationColumn) {
+      return 0;
+    }
+
+    final allColumns = <({PluginSettingValueTableColumn column, bool isOperation})>[
+      for (final column in columns) (column: column, isOperation: false),
+      if (includeOperationColumn) (column: buildOperationColumnDefinition(), isOperation: true),
+    ];
+
+    var width = _tableHorizontalMargin * 2;
+    for (var index = 0; index < allColumns.length; index++) {
+      final current = allColumns[index];
+      width += resolveColumnWidth(column: current.column, isOperation: current.isOperation);
+      if (index != allColumns.length - 1) {
+        width += columnSpacing;
+      }
+    }
+
+    return width;
+  }
 
   double calculateColumnWidthForZeroWidth(PluginSettingValueTableColumn column) {
     // if there are multiple columns which have width set to 0, we will set the max width to 100 for each column
@@ -70,18 +157,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   }
 
   Widget columnWidth({required PluginSettingValueTableColumn column, required bool isHeader, required bool isOperation, required Widget child}) {
-    var width = column.width;
-    if (isOperation) {
-      width = operationWidth.toInt();
-    }
-    if (width == 0) {
-      width = calculateColumnWidthForZeroWidth(column).toInt();
-    }
-    if (column.tooltip.isNotEmpty) {
-      width += columnTooltipWidth.toInt();
-    }
-
-    return SizedBox(width: width.toDouble(), child: Align(alignment: Alignment.centerLeft, child: child));
+    return SizedBox(width: resolveColumnWidth(column: column, isOperation: isOperation), child: Align(alignment: Alignment.centerLeft, child: child));
   }
 
   Widget buildHeaderCell(PluginSettingValueTableColumn column) {
@@ -290,7 +366,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     return -1;
   }
 
-  DataCell buildOperationCell(context, row, rows) {
+  DataCell buildOperationCell(BuildContext context, Map<String, dynamic> row, List<dynamic> rows) {
     // Deep-copy snapshot to avoid sharing nested List/Map references with update dialog state
     final originalRow = json.decode(json.encode(row)) as Map<String, dynamic>;
     originalRow.remove(rowUniqueIdKey);
@@ -352,7 +428,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                     final isDarkTheme = themeBackground.computeLuminance() < 0.5;
                     final baseSurface = themeBackground.withAlpha(255);
                     final cardColor = (isDarkTheme ? baseSurface.lighter(12) : baseSurface.darker(6)).withAlpha(255);
-                    final outlineColor = getThemeActiveBackgroundColor().withOpacity(isDarkTheme ? 0.22 : 0.15);
+                    final outlineColor = getThemeActiveBackgroundColor().withValues(alpha: isDarkTheme ? 0.22 : 0.15);
 
                     return AlertDialog(
                       backgroundColor: cardColor,
@@ -400,72 +476,101 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     );
   }
 
+  Widget buildOperationHeaderCell() {
+    final operationColumn = buildOperationColumnDefinition();
+    return columnWidth(
+      column: operationColumn,
+      isHeader: true,
+      isOperation: true,
+      child: Tooltip(
+        message: tr("ui_operation"),
+        child: Text(
+          tr("ui_operation"),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
+          style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveFontColor), fontSize: 13),
+        ),
+      ),
+    );
+  }
+
+  DataColumn buildHeaderDataColumn(PluginSettingValueTableColumn column, {required bool isOperation}) {
+    return DataColumn(label: isOperation ? buildOperationHeaderCell() : columnWidth(column: column, isHeader: true, isOperation: false, child: buildHeaderCell(column)));
+  }
+
+  DataColumn buildBodyDataColumn(PluginSettingValueTableColumn column, {required bool isOperation}) {
+    return DataColumn(label: columnWidth(column: column, isHeader: false, isOperation: isOperation, child: const SizedBox.shrink()));
+  }
+
+  DataTable buildStyledTable({
+    required List<DataColumn> columns,
+    required List<DataRow> rows,
+    required double headingRowHeight,
+    bool showTopBorder = true,
+    bool showBottomBorder = true,
+    bool showLeftBorder = true,
+    bool showRightBorder = true,
+    Color? topBorderColor,
+    Color? leftBorderColor,
+    Color? rightBorderColor,
+    Color? bottomBorderColor,
+  }) {
+    final borderColor = safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.previewSplitLineColor);
+
+    return DataTable(
+      columnSpacing: columnSpacing,
+      horizontalMargin: _tableHorizontalMargin,
+      clipBehavior: Clip.hardEdge,
+      dividerThickness: 0,
+      headingRowHeight: headingRowHeight,
+      dataRowMinHeight: _dataRowHeight,
+      dataRowMaxHeight: _dataRowHeight,
+      headingRowColor: WidgetStateProperty.resolveWith((states) => safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveBackgroundColor)),
+      border: TableBorder(
+        top: showTopBorder ? BorderSide(color: topBorderColor ?? borderColor) : BorderSide.none,
+        bottom: showBottomBorder ? BorderSide(color: bottomBorderColor ?? borderColor) : BorderSide.none,
+        left: showLeftBorder ? BorderSide(color: leftBorderColor ?? borderColor) : BorderSide.none,
+        right: showRightBorder ? BorderSide(color: rightBorderColor ?? borderColor) : BorderSide.none,
+        horizontalInside: BorderSide(color: borderColor),
+        verticalInside: BorderSide(color: borderColor),
+      ),
+      columns: columns,
+      rows: rows,
+    );
+  }
+
   Widget buildEmptyTable() {
+    final visibleColumns = buildVisibleColumns();
+    final headerBorderColor = safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveBackgroundColor);
+    if (visibleColumns.isEmpty) {
+      return Center(child: Text(tr("ui_no_data"), style: TextStyle(color: getThemeSubTextColor(), fontSize: 13)));
+    }
+
     return ConstrainedBox(
       constraints: const BoxConstraints(maxHeight: 100),
       child: Scrollbar(
         thumbVisibility: true,
-        controller: horizontalScrollController,
+        controller: horizontalBodyScrollController,
         child: SingleChildScrollView(
-          controller: horizontalScrollController,
+          controller: horizontalBodyScrollController,
+          physics: _tableScrollPhysics,
           scrollDirection: Axis.horizontal,
           child: SizedBox(
             width: tableWidth,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                DataTable(
-                  columnSpacing: columnSpacing,
-                  horizontalMargin: 5,
-                  clipBehavior: Clip.hardEdge,
-                  headingRowHeight: 36,
-                  dataRowMinHeight: 36,
-                  dataRowMaxHeight: 36,
-                  headingRowColor: WidgetStateProperty.resolveWith((states) => safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveBackgroundColor)),
-                  border: TableBorder.all(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.previewSplitLineColor)),
+                buildStyledTable(
                   columns: [
-                    for (var column in item.columns)
-                      DataColumn(
-                        label: columnWidth(
-                          column: column,
-                          isHeader: false,
-                          isOperation: false,
-                          child: Tooltip(
-                            message: tr(column.label),
-                            child: Text(
-                              tr(column.label),
-                              overflow: TextOverflow.ellipsis,
-                              maxLines: 1,
-                              style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveFontColor)),
-                            ),
-                          ),
-                        ),
-                      ),
-                    DataColumn(
-                      label: columnWidth(
-                        column: PluginSettingValueTableColumn.fromJson(<String, dynamic>{
-                          "Key": "Operation",
-                          "Label": tr("ui_operation"),
-                          "Tooltip": "",
-                          "Width": operationWidth.toInt(),
-                          "Type": PluginSettingValueType.pluginSettingValueTableColumnTypeText,
-                          "TextMaxLines": 1,
-                        }),
-                        isHeader: false,
-                        isOperation: true,
-                        child: Tooltip(
-                          message: tr("ui_operation"),
-                          child: Text(
-                            tr("ui_operation"),
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                            style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveFontColor), fontSize: 13),
-                          ),
-                        ),
-                      ),
-                    ),
+                    for (var column in visibleColumns) buildHeaderDataColumn(column, isOperation: false),
+                    if (!readonly) buildHeaderDataColumn(buildOperationColumnDefinition(), isOperation: true),
                   ],
+                  headingRowHeight: _headerRowHeight,
                   rows: const [],
+                  topBorderColor: headerBorderColor,
+                  showBottomBorder: false,
+                  leftBorderColor: headerBorderColor,
+                  rightBorderColor: headerBorderColor,
                 ),
                 Center(child: Padding(padding: const EdgeInsets.only(top: 10), child: Text(tr("ui_no_data"), style: TextStyle(color: getThemeSubTextColor(), fontSize: 13)))),
               ],
@@ -481,21 +586,23 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     if (rowsJson == "") {
       return buildEmptyTable();
     }
-    var rows = json.decode(rowsJson);
-    if (rows == null || rows.isEmpty) {
+    var rows = json.decode(rowsJson) as List<dynamic>;
+    if (rows.isEmpty) {
       return buildEmptyTable();
     }
 
     //give each row a unique key
     for (var row in rows) {
-      row[rowUniqueIdKey] = const UuidV4().generate();
+      (row as Map<String, dynamic>)[rowUniqueIdKey] = const UuidV4().generate();
     }
 
     //sort the rows if needed
     if (item.sortColumnKey.isNotEmpty) {
       rows.sort((a, b) {
-        var aValue = a[item.sortColumnKey] ?? "";
-        var bValue = b[item.sortColumnKey] ?? "";
+        final rowA = a as Map<String, dynamic>;
+        final rowB = b as Map<String, dynamic>;
+        var aValue = rowA[item.sortColumnKey] ?? "";
+        var bValue = rowB[item.sortColumnKey] ?? "";
         if (item.sortOrder == "asc") {
           return aValue.toString().compareTo(bValue.toString());
         } else {
@@ -504,17 +611,27 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
       });
     }
 
-    var dataRows = <DataRow>[];
-    for (var row in rows) {
-      dataRows.add(
-        DataRow(
-          cells: [
-            for (var column in item.columns)
-              if (!column.hideInTable) DataCell(buildRowCell(column, row)),
-            if (!readonly) buildOperationCell(context, row, rows),
-          ],
-        ),
-      );
+    final visibleColumns = buildVisibleColumns();
+    if (visibleColumns.isEmpty && readonly) {
+      return buildEmptyTable();
+    }
+
+    final pinnedColumn = !readonly ? buildOperationColumnDefinition() : visibleColumns.last;
+    final pinnedIsOperation = !readonly;
+    final leftColumns = pinnedIsOperation ? visibleColumns : visibleColumns.sublist(0, visibleColumns.length - 1);
+
+    final leftDataRows = <DataRow>[];
+    if (leftColumns.isNotEmpty) {
+      for (final row in rows) {
+        final rowMap = row as Map<String, dynamic>;
+        leftDataRows.add(DataRow(cells: [for (final column in leftColumns) DataCell(buildRowCell(column, rowMap))]));
+      }
+    }
+
+    final pinnedDataRows = <DataRow>[];
+    for (final row in rows) {
+      final rowMap = row as Map<String, dynamic>;
+      pinnedDataRows.add(DataRow(cells: [if (pinnedIsOperation) DataCell(buildOperationCell(context, rowMap, rows).child) else DataCell(buildRowCell(pinnedColumn, rowMap))]));
     }
 
     var tableMaxHeight = item.maxHeight;
@@ -522,60 +639,150 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
       tableMaxHeight = tableMaxHeightMin;
     }
 
-    return Scrollbar(
-      controller: horizontalScrollController,
-      child: SingleChildScrollView(
-        controller: horizontalScrollController,
-        scrollDirection: Axis.horizontal,
-        child: ConstrainedBox(
-          // Keep a bounded viewport height for vertical scrolling, but allow width to grow
-          // beyond tableWidth when columns sum exceeds it so that horizontal scroll works.
-          constraints: BoxConstraints(maxHeight: tableMaxHeight.toDouble(), minWidth: tableWidth),
-          child: Scrollbar(
-            controller: verticalScrollController,
-            child: SingleChildScrollView(
-              controller: verticalScrollController,
-              child: DataTable(
-                columnSpacing: columnSpacing,
-                horizontalMargin: 5,
-                headingRowHeight: 36,
-                dataRowMinHeight: 36,
-                dataRowMaxHeight: 36,
-                headingRowColor: WidgetStateProperty.resolveWith((states) => safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveBackgroundColor)),
-                border: TableBorder.all(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.previewSplitLineColor)),
-                columns: [
-                  for (var column in item.columns)
-                    if (!column.hideInTable) DataColumn(label: columnWidth(column: column, isHeader: true, isOperation: false, child: buildHeaderCell(column))),
-                  if (!readonly)
-                    DataColumn(
-                      label: columnWidth(
-                        column: PluginSettingValueTableColumn.fromJson(<String, dynamic>{
-                          "Key": "Operation",
-                          "Label": tr("ui_operation"),
-                          "Tooltip": "",
-                          "Width": operationWidth.toInt(),
-                          "Type": PluginSettingValueType.pluginSettingValueTableColumnTypeText,
-                          "TextMaxLines": 1,
-                        }),
-                        isHeader: true,
-                        isOperation: true,
-                        child: Tooltip(
-                          message: tr("ui_operation"),
-                          child: Text(
-                            tr("ui_operation"),
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                            style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveFontColor), fontSize: 13),
+    final tableBodyMaxHeight = (tableMaxHeight - _headerRowHeight).clamp(_dataRowHeight, double.infinity).toDouble();
+    final tableBodyContentHeight = rows.length * _dataRowHeight;
+    final tableBodyHeight = tableBodyContentHeight > tableBodyMaxHeight ? tableBodyMaxHeight : tableBodyContentHeight;
+    final pinnedSectionWidth = estimateDataTableWidth(pinnedIsOperation ? const [] : [pinnedColumn], includeOperationColumn: pinnedIsOperation);
+    final leftViewportWidth = (tableWidth - pinnedSectionWidth).clamp(0.0, tableWidth);
+    final leftContentWidth = estimateDataTableWidth(leftColumns, includeOperationColumn: false);
+    final leftSectionMinWidth =
+        leftColumns.isEmpty
+            ? 0.0
+            : leftContentWidth > leftViewportWidth
+            ? leftContentWidth
+            : leftViewportWidth;
+    final headerBorderColor = safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveBackgroundColor);
+
+    if (leftColumns.isEmpty) {
+      return SizedBox(
+        width: tableWidth,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: pinnedSectionWidth,
+              child: buildStyledTable(
+                columns: [buildHeaderDataColumn(pinnedColumn, isOperation: pinnedIsOperation)],
+                rows: const [],
+                headingRowHeight: _headerRowHeight,
+                topBorderColor: headerBorderColor,
+                showBottomBorder: false,
+                leftBorderColor: headerBorderColor,
+                rightBorderColor: headerBorderColor,
+              ),
+            ),
+            SizedBox(
+              width: pinnedSectionWidth,
+              height: tableBodyHeight,
+              child: Scrollbar(
+                controller: verticalPinnedBodyScrollController,
+                child: SingleChildScrollView(
+                  controller: verticalPinnedBodyScrollController,
+                  physics: _tableScrollPhysics,
+                  child: buildStyledTable(
+                    columns: [buildBodyDataColumn(pinnedColumn, isOperation: pinnedIsOperation)],
+                    rows: pinnedDataRows,
+                    headingRowHeight: 0,
+                    showTopBorder: false,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return SizedBox(
+      width: tableWidth,
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  controller: horizontalHeaderScrollController,
+                  physics: const NeverScrollableScrollPhysics(),
+                  scrollDirection: Axis.horizontal,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minWidth: leftSectionMinWidth),
+                    child: buildStyledTable(
+                      columns: [for (final column in leftColumns) buildHeaderDataColumn(column, isOperation: false)],
+                      rows: const [],
+                      headingRowHeight: _headerRowHeight,
+                      showRightBorder: false,
+                      topBorderColor: headerBorderColor,
+                      showBottomBorder: false,
+                      leftBorderColor: headerBorderColor,
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: pinnedSectionWidth,
+                child: buildStyledTable(
+                  columns: [buildHeaderDataColumn(pinnedColumn, isOperation: pinnedIsOperation)],
+                  rows: const [],
+                  headingRowHeight: _headerRowHeight,
+                  topBorderColor: headerBorderColor,
+                  showBottomBorder: false,
+                  rightBorderColor: headerBorderColor,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(
+            height: tableBodyHeight,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Scrollbar(
+                    controller: horizontalBodyScrollController,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: horizontalBodyScrollController,
+                      physics: _tableScrollPhysics,
+                      scrollDirection: Axis.horizontal,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(minWidth: leftSectionMinWidth),
+                        child: SingleChildScrollView(
+                          controller: verticalBodyScrollController,
+                          physics: _tableScrollPhysics,
+                          child: buildStyledTable(
+                            columns: [for (final column in leftColumns) buildBodyDataColumn(column, isOperation: false)],
+                            rows: leftDataRows,
+                            headingRowHeight: 0,
+                            showTopBorder: false,
+                            showRightBorder: false,
                           ),
                         ),
                       ),
                     ),
-                ],
-                rows: dataRows,
-              ),
+                  ),
+                ),
+                SizedBox(
+                  width: pinnedSectionWidth,
+                  child: Scrollbar(
+                    controller: verticalPinnedBodyScrollController,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: verticalPinnedBodyScrollController,
+                      physics: _tableScrollPhysics,
+                      child: buildStyledTable(
+                        columns: [buildBodyDataColumn(pinnedColumn, isOperation: pinnedIsOperation)],
+                        rows: pinnedDataRows,
+                        headingRowHeight: 0,
+                        showTopBorder: false,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }

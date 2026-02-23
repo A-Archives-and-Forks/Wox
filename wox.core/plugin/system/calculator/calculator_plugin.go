@@ -76,10 +76,6 @@ func (c *CalculatorPlugin) GetMetadata() plugin.Metadata {
 						{Label: "i18n:plugin_calculator_thousands_separator_none", Value: "None"},
 					},
 					Tooltip: "i18n:plugin_calculator_thousands_separator_description",
-					Style: definition.PluginSettingValueStyle{
-						Width:         220,
-						PaddingBottom: 10,
-					},
 				},
 			},
 			{
@@ -94,10 +90,6 @@ func (c *CalculatorPlugin) GetMetadata() plugin.Metadata {
 						{Label: "i18n:plugin_calculator_decimal_separator_comma", Value: "Comma"},
 					},
 					Tooltip: "i18n:plugin_calculator_decimal_separator_description",
-					Style: definition.PluginSettingValueStyle{
-						Width:         220,
-						PaddingBottom: 10,
-					},
 				},
 			},
 			{
@@ -125,7 +117,8 @@ func (c *CalculatorPlugin) Init(ctx context.Context, initParams plugin.InitParam
 			return definition.PluginSettingDefinitionItem{
 				Type: definition.PluginSettingDefinitionTypeLabel,
 				Value: &definition.PluginSettingValueLabel{
-					Content: c.api.GetTranslation(ctx, "plugin_calculator_separator_preview_example") + ": " + sampleNumber,
+					Content:           c.api.GetTranslation(ctx, "plugin_calculator_separator_preview_example") + ": " + sampleNumber,
+					ReserveLabelSpace: true,
 				},
 			}
 		}

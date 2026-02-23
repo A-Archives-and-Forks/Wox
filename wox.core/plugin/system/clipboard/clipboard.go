@@ -179,6 +179,7 @@ func (c *ClipboardPlugin) GetMetadata() plugin.Metadata {
 				Value: &definition.PluginSettingValueSelect{
 					Key:          primaryActionSettingKey,
 					Label:        "i18n:plugin_clipboard_primary_action",
+					Tooltip:      "i18n:plugin_clipboard_primary_action_tooltip",
 					DefaultValue: primaryActionValuePaste,
 					Options: []definition.PluginSettingValueSelectOption{
 						{Label: "i18n:plugin_clipboard_primary_action_copy_to_clipboard", Value: primaryActionValueCopy},

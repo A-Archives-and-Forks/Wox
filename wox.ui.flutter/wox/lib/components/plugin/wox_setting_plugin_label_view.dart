@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:wox/entity/setting/wox_plugin_setting_label.dart';
+import 'package:wox/entity/wox_plugin_setting.dart';
 import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/consts.dart';
 
@@ -10,12 +11,27 @@ class WoxSettingPluginLabel extends WoxSettingPluginItem {
 
   const WoxSettingPluginLabel({super.key, required this.item, required super.value, required super.onUpdate, super.labelWidth = SETTING_LABEL_DEAULT_WIDTH});
 
+  PluginSettingValueStyle buildEffectiveStyle() {
+    final style = PluginSettingValueStyle.fromJson(<String, dynamic>{});
+    style.paddingLeft = item.style.paddingLeft;
+    style.paddingTop = item.style.paddingTop;
+    style.paddingRight = item.style.paddingRight;
+    style.paddingBottom = item.style.paddingBottom;
+    style.width = item.style.width;
+
+    if (item.reserveLabelSpace) {
+      style.paddingLeft += labelWidth + WoxSettingPluginItem.defaultLabelGap;
+    }
+
+    return style;
+  }
+
   @override
   Widget build(BuildContext context) {
     return layout(
       label: "",
       child: Text(item.content, style: TextStyle(color: getThemeTextColor(), fontSize: 13)),
-      style: item.style,
+      style: buildEffectiveStyle(),
       tooltip: item.tooltip,
       includeBottomSpacing: false,
     );

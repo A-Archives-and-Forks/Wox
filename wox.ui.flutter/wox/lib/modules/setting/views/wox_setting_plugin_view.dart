@@ -12,7 +12,6 @@ import 'package:wox/components/plugin/wox_setting_plugin_newline_view.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_select_ai_model_view.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_select_view.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_table_view.dart';
-import 'package:wox/components/plugin/wox_setting_plugin_item_view.dart';
 import 'package:wox/components/wox_hint_box.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_textfield.dart';
@@ -583,7 +582,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                   return WoxSettingPluginHead(value: "", item: e.value as PluginSettingValueHead, onUpdate: (key, value) async {});
                 }
                 if (e.type == "label") {
-                  return WoxSettingPluginLabel(value: "", item: e.value as PluginSettingValueLabel, onUpdate: (key, value) async {});
+                  return WoxSettingPluginLabel(value: "", item: e.value as PluginSettingValueLabel, labelWidth: uniformLabelWidth, onUpdate: (key, value) async {});
                 }
                 if (e.type == "table") {
                   return WoxSettingPluginTable(
