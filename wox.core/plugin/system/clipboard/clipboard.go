@@ -132,6 +132,7 @@ func (c *ClipboardPlugin) GetMetadata() plugin.Metadata {
 				Type: definition.PluginSettingDefinitionTypeCheckBox,
 				Value: &definition.PluginSettingValueCheckBox{
 					Key:          isKeepTextHistorySettingKey,
+					Label:        "i18n:plugin_clipboard_enable_text_history",
 					DefaultValue: "true",
 					Style: definition.PluginSettingValueStyle{
 						PaddingRight: 10,
@@ -151,12 +152,10 @@ func (c *ClipboardPlugin) GetMetadata() plugin.Metadata {
 				},
 			},
 			{
-				Type: definition.PluginSettingDefinitionTypeNewLine,
-			},
-			{
 				Type: definition.PluginSettingDefinitionTypeCheckBox,
 				Value: &definition.PluginSettingValueCheckBox{
 					Key:          isKeepImageHistorySettingKey,
+					Label:        "i18n:plugin_clipboard_enable_image_history",
 					DefaultValue: "true",
 					Style: definition.PluginSettingValueStyle{
 						PaddingRight: 10,
@@ -174,9 +173,6 @@ func (c *ClipboardPlugin) GetMetadata() plugin.Metadata {
 						Width: 50,
 					},
 				},
-			},
-			{
-				Type: definition.PluginSettingDefinitionTypeNewLine,
 			},
 			{
 				Type: definition.PluginSettingDefinitionTypeSelect,

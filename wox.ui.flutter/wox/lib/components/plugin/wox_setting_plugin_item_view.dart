@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:wox/components/wox_markdown.dart';
+import 'package:wox/components/wox_setting_form_field.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/wox_plugin_setting.dart';
 import 'package:wox/utils/colors.dart';
@@ -7,8 +9,9 @@ import 'package:wox/utils/colors.dart';
 abstract class WoxSettingPluginItem extends StatelessWidget {
   final String value;
   final Function onUpdate;
+  final double labelWidth;
 
-  const WoxSettingPluginItem({super.key, required this.value, required this.onUpdate});
+  const WoxSettingPluginItem({super.key, required this.value, required this.onUpdate, required this.labelWidth});
 
   Future<void> updateConfig(String key, String value) async {
     onUpdate(key, value);
@@ -22,46 +25,45 @@ abstract class WoxSettingPluginItem extends StatelessWidget {
     return Get.find<WoxSettingController>().tr(key);
   }
 
-  PluginSettingValueStyle resolveStyle(PluginSettingValueStyle style) {
-    final woxSettingController = Get.find<WoxSettingController>();
-    return style.resolve(woxSettingController.woxSetting.value.langCode);
-  }
-
-  Widget withFlexible(List<Widget> children) {
-    return Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: children);
-  }
-
-  Widget layout({required List<Widget> children, required PluginSettingValueStyle style}) {
-    final resolvedStyle = resolveStyle(style);
-
-    if (resolvedStyle.hasAnyPadding()) {
-      return Padding(
-        padding: EdgeInsets.only(top: resolvedStyle.paddingTop, bottom: resolvedStyle.paddingBottom, left: resolvedStyle.paddingLeft, right: resolvedStyle.paddingRight),
-        child: withFlexible(children),
-      );
+  Widget tooltipText(String tooltip) {
+    if (tooltip.trim().isEmpty) {
+      return const SizedBox.shrink();
     }
 
-    return withFlexible(children);
+    final accentColor = getThemeActiveBackgroundColor();
+
+    return Padding(
+      padding: EdgeInsets.only(top: 2),
+      child: WoxMarkdownView(
+        data: tr(tooltip),
+        fontColor: getThemeSubTextColor(),
+        fontSize: 13,
+        linkColor: accentColor,
+        linkHoverColor: accentColor.withValues(alpha: 0.8),
+        selectable: true,
+      ),
+    );
   }
 
-  Widget label(String text, PluginSettingValueStyle style) {
-    if (text != "") {
-      final resolvedStyle = resolveStyle(style);
+  Widget applyStylePadding({required PluginSettingValueStyle style, required Widget child}) {
+    return Padding(padding: EdgeInsets.only(top: style.paddingTop, bottom: style.paddingBottom, left: style.paddingLeft, right: style.paddingRight), child: child);
+  }
 
-      if (resolvedStyle.labelWidth > 0) {
-        return Padding(
-          padding: const EdgeInsets.only(right: 4),
-          child: SizedBox(
-            width: resolvedStyle.labelWidth,
-            child: Text(text, style: TextStyle(overflow: TextOverflow.ellipsis, color: getThemeTextColor(), fontSize: 13), textAlign: TextAlign.right),
-          ),
-        );
-      } else {
-        return Padding(padding: const EdgeInsets.only(right: 4), child: Text(text, style: TextStyle(color: getThemeTextColor(), fontSize: 13)));
-      }
+  Widget layout({required String label, required Widget child, required PluginSettingValueStyle style, String tooltip = "", bool includeBottomSpacing = true}) {
+    final hasLabel = label.trim().isNotEmpty;
+    final tipsWidget = tooltip.trim().isNotEmpty ? tooltipText(tooltip) : null;
+    final bottomSpacing = includeBottomSpacing ? 10.0 : 0.0;
+
+    if (!hasLabel) {
+      final content = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [child, if (tipsWidget != null) tipsWidget]);
+      final wrappedContent = bottomSpacing > 0 ? Padding(padding: EdgeInsets.only(bottom: bottomSpacing), child: content) : content;
+      return applyStylePadding(style: style, child: wrappedContent);
     }
 
-    return const SizedBox.shrink();
+    return applyStylePadding(
+      style: style,
+      child: WoxSettingFormField(label: label, tips: tipsWidget, labelWidth: labelWidth, labelGap: 12, bottomSpacing: bottomSpacing, tipsTopSpacing: 0, child: child),
+    );
   }
 
   Widget suffix(String text) {

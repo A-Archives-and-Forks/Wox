@@ -92,7 +92,7 @@
 | `dynamic`       | 由插件运行时动态替换           | 仅 `Key`                                                                         |
 | `newline`       | 视觉分隔                       | 无                                                                               |
 
-`Style` 支持 `PaddingLeft/Top/Right/Bottom`、`Width`、`LabelWidth`。设置值会在初始化参数传入插件，并在脚本插件中以 `WOX_SETTING_<KEY>` 环境变量提供。
+`Style` 支持 `PaddingLeft/Top/Right/Bottom`、`Width`。设置值会在初始化参数传入插件，并在脚本插件中以 `WOX_SETTING_<KEY>` 环境变量提供。
 
 ### SettingDefinitions 示例
 
@@ -109,7 +109,7 @@
         "Label": "API Key",
         "Tooltip": "从服务商获取",
         "DefaultValue": "",
-        "Style": { "Width": 320, "LabelWidth": 90 }
+        "Style": { "Width": 320 }
       }
     },
     {

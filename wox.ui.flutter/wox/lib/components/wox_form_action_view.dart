@@ -34,6 +34,17 @@ class _WoxFormActionViewState extends State<WoxFormActionView> {
   final Map<String, TextEditingController> _textControllers = {};
   double _maxLabelWidth = 60;
 
+  double _measureLabelWidth(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      return 60;
+    }
+
+    final painter = TextPainter(text: TextSpan(text: trimmed, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)), textDirection: TextDirection.ltr, maxLines: 1)
+      ..layout();
+    return painter.width + 8;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -48,13 +59,21 @@ class _WoxFormActionViewState extends State<WoxFormActionView> {
         }
         final textbox = item.value as PluginSettingValueTextBox;
         _textControllers[textbox.key] = TextEditingController(text: _values[textbox.key] ?? textbox.defaultValue);
-        if (textbox.style.labelWidth > _maxLabelWidth) {
-          _maxLabelWidth = textbox.style.labelWidth.toDouble();
+        final labelWidth = _measureLabelWidth(widget.translate(textbox.label));
+        if (labelWidth > _maxLabelWidth) {
+          _maxLabelWidth = labelWidth;
         }
       } else if (item.type == "select") {
         final select = item.value as PluginSettingValueSelect;
-        if (select.style.labelWidth > _maxLabelWidth) {
-          _maxLabelWidth = select.style.labelWidth.toDouble();
+        final labelWidth = _measureLabelWidth(widget.translate(select.label));
+        if (labelWidth > _maxLabelWidth) {
+          _maxLabelWidth = labelWidth;
+        }
+      } else if (item.type == "checkbox") {
+        final checkbox = item.value as PluginSettingValueCheckBox;
+        final labelWidth = _measureLabelWidth(widget.translate(checkbox.label));
+        if (labelWidth > _maxLabelWidth) {
+          _maxLabelWidth = labelWidth;
         }
       }
     }

@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:wox/components/wox_tooltip_icon_view.dart';
 import 'package:wox/entity/setting/wox_plugin_setting_head.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/consts.dart';
 
 import 'wox_setting_plugin_item_view.dart';
 
 class WoxSettingPluginHead extends WoxSettingPluginItem {
   final PluginSettingValueHead item;
 
-  const WoxSettingPluginHead({super.key, required this.item, required super.value, required super.onUpdate});
+  const WoxSettingPluginHead({super.key, required this.item, required super.value, required super.onUpdate, super.labelWidth = SETTING_LABEL_DEAULT_WIDTH});
 
   @override
   Widget build(BuildContext context) {
@@ -19,15 +19,11 @@ class WoxSettingPluginHead extends WoxSettingPluginItem {
     }
 
     return layout(
-      children: [
-        Row(
-          children: [
-            Text(item.content, style: TextStyle(fontSize: 16, color: getThemeTextColor())),
-            if (item.tooltip != "") WoxTooltipIconView(tooltip: item.tooltip, color: getThemeTextColor()),
-          ],
-        ),
-      ],
+      label: "",
+      child: Row(children: [Text(item.content, style: TextStyle(fontSize: 16, color: getThemeTextColor()))]),
       style: item.style,
+      tooltip: item.tooltip,
+      includeBottomSpacing: false,
     );
   }
 }

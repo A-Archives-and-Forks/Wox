@@ -31,8 +31,7 @@ export type PluginSettingDefinitionType = "head" | "textbox" | "checkbox" | "sel
  *   PaddingTop: 5,
  *   PaddingRight: 10,
  *   PaddingBottom: 5,
- *   Width: 300,
- *   LabelWidth: 100
+ *   Width: 300
  * }
  * ```
  */
@@ -58,18 +57,6 @@ export interface PluginSettingValueStyle {
    * Width of the setting element in pixels.
    */
   Width: number
-  /**
-   * Width of the label portion.
-   *
-   * Only applicable for settings with labels (textbox, checkbox, select).
-   */
-  LabelWidth: number
-  /**
-   * Override style for different languages.
-   *
-   * Key is the language code (e.g. "zh_CN"), value is the style override.
-   */
-  I18nOverrideMap?: { [key: string]: PluginSettingValueStyle }
 }
 
 /**

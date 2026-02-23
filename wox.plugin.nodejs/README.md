@@ -154,8 +154,7 @@ const settings: PluginSettingDefinitionItem[] = [
         PaddingTop: 0,
         PaddingRight: 0,
         PaddingBottom: 0,
-        Width: 0,
-        LabelWidth: 0
+        Width: 0
       }
     } as PluginSettingValueTextBox,
     DisabledInPlatforms: [],
@@ -173,8 +172,7 @@ const settings: PluginSettingDefinitionItem[] = [
         PaddingTop: 0,
         PaddingRight: 0,
         PaddingBottom: 0,
-        Width: 0,
-        LabelWidth: 0
+        Width: 0
       }
     } as PluginSettingValueCheckBox,
     DisabledInPlatforms: [],

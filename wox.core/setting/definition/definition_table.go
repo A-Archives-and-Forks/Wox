@@ -52,7 +52,7 @@ type PluginSettingValueTableColumn struct {
 }
 
 func (p *PluginSettingValueTable) GetPluginSettingType() PluginSettingDefinitionType {
-	return PluginSettingDefinitionTypeNewLine
+	return PluginSettingDefinitionTypeTable
 }
 
 func (p *PluginSettingValueTable) GetKey() string {

@@ -102,7 +102,6 @@ class PluginSettingValueStyle:
         padding_right: Right padding in pixels
         padding_bottom: Bottom padding in pixels
         width: Width of the setting element (0 = default)
-        label_width: Width of the label column (0 = default)
 
     Example usage:
         style = PluginSettingValueStyle(
@@ -148,21 +147,6 @@ class PluginSettingValueStyle:
     A value of 0 uses the default/automatic width.
     """
 
-    label_width: int = field(default=0)
-    """
-    Width of the label column in pixels.
-
-    Controls how much horizontal space the label takes.
-    A value of 0 uses the default width.
-    """
-
-    i18n_override_map: Dict[str, "PluginSettingValueStyle"] = field(default_factory=dict)
-    """
-    Override style for different languages.
-
-    Key is the language code (e.g. "zh_CN"), value is the style override.
-    """
-
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert to dictionary with camelCase naming.
@@ -176,8 +160,6 @@ class PluginSettingValueStyle:
             "PaddingRight": self.padding_right,
             "PaddingBottom": self.padding_bottom,
             "Width": self.width,
-            "LabelWidth": self.label_width,
-            "I18nOverrideMap": {k: v.to_dict() for k, v in self.i18n_override_map.items()},
         }
 
     @classmethod
@@ -197,8 +179,6 @@ class PluginSettingValueStyle:
             padding_right=data.get("PaddingRight", 0),
             padding_bottom=data.get("PaddingBottom", 0),
             width=data.get("Width", 0),
-            label_width=data.get("LabelWidth", 0),
-            i18n_override_map={k: cls.from_dict(v) for k, v in data.get("I18nOverrideMap", {}).items()},
         )
 
 

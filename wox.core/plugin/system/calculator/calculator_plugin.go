@@ -8,7 +8,6 @@ import (
 	"time"
 	"unicode"
 	"wox/common"
-	"wox/i18n"
 	"wox/plugin"
 	"wox/setting"
 	"wox/setting/definition"
@@ -78,16 +77,8 @@ func (c *CalculatorPlugin) GetMetadata() plugin.Metadata {
 					},
 					Tooltip: "i18n:plugin_calculator_thousands_separator_description",
 					Style: definition.PluginSettingValueStyle{
-						LabelWidth:    140,
 						Width:         220,
 						PaddingBottom: 10,
-						I18nOverrideMap: map[i18n.LangCode]definition.PluginSettingValueStyle{
-							i18n.LangCodeZhCn: {
-								LabelWidth:    80,
-								Width:         220,
-								PaddingBottom: 10,
-							},
-						},
 					},
 				},
 			},
@@ -104,22 +95,10 @@ func (c *CalculatorPlugin) GetMetadata() plugin.Metadata {
 					},
 					Tooltip: "i18n:plugin_calculator_decimal_separator_description",
 					Style: definition.PluginSettingValueStyle{
-						LabelWidth:    140,
 						Width:         220,
 						PaddingBottom: 10,
-						I18nOverrideMap: map[i18n.LangCode]definition.PluginSettingValueStyle{
-							i18n.LangCodeZhCn: {
-								LabelWidth:    80,
-								Width:         220,
-								PaddingBottom: 10,
-							},
-						},
 					},
 				},
-			},
-			{
-				Type:  definition.PluginSettingDefinitionTypeNewLine,
-				Value: &definition.PluginSettingValueNewLine{},
 			},
 			{
 				Type: definition.PluginSettingDefinitionTypeDynamic,

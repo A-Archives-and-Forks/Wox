@@ -11,6 +11,7 @@ import 'package:wox/entity/setting/wox_plugin_setting_table.dart';
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/color_util.dart';
 
@@ -30,7 +31,16 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   final ScrollController horizontalScrollController = ScrollController();
   final ScrollController verticalScrollController = ScrollController();
 
-  WoxSettingPluginTable({super.key, required this.item, required super.value, required super.onUpdate, this.tableWidth = 740.0, this.readonly = false, this.onUpdateValidate});
+  WoxSettingPluginTable({
+    super.key,
+    required this.item,
+    required super.value,
+    required super.onUpdate,
+    super.labelWidth = SETTING_LABEL_DEAULT_WIDTH,
+    this.tableWidth = 740.0,
+    this.readonly = false,
+    this.onUpdateValidate,
+  });
 
   double calculateColumnWidthForZeroWidth(PluginSettingValueTableColumn column) {
     // if there are multiple columns which have width set to 0, we will set the max width to 100 for each column
@@ -574,57 +584,56 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: tableWidth,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
+      child: layout(
+        label: item.title,
+        style: item.style,
+        tooltip: item.tooltip,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!readonly)
+              SizedBox(
+                width: tableWidth,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    Text(item.title, style: TextStyle(color: getThemeTextColor(), fontSize: 13)),
-                    if (item.tooltip != "") WoxTooltipIconView(tooltip: item.tooltip, color: getThemeTextColor()),
+                    WoxButton.text(
+                      text: tr("ui_add"),
+                      icon: Icon(Icons.add, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
+                      padding: EdgeInsets.zero,
+                      onPressed: () {
+                        showDialog(
+                          context: context,
+                          builder: (context) {
+                            return WoxSettingPluginTableUpdate(
+                              item: item,
+                              row: const {},
+                              onUpdate: (key, row) {
+                                var rowsJson = getSetting(key);
+                                if (rowsJson == "") {
+                                  rowsJson = "[]";
+                                }
+                                var rows = json.decode(rowsJson);
+                                rows.add(row);
+                                //remove the unique key
+                                rows.forEach((element) {
+                                  element.remove(rowUniqueIdKey);
+                                });
+
+                                updateConfig(key, json.encode(rows));
+                              },
+                            );
+                          },
+                        );
+                      },
+                    ),
                   ],
                 ),
-                if (!readonly)
-                  WoxButton.text(
-                    text: tr("ui_add"),
-                    icon: Icon(Icons.add, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
-                    padding: EdgeInsets.zero,
-                    onPressed: () {
-                      showDialog(
-                        context: context,
-                        builder: (context) {
-                          return WoxSettingPluginTableUpdate(
-                            item: item,
-                            row: const {},
-                            onUpdate: (key, row) {
-                              var rowsJson = getSetting(key);
-                              if (rowsJson == "") {
-                                rowsJson = "[]";
-                              }
-                              var rows = json.decode(rowsJson);
-                              rows.add(row);
-                              //remove the unique key
-                              rows.forEach((element) {
-                                element.remove(rowUniqueIdKey);
-                              });
-
-                              updateConfig(key, json.encode(rows));
-                            },
-                          );
-                        },
-                      );
-                    },
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
-          buildTable(context),
-        ],
+              ),
+            if (!readonly) const SizedBox(height: 6),
+            buildTable(context),
+          ],
+        ),
       ),
     );
   }

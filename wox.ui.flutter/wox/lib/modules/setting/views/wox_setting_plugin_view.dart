@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:dynamic_tabbar/dynamic_tabbar.dart' as dt;
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'package:wox/components/plugin/wox_setting_plugin_newline_view.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_select_ai_model_view.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_select_view.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_table_view.dart';
+import 'package:wox/components/plugin/wox_setting_plugin_item_view.dart';
 import 'package:wox/components/wox_hint_box.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_textfield.dart';
@@ -28,6 +30,7 @@ import 'package:wox/components/plugin/wox_setting_plugin_checkbox_view.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_textbox_view.dart';
 import 'package:wox/components/wox_button.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/strings.dart';
 import 'package:wox/enums/wox_plugin_runtime_enum.dart';
 
@@ -35,6 +38,64 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
   const WoxSettingPluginView({super.key});
   // Local refreshing state for showing loading spinner on refresh button
   static final RxBool _refreshing = false.obs;
+  static const double _pluginLabelMaxWidth = 200;
+  static const double _pluginLabelMinWidth = 0;
+  static const double _pluginTableDefaultWidth = 626;
+
+  String _extractSettingLabelText(dynamic settingDefinitionValue, String settingType) {
+    if (settingType == "checkbox") {
+      return (settingDefinitionValue as PluginSettingValueCheckBox).label;
+    }
+    if (settingType == "textbox") {
+      return (settingDefinitionValue as PluginSettingValueTextBox).label;
+    }
+    if (settingType == "select") {
+      return (settingDefinitionValue as PluginSettingValueSelect).label;
+    }
+    if (settingType == "selectAIModel") {
+      return (settingDefinitionValue as PluginSettingValueSelectAIModel).label;
+    }
+    if (settingType == "table") {
+      return (settingDefinitionValue as PluginSettingValueTable).title;
+    }
+
+    return "";
+  }
+
+  double _measureLabelWidthByText(String label, {double minWidth = _pluginLabelMinWidth}) {
+    final trimmedLabel = label.trim();
+    if (trimmedLabel.isEmpty) {
+      return SETTING_LABEL_DEAULT_WIDTH;
+    }
+
+    final painter = TextPainter(text: TextSpan(text: trimmedLabel, style: const TextStyle(fontSize: 13)), textDirection: TextDirection.ltr, maxLines: 1)..layout();
+    final preferredWidth = painter.width + 8;
+    return preferredWidth.clamp(minWidth, _pluginLabelMaxWidth).toDouble();
+  }
+
+  double _calculateUniformPluginLabelWidth(PluginDetail plugin) {
+    double maxLabelWidth = 0;
+
+    for (final definition in plugin.settingDefinitions) {
+      final rawLabel = _extractSettingLabelText(definition.value, definition.type).trim();
+      if (rawLabel.isEmpty) {
+        continue;
+      }
+
+      final translatedLabel = controller.tr(rawLabel).trim();
+      if (translatedLabel.isEmpty) {
+        continue;
+      }
+
+      maxLabelWidth = math.max(maxLabelWidth, _measureLabelWidthByText(translatedLabel, minWidth: 0));
+    }
+
+    if (maxLabelWidth <= 0) {
+      return SETTING_LABEL_DEAULT_WIDTH;
+    }
+
+    return maxLabelWidth.clamp(_pluginLabelMinWidth, _pluginLabelMaxWidth).toDouble();
+  }
 
   Widget pluginList() {
     return Column(
@@ -458,6 +519,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
   Widget pluginTabSetting() {
     return Obx(() {
       var plugin = controller.activePlugin.value;
+      final uniformLabelWidth = _calculateUniformPluginLabelWidth(plugin);
 
       // Show empty state if no settings
       if (plugin.settingDefinitions.isEmpty) {
@@ -478,6 +540,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                   return WoxSettingPluginCheckbox(
                     value: plugin.setting.settings[e.value.key] ?? "",
                     item: e.value as PluginSettingValueCheckBox,
+                    labelWidth: uniformLabelWidth,
                     onUpdate: (key, value) async {
                       await controller.updatePluginSetting(plugin.id, key, value);
                     },
@@ -487,6 +550,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                   return WoxSettingPluginTextBox(
                     value: plugin.setting.settings[e.value.key] ?? "",
                     item: e.value as PluginSettingValueTextBox,
+                    labelWidth: uniformLabelWidth,
                     onUpdate: (key, value) async {
                       await controller.updatePluginSetting(plugin.id, key, value);
                     },
@@ -499,6 +563,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                   return WoxSettingPluginSelect(
                     value: plugin.setting.settings[e.value.key] ?? "",
                     item: e.value as PluginSettingValueSelect,
+                    labelWidth: uniformLabelWidth,
                     onUpdate: (key, value) async {
                       await controller.updatePluginSetting(plugin.id, key, value);
                     },
@@ -508,6 +573,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                   return WoxSettingPluginSelectAIModel(
                     value: plugin.setting.settings[e.value.key] ?? "",
                     item: e.value as PluginSettingValueSelectAIModel,
+                    labelWidth: uniformLabelWidth,
                     onUpdate: (key, value) async {
                       await controller.updatePluginSetting(plugin.id, key, value);
                     },
@@ -521,9 +587,9 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                 }
                 if (e.type == "table") {
                   return WoxSettingPluginTable(
-                    tableWidth: 640,
                     value: plugin.setting.settings[e.value.key] ?? "",
                     item: e.value as PluginSettingValueTable,
+                    labelWidth: uniformLabelWidth,
                     onUpdate: (key, value) async {
                       await controller.updatePluginSetting(plugin.id, key, value);
                     },
@@ -553,10 +619,9 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
           else
             WoxSettingPluginTable(
               value: json.encode(plugin.triggerKeywords.map((e) => {"keyword": e}).toList()),
-              tableWidth: 640,
+              tableWidth: _pluginTableDefaultWidth,
               item: PluginSettingValueTable.fromJson({
                 "Key": "_triggerKeywords",
-                "Title": controller.tr('ui_plugin_tab_trigger_keywords'),
                 "Columns": [
                   {
                     "Key": "keyword",
@@ -599,11 +664,10 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
           else
             WoxSettingPluginTable(
               value: json.encode(plugin.commands),
-              tableWidth: 680,
+              tableWidth: _pluginTableDefaultWidth,
               readonly: true,
               item: PluginSettingValueTable.fromJson({
                 "Key": "_commands",
-                "Title": controller.tr('ui_plugin_tab_commands'),
                 "Columns": [
                   {
                     "Key": "Command",

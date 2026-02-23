@@ -138,11 +138,13 @@ func (a *ApplicationPlugin) GetMetadata() plugin.Metadata {
 			{
 				Type: definition.PluginSettingDefinitionTypeTable,
 				Value: &definition.PluginSettingValueTable{
-					Key: "AppDirectories",
+					Key:     "AppDirectories",
+					Title:   "i18n:plugin_app_directories",
+					Tooltip: "i18n:plugin_app_directories_tooltip",
 					Columns: []definition.PluginSettingValueTableColumn{
 						{
 							Key:   "Path",
-							Label: "Path",
+							Label: "i18n:plugin_app_path",
 							Type:  definition.PluginSettingValueTableColumnTypeDirPath,
 						},
 					},

@@ -92,7 +92,7 @@ Settings are rendered in the Wox settings UI and passed to the plugin host:
 | `dynamic`       | Placeholder that will be filled by the plugin via API          | `Key` only                                                                       |
 | `newline`       | Visual separator                                               | (no value)                                                                       |
 
-`Style` supports `PaddingLeft/Top/Right/Bottom`, `Width`, and `LabelWidth`. Settings are provided to plugins as part of init parameters and (for script plugins) as `WOX_SETTING_<KEY>` environment variables.
+`Style` supports `PaddingLeft/Top/Right/Bottom` and `Width`. Settings are provided to plugins as part of init parameters and (for script plugins) as `WOX_SETTING_<KEY>` environment variables.
 
 ### SettingDefinitions examples
 
@@ -109,7 +109,7 @@ Minimal layout with AI model pick:
         "Label": "API Key",
         "Tooltip": "Get it from your provider",
         "DefaultValue": "",
-        "Style": { "Width": 320, "LabelWidth": 90 }
+        "Style": { "Width": 320 }
       }
     },
     {
