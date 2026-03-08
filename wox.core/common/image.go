@@ -410,6 +410,12 @@ func ParseWoxImage(image string) (WoxImage, error) {
 func ConvertIcon(ctx context.Context, image WoxImage, pluginDirectory string) (newImage WoxImage) {
 	newImage = ConvertFileIconToAbsolutePath(ctx, image)
 	newImage = ConvertRelativePathToAbsolutePath(ctx, newImage, pluginDirectory)
+
+	// skip svg image as it will be rendered directly by wox, no need to crop or resize
+	if newImage.ImageType == WoxImageTypeSvg {
+		return newImage
+	}
+
 	newImage = cropPngTransparentPaddings(ctx, newImage)
 	newImage = resizeImage(ctx, newImage, 40)
 	return
