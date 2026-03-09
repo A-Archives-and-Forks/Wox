@@ -29,7 +29,65 @@ description: Create, scaffold, implement, and publish Wox plugins (nodejs, pytho
 - For ready-to-copy patterns such as validated textbox/select fields, editable tables, AI model selectors, and dynamic preview settings, read `references/settings_patterns.md`.
 - For Python settings APIs, note that helper builders are limited; advanced settings are often created by constructing `PluginSettingDefinitionItem` and value objects directly.
 
-### 2) Package and publish
+### 2) Author result and action icons
+
+- Prefer Iconify SVG over emoji when the plugin needs polished result rows or action entries.
+- Keep `result` and `action` icons in the same Iconify family. Reuse the bundled starters in `assets/iconify/result.svg` and `assets/iconify/action.svg` unless the user already has a stronger visual direction. The bundled pair is based on Iconify Tabler icons (`list-details` and `hand-click`).
+- Copy starter SVGs into the plugin's own directory before using them at runtime. Do not reference files inside the skill folder from the plugin.
+- Prefer `relative` file icons for checked-in assets and inline `svg` only when the icon must be generated dynamically.
+- Optimize for small sizes. Use simple silhouettes, a square viewBox, and avoid thin strokes or dense details that blur at 16-32 px.
+- Keep the result icon descriptive and calm. Keep the action icon more active, directional, or click-oriented.
+- For plugin metadata icons in `plugin.json`, read `references/plugin_json_schema.md` and use `relative:` or `svg:` formats.
+
+Node.js example:
+
+```ts
+const resultIcon = { ImageType: "relative", ImageData: "icons/result.svg" };
+const actionIcon = { ImageType: "relative", ImageData: "icons/action.svg" };
+
+return [
+  {
+    Title: item.title,
+    SubTitle: item.subtitle,
+    Icon: resultIcon,
+    Actions: [
+      {
+        Name: "Open",
+        Icon: actionIcon,
+        IsDefault: true,
+        Action: async (ctx, actionCtx) => {
+          await this.openItem(item);
+        },
+      },
+    ],
+  },
+];
+```
+
+Python example:
+
+```python
+result_icon = WoxImage.new_relative("icons/result.svg")
+action_icon = WoxImage.new_relative("icons/action.svg")
+
+return [
+    Result(
+        title=item.title,
+        sub_title=item.subtitle,
+        icon=result_icon,
+        actions=[
+            ResultAction(
+                name="Open",
+                icon=action_icon,
+                is_default=True,
+                action=self.open_item,
+            )
+        ],
+    )
+]
+```
+
+### 3) Package and publish
 
 - For SDK plugins cloned from templates, run `make publish` inside the template repo.
 - Publishing notes: `references/publishing.md`.
@@ -40,4 +98,4 @@ description: Create, scaffold, implement, and publish Wox plugins (nodejs, pytho
 
 - scripts: `scripts/scaffold_wox_plugin.py`
 - references: `references/plugin_overview.md`, `references/scaffold_nodejs.md`, `references/scaffold_python.md`, `references/sdk_nodejs.md`, `references/sdk_python.md`, `references/plugin_json_schema.md`, `references/settings_patterns.md`, `references/plugin_i18n.md`, `references/publishing.md`, `references/store_publishing.md`
-- assets: `assets/script_plugin_templates/`
+- assets: `assets/script_plugin_templates/`, `assets/iconify/result.svg`, `assets/iconify/action.svg`
