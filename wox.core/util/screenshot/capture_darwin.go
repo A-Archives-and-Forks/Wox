@@ -148,17 +148,3 @@ func intersectPixelRect(a PixelRect, b PixelRect) (PixelRect, bool) {
 		Height: bottom - top,
 	}, true
 }
-
-func minInt(a int, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt(a int, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

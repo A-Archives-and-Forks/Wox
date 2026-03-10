@@ -231,6 +231,7 @@
   - Added a unit test covering shared toolbar and properties visibility rules
   - Verified screenshot tests and full repo build
   - Restyled the macOS toolbar buttons to use explicit dark-chrome colors for normal, active, confirm, cancel, and disabled states
+  - Fixed Linux CI compilation by moving shared integer helpers out of darwin-only code and adding a `linux && !cgo` fallback for `util/screen`
 - Files created/modified:
   - `wox.core/util/screenshot/bridge.go` (updated)
   - `wox.core/util/screenshot/session.go` (updated)
@@ -260,6 +261,7 @@
 | Screenshot unit tests after selection editing | `go test ./util/screenshot` | Shared selection creation, move, resize, and lifecycle tests pass | Tests passed; linker still emitted existing duplicate `-lobjc` warning | ✓ |
 | Screenshot unit tests after native chrome work | `go test ./util/screenshot` | Shared session and macOS bridge changes still pass | Tests passed; linker still emitted existing duplicate `-lobjc` warning | ✓ |
 | Repo build after native chrome work | `make build` | Main build still succeeds after toolbar and properties window work | Build succeeded; existing warnings remained in unrelated native modules | ✓ |
+| Linux screenshot compile after CI fix | `GOOS=linux GOARCH=amd64 go test -c ./util/screenshot` | Screenshot package cross-compiles for Linux CI | Compile-only check passed | ✓ |
 | Repo build after selection editing | `make build` | Main build still succeeds after shared selection editing and macOS handle rendering changes | Build succeeded; existing warnings remained in unrelated native modules | ✓ |
 
 ## Error Log

@@ -321,3 +321,17 @@ func clampFloat(value float64, min float64, max float64) float64 {
 	}
 	return value
 }
+
+func minInt(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}

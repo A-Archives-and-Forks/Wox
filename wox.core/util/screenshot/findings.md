@@ -61,6 +61,7 @@
 - The macOS shell now includes separate native toolbar and properties windows that are positioned from shared Go anchors
 - Shared `ToolState` now drives native tool selection, undo/redo/confirm enablement, and property controls for color, stroke width, and text size
 - Default AppKit button chrome produced incorrect toolbar text colors on the dark overlay, so the toolbar now applies explicit attributed-title colors and custom backgrounds
+- Linux CI exposed that generic helpers used by shared screenshot geometry cannot live in darwin-only files, and `util/screen` needs an explicit `linux && !cgo` fallback to keep cross-compiles working
 
 ## Technical Decisions
 | Decision | Rationale |
@@ -85,6 +86,7 @@
 | Keep move/resize semantics in shared Go geometry/session code | It avoids re-implementing selection behavior per platform and makes the behavior unit-testable |
 | Keep toolbar visibility, property visibility, and tool/property values in the shared `ViewModel` | It keeps native chrome thin and prevents the macOS and Windows shells from diverging on control state |
 | Style toolbar buttons explicitly instead of relying on default AppKit tinting | The dark screenshot chrome needs stable white, green, and red foreground colors across states |
+| Keep shared math helpers in cross-platform files, not OS-specific capture files | Linux and Windows builds should not depend on darwin-only compilation units for common geometry code |
 
 ## Issues Encountered
 | Issue | Resolution |
