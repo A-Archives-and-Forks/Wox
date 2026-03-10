@@ -3,6 +3,9 @@ package screen
 /*
 #include <windows.h>
 #include <shellscalingapi.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 typedef struct {
     int width;
@@ -10,6 +13,28 @@ typedef struct {
     int x;
     int y;
 } ScreenInfo;
+
+typedef struct {
+    char id[64];
+    int x;
+    int y;
+    int width;
+    int height;
+    int workX;
+    int workY;
+    int workWidth;
+    int workHeight;
+    int pixelX;
+    int pixelY;
+    int pixelWidth;
+    int pixelHeight;
+    int pixelWorkX;
+    int pixelWorkY;
+    int pixelWorkWidth;
+    int pixelWorkHeight;
+    double scale;
+    int primary;
+} ScreenDisplayInfo;
 
 // IMPORTANT: Understanding Physical vs Logical Coordinates in Windows
 //
@@ -130,8 +155,86 @@ ScreenInfo getActiveScreenSize() {
     // Fallback to mouse screen
     return getMouseScreenSize();
 }
+
+typedef struct {
+    ScreenDisplayInfo* displays;
+    int maxCount;
+    int count;
+} MonitorEnumContext;
+
+static int physicalToLogical(int value, float scale) {
+    return (int)(value / scale);
+}
+
+static BOOL CALLBACK enumerateMonitors(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
+    MonitorEnumContext* ctx = (MonitorEnumContext*)dwData;
+    if (ctx->count >= ctx->maxCount) {
+        return FALSE;
+    }
+
+    MONITORINFOEXW mi;
+    ZeroMemory(&mi, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(hMonitor, (MONITORINFO*)&mi)) {
+        return TRUE;
+    }
+
+    UINT dpi = GetDpiForMonitorCompat(hMonitor);
+    float scale = (float)dpi / 96.0f;
+    if (scale <= 0.0f) {
+        scale = 1.0f;
+    }
+
+    ScreenDisplayInfo info;
+    ZeroMemory(&info, sizeof(info));
+
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, mi.szDevice, -1, info.id, sizeof(info.id), NULL, NULL);
+    if (utf8Len <= 0) {
+        strcpy_s(info.id, sizeof(info.id), "monitor");
+    }
+
+    info.pixelX = mi.rcMonitor.left;
+    info.pixelY = mi.rcMonitor.top;
+    info.pixelWidth = mi.rcMonitor.right - mi.rcMonitor.left;
+    info.pixelHeight = mi.rcMonitor.bottom - mi.rcMonitor.top;
+    info.pixelWorkX = mi.rcWork.left;
+    info.pixelWorkY = mi.rcWork.top;
+    info.pixelWorkWidth = mi.rcWork.right - mi.rcWork.left;
+    info.pixelWorkHeight = mi.rcWork.bottom - mi.rcWork.top;
+
+    info.x = physicalToLogical(info.pixelX, scale);
+    info.y = physicalToLogical(info.pixelY, scale);
+    info.width = physicalToLogical(info.pixelWidth, scale);
+    info.height = physicalToLogical(info.pixelHeight, scale);
+    info.workX = physicalToLogical(info.pixelWorkX, scale);
+    info.workY = physicalToLogical(info.pixelWorkY, scale);
+    info.workWidth = physicalToLogical(info.pixelWorkWidth, scale);
+    info.workHeight = physicalToLogical(info.pixelWorkHeight, scale);
+    info.scale = scale;
+    info.primary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0 ? 1 : 0;
+
+    ctx->displays[ctx->count++] = info;
+    return TRUE;
+}
+
+int listDisplays(ScreenDisplayInfo* displays, int maxCount) {
+    if (!displays || maxCount <= 0) {
+        return 0;
+    }
+
+    MonitorEnumContext ctx;
+    ctx.displays = displays;
+    ctx.maxCount = maxCount;
+    ctx.count = 0;
+
+    EnumDisplayMonitors(NULL, NULL, enumerateMonitors, (LPARAM)&ctx);
+    return ctx.count;
+}
 */
 import "C"
+import "fmt"
+
+const maxDisplayCount = 16
 
 func GetMouseScreen() Size {
 	screenInfo := C.getMouseScreenSize()
@@ -151,4 +254,49 @@ func GetActiveScreen() Size {
 		X:      int(screenInfo.x),
 		Y:      int(screenInfo.y),
 	}
+}
+
+func listDisplays() ([]Display, error) {
+	buffer := make([]C.ScreenDisplayInfo, maxDisplayCount)
+	count := int(C.listDisplays(&buffer[0], C.int(len(buffer))))
+	if count < 0 {
+		return nil, fmt.Errorf("failed to enumerate displays")
+	}
+
+	displays := make([]Display, 0, count)
+	for i := 0; i < count; i++ {
+		info := buffer[i]
+		displays = append(displays, Display{
+			ID:   C.GoString(&info.id[0]),
+			Name: C.GoString(&info.id[0]),
+			Bounds: Rect{
+				X:      int(info.x),
+				Y:      int(info.y),
+				Width:  int(info.width),
+				Height: int(info.height),
+			},
+			WorkArea: Rect{
+				X:      int(info.workX),
+				Y:      int(info.workY),
+				Width:  int(info.workWidth),
+				Height: int(info.workHeight),
+			},
+			PixelBounds: Rect{
+				X:      int(info.pixelX),
+				Y:      int(info.pixelY),
+				Width:  int(info.pixelWidth),
+				Height: int(info.pixelHeight),
+			},
+			PixelWorkArea: Rect{
+				X:      int(info.pixelWorkX),
+				Y:      int(info.pixelWorkY),
+				Width:  int(info.pixelWorkWidth),
+				Height: int(info.pixelWorkHeight),
+			},
+			Scale:   float64(info.scale),
+			Primary: int(info.primary) == 1,
+		})
+	}
+
+	return displays, nil
 }

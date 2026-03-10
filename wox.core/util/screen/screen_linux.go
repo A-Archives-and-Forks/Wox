@@ -1,6 +1,8 @@
 package screen
 
 import (
+	"fmt"
+
 	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/gtk"
 )
@@ -75,4 +77,65 @@ func GetActiveScreen() Size {
 	// For Linux, we'll use the mouse screen info
 	// Note: Getting the truly active screen in Linux is complex and requires window manager integration
 	return GetMouseScreen()
+}
+
+func listDisplays() ([]Display, error) {
+	err := gtk.InitCheck(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	display, err := gdk.DisplayGetDefault()
+	if err != nil {
+		return nil, err
+	}
+
+	count := display.GetNMonitors()
+	displays := make([]Display, 0, count)
+	for i := 0; i < count; i++ {
+		monitor, monitorErr := display.GetMonitor(i)
+		if monitorErr != nil {
+			return nil, monitorErr
+		}
+
+		geometry := monitor.GetGeometry()
+		workarea := monitor.GetWorkarea()
+		scale := float64(monitor.GetScaleFactor())
+		if scale <= 0 {
+			scale = 1
+		}
+
+		displays = append(displays, Display{
+			ID:   fmt.Sprintf("%d", i),
+			Name: fmt.Sprintf("Display %d", i+1),
+			Bounds: Rect{
+				X:      int(geometry.GetX()),
+				Y:      int(geometry.GetY()),
+				Width:  int(geometry.GetWidth()),
+				Height: int(geometry.GetHeight()),
+			},
+			WorkArea: Rect{
+				X:      int(workarea.GetX()),
+				Y:      int(workarea.GetY()),
+				Width:  int(workarea.GetWidth()),
+				Height: int(workarea.GetHeight()),
+			},
+			PixelBounds: Rect{
+				X:      int(float64(geometry.GetX()) * scale),
+				Y:      int(float64(geometry.GetY()) * scale),
+				Width:  int(float64(geometry.GetWidth()) * scale),
+				Height: int(float64(geometry.GetHeight()) * scale),
+			},
+			PixelWorkArea: Rect{
+				X:      int(float64(workarea.GetX()) * scale),
+				Y:      int(float64(workarea.GetY()) * scale),
+				Width:  int(float64(workarea.GetWidth()) * scale),
+				Height: int(float64(workarea.GetHeight()) * scale),
+			},
+			Scale:   scale,
+			Primary: i == 0,
+		})
+	}
+
+	return displays, nil
 }
