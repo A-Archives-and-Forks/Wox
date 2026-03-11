@@ -29,3 +29,7 @@ func writeImageBytes(pngData []byte, dibData []byte) error {
 func isClipboardChanged() bool {
 	return false
 }
+
+func buildWatchSnapshot() string {
+	return ""
+}

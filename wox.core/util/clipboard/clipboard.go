@@ -172,7 +172,12 @@ func watchChange() {
 	start := time.Now()
 	data, err := Read()
 	if err != nil {
-		util.GetLogger().Warn(context.Background(), fmt.Sprintf("clipboard: changed but failed to read: %v", err))
+		snapshot := buildWatchSnapshot()
+		if snapshot != "" {
+			util.GetLogger().Warn(context.Background(), fmt.Sprintf("clipboard: changed but failed to read: %v %s", err, snapshot))
+		} else {
+			util.GetLogger().Warn(context.Background(), fmt.Sprintf("clipboard: changed but failed to read: %v", err))
+		}
 		return
 	}
 

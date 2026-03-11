@@ -31,6 +31,7 @@ var (
 	isClipboardFormatAvailable = user32.MustFindProc("IsClipboardFormatAvailable")
 	getClipboardSequenceNumber = user32.MustFindProc("GetClipboardSequenceNumber")
 	registerClipboardFormat    = user32.MustFindProc("RegisterClipboardFormatW")
+	getClipboardOwner          = user32.MustFindProc("GetClipboardOwner")
 	getOpenClipboardWindow     = user32.MustFindProc("GetOpenClipboardWindow")
 	getWindowThreadProcessId   = user32.MustFindProc("GetWindowThreadProcessId")
 	getWindowText              = user32.MustFindProc("GetWindowTextW")
@@ -487,6 +488,12 @@ func readBmpImage() (image.Image, error) {
 
 		// Copy header first
 		headerCopy = *(*bitmapHeader)(unsafe.Pointer(pMemBlk))
+		if isSuspiciousTinyBitmap(headerCopy) {
+			util.GetLogger().Warn(
+				util.NewTraceContext(),
+				fmt.Sprintf("clipboard: suspicious tiny CF_DIB %s %s", formatBitmapHeader(headerCopy), buildClipboardSnapshot()),
+			)
+		}
 
 		// Get the actual allocated memory size to prevent out-of-bounds reads
 		actualBytes, _, _ := gSize.Call(hClipDat)
@@ -544,7 +551,7 @@ func readBmpImage() (image.Image, error) {
 		srcData := (*[1 << 30]byte)(unsafe.Pointer(pMemBlk))[:dibSize:dibSize]
 		dibDataCopy = make([]byte, dibSize)
 		copy(dibDataCopy, srcData)
-		logClipboardDiagnostic(fmt.Sprintf("clipboard: read CF_DIB copied %s", buildDIBDataSummary(dibDataCopy)))
+		logClipboardDiagnostic(fmt.Sprintf("clipboard: read CF_DIB copied %s %s", buildDIBDataSummary(dibDataCopy), buildClipboardSnapshot()))
 
 		return nil
 	}()
@@ -743,12 +750,13 @@ func buildClipboardSnapshot() string {
 	}
 
 	return fmt.Sprintf(
-		"snapshot{seq=%d last_seq=%d last_write_ago_ms=%d %s %s}",
+		"snapshot{seq=%d last_seq=%d last_write_ago_ms=%d %s %s %s}",
 		currentClipboardSequence(),
 		lastSeqNum,
 		lastWriteAgoMs,
 		buildClipboardFormatsSnapshot(),
 		buildClipboardOwnerSnapshot(),
+		buildClipboardDataOwnerSnapshot(),
 	)
 }
 
@@ -794,13 +802,30 @@ func getPNGClipboardFormat() uint32 {
 func buildClipboardOwnerSnapshot() string {
 	hWnd, _, _ := getOpenClipboardWindow.Call()
 	if hWnd == 0 {
-		return "owner{none}"
+		return "open_owner{none}"
 	}
 
 	var pid uint32
 	getWindowThreadProcessId.Call(hWnd, uintptr(unsafe.Pointer(&pid)))
 	return fmt.Sprintf(
-		"owner{hwnd=0x%X pid=%d class=%q title=%q}",
+		"open_owner{hwnd=0x%X pid=%d class=%q title=%q}",
+		hWnd,
+		pid,
+		readWindowClassName(hWnd),
+		readWindowTitle(hWnd),
+	)
+}
+
+func buildClipboardDataOwnerSnapshot() string {
+	hWnd, _, _ := getClipboardOwner.Call()
+	if hWnd == 0 {
+		return "data_owner{none}"
+	}
+
+	var pid uint32
+	getWindowThreadProcessId.Call(hWnd, uintptr(unsafe.Pointer(&pid)))
+	return fmt.Sprintf(
+		"data_owner{hwnd=0x%X pid=%d class=%q title=%q}",
 		hWnd,
 		pid,
 		readWindowClassName(hWnd),
@@ -878,6 +903,26 @@ func buildDIBDataSummary(dibData []byte) string {
 		offset,
 		bytesChecksumString(dibData),
 	)
+}
+
+func isSuspiciousTinyBitmap(h bitmapHeader) bool {
+	width := absInt32(h.Width)
+	height := absInt32(h.Height)
+	if width == 0 || height == 0 {
+		return false
+	}
+	return width <= 4 && height <= 4
+}
+
+func absInt32(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func buildWatchSnapshot() string {
+	return buildClipboardSnapshot()
 }
 
 func logClipboardDiagnostic(message string) {
