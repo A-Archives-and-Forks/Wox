@@ -139,8 +139,81 @@ func GetFileDialogPathByPid(pid int) string {
 	return strings.TrimSpace(C.GoString(result))
 }
 
-// NavigateInFileExplorerByPid navigates the active Explorer window owned by pid to the target path.
-func NavigateInFileExplorerByPid(pid int, targetPath string) bool {
+type explorerShellWindowCandidate struct {
+	index        int
+	hwnd         uintptr
+	path         string
+	locationName string
+	z            int
+}
+
+func getExplorerWindowZOrder() map[uintptr]int {
+	zOrder := map[uintptr]int{}
+	idx := 0
+	for wnd := win.GetWindow(win.GetDesktopWindow(), win.GW_CHILD); wnd != 0; wnd = win.GetWindow(wnd, win.GW_HWNDNEXT) {
+		zOrder[uintptr(wnd)] = idx
+		idx++
+	}
+	return zOrder
+}
+
+func scoreExplorerShellWindowCandidate(candidate explorerShellWindowCandidate, windowTitle string) int {
+	score := 0
+
+	titleLower := strings.ToLower(strings.TrimSpace(windowTitle))
+	loc := strings.TrimSpace(candidate.locationName)
+	if loc == "" {
+		loc = filepath.Base(candidate.path)
+	}
+	locLower := strings.ToLower(loc)
+	if titleLower != "" && locLower != "" {
+		if titleLower == locLower {
+			score += 100
+		} else if strings.Contains(titleLower, locLower) || strings.Contains(locLower, titleLower) {
+			score += 50
+		}
+	}
+
+	if candidate.z < (1 << 30) {
+		score += 10
+	}
+
+	return score
+}
+
+func selectBestExplorerShellWindowCandidate(candidates []explorerShellWindowCandidate, preferredHwnd uintptr, windowTitle string) int {
+	if len(candidates) == 0 {
+		return -1
+	}
+
+	bestIdx := 0
+	bestScore := -1
+	for i, candidate := range candidates {
+		score := scoreExplorerShellWindowCandidate(candidate, windowTitle)
+		if preferredHwnd != 0 && candidate.hwnd == preferredHwnd {
+			score += 1000
+		}
+
+		if score > bestScore {
+			bestScore = score
+			bestIdx = i
+			continue
+		}
+
+		if score == bestScore && candidate.z < candidates[bestIdx].z {
+			bestIdx = i
+		}
+	}
+
+	return bestIdx
+}
+
+// NavigateInFileExplorer navigates the active Explorer tab/window owned by pid to targetPath.
+// Windows 11 Explorer tabs can share one top-level HWND while ShellWindows still exposes
+// one automation entry per tab. Navigating by pid/HWND alone can therefore hit the first
+// tab entry instead of the focused tab. We rank ShellWindows candidates with the active
+// window title and z-order before calling Navigate so type-to-search stays on the current tab.
+func NavigateInFileExplorer(pid int, targetPath string, windowTitle string) bool {
 	if pid <= 0 || targetPath == "" {
 		return false
 	}
@@ -199,13 +272,19 @@ func NavigateInFileExplorerByPid(pid int, targetPath string) bool {
 	count := int(countVar.Val)
 	countVar.Clear()
 
-	type shellWindowCandidate struct {
-		index int
-		hwnd  uintptr
+	getShellWindowLocationName := func(wDisp *ole.IDispatch) string {
+		v, err := oleutil.GetProperty(wDisp, "LocationName")
+		if err != nil {
+			return ""
+		}
+		name := strings.TrimSpace(v.ToString())
+		v.Clear()
+		return name
 	}
 
-	candidates := make([]shellWindowCandidate, 0, 4)
+	candidates := make([]explorerShellWindowCandidate, 0, 4)
 	uniqueHwnds := map[uintptr]struct{}{}
+	zOrder := getExplorerWindowZOrder()
 
 	for i := 0; i < count; i++ {
 		itemVar, err := oleutil.CallMethod(windowsDisp, "Item", i)
@@ -233,7 +312,16 @@ func NavigateInFileExplorerByPid(pid int, targetPath string) bool {
 			continue
 		}
 
-		candidates = append(candidates, shellWindowCandidate{index: i, hwnd: wnd})
+		z := 1 << 30
+		if v, ok := zOrder[wnd]; ok {
+			z = v
+		}
+		candidates = append(candidates, explorerShellWindowCandidate{
+			index:        i,
+			hwnd:         wnd,
+			locationName: getShellWindowLocationName(wDisp),
+			z:            z,
+		})
 		uniqueHwnds[wnd] = struct{}{}
 		itemVar.Clear()
 	}
@@ -268,16 +356,11 @@ func NavigateInFileExplorerByPid(pid int, targetPath string) bool {
 		targetHwnd = candidates[0].hwnd
 	}
 
-	bestIndex := -1
-	for _, c := range candidates {
-		if c.hwnd == targetHwnd {
-			bestIndex = c.index
-			break
-		}
+	bestCandidateIdx := selectBestExplorerShellWindowCandidate(candidates, targetHwnd, windowTitle)
+	if bestCandidateIdx < 0 {
+		return false
 	}
-	if bestIndex == -1 {
-		bestIndex = candidates[0].index
-	}
+	bestIndex := candidates[bestCandidateIdx].index
 
 	itemVar, err := oleutil.CallMethod(windowsDisp, "Item", bestIndex)
 	if err != nil {
@@ -675,23 +758,9 @@ func GetFileExplorerPathByPidAndWindowTitle(pid int, windowTitle string) string 
 		return p
 	}
 
-	// Compute z-order preference for visible windows (top-most earlier).
-	zOrder := map[uintptr]int{}
-	idx := 0
-	for wnd := win.GetWindow(win.GetDesktopWindow(), win.GW_CHILD); wnd != 0; wnd = win.GetWindow(wnd, win.GW_HWNDNEXT) {
-		zOrder[uintptr(wnd)] = idx
-		idx++
-	}
-
-	titleLower := strings.ToLower(strings.TrimSpace(windowTitle))
-	type candidate struct {
-		path         string
-		locationName string
-		hwnd         uintptr
-		z            int
-	}
-
-	candidates := make([]candidate, 0, 8)
+	foreground := uintptr(win.GetForegroundWindow())
+	zOrder := getExplorerWindowZOrder()
+	candidates := make([]explorerShellWindowCandidate, 0, 8)
 	for i := 0; i < count; i++ {
 		itemVar, err := oleutil.CallMethod(windowsDisp, "Item", i)
 		if err != nil {
@@ -729,7 +798,13 @@ func GetFileExplorerPathByPidAndWindowTitle(pid int, windowTitle string) string 
 		if v, ok := zOrder[hwnd]; ok {
 			z = v
 		}
-		candidates = append(candidates, candidate{path: p, locationName: loc, hwnd: hwnd, z: z})
+		candidates = append(candidates, explorerShellWindowCandidate{
+			index:        i,
+			hwnd:         hwnd,
+			path:         p,
+			locationName: loc,
+			z:            z,
+		})
 		itemVar.Clear()
 	}
 
@@ -737,37 +812,9 @@ func GetFileExplorerPathByPidAndWindowTitle(pid int, windowTitle string) string 
 		return ""
 	}
 
-	bestIdx := 0
-	bestScore := -1
-	for i, c := range candidates {
-		score := 0
-		loc := strings.TrimSpace(c.locationName)
-		if loc == "" {
-			loc = filepath.Base(c.path)
-		}
-		locLower := strings.ToLower(loc)
-		if titleLower != "" && locLower != "" {
-			if titleLower == locLower {
-				score += 100
-			} else if strings.Contains(titleLower, locLower) || strings.Contains(locLower, titleLower) {
-				score += 50
-			}
-		}
-
-		// Prefer top-most visible window when ambiguous.
-		if c.z < (1 << 30) {
-			score += 10
-		}
-
-		if score > bestScore {
-			bestScore = score
-			bestIdx = i
-		} else if score == bestScore {
-			// tie-break: closer to top in z-order
-			if c.z < candidates[bestIdx].z {
-				bestIdx = i
-			}
-		}
+	bestIdx := selectBestExplorerShellWindowCandidate(candidates, foreground, windowTitle)
+	if bestIdx < 0 {
+		return ""
 	}
 
 	return candidates[bestIdx].path

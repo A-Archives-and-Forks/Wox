@@ -47,7 +47,7 @@ func GetFileDialogPathByPid(pid int) string {
 	return ""
 }
 
-func NavigateInFileExplorerByPid(pid int, targetPath string) bool {
+func NavigateInFileExplorer(pid int, targetPath string, windowTitle string) bool {
 	return false
 }
 

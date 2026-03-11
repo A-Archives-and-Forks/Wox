@@ -132,8 +132,8 @@ func GetFileDialogPathByPid(pid int) string {
 	return strings.TrimSpace(C.GoString(result))
 }
 
-// NavigateInFileExplorerByPid navigates the active Finder window to targetPath.
-func NavigateInFileExplorerByPid(pid int, targetPath string) bool {
+// NavigateInFileExplorer navigates the active Finder window to targetPath.
+func NavigateInFileExplorer(pid int, targetPath string, windowTitle string) bool {
 	if pid <= 0 || targetPath == "" {
 		return false
 	}

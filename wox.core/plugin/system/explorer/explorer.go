@@ -536,7 +536,7 @@ func (c *ExplorerPlugin) jumpToFolder(ctx context.Context, env plugin.QueryEnv, 
 			return
 		}
 
-		if window.NavigateInFileExplorerByPid(env.ActiveWindowPid, folderPath) {
+		if window.NavigateInFileExplorer(env.ActiveWindowPid, folderPath, env.ActiveWindowTitle) {
 			window.ActivateWindowByPid(env.ActiveWindowPid)
 			return
 		}
