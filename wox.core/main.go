@@ -21,9 +21,8 @@ import (
 	"wox/ui"
 	"wox/updater"
 	"wox/util"
+	"wox/util/mainthread"
 	"wox/util/selection"
-
-	"golang.design/x/hotkey/mainthread"
 
 	_ "wox/plugin/host"
 
@@ -54,6 +53,10 @@ import (
 )
 
 func main() {
+	mainthread.Init(run)
+}
+
+func run() {
 	// logger depends on location, so location must be initialized first
 	locationErr := util.GetLocation().Init()
 	if locationErr != nil {
@@ -210,7 +213,7 @@ func main() {
 	}
 
 	// hotkey must be registered in main thread
-	mainthread.Init(func() {
+	mainthread.Call(func() {
 		registerMainHotkeyErr := ui.GetUIManager().RegisterMainHotkey(ctx, woxSetting.MainHotkey.Get())
 		if registerMainHotkeyErr != nil {
 			util.GetLogger().Error(ctx, fmt.Sprintf("failed to register main hotkey: %s", registerMainHotkeyErr.Error()))
@@ -225,20 +228,20 @@ func main() {
 				util.GetLogger().Error(ctx, fmt.Sprintf("failed to register query hotkey: %s", registerQueryHotkeyErr.Error()))
 			}
 		}
-
-		if util.IsProd() {
-			util.Go(ctx, "start ui", func() {
-				time.Sleep(time.Millisecond * 200) // wait websocket server start
-				appErr := ui.GetUIManager().StartUIApp(ctx)
-				if appErr != nil {
-					util.GetLogger().Error(ctx, fmt.Sprintf("failed to start ui app: %s", appErr.Error()))
-					return
-				}
-			})
-		}
-
-		ui.GetUIManager().StartWebsocketAndWait(ctx)
 	})
+
+	if util.IsProd() {
+		util.Go(ctx, "start ui", func() {
+			time.Sleep(time.Millisecond * 200) // wait websocket server start
+			appErr := ui.GetUIManager().StartUIApp(ctx)
+			if appErr != nil {
+				util.GetLogger().Error(ctx, fmt.Sprintf("failed to start ui app: %s", appErr.Error()))
+				return
+			}
+		})
+	}
+
+	ui.GetUIManager().StartWebsocketAndWait(ctx)
 }
 
 // retrieves the instance port from the existing instance lock file.

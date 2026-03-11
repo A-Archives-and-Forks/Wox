@@ -28,7 +28,7 @@ import (
 	"time"
 	"unsafe"
 
-	"golang.design/x/hotkey/mainthread"
+	"wox/util/mainthread"
 )
 
 // menuCallbacks maps menu item IDs to their callbacks.

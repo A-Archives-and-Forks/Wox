@@ -14,8 +14,7 @@ import (
 	"errors"
 	"unsafe"
 	"wox/util"
-
-	"golang.design/x/hotkey/mainthread"
+	"wox/util/mainthread"
 )
 
 func SwitchInputMethodABC() error {

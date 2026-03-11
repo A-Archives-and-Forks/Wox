@@ -26,14 +26,6 @@
 | macOS         | Homebrew | `brew tap wox-launcher/wox && brew install wox`                                                           |
 | Arch Linux    | AUR      | `yay -S wox-bin` or use your preferred AUR helper                                                         |
 
-## Linux Dependencies
-
-| Dependency | Link                                        | Description                                  | Install                     |
-| ---------- | ------------------------------------------- | -------------------------------------------- | --------------------------- |
-| keybinder  | https://github.com/kupferlauncher/keybinder | For recording the double modifier key hotkey | `apt install keybinder-3.0` |
-
-Due to the large number of Linux distributions, we only test Wox on Ubuntu. We cannot guarantee that it will work properly on other Linux platforms.
-
 ## Usages
 
 | Action        | Shortcut                                             |

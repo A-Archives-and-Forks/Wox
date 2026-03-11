@@ -744,6 +744,7 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 			case ev := <-events:
 				switch ev.eventType {
 				case overlayEventActivate:
+					c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: event activate active=%v waitingVisible=%v pending=%q", active, waitingVisible, pending))
 					active = true
 					// Don't reset state when we're waiting for the overlay to become visible.
 					// ShowApp steals focus from Explorer, which triggers deactivated → activated cycling.
@@ -752,6 +753,7 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 						resetState()
 					}
 				case overlayEventDeactivate:
+					c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: event deactivate active=%v waitingVisible=%v pending=%q", active, waitingVisible, pending))
 					active = false
 					if !waitingVisible {
 						resetState()
@@ -761,11 +763,13 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 					if localCtx == nil {
 						localCtx = ctx
 					}
+					visible := c.api.IsVisible(localCtx)
+					c.api.Log(localCtx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: event key=%q active=%v visible=%v waitingVisible=%v pending=%q", ev.key, active, visible, waitingVisible, pending))
 					if !active || ev.key == "" {
 						c.api.Log(localCtx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: ignore key=%q active=%v", ev.key, active))
 						continue
 					}
-					if c.api.IsVisible(localCtx) {
+					if visible {
 						c.api.Log(localCtx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: ignore key=%q (wox visible)", ev.key))
 						continue
 					}
@@ -793,7 +797,9 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 				if tickCtx == nil {
 					tickCtx = ctx
 				}
-				if c.api.IsVisible(tickCtx) {
+				visible := c.api.IsVisible(tickCtx)
+				c.api.Log(tickCtx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: ticker waitingVisible=%v visible=%v pending=%q active=%v", waitingVisible, visible, pending, active))
+				if visible {
 					if pending != "" {
 						queryText := "explorer " + pending
 						c.api.Log(tickCtx, plugin.LogLevelInfo, fmt.Sprintf("typeToSearch: changeQuery %q", queryText))

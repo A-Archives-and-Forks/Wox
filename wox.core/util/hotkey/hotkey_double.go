@@ -1,69 +1,64 @@
 package hotkey
 
 import (
-	"context"
-	"time"
 	"wox/util"
-
-	hook "github.com/robotn/gohook"
-	"golang.design/x/hotkey"
+	"wox/util/keyboard"
 )
 
-var initialized = false
-var lastKeyUpTimestamp = util.NewHashMap[uint16, int64]()
-var keyCallback = util.NewHashMap[uint16, func()]()
+var (
+	doubleKeyMu        = util.NewHashMap[keyboard.Key, int64]()
+	doubleKeyCallbacks = util.NewHashMap[keyboard.Key, func()]()
+	doubleKeyListener  keyboard.RawKeySubscription
+)
 
-func registerDoubleHotKey(ctx context.Context, modifier hotkey.Modifier, callback func()) error {
-	keyCode, err := getModifierKeyCode(ctx, modifier)
-	if err != nil {
-		return err
-	}
-	keyCallback.Store(keyCode, callback)
+func registerDoubleHotKey(modifierKey keyboard.Key, callback func()) error {
+	doubleKeyCallbacks.Store(modifierKey, callback)
 
-	if initialized {
+	if doubleKeyListener != nil {
 		return nil
 	}
-	initialized = true
 
-	util.Go(context.Background(), "double key listener", func() {
-		evChan := hook.Start()
-		for {
-			select {
-			case ev := <-evChan:
-				if ev.Kind == hook.KeyUp {
-					// util.GetLogger().Info(ctx, fmt.Sprintf("hotkey event received, ev: %v", ev.Keycode))
-					if cb, callbackExist := keyCallback.Load(ev.Keycode); callbackExist {
-						var keyUpMaxInterval int64 = 500
-						if v, ok := lastKeyUpTimestamp.Load(ev.Keycode); ok {
-							if util.GetSystemTimestamp()-v < keyUpMaxInterval {
-								lastKeyUpTimestamp.Delete(ev.Keycode)
-								util.Go(context.Background(), "double hotkey callback", func() {
-									cb()
-								})
-							}
-						}
-
-						lastKeyUpTimestamp.Store(ev.Keycode, util.GetSystemTimestamp())
-					} else {
-						lastKeyUpTimestamp.Clear()
-					}
-				}
-			default:
-				// avoid 100% cpu usage
-				time.Sleep(20 * time.Millisecond)
-			}
+	listener, err := keyboard.AddRawKeyListener(func(event keyboard.RawKeyEvent) bool {
+		if event.Type != keyboard.EventTypeKeyUp || event.Key == keyboard.KeyUnknown {
+			return false
 		}
-	})
 
+		callback, ok := doubleKeyCallbacks.Load(event.Key)
+		if !ok || callback == nil {
+			return false
+		}
+
+		now := util.GetSystemTimestamp()
+		if lastUpAt, found := doubleKeyMu.Load(event.Key); found && now-lastUpAt < 500 {
+			doubleKeyMu.Delete(event.Key)
+			util.Go(util.NewTraceContext(), "double hotkey callback", func() {
+				callback()
+			})
+			return false
+		}
+
+		doubleKeyMu.Store(event.Key, now)
+		return false
+	})
+	if err != nil {
+		doubleKeyCallbacks.Delete(modifierKey)
+		return err
+	}
+
+	doubleKeyListener = listener
 	return nil
 }
 
-func unregisterDoubleHotkey(ctx context.Context, modifier hotkey.Modifier) error {
-	keyCode, err := getModifierKeyCode(ctx, modifier)
-	if err != nil {
-		return err
+func unregisterDoubleHotKey(modifierKey keyboard.Key) {
+	doubleKeyCallbacks.Delete(modifierKey)
+	doubleKeyMu.Delete(modifierKey)
+
+	if doubleKeyCallbacks.Len() > 0 {
+		return
 	}
 
-	keyCallback.Delete(keyCode)
-	return nil
+	if doubleKeyListener != nil {
+		_ = doubleKeyListener.Close()
+		doubleKeyListener = nil
+	}
 }

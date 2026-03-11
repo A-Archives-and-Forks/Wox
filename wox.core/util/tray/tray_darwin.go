@@ -13,7 +13,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"golang.design/x/hotkey/mainthread"
+	"wox/util/mainthread"
 )
 
 var (

@@ -43,7 +43,7 @@ import (
 	"image/png"
 	"unsafe"
 
-	"golang.design/x/hotkey/mainthread"
+	"wox/util/mainthread"
 )
 
 var clickCallbacks = make(map[string]func())

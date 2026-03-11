@@ -10,7 +10,6 @@ require (
 	github.com/forPelevin/gomoji v1.4.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-ole/go-ole v1.3.0
-	github.com/godbus/dbus/v5 v5.2.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/gotk3/gotk3 v0.6.5-0.20240618185848-ff349ae13f56
@@ -24,7 +23,6 @@ require (
 	github.com/openai/openai-go/v3 v3.11.0
 	github.com/otiai10/copy v1.14.1
 	github.com/petermattis/goid v0.0.0-20251121121749-a11dd1a45f9a
-	github.com/robotn/gohook v0.42.3
 	github.com/rs/cors v1.11.1
 	github.com/samber/lo v1.52.0
 	github.com/saracen/fastzip v0.2.0
@@ -38,7 +36,6 @@ require (
 	github.com/tmc/langchaingo v0.1.14
 	github.com/wissance/stringFormatter v1.6.1
 	go.uber.org/zap v1.27.1
-	golang.design/x/hotkey v0.4.1
 	golang.org/x/image v0.34.0
 	golang.org/x/sys v0.39.0
 	gorm.io/driver/sqlite v1.6.0
@@ -47,15 +44,14 @@ require (
 )
 
 require (
-	github.com/akavel/rsrc v0.10.2 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/jsonschema-go v0.3.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
-	github.com/josephspurrier/goversioninfo v1.5.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/otiai10/mint v1.6.3 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -63,10 +59,8 @@ require (
 	github.com/saracen/zipextra v0.0.0-20250129175152-f1aa42d25216 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/vcaesar/keycode v0.10.1 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.design/x/mainthread v0.3.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect

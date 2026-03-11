@@ -43,7 +43,7 @@ build: clean
 	$(MAKE) woxmr-build
 ifeq ($(PLATFORM),windows)
 	# Generate Windows VERSIONINFO using the version from updater.CURRENT_VERSION
-	cd . && go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo \
+	cd . && go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0 \
 		-o resource_windows.syso -64 -icon resource/app.ico \
 		-product-name "Wox" -description "Wox" -internal-name "Wox" -original-name "wox-windows-$(GOARCH).exe" \
 		-product-version "$(VERSION)" -file-version "$(VERSION)" \
