@@ -659,14 +659,14 @@ class WoxLauncherController extends GetxController {
     // Workaround for Windows DWM Acrylic bug:
     // When resizing a hidden window to its full height, DWM caching fails to compose the transparent alpha channel upon showing.
     // We must manually trigger a resize event *after* the window is fully visible to force DWM recomposition.
-    // Note: We cannot achieve this simply by firing SetWindowPos with SWP_FRAMECHANGED in native C++ during WM_SHOWWINDOW. 
-    // Because of the timing difference between DWM and Flutter's DirectX Swapchain, an empty native window update gets 
+    // Note: We cannot achieve this simply by firing SetWindowPos with SWP_FRAMECHANGED in native C++ during WM_SHOWWINDOW.
+    // Because of the timing difference between DWM and Flutter's DirectX Swapchain, an empty native window update gets
     // immediately overwritten/ignored by the Flutter engine if the logical window height remains unchanged.
     // Thus, we physically alter the height by 1 pixel via Dart in a delayed manner to strictly ensure a new valid frame is painted.
     if (Platform.isWindows) {
       Future.delayed(const Duration(milliseconds: 25), () {
         if (!isClosed) {
-          resizeHeight(forceFrameChange: true);
+          resizeHeight(forceDwmRecomposition: true);
         }
       });
     }
@@ -1670,7 +1670,7 @@ class WoxLauncherController extends GetxController {
     }
   }
 
-  Future<void> resizeHeight({bool forceFrameChange = false}) async {
+  Future<void> resizeHeight({bool forceDwmRecomposition = false}) async {
     // Don't resize when in setting view, setting view has its own fixed size (1200x800)
     if (isInSettingView.value) {
       return;
@@ -1678,7 +1678,7 @@ class WoxLauncherController extends GetxController {
     var totalHeight = calculateWindowHeight();
 
     // Force DWM to recompose Acrylic by adding a single pixel to bypass caching identical sizes
-    if (forceFrameChange && Platform.isWindows) {
+    if (forceDwmRecomposition && Platform.isWindows) {
       totalHeight += 1;
     }
 
@@ -1705,7 +1705,10 @@ class WoxLauncherController extends GetxController {
 
     // Windows-specific debounce: if height is increasing, debounce and only apply the last resize.
     // If height is decreasing or same, resize immediately.
-    if (Platform.isWindows && !isQueryBoxAtBottom.value) {
+    // We explicitly bypass the debounce when forceDwmRecomposition is true because it only
+    // happens on ShowApp, and we need the +1 pixel height change to be applied instantly
+    // to force DWM recomposition and prevent the old UI buffer from getting stuck as a background.
+    if (Platform.isWindows && !isQueryBoxAtBottom.value && !forceDwmRecomposition) {
       final currentSize = await windowManager.getSize();
       if (totalHeight > currentSize.height) {
         resizeHeightDebounceTimer?.cancel();
