@@ -131,10 +131,13 @@ void FlutterWindow::RestorePreviousActiveWindow(HWND selfHwnd)
   sprintf_s(prevStr, "%p", prev);
   Log(std::string("Window: restoring previous foreground hwnd=") + prevStr);
 
-  // If the previous window is minimized, restore it.
+  // If the previous window is minimized, do not restore it.
+  // The user might have minimized it explicitly, and Wox being an overlay shouldn't change the window layout.
   if (IsIconic(prev))
   {
-    ShowWindow(prev, SW_RESTORE);
+    Log("Window: previous foreground is minimized, skipping restore");
+    previous_active_window_ = nullptr;
+    return;
   }
 
   // Fast path: try directly.
@@ -905,14 +908,30 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       Log("[KEYLOG][NATIVE] Hide called, using ShowWindow(SW_HIDE)");
       blur_guard_active_ = false;
       blur_guard_until_tick_ = 0;
-      ShowWindow(hwnd, SW_HIDE);
-      RestorePreviousActiveWindow(hwnd);
 
-      // Retry restore after the system finishes processing activation changes.
-      KillTimer(hwnd, kRestoreForegroundTimerId1);
-      KillTimer(hwnd, kRestoreForegroundTimerId2);
-      SetTimer(hwnd, kRestoreForegroundTimerId1, 30, nullptr);
-      SetTimer(hwnd, kRestoreForegroundTimerId2, 200, nullptr);
+      HWND fg = GetForegroundWindow();
+      bool isForeground = (fg == hwnd || fg == GetAncestor(hwnd, GA_ROOT));
+
+      ShowWindow(hwnd, SW_HIDE);
+
+      if (isForeground)
+      {
+        RestorePreviousActiveWindow(hwnd);
+
+        // Retry restore after the system finishes processing activation changes.
+        KillTimer(hwnd, kRestoreForegroundTimerId1);
+        KillTimer(hwnd, kRestoreForegroundTimerId2);
+        SetTimer(hwnd, kRestoreForegroundTimerId1, 30, nullptr);
+        SetTimer(hwnd, kRestoreForegroundTimerId2, 200, nullptr);
+      }
+      else
+      {
+        Log("Window: Wox is not foreground when hiding, skipping restore");
+        previous_active_window_ = nullptr;
+        KillTimer(hwnd, kRestoreForegroundTimerId1);
+        KillTimer(hwnd, kRestoreForegroundTimerId2);
+      }
+
       result->Success();
     }
     else if (method_name == "focus")
