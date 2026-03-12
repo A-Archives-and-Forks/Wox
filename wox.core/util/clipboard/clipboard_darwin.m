@@ -15,6 +15,30 @@ _Bool hasClipboardChanged() {
     return 0;
 }
 
+// GetClipboardContentType returns 0=empty, 1=text, 2=image, 3=file
+int GetClipboardContentType() {
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+
+    // Check for file URLs first (highest priority)
+    NSArray *fileClasses = [NSArray arrayWithObject:[NSURL class]];
+    if ([pasteboard canReadObjectForClasses:fileClasses options:nil]) {
+        return 3;
+    }
+
+    // Check for image types
+    NSArray *imageTypes = [NSArray arrayWithObjects:NSPasteboardTypePNG, NSPasteboardTypeTIFF, nil];
+    if ([pasteboard availableTypeFromArray:imageTypes] != nil) {
+        return 2;
+    }
+
+    // Check for text
+    if ([pasteboard availableTypeFromArray:[NSArray arrayWithObject:NSPasteboardTypeString]] != nil) {
+        return 1;
+    }
+
+    return 0;
+}
+
 const char* GetClipboardText() {
     @try {
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];

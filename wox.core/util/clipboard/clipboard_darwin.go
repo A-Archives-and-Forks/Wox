@@ -11,6 +11,7 @@ unsigned char *GetClipboardImage(size_t *length);
 void WriteClipboardText(const char *text);
 void WriteClipboardImage(const char *imageData, int length);
 _Bool hasClipboardChanged();
+int GetClipboardContentType();
 */
 import "C"
 import (
@@ -24,6 +25,21 @@ import (
 
 	"github.com/samber/lo"
 )
+
+// readClipboardContentType detects the current clipboard content type.
+func readClipboardContentType() Type {
+	t := C.GetClipboardContentType()
+	switch int(t) {
+	case 1:
+		return ClipboardTypeText
+	case 2:
+		return ClipboardTypeImage
+	case 3:
+		return ClipboardTypeFile
+	default:
+		return ""
+	}
+}
 
 func readText() (string, error) {
 	text := C.GetClipboardText()

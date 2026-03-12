@@ -41,25 +41,29 @@ type Data interface {
 }
 
 func Read() (Data, error) {
-	imageData, imgErr := readImage()
-	if imgErr == nil {
-		return &ImageData{
-			Image: imageData,
-		}, nil
+	contentType := readClipboardContentType()
+	switch contentType {
+	case ClipboardTypeText:
+		text, err := readText()
+		if err != nil {
+			return nil, err
+		}
+		return &TextData{Text: text}, nil
+	case ClipboardTypeImage:
+		img, err := readImage()
+		if err != nil {
+			return nil, err
+		}
+		return &ImageData{Image: img}, nil
+	case ClipboardTypeFile:
+		paths, err := readFilePaths()
+		if err != nil {
+			return nil, err
+		}
+		return &FilePathData{FilePaths: paths}, nil
+	default:
+		return nil, noDataErr
 	}
-
-	otherData, otherErr := ReadFilesAndText()
-	if otherErr == nil {
-		return otherData, nil
-	}
-
-	// If image decoding failed with a real error and no fallback data exists,
-	// surface the image error for diagnostics (instead of masking as noDataErr).
-	if imgErr != nil && imgErr != noDataErr && otherErr == noDataErr {
-		return nil, imgErr
-	}
-
-	return nil, otherErr
 }
 
 func ReadFilesAndText() (Data, error) {

@@ -2,6 +2,11 @@ package clipboard
 
 import "image"
 
+// readClipboardContentType is not implemented on Linux.
+func readClipboardContentType() Type {
+	return ""
+}
+
 func readText() (string, error) {
 	return "", notImplement
 }
