@@ -22,10 +22,10 @@ import (
 // and converting it to PNG, cached on disk by extension.
 
 var (
-	shell32          = syscall.NewLazyDLL("shell32.dll")
-	user32           = syscall.NewLazyDLL("user32.dll")
-	shGetFileInfo    = shell32.NewProc("SHGetFileInfoW")
-	extractIconEx    = shell32.NewProc("ExtractIconExW")
+	shell32             = syscall.NewLazyDLL("shell32.dll")
+	user32              = syscall.NewLazyDLL("user32.dll")
+	shGetFileInfo       = shell32.NewProc("SHGetFileInfoW")
+	extractIconEx       = shell32.NewProc("ExtractIconExW")
 	privateExtractIcons = user32.NewProc("PrivateExtractIconsW")
 )
 
@@ -38,11 +38,11 @@ type shFileInfo struct {
 }
 
 const (
-	SHGFI_ICON              = 0x000000100
-	SHGFI_LARGEICON         = 0x000000000
-	SHGFI_USEFILEATTRIBUTES = 0x000000010
-	FILE_ATTRIBUTE_NORMAL   = 0x00000080
-	FILE_ATTRIBUTE_OFFLINE  = 0x00001000
+	SHGFI_ICON                           = 0x000000100
+	SHGFI_LARGEICON                      = 0x000000000
+	SHGFI_USEFILEATTRIBUTES              = 0x000000010
+	FILE_ATTRIBUTE_NORMAL                = 0x00000080
+	FILE_ATTRIBUTE_OFFLINE               = 0x00001000
 	FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
 	FILE_ATTRIBUTE_RECALL_ON_OPEN        = 0x00040000
 )
@@ -164,7 +164,7 @@ func getFileIconImpl(ctx context.Context, filePath string) (string, error) {
 	if strings.TrimSpace(filePath) == "" {
 		return "", errors.New("empty path")
 	}
-	
+
 	fi, err := os.Stat(filePath)
 	if err != nil {
 		return "", err
@@ -442,4 +442,54 @@ func convertIconToImage(ctx context.Context, hIcon win.HICON) (image.Image, erro
 	}
 
 	return img, nil
+}
+
+// HasDedicatedExecutableIcon reports whether an executable icon differs from the generic Windows .exe icon.
+func HasDedicatedExecutableIcon(ctx context.Context, filePath string) (bool, error) {
+	if !strings.EqualFold(filepath.Ext(filePath), ".exe") {
+		return true, nil
+	}
+
+	fileIcon, err := getHighResIcon(ctx, filePath)
+	if err != nil {
+		fileIcon, err = getIconUsingExtractIconEx(ctx, filePath)
+		if err != nil {
+			return false, nil
+		}
+	}
+
+	defaultIcon, err := getWindowsDefaultIcon(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	return !iconsEqual(fileIcon, defaultIcon), nil
+}
+
+func iconsEqual(left image.Image, right image.Image) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+
+	leftIcon := normalizeIcon(left)
+	rightIcon := normalizeIcon(right)
+	bounds := leftIcon.Bounds()
+	if bounds != rightIcon.Bounds() {
+		return false
+	}
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			if leftIcon.At(x, y) != rightIcon.At(x, y) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func normalizeIcon(icon image.Image) *image.NRGBA {
+	const iconSize = 48
+	return imaging.Resize(imaging.Clone(icon), iconSize, iconSize, imaging.Lanczos)
 }

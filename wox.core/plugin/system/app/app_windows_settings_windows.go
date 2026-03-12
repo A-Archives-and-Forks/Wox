@@ -18,10 +18,7 @@ type windowsSettingItem struct {
 }
 
 func (a *WindowsRetriever) getWindowsSettingsApps(ctx context.Context) []appInfo {
-	systemRoot := os.Getenv("SystemRoot")
-	if systemRoot == "" {
-		systemRoot = `C:\Windows`
-	}
+	systemRoot := getWindowsSystemRoot()
 
 	defaultIcon := a.iconFromFile(ctx, filepath.Join(systemRoot, "ImmersiveControlPanel", "SystemSettings.exe"))
 	if defaultIcon.IsEmpty() {

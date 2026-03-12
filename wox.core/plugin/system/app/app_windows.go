@@ -94,6 +94,21 @@ func (a *WindowsRetriever) GetPlatform() string {
 	return util.PlatformWindows
 }
 
+func getWindowsSystemRoot() string {
+	systemRoot := strings.TrimSpace(os.Getenv("SystemRoot"))
+	if systemRoot == "" {
+		systemRoot = `C:\Windows`
+	}
+
+	return filepath.Clean(systemRoot)
+}
+
+func isWindowsSystem32Path(appPath string) bool {
+	system32Path := strings.ToLower(filepath.Clean(filepath.Join(getWindowsSystemRoot(), "System32")))
+	cleanPath := strings.ToLower(filepath.Clean(appPath))
+	return strings.HasPrefix(cleanPath, system32Path+"\\") || cleanPath == system32Path
+}
+
 func (a *WindowsRetriever) GetAppDirectories(ctx context.Context) []appDirectory {
 	// get the start menu and program files directories for current user
 	usr, _ := user.Current()
@@ -123,6 +138,12 @@ func (a *WindowsRetriever) GetAppDirectories(ctx context.Context) []appDirectory
 			Path:           "C:\\Program Files (x86)",
 			Recursive:      true,
 			RecursiveDepth: 2,
+		},
+		{
+			// Many built-in launchable tools like mstsc.exe only live in System32.
+			Path:           filepath.Join(getWindowsSystemRoot(), "System32"),
+			Recursive:      false,
+			RecursiveDepth: 0,
 		},
 		{
 			Path:           usr.HomeDir + "\\Desktop",
@@ -193,6 +214,15 @@ func (a *WindowsRetriever) parseExe(ctx context.Context, appPath string) (appInf
 		// Fallback to exe filename if no display name found
 		displayName = strings.TrimSuffix(filepath.Base(appPath), filepath.Ext(appPath))
 		util.GetLogger().Debug(ctx, fmt.Sprintf("Using exe filename as display name: %s", displayName))
+	}
+
+	hasDedicatedIcon, iconCheckErr := fileicon.HasDedicatedExecutableIcon(ctx, appPath)
+	if iconCheckErr != nil {
+		util.GetLogger().Debug(ctx, fmt.Sprintf("Failed to classify executable icon for %s: %s", appPath, iconCheckErr.Error()))
+	}
+	// Filter generic System32 executables to reduce noise after adding System32 to the app index.
+	if isWindowsSystem32Path(appPath) && !hasDedicatedIcon {
+		return appInfo{}, fmt.Errorf("%w: system32 executable without dedicated icon", errSkipAppIndexing)
 	}
 
 	return appInfo{

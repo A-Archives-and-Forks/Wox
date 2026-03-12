@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -28,6 +29,8 @@ import (
 )
 
 var appIcon = common.PluginAppIcon
+
+var errSkipAppIndexing = errors.New("skip app indexing")
 
 type AppType = string
 
@@ -645,6 +648,10 @@ func (a *ApplicationPlugin) indexAppsByDirectory(ctx context.Context) []appInfo 
 
 				info, getErr := a.retriever.ParseAppInfo(ctx, appPath)
 				if getErr != nil {
+					if errors.Is(getErr, errSkipAppIndexing) {
+						a.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("skip indexing app %s: %s", appPath, getErr.Error()))
+						continue
+					}
 					a.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("error getting app info for %s: %s", appPath, getErr.Error()))
 					continue
 				}
