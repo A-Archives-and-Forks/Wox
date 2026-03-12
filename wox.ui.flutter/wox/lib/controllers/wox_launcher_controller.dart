@@ -655,6 +655,22 @@ class WoxLauncherController extends GetxController {
     }
     await windowManager.show();
     await windowManager.focus();
+
+    // Workaround for Windows DWM Acrylic bug:
+    // When resizing a hidden window to its full height, DWM caching fails to compose the transparent alpha channel upon showing.
+    // We must manually trigger a resize event *after* the window is fully visible to force DWM recomposition.
+    // Note: We cannot achieve this simply by firing SetWindowPos with SWP_FRAMECHANGED in native C++ during WM_SHOWWINDOW. 
+    // Because of the timing difference between DWM and Flutter's DirectX Swapchain, an empty native window update gets 
+    // immediately overwritten/ignored by the Flutter engine if the logical window height remains unchanged.
+    // Thus, we physically alter the height by 1 pixel via Dart in a delayed manner to strictly ensure a new valid frame is painted.
+    if (Platform.isWindows) {
+      Future.delayed(const Duration(milliseconds: 25), () {
+        if (!isClosed) {
+          resizeHeight(forceFrameChange: true);
+        }
+      });
+    }
+
     focusQueryBox(selectAll: params.selectAll);
 
     if (params.isQueryFocus) {
@@ -1654,12 +1670,17 @@ class WoxLauncherController extends GetxController {
     }
   }
 
-  Future<void> resizeHeight() async {
+  Future<void> resizeHeight({bool forceFrameChange = false}) async {
     // Don't resize when in setting view, setting view has its own fixed size (1200x800)
     if (isInSettingView.value) {
       return;
     }
-    final totalHeight = calculateWindowHeight();
+    var totalHeight = calculateWindowHeight();
+
+    // Force DWM to recompose Acrylic by adding a single pixel to bypass caching identical sizes
+    if (forceFrameChange && Platform.isWindows) {
+      totalHeight += 1;
+    }
 
     double targetWidth = forceWindowWidth != 0 ? forceWindowWidth : WoxSettingUtil.instance.currentSetting.appWidth.toDouble();
     if (isQueryBoxAtBottom.value) {
