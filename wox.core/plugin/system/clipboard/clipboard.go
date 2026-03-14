@@ -22,6 +22,7 @@ import (
 	"wox/setting/definition"
 	"wox/util"
 	"wox/util/clipboard"
+	"wox/util/shell"
 
 	"github.com/cdfmlr/ellipsis"
 	"github.com/disintegration/imaging"
@@ -545,6 +546,49 @@ func (c *ClipboardPlugin) shortHashBytes(data []byte) string {
 	return hex.EncodeToString(sum[:6])
 }
 
+func resolveClipboardDirectoryPath(content string) string {
+	path := strings.TrimSpace(content)
+	if path == "" {
+		return ""
+	}
+
+	if len(path) >= 2 {
+		firstChar := path[0]
+		lastChar := path[len(path)-1]
+		if (firstChar == '"' && lastChar == '"') || (firstChar == '\'' && lastChar == '\'') {
+			path = strings.TrimSpace(path[1 : len(path)-1])
+		}
+	}
+	if path == "" {
+		return ""
+	}
+
+	if path == "~" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		path = homeDir
+	} else if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~\\") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		path = filepath.Join(homeDir, path[2:])
+	}
+
+	if !filepath.IsAbs(path) {
+		return ""
+	}
+
+	path = filepath.Clean(path)
+	if !util.IsDirExists(path) {
+		return ""
+	}
+
+	return path
+}
+
 // convertRecordToResult converts a database record to a query result
 func (c *ClipboardPlugin) convertRecordToResult(ctx context.Context, record ClipboardRecord, query plugin.Query) plugin.QueryResult {
 	if record.Type == string(clipboard.ClipboardTypeText) {
@@ -561,6 +605,7 @@ func (c *ClipboardPlugin) convertRecordToResult(ctx context.Context, record Clip
 // convertTextRecord converts a text record to a query result
 func (c *ClipboardPlugin) convertTextRecord(ctx context.Context, record ClipboardRecord, query plugin.Query) plugin.QueryResult {
 	primaryActionCode := c.api.GetSetting(ctx, primaryActionSettingKey)
+	openDirectoryPath := resolveClipboardDirectoryPath(record.Content)
 
 	actions := []plugin.QueryResultAction{
 		{
@@ -586,6 +631,19 @@ func (c *ClipboardPlugin) convertTextRecord(ctx context.Context, record Clipboar
 	})
 	if pasteToActiveWindowErr == nil {
 		actions = append(actions, pasteToActiveWindowAction)
+	}
+
+	if openDirectoryPath != "" {
+		actions = append(actions, plugin.QueryResultAction{
+			Name: "i18n:plugin_clipboard_open_path",
+			Icon: common.OpenContainingFolderIcon,
+			Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+				c.moveRecordToTop(ctx, record.ID)
+				if err := shell.Open(openDirectoryPath); err != nil {
+					c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to open clipboard directory path: id=%s path=%s err=%s", record.ID, openDirectoryPath, err.Error()))
+				}
+			},
+		})
 	}
 
 	if !record.IsFavorite {
