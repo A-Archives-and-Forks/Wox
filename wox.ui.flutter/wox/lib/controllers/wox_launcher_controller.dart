@@ -1968,9 +1968,7 @@ class WoxLauncherController extends GetxController {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await Future.delayed(const Duration(milliseconds: 100));
         await settingController.switchToPluginList(traceId, false);
-        settingController.filterPluginKeywordController.text = context.param;
-        settingController.filterPlugins();
-        settingController.setFirstFilteredPluginDetailActive();
+        settingController.focusInstalledPlugin(context.param);
         settingController.switchToPluginSettingTab();
       });
     }

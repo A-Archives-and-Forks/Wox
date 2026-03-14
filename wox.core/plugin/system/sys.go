@@ -283,7 +283,7 @@ func (r *SysPlugin) Query(ctx context.Context, query plugin.Query) (results []pl
 						Action: func(ctx context.Context, actionContext plugin.ActionContext) {
 							plugin.GetPluginManager().GetUI().OpenSettingWindow(ctx, common.SettingWindowContext{
 								Path:  "/plugin/setting",
-								Param: pluginName,
+								Param: instance.Metadata.Id,
 							})
 						},
 						PreventHideAfterAction: true,

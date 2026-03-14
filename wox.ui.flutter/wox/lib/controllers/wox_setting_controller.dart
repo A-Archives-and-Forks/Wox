@@ -51,6 +51,9 @@ class WoxSettingController extends GetxController {
   final filterRuntimeScriptPythonOnly = false.obs;
   final activePlugin = PluginDetail.empty().obs;
   final isStorePluginList = true.obs;
+  String pendingInstalledPluginFocusRef = '';
+  final pluginListScrollController = ScrollController();
+  final Map<String, GlobalKey> pluginListItemKeys = <String, GlobalKey>{};
   late TabController activePluginTabController;
 
   // UI state: show loading spinner when refreshing visible plugin list
@@ -235,6 +238,14 @@ class WoxSettingController extends GetxController {
 
     filterPlugins();
 
+    if (pendingInstalledPluginFocusRef.isNotEmpty) {
+      final focused = focusInstalledPlugin(pendingInstalledPluginFocusRef, keepPendingFocus: true);
+      if (focused) {
+        pendingInstalledPluginFocusRef = '';
+        return;
+      }
+    }
+
     if (currentActivePluginId.isEmpty) {
       setFirstFilteredPluginDetailActive();
       return;
@@ -359,6 +370,79 @@ class WoxSettingController extends GetxController {
 
   Future<void> switchToDataView(String traceId) async {
     activeNavPath.value = 'data';
+  }
+
+  GlobalKey getPluginListItemKey(String pluginId) {
+    return pluginListItemKeys.putIfAbsent(pluginId, () => GlobalKey());
+  }
+
+  Future<void> ensurePluginVisible(String pluginId) async {
+    final targetIndex = filteredPluginList.indexWhere((plugin) => plugin.id == pluginId);
+    if (targetIndex < 0) {
+      return;
+    }
+    final itemKey = pluginListItemKeys[pluginId];
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (pluginListScrollController.hasClients) {
+        const estimatedItemExtent = 88.0;
+        final targetOffset = targetIndex * estimatedItemExtent;
+        final maxExtent = pluginListScrollController.position.maxScrollExtent;
+        final clampedOffset = targetOffset.clamp(0.0, maxExtent);
+
+        if ((pluginListScrollController.offset - clampedOffset).abs() > 4) {
+          await pluginListScrollController.animateTo(clampedOffset, duration: const Duration(milliseconds: 180), curve: Curves.easeOutCubic);
+        }
+      }
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final itemContext = itemKey?.currentContext;
+        if (itemContext != null) {
+          Scrollable.ensureVisible(itemContext, duration: const Duration(milliseconds: 120), curve: Curves.easeOutCubic, alignment: 0.5);
+        }
+      });
+    });
+  }
+
+  void resetPluginFilters() {
+    filterPluginKeywordController.text = "";
+    filterEnabledPluginsOnly.value = false;
+    filterDisabledPluginsOnly.value = false;
+    filterUpgradablePluginsOnly.value = false;
+    filterUninstalledPluginsOnly.value = false;
+    filterRuntimeNodejsOnly.value = false;
+    filterRuntimePythonOnly.value = false;
+    filterRuntimeScriptOnly.value = false;
+    filterRuntimeScriptNodejsOnly.value = false;
+    filterRuntimeScriptPythonOnly.value = false;
+  }
+
+  bool focusInstalledPlugin(String pluginRef, {bool keepPendingFocus = false}) {
+    if (!keepPendingFocus) {
+      pendingInstalledPluginFocusRef = pluginRef;
+    }
+
+    resetPluginFilters();
+    filterPlugins();
+
+    if (pluginRef.isEmpty) {
+      setFirstFilteredPluginDetailActive();
+      ensurePluginVisible(activePlugin.value.id);
+      return activePlugin.value.id.isNotEmpty;
+    }
+
+    final exactPluginIndex = filteredPluginList.indexWhere((plugin) => plugin.id == pluginRef);
+    if (exactPluginIndex >= 0) {
+      activePlugin.value = filteredPluginList[exactPluginIndex];
+      ensurePluginVisible(activePlugin.value.id);
+      return true;
+    }
+
+    filterPluginKeywordController.text = pluginRef;
+    filterPlugins();
+    setFirstFilteredPluginDetailActive();
+    ensurePluginVisible(activePlugin.value.id);
+    return activePlugin.value.id.isNotEmpty;
   }
 
   void setFirstFilteredPluginDetailActive() {
@@ -928,6 +1012,7 @@ class WoxSettingController extends GetxController {
 
   @override
   void onClose() {
+    pluginListScrollController.dispose();
     settingFocusNode.dispose();
     super.onClose();
   }

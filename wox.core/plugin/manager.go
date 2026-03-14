@@ -97,6 +97,12 @@ type Manager struct {
 	pluginQueryLatency *util.HashMap[string, *util.EWMA]
 }
 
+const (
+	systemActionPinInQueryID        = "__system_pin_in_query__"
+	systemActionUnpinInQueryID      = "__system_unpin_in_query__"
+	systemActionOpenPluginSettingID = "__system_open_plugin_setting__"
+)
+
 func GetPluginManager() *Manager {
 	managerOnce.Do(func() {
 		managerInstance = &Manager{
@@ -839,10 +845,8 @@ func (m *Manager) queryForPlugin(ctx context.Context, pluginInstance *Instance, 
 	}
 
 	for i := range results {
-		if results[i].Group == "" {
-			defaultActions := m.getDefaultActions(ctx, pluginInstance, query, results[i].Title, results[i].SubTitle)
-			results[i].Actions = append(results[i].Actions, defaultActions...)
-		}
+		defaultActions := m.getDefaultActions(ctx, pluginInstance, query, results[i].Title, results[i].SubTitle)
+		results[i].Actions = append(results[i].Actions, defaultActions...)
 		results[i] = m.PolishResult(ctx, pluginInstance, query, results[i])
 	}
 
@@ -923,6 +927,7 @@ func (m *Manager) getDefaultActions(ctx context.Context, pluginInstance *Instanc
 
 	if setting.GetSettingManager().IsPinedResult(ctx, pluginInstance.Metadata.Id, title, subTitle) {
 		defaultActions = append(defaultActions, QueryResultAction{
+			Id:                     systemActionUnpinInQueryID,
 			Name:                   "i18n:plugin_manager_unpin_in_query",
 			Icon:                   common.UnpinIcon,
 			IsSystemAction:         true,
@@ -931,6 +936,7 @@ func (m *Manager) getDefaultActions(ctx context.Context, pluginInstance *Instanc
 		})
 	} else {
 		defaultActions = append(defaultActions, QueryResultAction{
+			Id:                     systemActionPinInQueryID,
 			Name:                   "i18n:plugin_manager_pin_in_query",
 			Icon:                   common.PinIcon,
 			IsSystemAction:         true,
@@ -939,7 +945,25 @@ func (m *Manager) getDefaultActions(ctx context.Context, pluginInstance *Instanc
 		})
 	}
 
+	defaultActions = append(defaultActions, m.newOpenPluginSettingAction(ctx, pluginInstance))
+
 	return defaultActions
+}
+
+func (m *Manager) newOpenPluginSettingAction(ctx context.Context, pluginInstance *Instance) QueryResultAction {
+	return QueryResultAction{
+		Id:                     systemActionOpenPluginSettingID,
+		Name:                   fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_sys_open_plugin_settings"), pluginInstance.GetName(ctx)),
+		Icon:                   common.SettingIcon,
+		IsSystemAction:         true,
+		PreventHideAfterAction: true,
+		Action: func(ctx context.Context, actionContext ActionContext) {
+			m.ui.OpenSettingWindow(ctx, common.SettingWindowContext{
+				Path:  "/plugin/setting",
+				Param: pluginInstance.Metadata.Id,
+			})
+		},
+	}
 }
 
 func (m *Manager) formatFileListPreview(ctx context.Context, filePaths []string) string {

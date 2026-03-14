@@ -215,7 +215,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
               }
 
               return ListView.builder(
-                primary: true,
+                controller: controller.pluginListScrollController,
                 itemCount: controller.filteredPluginList.length,
                 itemBuilder: (context, index) {
                   final plugin = controller.filteredPluginList[index];
@@ -224,6 +224,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                     child: Obx(() {
                       final isActive = controller.activePlugin.value.id == plugin.id;
                       return Container(
+                        key: controller.getPluginListItemKey(plugin.id),
                         decoration: BoxDecoration(color: isActive ? getThemeActiveBackgroundColor() : Colors.transparent, borderRadius: BorderRadius.circular(4)),
                         child: GestureDetector(
                           behavior: HitTestBehavior.translucent,
@@ -232,7 +233,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                           },
                           child: ListTile(
                             contentPadding: const EdgeInsets.only(left: 6, right: 6),
-                            leading: WoxImageView(woxImage: plugin.icon, width: 32),
+                            leading: WoxImageView(woxImage: plugin.icon, width: 32, height: 32),
                             title: Text(
                               plugin.name,
                               maxLines: 1,
@@ -339,7 +340,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
               padding: const EdgeInsets.only(bottom: 8.0, left: 10),
               child: Row(
                 children: [
-                  WoxImageView(woxImage: plugin.icon, width: 32),
+                  WoxImageView(woxImage: plugin.icon, width: 32, height: 32),
                   Padding(padding: const EdgeInsets.only(left: 8.0), child: Text(plugin.name, style: TextStyle(fontSize: 20, color: getThemeTextColor()))),
                   Padding(padding: const EdgeInsets.only(left: 10.0), child: Text(plugin.version, style: TextStyle(color: getThemeSubTextColor()))),
                   if (plugin.isDev)
@@ -800,7 +801,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
 
     return Padding(
       padding: const EdgeInsets.all(16.0),
-      child: Expanded(
+      child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
