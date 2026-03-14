@@ -1,3 +1,5 @@
+//go:build !darwin
+
 package mainthread
 
 import "runtime"
@@ -24,6 +26,8 @@ func Init(main func()) {
 	}
 }
 
+// Call executes f on the main thread and blocks until f returns.
+// Do not use it as a fire-and-forget dispatch helper.
 func Call(f func()) {
 	done := make(chan struct{})
 	funcQ <- callRequest{fn: f, done: done}

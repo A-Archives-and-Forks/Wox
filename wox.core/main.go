@@ -212,23 +212,21 @@ func run() {
 		}
 	}
 
-	// hotkey must be registered in main thread
-	mainthread.Call(func() {
-		registerMainHotkeyErr := ui.GetUIManager().RegisterMainHotkey(ctx, woxSetting.MainHotkey.Get())
-		if registerMainHotkeyErr != nil {
-			util.GetLogger().Error(ctx, fmt.Sprintf("failed to register main hotkey: %s", registerMainHotkeyErr.Error()))
+	// Platform-specific keyboard implementations handle their own main-thread dispatch.
+	registerMainHotkeyErr := ui.GetUIManager().RegisterMainHotkey(ctx, woxSetting.MainHotkey.Get())
+	if registerMainHotkeyErr != nil {
+		util.GetLogger().Error(ctx, fmt.Sprintf("failed to register main hotkey: %s", registerMainHotkeyErr.Error()))
+	}
+	registerSelectionHotkeyErr := ui.GetUIManager().RegisterSelectionHotkey(ctx, woxSetting.SelectionHotkey.Get())
+	if registerSelectionHotkeyErr != nil {
+		util.GetLogger().Error(ctx, fmt.Sprintf("failed to register selection hotkey: %s", registerSelectionHotkeyErr.Error()))
+	}
+	for _, queryHotkey := range woxSetting.QueryHotkeys.Get() {
+		registerQueryHotkeyErr := ui.GetUIManager().RegisterQueryHotkey(ctx, queryHotkey)
+		if registerQueryHotkeyErr != nil {
+			util.GetLogger().Error(ctx, fmt.Sprintf("failed to register query hotkey: %s", registerQueryHotkeyErr.Error()))
 		}
-		registerSelectionHotkeyErr := ui.GetUIManager().RegisterSelectionHotkey(ctx, woxSetting.SelectionHotkey.Get())
-		if registerSelectionHotkeyErr != nil {
-			util.GetLogger().Error(ctx, fmt.Sprintf("failed to register selection hotkey: %s", registerSelectionHotkeyErr.Error()))
-		}
-		for _, queryHotkey := range woxSetting.QueryHotkeys.Get() {
-			registerQueryHotkeyErr := ui.GetUIManager().RegisterQueryHotkey(ctx, queryHotkey)
-			if registerQueryHotkeyErr != nil {
-				util.GetLogger().Error(ctx, fmt.Sprintf("failed to register query hotkey: %s", registerQueryHotkeyErr.Error()))
-			}
-		}
-	})
+	}
 
 	if util.IsProd() {
 		util.Go(ctx, "start ui", func() {
