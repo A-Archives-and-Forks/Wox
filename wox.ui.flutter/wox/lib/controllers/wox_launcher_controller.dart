@@ -169,6 +169,23 @@ class WoxLauncherController extends GetxController {
   void onInit() {
     super.onInit();
 
+    // On Linux, the IME (IBus/Fcitx) consumes the first ESC KeyDownEvent when the window
+    // gains focus (to cancel any pending composition). Flutter only receives a KeyRepeatEvent.
+    // So we must also handle KeyRepeatEvent for Escape to enable one-press hiding.
+    if (Platform.isLinux) {
+      queryBoxFocusNode.onKeyEvent = (node, event) {
+        final traceId = const UuidV4().generate();
+        Logger.instance.debug(traceId, "[KEYLOG][FLUTTER] TextField Node Key: ${event.logicalKey.keyLabel}, type: ${event.runtimeType}");
+
+        if ((event is KeyDownEvent || event is KeyRepeatEvent) && event.logicalKey == LogicalKeyboardKey.escape && !WoxHotkey.isAnyModifierPressed()) {
+          Logger.instance.debug(traceId, "[KEYLOG][FLUTTER] TextField ESC intercepted -> hiding app");
+          hideApp(traceId);
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      };
+    }
+
     resultListViewController = Get.put(
       WoxListController<WoxQueryResult>(
         onItemExecuted: (traceId, item) {
