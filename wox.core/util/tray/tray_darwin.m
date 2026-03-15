@@ -8,6 +8,17 @@ static NSMutableArray *queryTargets = nil;
 
 extern void reportLeftClick();
 
+static void showGlobalStatusItemMenu(void) {
+    if (globalStatusItem == nil || globalMenu == nil || globalStatusItem.button == nil) {
+        return;
+    }
+
+    NSStatusBarButton *button = globalStatusItem.button;
+    [button highlight:YES];
+    [globalMenu popUpMenuPositioningItem:nil atLocation:NSMakePoint(0, NSHeight(button.bounds)) inView:button];
+    [button highlight:NO];
+}
+
 @interface MenuItemTarget : NSObject
 @end
 
@@ -22,9 +33,7 @@ extern void reportLeftClick();
 - (void)trayClick:(id)sender {
     NSEvent *event = [NSApp currentEvent];
     if (event.type == NSEventTypeRightMouseUp || (event.type == NSEventTypeLeftMouseUp && (event.modifierFlags & NSEventModifierFlagControl))) {
-        if (globalStatusItem != nil && globalMenu != nil) {
-            [globalStatusItem popUpStatusItemMenu:globalMenu];
-        }
+        showGlobalStatusItemMenu();
     } else {
         reportLeftClick();
     }

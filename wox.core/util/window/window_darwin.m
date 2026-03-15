@@ -7,6 +7,22 @@
 static char* copyPathFromAXValue(CFTypeRef value);
 char* getFinderWindowPathByPid(int pid);
 
+static void activateRunningApplication(NSRunningApplication *application) {
+    if (application == nil) {
+        return;
+    }
+
+    if (@available(macOS 14.0, *)) {
+        [application activateWithOptions:0];
+        return;
+    }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [application activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+#pragma clang diagnostic pop
+}
+
 int getActiveWindowIcon(unsigned char **iconData) {
     @autoreleasepool {
         NSRunningApplication *activeApp = [[NSWorkspace sharedWorkspace] frontmostApplication];
@@ -788,7 +804,7 @@ int selectInActiveFileDialog(const char* path) {
         }
 
         AXUIElementPerformAction(dialogWindow, kAXRaiseAction);
-        [activeApp activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+        activateRunningApplication(activeApp);
         usleep(80 * 1000);
 
         BOOL selected = selectItemInDialogTreeByName(dialogWindow, targetName, 0);
@@ -883,7 +899,7 @@ int navigateActiveFileDialog(const char* path) {
             CFRelease(textField);
         }
 
-        [activeApp activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+        activateRunningApplication(activeApp);
         usleep(10 * 1000);
 
         NSAppleScript *appleScript = [[NSAppleScript alloc] initWithSource:@"tell application \"System Events\" to key code 36"];

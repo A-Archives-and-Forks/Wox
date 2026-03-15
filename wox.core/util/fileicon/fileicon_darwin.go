@@ -2,7 +2,7 @@ package fileicon
 
 /*
 #cgo CFLAGS: -x objective-c
-#cgo LDFLAGS: -framework Foundation -framework Cocoa
+#cgo LDFLAGS: -framework Foundation -framework Cocoa -framework UniformTypeIdentifiers
 #include <stdlib.h>
 
 const unsigned char *GetFileTypeIconBytes(const char *ext, size_t *length);

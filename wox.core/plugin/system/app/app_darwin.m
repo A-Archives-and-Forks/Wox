@@ -1,9 +1,52 @@
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
+#if __has_include(<UniformTypeIdentifiers/UniformTypeIdentifiers.h>)
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#endif
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/sysctl.h>
 #include <libproc.h>
+
+static NSImage *GetWorkspaceIconForExtension(NSString *extension) {
+    NSWorkspace *workspace = [NSWorkspace sharedWorkspace];
+
+    if (@available(macOS 11.0, *)) {
+#if __has_include(<UniformTypeIdentifiers/UniformTypeIdentifiers.h>)
+        if ([extension length] > 0) {
+            UTType *contentType = [UTType typeWithFilenameExtension:extension];
+            if (contentType != nil) {
+                return [workspace iconForContentType:contentType];
+            }
+        }
+
+        return [workspace iconForContentType:UTTypeData];
+#endif
+    }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [workspace iconForFileType:extension];
+#pragma clang diagnostic pop
+}
+
+static NSImage *CreateTintedImage(NSImage *image, NSColor *color) {
+    if (image == nil || color == nil) {
+        return image;
+    }
+
+    NSImage *tintedImage = [[[NSImage alloc] initWithSize:[image size]] autorelease];
+    [tintedImage lockFocus];
+    [image drawInRect:NSMakeRect(0, 0, image.size.width, image.size.height)
+             fromRect:NSZeroRect
+            operation:NSCompositingOperationSourceOver
+             fraction:1.0];
+    [color set];
+    NSRectFillUsingOperation(NSMakeRect(0, 0, image.size.width, image.size.height), NSCompositingOperationSourceAtop);
+    [tintedImage unlockFocus];
+
+    return tintedImage;
+}
 
 // Helper function to get NSColor from color name string
 static NSColor* colorFromName(NSString *colorName) {
@@ -13,7 +56,12 @@ static NSColor* colorFromName(NSString *colorName) {
     if ([colorName isEqualToString:@"indigo"]) return [NSColor systemIndigoColor];
     if ([colorName isEqualToString:@"pink"]) return [NSColor systemPinkColor];
     if ([colorName isEqualToString:@"purple"]) return [NSColor systemPurpleColor];
-    if ([colorName isEqualToString:@"cyan"]) return [NSColor systemCyanColor];
+    if ([colorName isEqualToString:@"cyan"]) {
+        if (@available(macOS 12.0, *)) {
+            return [NSColor systemCyanColor];
+        }
+        return [NSColor colorWithSRGBRed:0.04 green:0.68 blue:0.80 alpha:1.0];
+    }
     if ([colorName isEqualToString:@"orange"]) return [NSColor systemOrangeColor];
     if ([colorName isEqualToString:@"green"]) return [NSColor systemGreenColor];
     if ([colorName isEqualToString:@"teal"]) return [NSColor systemTealColor];
@@ -39,8 +87,6 @@ const unsigned char *GenerateSFSymbolIcon(const char *symbolName, const char *co
             CGFloat symbolWeight = NSFontWeightBold;
             CGFloat symbolPointSize = 180;
             NSImageSymbolConfiguration *weightConfig = [NSImageSymbolConfiguration configurationWithPointSize:symbolPointSize weight:symbolWeight scale:NSImageSymbolScaleLarge];
-            NSImageSymbolConfiguration *colorConfig = [NSImageSymbolConfiguration configurationWithPaletteColors:@[symbolColor, symbolColor, symbolColor]];
-            NSImageSymbolConfiguration *config = [weightConfig configurationByApplyingConfiguration:colorConfig];
             NSImage *symbolImage = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:nil];
             
             if (!symbolImage) {
@@ -48,7 +94,13 @@ const unsigned char *GenerateSFSymbolIcon(const char *symbolName, const char *co
                 return NULL;
             }
             
-            symbolImage = [symbolImage imageWithSymbolConfiguration:config];
+            symbolImage = [symbolImage imageWithSymbolConfiguration:weightConfig];
+            if (@available(macOS 12.0, *)) {
+                NSImageSymbolConfiguration *colorConfig = [NSImageSymbolConfiguration configurationWithPaletteColors:@[symbolColor, symbolColor, symbolColor]];
+                symbolImage = [symbolImage imageWithSymbolConfiguration:colorConfig];
+            } else {
+                symbolImage = CreateTintedImage(symbolImage, symbolColor);
+            }
             
             NSSize size = NSMakeSize(256, 256);
             NSImage *icon = [[NSImage alloc] initWithSize:size];
@@ -142,7 +194,7 @@ const unsigned char *GetPrefPaneIcon(const char *prefPanePath, size_t *length) {
         
         // Last resort: generic prefPane icon using UTI
         if (!icon) {
-            icon = [[NSWorkspace sharedWorkspace] iconForFileType:@"prefPane"];
+            icon = GetWorkspaceIconForExtension(@"prefPane");
         }
 
         if (icon == nil) {

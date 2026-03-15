@@ -2,7 +2,7 @@ package app
 
 /*
 #cgo CFLAGS: -x objective-c
-#cgo LDFLAGS: -framework Foundation -framework Cocoa
+#cgo LDFLAGS: -framework Foundation -framework Cocoa -framework UniformTypeIdentifiers
 #include <stdlib.h>
 #include <sys/sysctl.h>
 

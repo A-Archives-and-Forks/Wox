@@ -1,4 +1,29 @@
 #import <Cocoa/Cocoa.h>
+#if __has_include(<UniformTypeIdentifiers/UniformTypeIdentifiers.h>)
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#endif
+
+static NSImage *GetWorkspaceIconForExtension(NSString *extension) {
+    NSWorkspace *workspace = [NSWorkspace sharedWorkspace];
+
+    if (@available(macOS 11.0, *)) {
+#if __has_include(<UniformTypeIdentifiers/UniformTypeIdentifiers.h>)
+        if ([extension length] > 0) {
+            UTType *contentType = [UTType typeWithFilenameExtension:extension];
+            if (contentType != nil) {
+                return [workspace iconForContentType:contentType];
+            }
+        }
+
+        return [workspace iconForContentType:UTTypeData];
+#endif
+    }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [workspace iconForFileType:extension];
+#pragma clang diagnostic pop
+}
 
 const unsigned char *GetFileIconBytes(const char *pathC, size_t *length) {
     @autoreleasepool {
@@ -29,7 +54,7 @@ const unsigned char *GetFileTypeIconBytes(const char *extC, size_t *length) {
         if ([ext hasPrefix:@"."]) {
             ext = [ext substringFromIndex:1];
         }
-        NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFileType:ext];
+        NSImage *icon = GetWorkspaceIconForExtension(ext);
         if (!icon) return NULL;
 
         CGImageRef cgRef = [icon CGImageForProposedRect:NULL context:nil hints:nil];

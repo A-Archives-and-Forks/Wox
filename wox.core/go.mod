@@ -1,6 +1,6 @@
 module wox
 
-go 1.25
+go 1.26
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
@@ -10,6 +10,7 @@ require (
 	github.com/forPelevin/gomoji v1.4.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-ole/go-ole v1.3.0
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/gotk3/gotk3 v0.6.5-0.20240618185848-ff349ae13f56
@@ -46,7 +47,6 @@ require (
 require (
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/jsonschema-go v0.3.0 // indirect

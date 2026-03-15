@@ -5,6 +5,7 @@
 
 const char *wox_mr_get_now_playing_json(void);
 void wox_mr_free(char *p);
+int wox_mr_toggle(void);
 
 MODULE = WoxMR    PACKAGE = WoxMR
 
