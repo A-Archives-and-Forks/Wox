@@ -16,6 +16,7 @@ import (
 	"wox/common"
 	"wox/plugin"
 	"wox/setting/definition"
+	"wox/setting/validator"
 	"wox/util"
 	"wox/util/clipboard"
 	"wox/util/nativecontextmenu"
@@ -181,6 +182,12 @@ func (a *ApplicationPlugin) GetMetadata() plugin.Metadata {
 							Key:   "Path",
 							Label: "i18n:plugin_app_path",
 							Type:  definition.PluginSettingValueTableColumnTypeDirPath,
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
 						},
 					},
 				},

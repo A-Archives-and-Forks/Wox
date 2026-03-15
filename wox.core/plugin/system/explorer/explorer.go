@@ -13,6 +13,7 @@ import (
 	"wox/i18n"
 	"wox/plugin"
 	"wox/setting/definition"
+	"wox/setting/validator"
 	"wox/util"
 	"wox/util/overlay"
 	"wox/util/shell"
@@ -102,6 +103,12 @@ func (c *ExplorerPlugin) GetMetadata() plugin.Metadata {
 							Key:   "Path",
 							Label: "i18n:plugin_explorer_setting_quick_jump_path",
 							Type:  definition.PluginSettingValueTableColumnTypeDirPath,
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
 						},
 					},
 				},

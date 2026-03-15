@@ -11,7 +11,6 @@ import 'package:wox/entity/setting/wox_plugin_setting_table.dart';
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/utils/colors.dart';
-import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/color_util.dart';
 
@@ -76,6 +75,36 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     }
 
     target.jumpTo(clampedOffset);
+  }
+
+  List<dynamic> decodeRowsJson(String rowsJson) {
+    final normalized = rowsJson.trim();
+    if (normalized.isEmpty || normalized == "null") {
+      return [];
+    }
+
+    try {
+      final decoded = json.decode(normalized);
+      if (decoded is List) {
+        return decoded;
+      }
+    } catch (_) {
+      // Ignore invalid persisted table data and render an empty table instead of crashing.
+    }
+
+    return [];
+  }
+
+  AIModel? decodeAIModel(dynamic value) {
+    if (value is! String || value.trim().isEmpty) {
+      return null;
+    }
+
+    try {
+      return AIModel.fromJson(json.decode(value));
+    } catch (_) {
+      return null;
+    }
   }
 
   PluginSettingValueTableColumn buildOperationColumnDefinition() {
@@ -254,8 +283,12 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
         return const SizedBox.shrink();
       }
 
-      final woxImage = WoxImage.fromJson(jsonDecode(value));
-      return Row(children: [WoxImageView(woxImage: woxImage, width: 24, height: 24)]);
+      try {
+        final woxImage = WoxImage.fromJson(jsonDecode(value));
+        return Row(children: [WoxImageView(woxImage: woxImage, width: 24, height: 24)]);
+      } catch (_) {
+        return const SizedBox.shrink();
+      }
     }
     if (column.type == PluginSettingValueType.pluginSettingValueTableColumnTypeSelect) {
       PluginSettingValueSelectOption selectOption;
@@ -272,7 +305,16 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
       );
     }
     if (column.type == PluginSettingValueType.pluginSettingValueTableColumnTypeSelectAIModel) {
-      var model = AIModel.fromJson(json.decode(value));
+      final model = decodeAIModel(value);
+      if (model == null) {
+        return columnWidth(
+          column: column,
+          isHeader: false,
+          isOperation: false,
+          child: Text("", style: TextStyle(overflow: TextOverflow.ellipsis, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemTitleColor))),
+        );
+      }
+
       final providerDisplayName = model.providerAlias.isEmpty ? model.provider : "${model.provider} (${model.providerAlias})";
       return columnWidth(
         column: column,
@@ -393,12 +435,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                       onUpdate: (key, value) async {
                         // Re-read the latest rows from the current setting value
                         // to avoid using stale closure-captured data
-                        var rowsJson = getSetting(key);
-                        if (rowsJson == "" || rowsJson == "null") {
-                          rowsJson = "[]";
-                        }
-                        var decoded = json.decode(rowsJson);
-                        var freshRows = decoded is List ? decoded : [];
+                        final freshRows = decodeRowsJson(getSetting(key));
 
                         // Find the target row in fresh data by matching original field values
                         var idx = _findRowIndex(freshRows, originalRow);
@@ -448,12 +485,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                                 Navigator.pop(context);
 
                                 // Re-read the latest rows from the current setting value
-                                var rowsJson = getSetting(item.key);
-                                if (rowsJson == "" || rowsJson == "null") {
-                                  rowsJson = "[]";
-                                }
-                                var decoded = json.decode(rowsJson);
-                                var freshRows = decoded is List ? decoded : [];
+                                final freshRows = decodeRowsJson(getSetting(item.key));
 
                                 // Find and remove the target row by matching original field values
                                 var idx = _findRowIndex(freshRows, originalRow);
@@ -584,15 +616,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   }
 
   Widget buildTable(BuildContext context) {
-    var rowsJson = getSetting(item.key);
-    if (rowsJson == "" || rowsJson == "null") {
-      return buildEmptyTable();
-    }
-    var decoded = json.decode(rowsJson);
-    if (decoded == null || decoded is! List) {
-      return buildEmptyTable();
-    }
-    var rows = decoded;
+    final rows = decodeRowsJson(getSetting(item.key));
     if (rows.isEmpty) {
       return buildEmptyTable();
     }
@@ -822,17 +846,12 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                               item: item,
                               row: const {},
                               onUpdate: (key, row) {
-                                var rowsJson = getSetting(key);
-                                if (rowsJson == "" || rowsJson == "null") {
-                                  rowsJson = "[]";
-                                }
-                                var decoded = json.decode(rowsJson);
-                                var rows = decoded is List ? decoded : [];
+                                final rows = decodeRowsJson(getSetting(key));
                                 rows.add(row);
                                 //remove the unique key
-                                rows.forEach((element) {
+                                for (final element in rows) {
                                   element.remove(rowUniqueIdKey);
-                                });
+                                }
 
                                 updateConfig(key, json.encode(rows));
                               },

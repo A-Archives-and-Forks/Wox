@@ -9,6 +9,7 @@ import (
 	"wox/i18n"
 	"wox/plugin"
 	"wox/setting/definition"
+	"wox/setting/validator"
 	"wox/util"
 	"wox/util/clipboard"
 	"wox/util/selection"
@@ -79,6 +80,12 @@ func (c *Plugin) GetMetadata() plugin.Metadata {
 							Type:    definition.PluginSettingValueTableColumnTypeText,
 							Width:   100,
 							Tooltip: "i18n:plugin_ai_command_name_tooltip",
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
 						},
 						{
 							Key:     "command",
@@ -86,6 +93,12 @@ func (c *Plugin) GetMetadata() plugin.Metadata {
 							Type:    definition.PluginSettingValueTableColumnTypeText,
 							Width:   80,
 							Tooltip: "i18n:plugin_ai_command_command_tooltip",
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
 						},
 						{
 							Key:     "model",
@@ -93,6 +106,12 @@ func (c *Plugin) GetMetadata() plugin.Metadata {
 							Type:    definition.PluginSettingValueTableColumnTypeSelectAIModel,
 							Width:   100,
 							Tooltip: "i18n:plugin_ai_command_model_tooltip",
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
 						},
 						{
 							Key:          "prompt",
@@ -100,6 +119,12 @@ func (c *Plugin) GetMetadata() plugin.Metadata {
 							Type:         definition.PluginSettingValueTableColumnTypeText,
 							TextMaxLines: 10,
 							Tooltip:      "i18n:plugin_ai_command_prompt_tooltip",
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
 						},
 						{
 							Key:     "vision",

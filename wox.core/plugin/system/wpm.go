@@ -16,6 +16,7 @@ import (
 	"wox/i18n"
 	"wox/plugin"
 	"wox/setting/definition"
+	"wox/setting/validator"
 	"wox/util"
 	"wox/util/shell"
 	"wox/util/trash"
@@ -155,6 +156,12 @@ func (w *WPMPlugin) GetMetadata() plugin.Metadata {
 							Key:   "path",
 							Label: "i18n:plugin_wpm_path",
 							Type:  definition.PluginSettingValueTableColumnTypeDirPath,
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
 						},
 					},
 				},

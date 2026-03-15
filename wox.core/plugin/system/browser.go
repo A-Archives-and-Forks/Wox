@@ -93,6 +93,10 @@ func (c *BrowserPlugin) GetMetadata() plugin.Metadata {
 					},
 					Validators: []validator.PluginSettingValidator{
 						{
+							Type:  validator.PluginSettingValidatorTypeNotEmpty,
+							Value: &validator.PluginSettingValidatorNotEmpty{},
+						},
+						{
 							Type: validator.PluginSettingValidatorTypeIsNumber,
 							Value: &validator.PluginSettingValidatorIsNumber{
 								IsInteger: true,

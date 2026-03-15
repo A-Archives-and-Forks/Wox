@@ -16,6 +16,7 @@ import (
 	"wox/plugin"
 	"wox/plugin/system/shell/terminal"
 	"wox/setting/definition"
+	"wox/setting/validator"
 	"wox/util"
 	shellutil "wox/util/shell"
 
@@ -133,6 +134,12 @@ func (s *ShellPlugin) GetMetadata() plugin.Metadata {
 							Label: "i18n:plugin_shell_command_alias",
 							Type:  definition.PluginSettingValueTableColumnTypeText,
 							Width: 100,
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
 						},
 						{
 							Key:          "Command",
@@ -140,6 +147,12 @@ func (s *ShellPlugin) GetMetadata() plugin.Metadata {
 							Tooltip:      "i18n:plugin_shell_command_script_tooltip",
 							Type:         definition.PluginSettingValueTableColumnTypeText,
 							TextMaxLines: 5,
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
 						},
 						{
 							Key:   "Enabled",

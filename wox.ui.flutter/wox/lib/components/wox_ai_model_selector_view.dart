@@ -20,10 +20,13 @@ class WoxAIModelSelectorView extends StatefulWidget {
   /// Callback when a model is selected
   final Function(String modelJson) onModelSelected;
 
+  /// Callback when the widget resolves an initial/default model selection.
+  final Function(String modelJson)? onInitialModelResolved;
+
   /// Whether to allow editing the model
   final bool allowEdit;
 
-  const WoxAIModelSelectorView({super.key, this.initialValue, required this.onModelSelected, this.allowEdit = true});
+  const WoxAIModelSelectorView({super.key, this.initialValue, required this.onModelSelected, this.onInitialModelResolved, this.allowEdit = true});
 
   @override
   State<WoxAIModelSelectorView> createState() => _WoxAIModelSelectorViewState();
@@ -36,6 +39,7 @@ class _WoxAIModelSelectorViewState extends State<WoxAIModelSelectorView> {
   String? selectedProviderKey;
   AIModel? selectedModel;
   bool isEditMode = false;
+  bool _hasResolvedInitialModel = false;
 
   // For custom model editing
   final TextEditingController nameController = TextEditingController();
@@ -115,6 +119,8 @@ class _WoxAIModelSelectorViewState extends State<WoxAIModelSelectorView> {
         isEditMode = true;
         nameController.text = selectedModel!.name;
       }
+
+      _notifyInitialModelResolved();
     } catch (e) {
       // Handle error
     } finally {
@@ -126,6 +132,15 @@ class _WoxAIModelSelectorViewState extends State<WoxAIModelSelectorView> {
 
   String tr(String key) {
     return Get.find<WoxSettingController>().tr(key);
+  }
+
+  void _notifyInitialModelResolved() {
+    if (_hasResolvedInitialModel || selectedModel == null) {
+      return;
+    }
+
+    _hasResolvedInitialModel = true;
+    widget.onInitialModelResolved?.call(jsonEncode(selectedModel!));
   }
 
   @override

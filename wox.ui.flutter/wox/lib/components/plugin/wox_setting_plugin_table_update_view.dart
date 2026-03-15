@@ -359,6 +359,17 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
             width: 400, // Limit width to prevent overflow
             child: WoxAIModelSelectorView(
               initialValue: getValue(column.key),
+              onInitialModelResolved: (modelJson) {
+                if (getValue(column.key) == modelJson) {
+                  return;
+                }
+
+                updateValue(column.key, modelJson);
+                setFieldValidationError(column.key, validateValue(modelJson, column.validators));
+                if (mounted) {
+                  setState(() {});
+                }
+              },
               onModelSelected: (modelJson) {
                 updateValue(column.key, modelJson);
                 setFieldValidationError(column.key, validateValue(modelJson, column.validators));
