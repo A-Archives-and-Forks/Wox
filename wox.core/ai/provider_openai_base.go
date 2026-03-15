@@ -17,7 +17,8 @@ import (
 )
 
 type OpenAIBaseProviderOptions struct {
-	Headers map[string]string
+	Headers            map[string]string
+	ChatRequestOptions func(ctx context.Context, model common.Model, conversations []common.Conversation, options common.ChatOptions) []option.RequestOption
 }
 
 // OpenAIBaseProvider is the base provider for all OpenAI compatible providers
@@ -46,6 +47,7 @@ func NewOpenAIBaseProviderWithOptions(connectContext setting.AIProvider, options
 // ChatStream starts a chat stream with the OpenAI compatible provider
 func (o *OpenAIBaseProvider) ChatStream(ctx context.Context, model common.Model, conversations []common.Conversation, options common.ChatOptions) (ChatStream, error) {
 	client := o.getClient(ctx)
+	requestOptions := o.getChatRequestOptions(ctx, model, conversations, options)
 
 	util.GetLogger().Debug(ctx, fmt.Sprintf("AI: chat stream with model: %s, conversations: %d, tools: %d", model.Name, len(conversations), len(options.Tools)))
 
@@ -69,15 +71,23 @@ func (o *OpenAIBaseProvider) ChatStream(ctx context.Context, model common.Model,
 				OfAuto: param.Opt[string]{},
 			},
 		}
-		createdStream = client.Chat.Completions.NewStreaming(ctx, chatParams)
+		createdStream = client.Chat.Completions.NewStreaming(ctx, chatParams, requestOptions...)
 	} else {
 		createdStream = client.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
 			Model:    model.Name,
 			Messages: o.convertConversations(conversations),
-		})
+		}, requestOptions...)
 	}
 
 	return &OpenAIBaseProviderStream{conversations: conversations, stream: createdStream}, nil
+}
+
+func (o *OpenAIBaseProvider) getChatRequestOptions(ctx context.Context, model common.Model, conversations []common.Conversation, options common.ChatOptions) []option.RequestOption {
+	if o.options.ChatRequestOptions == nil {
+		return nil
+	}
+
+	return o.options.ChatRequestOptions(ctx, model, conversations, options)
 }
 
 // Models returns the list of available models from the OpenAI compatible provider
