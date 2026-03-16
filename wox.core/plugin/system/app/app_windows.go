@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -154,7 +155,7 @@ func (a *WindowsRetriever) GetAppDirectories(ctx context.Context) []appDirectory
 }
 
 func (a *WindowsRetriever) GetAppExtensions(ctx context.Context) []string {
-	return []string{"exe", "lnk"}
+	return []string{"exe", "lnk", "url"}
 }
 
 func (a *WindowsRetriever) ParseAppInfo(ctx context.Context, path string) (appInfo, error) {
@@ -164,6 +165,9 @@ func (a *WindowsRetriever) ParseAppInfo(ctx context.Context, path string) (appIn
 	}
 	if strings.HasSuffix(lowerPath, ".exe") {
 		return a.parseExe(ctx, path)
+	}
+	if strings.HasSuffix(lowerPath, ".url") {
+		return a.parseUrlShortcut(ctx, path)
 	}
 
 	return appInfo{}, errors.New("not implemented")
@@ -224,6 +228,62 @@ func (a *WindowsRetriever) parseExe(ctx context.Context, appPath string) (appInf
 	if isWindowsSystem32Path(appPath) && !hasDedicatedIcon {
 		return appInfo{}, fmt.Errorf("%w: system32 executable without dedicated icon", errSkipAppIndexing)
 	}
+
+	return appInfo{
+		Name:          displayName,
+		Path:          filepath.Clean(appPath),
+		Icon:          icon,
+		Type:          AppTypeDesktop,
+		IsDefaultIcon: icon.ImageData == appIcon.ImageData,
+	}, nil
+}
+
+// parseUrlShortcut parses a .url (Internet Shortcut) file, commonly created by Steam for game shortcuts.
+// The .url file is an INI-format text file containing fields like URL, IconFile, and IconIndex.
+func (a *WindowsRetriever) parseUrlShortcut(ctx context.Context, appPath string) (appInfo, error) {
+	f, openErr := os.Open(appPath)
+	if openErr != nil {
+		return appInfo{}, fmt.Errorf("failed to open url shortcut %s: %w", appPath, openErr)
+	}
+	defer f.Close()
+
+	var targetURL string
+	var iconFile string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(strings.ToLower(line), "url=") {
+			targetURL = line[4:]
+		} else if strings.HasPrefix(strings.ToLower(line), "iconfile=") {
+			iconFile = line[9:]
+		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		return appInfo{}, fmt.Errorf("failed to read url shortcut %s: %w", appPath, scanErr)
+	}
+	if targetURL == "" {
+		return appInfo{}, fmt.Errorf("url shortcut %s has no URL field", appPath)
+	}
+
+	// Resolve icon: prefer IconFile from the .url, fall back to file association icon
+	icon := appIcon
+	if iconFile != "" {
+		if iconPath, iconErr := fileicon.GetFileIconByPath(ctx, iconFile); iconErr != nil {
+			util.GetLogger().Debug(ctx, fmt.Sprintf("Failed to get icon from IconFile %s: %s", iconFile, iconErr.Error()))
+		} else {
+			icon = common.NewWoxImageAbsolutePath(iconPath)
+		}
+	}
+	// If IconFile didn't yield an icon, try the .url file itself
+	if icon.ImageData == appIcon.ImageData {
+		if iconPath, iconErr := fileicon.GetFileIconByPath(ctx, appPath); iconErr != nil {
+			util.GetLogger().Debug(ctx, fmt.Sprintf("Failed to get icon for url shortcut %s: %s", appPath, iconErr.Error()))
+		} else {
+			icon = common.NewWoxImageAbsolutePath(iconPath)
+		}
+	}
+
+	displayName := strings.TrimSuffix(filepath.Base(appPath), filepath.Ext(appPath))
 
 	return appInfo{
 		Name:          displayName,
