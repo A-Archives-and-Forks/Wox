@@ -6,11 +6,14 @@ import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/components/wox_button.dart';
 import 'package:wox/components/wox_dropdown_button.dart';
+import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
 import 'package:wox/components/wox_textfield.dart';
 
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/wox_ai.dart';
+import 'package:wox/entity/wox_image.dart';
+import 'package:wox/entity/wox_setting.dart';
 import 'package:wox/utils/colors.dart';
 
 class WoxAIModelSelectorView extends StatefulWidget {
@@ -35,11 +38,13 @@ class WoxAIModelSelectorView extends StatefulWidget {
 class _WoxAIModelSelectorViewState extends State<WoxAIModelSelectorView> {
   bool _isLoading = true;
   List<AIModel> allModels = [];
+  List<AIProviderInfo> allProviders = [];
   Set<String> providerKeys = {};
   String? selectedProviderKey;
   AIModel? selectedModel;
   bool isEditMode = false;
   bool _hasResolvedInitialModel = false;
+  Map<String, WoxImage> providerIcons = {};
 
   // For custom model editing
   final TextEditingController nameController = TextEditingController();
@@ -71,7 +76,10 @@ class _WoxAIModelSelectorViewState extends State<WoxAIModelSelectorView> {
     setState(() => _isLoading = true);
 
     try {
-      allModels = await WoxApi.instance.findAIModels(const UuidV4().generate());
+      final results = await Future.wait([WoxApi.instance.findAIModels(const UuidV4().generate()), WoxApi.instance.findAIProviders(const UuidV4().generate())]);
+      allModels = results[0] as List<AIModel>;
+      allProviders = results[1] as List<AIProviderInfo>;
+      providerIcons = {for (final provider in allProviders) provider.name: provider.icon};
 
       // Extract unique providers
       providerKeys = allModels.map((e) => makeProviderKey(e.provider, e.providerAlias)).toSet();
@@ -200,6 +208,20 @@ class _WoxAIModelSelectorViewState extends State<WoxAIModelSelectorView> {
       return alias.isEmpty ? provider : alias;
     }
 
+    WoxImage getProviderIcon(String providerKey) {
+      final providerInfo = parseProviderKey(providerKey);
+      return providerIcons[providerInfo.$1] ?? WoxImage.empty();
+    }
+
+    Widget? buildProviderLeading(String providerKey) {
+      final icon = getProviderIcon(providerKey);
+      if (icon.imageData.isEmpty) {
+        return null;
+      }
+
+      return WoxImageView(woxImage: icon, width: 16, height: 16);
+    }
+
     return Row(
       children: [
         // Provider selector
@@ -208,7 +230,10 @@ class _WoxAIModelSelectorViewState extends State<WoxAIModelSelectorView> {
           child: WoxDropdownButton<String>(
             value: selectedProviderKey,
             isExpanded: true,
-            items: providerKeys.map((providerKey) => WoxDropdownItem<String>(value: providerKey, label: getProviderLabel(providerKey))).toList(),
+            items:
+                providerKeys
+                    .map((providerKey) => WoxDropdownItem<String>(value: providerKey, label: getProviderLabel(providerKey), leading: buildProviderLeading(providerKey)))
+                    .toList(),
             onChanged: (providerKey) {
               if (providerKey != null) {
                 setState(() {
@@ -254,7 +279,16 @@ class _WoxAIModelSelectorViewState extends State<WoxAIModelSelectorView> {
                     isExpanded: true,
                     enableFilter: true,
                     filterHintText: tr('ui_filter_placeholder'),
-                    items: getProviderModels().map((model) => WoxDropdownItem<String>(value: model.name, label: model.name)).toList(),
+                    items:
+                        getProviderModels()
+                            .map(
+                              (model) => WoxDropdownItem<String>(
+                                value: model.name,
+                                label: model.name,
+                                leading: buildProviderLeading(makeProviderKey(model.provider, model.providerAlias)),
+                              ),
+                            )
+                            .toList(),
                     onChanged: (modelName) {
                       if (modelName != null && selectedProviderKey != null) {
                         final providerInfo = parseProviderKey(selectedProviderKey!);

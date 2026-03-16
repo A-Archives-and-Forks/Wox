@@ -1,5 +1,5 @@
 import 'dart:ui';
-import 'package:flutter/material.dart' show HSLColor;
+import 'package:flutter/material.dart' show Colors, HSLColor;
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/color_util.dart';
 
@@ -20,10 +20,11 @@ Color getThemeSubTextColor() {
 }
 
 Color getThemeBackgroundColor() {
-  return safeFromCssColor(
-    WoxThemeUtil.instance.currentTheme.value.appBackgroundColor,
-    defaultColor: const Color(0xFF1F1F1F),
-  );
+  return safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.appBackgroundColor, defaultColor: const Color(0xFF1F1F1F));
+}
+
+bool isThemeDark() {
+  return getThemeBackgroundColor().computeLuminance() < 0.5;
 }
 
 Color getThemeDividerColor() {
@@ -36,10 +37,19 @@ Color getThemeActionItemActiveColor() {
 
 Color getThemePanelBackgroundColor() {
   final panelColor = WoxThemeUtil.instance.currentTheme.value.actionContainerBackgroundColor;
-  return safeFromCssColor(
-    panelColor,
-    defaultColor: getThemeCardBackgroundColor(),
-  );
+  return safeFromCssColor(panelColor, defaultColor: getThemeCardBackgroundColor());
+}
+
+Color getThemePopupSurfaceColor() {
+  return isThemeDark() ? const Color(0xFF242424) : Colors.white;
+}
+
+Color getThemePopupBarrierColor() {
+  return Colors.black.withValues(alpha: isThemeDark() ? 0.58 : 0.36);
+}
+
+Color getThemePopupOutlineColor() {
+  return getThemeActiveBackgroundColor().withValues(alpha: isThemeDark() ? 0.22 : 0.15);
 }
 
 Color getThemeCardBackgroundColor() {

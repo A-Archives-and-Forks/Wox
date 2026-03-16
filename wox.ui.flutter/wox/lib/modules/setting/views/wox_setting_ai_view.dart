@@ -37,7 +37,7 @@ class WoxSettingAIView extends WoxSettingBaseView {
                           "Tooltip": "i18n:ui_ai_providers_name_tooltip",
                           "Width": 100,
                           "Type": "select",
-                          "SelectOptions": snapshot.data!.map((e) => {"Label": e.name, "Value": e.name}).toList(),
+                          "SelectOptions": snapshot.data!.map((e) => {"Label": e.name, "Value": e.name, "Icon": e.icon.toJson()}).toList(),
                           "TextMaxLines": 1,
                           "Validators": [
                             {"Type": "not_empty"},

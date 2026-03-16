@@ -164,8 +164,12 @@ class WoxSettingDataView extends WoxSettingBaseView {
                                       onPressed: () {
                                         showDialog(
                                           context: context,
+                                          barrierColor: getThemePopupBarrierColor(),
                                           builder: (context) {
                                             return AlertDialog(
+                                              backgroundColor: getThemePopupSurfaceColor(),
+                                              surfaceTintColor: Colors.transparent,
+                                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: getThemePopupOutlineColor())),
                                               title: Text(controller.tr("ui_data_backup_restore_confirm_title")),
                                               content: Text(controller.tr("ui_data_backup_restore_confirm_message")),
                                               actions: [
@@ -246,8 +250,12 @@ class WoxSettingDataView extends WoxSettingBaseView {
                           : () {
                             showDialog(
                               context: context,
+                              barrierColor: getThemePopupBarrierColor(),
                               builder: (dialogContext) {
                                 return AlertDialog(
+                                  backgroundColor: getThemePopupSurfaceColor(),
+                                  surfaceTintColor: Colors.transparent,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: getThemePopupOutlineColor())),
                                   title: Text(controller.tr("ui_data_log_clear_confirm_title")),
                                   content: Text(controller.tr("ui_data_log_clear_confirm_message")),
                                   actions: [

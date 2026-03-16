@@ -89,8 +89,11 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
   }
 
   Color _getDropdownBackgroundColor() {
-    final baseDropdownBg = widget.dropdownColor ?? getThemeActiveBackgroundColor();
-    return baseDropdownBg.withAlpha(255);
+    if (widget.dropdownColor != null) {
+      return widget.dropdownColor!.withAlpha(255);
+    }
+
+    return getThemePopupSurfaceColor();
   }
 
   double _contrastRatio(Color foreground, Color background) {
@@ -105,6 +108,15 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
     const darkText = Colors.black87;
     const lightText = Colors.white;
     return _contrastRatio(lightText, background) >= _contrastRatio(darkText, background) ? lightText : darkText;
+  }
+
+  Color _getDropdownTextColor(Color dropdownBackground) {
+    final themeTextColor = getThemeTextColor();
+    if (_contrastRatio(themeTextColor, dropdownBackground) >= 4.5) {
+      return themeTextColor;
+    }
+
+    return _getReadableTextColor(dropdownBackground);
   }
 
   void _markOverlayNeedsBuildSafely() {
@@ -257,8 +269,8 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
   }
 
   void _showFilterableMenu() {
-    final activeTextColor = getThemeActiveTextColor();
     final dropdownBg = _getDropdownBackgroundColor();
+    final dropdownTextColor = _getDropdownTextColor(dropdownBg);
     final searchBg =
         dropdownBg.computeLuminance() > 0.45
             ? Color.alphaBlend(Colors.black.withValues(alpha: 0.08), dropdownBg)
@@ -348,10 +360,10 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
                                       },
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                        color: isSelected ? activeTextColor.withValues(alpha: 0.1) : null,
+                                        color: isSelected ? getThemeActiveBackgroundColor().withValues(alpha: dropdownBg.computeLuminance() < 0.5 ? 0.25 : 0.12) : null,
                                         child: DefaultTextStyle(
-                                          style: TextStyle(color: activeTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
-                                          child: _buildDropdownMenuItem(item, activeTextColor),
+                                          style: TextStyle(color: dropdownTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
+                                          child: _buildDropdownMenuItem(item, dropdownTextColor),
                                         ),
                                       ),
                                     );
@@ -403,8 +415,8 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
   }
 
   void _showMultiSelectMenu() {
-    final activeTextColor = getThemeActiveTextColor();
     final dropdownBg = _getDropdownBackgroundColor();
+    final dropdownTextColor = _getDropdownTextColor(dropdownBg);
     final borderColor = getThemeSubTextColor();
 
     final RenderBox renderBox = context.findRenderObject() as RenderBox;
@@ -441,15 +453,15 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
                               onTap: () => _toggleMultiValue(item.value),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                color: isSelected ? activeTextColor.withValues(alpha: 0.1) : null,
+                                color: isSelected ? getThemeActiveBackgroundColor().withValues(alpha: dropdownBg.computeLuminance() < 0.5 ? 0.25 : 0.12) : null,
                                 child: Row(
                                   children: [
                                     WoxCheckbox(value: isSelected, onChanged: (_) => _toggleMultiValue(item.value), size: 20),
                                     const SizedBox(width: 8),
                                     Expanded(
                                       child: DefaultTextStyle(
-                                        style: TextStyle(color: activeTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
-                                        child: _buildDropdownMenuItem(item, activeTextColor),
+                                        style: TextStyle(color: dropdownTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
+                                        child: _buildDropdownMenuItem(item, dropdownTextColor),
                                       ),
                                     ),
                                   ],
@@ -539,8 +551,8 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
   @override
   Widget build(BuildContext context) {
     final textColor = getThemeTextColor();
-    final activeTextColor = getThemeActiveTextColor();
     final dropdownBg = _getDropdownBackgroundColor();
+    final dropdownTextColor = _getDropdownTextColor(dropdownBg);
     final borderColor = getThemeSubTextColor();
 
     if (widget.multiSelect) {
@@ -586,7 +598,7 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
       // Convert WoxDropdownItem to DropdownMenuItem
       final dropdownMenuItems =
           widget.items.map((item) {
-            return DropdownMenuItem<T>(value: item.value, child: _buildDropdownMenuItem(item, activeTextColor));
+            return DropdownMenuItem<T>(value: item.value, child: _buildDropdownMenuItem(item, dropdownTextColor));
           }).toList();
 
       // Original non-filterable dropdown
@@ -600,7 +612,7 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
             focusNode: widget.focusNode,
             autofocus: widget.autofocus,
             isExpanded: widget.isExpanded,
-            style: TextStyle(color: activeTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
+            style: TextStyle(color: dropdownTextColor, fontSize: widget.fontSize).useSystemChineseFont(),
             selectedItemBuilder: (BuildContext context) {
               return widget.items.map<Widget>((item) {
                 return _buildSelectedItem(item, textColor);

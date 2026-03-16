@@ -301,7 +301,17 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
         column: column,
         isHeader: false,
         isOperation: false,
-        child: Text(selectOption.label, style: TextStyle(overflow: TextOverflow.ellipsis, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemTitleColor))),
+        child: Row(
+          children: [
+            if (selectOption.icon.imageData.isNotEmpty) ...[WoxImageView(woxImage: selectOption.icon, width: 18, height: 18), const SizedBox(width: 8)],
+            Expanded(
+              child: Text(
+                selectOption.label,
+                style: TextStyle(overflow: TextOverflow.ellipsis, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemTitleColor)),
+              ),
+            ),
+          ],
+        ),
       );
     }
     if (column.type == PluginSettingValueType.pluginSettingValueTableColumnTypeSelectAIModel) {
@@ -427,6 +437,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
               onPressed: () {
                 showDialog(
                   context: context,
+                  barrierColor: getThemePopupBarrierColor(),
                   builder: (context) {
                     return WoxSettingPluginTableUpdate(
                       item: item,
@@ -461,12 +472,10 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                 //confirm delete
                 showDialog(
                   context: context,
+                  barrierColor: getThemePopupBarrierColor(),
                   builder: (context) {
-                    final themeBackground = getThemeBackgroundColor();
-                    final isDarkTheme = themeBackground.computeLuminance() < 0.5;
-                    final baseSurface = themeBackground.withAlpha(255);
-                    final cardColor = (isDarkTheme ? baseSurface.lighter(12) : baseSurface.darker(6)).withAlpha(255);
-                    final outlineColor = getThemeActiveBackgroundColor().withValues(alpha: isDarkTheme ? 0.22 : 0.15);
+                    final cardColor = getThemePopupSurfaceColor();
+                    final outlineColor = getThemePopupOutlineColor();
 
                     return AlertDialog(
                       backgroundColor: cardColor,
@@ -841,6 +850,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                       onPressed: () {
                         showDialog(
                           context: context,
+                          barrierColor: getThemePopupBarrierColor(),
                           builder: (context) {
                             return WoxSettingPluginTableUpdate(
                               item: item,

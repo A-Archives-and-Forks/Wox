@@ -443,6 +443,7 @@ class WoxImageSelector extends StatelessWidget {
 
     return showDialog<String>(
       context: context,
+      barrierColor: getThemePopupBarrierColor(),
       builder: (context) {
         return EmojiPickerDialog(initialEmoji: initialEmoji, tr: tr);
       },
@@ -531,21 +532,19 @@ class EmojiPickerDialogState extends State<EmojiPickerDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final themeBackground = getThemeBackgroundColor();
-    final isDarkTheme = themeBackground.computeLuminance() < 0.5;
-    final baseSurface = themeBackground.withAlpha(255);
+    final darkTheme = isThemeDark();
     final accentColor = getThemeActiveBackgroundColor();
     final textColor = getThemeTextColor();
     final subTextColor = getThemeSubTextColor();
-    final cardColor = (isDarkTheme ? baseSurface.lighter(12) : baseSurface.darker(6)).withAlpha(255);
-    final outlineColor = accentColor.withValues(alpha: isDarkTheme ? 0.22 : 0.15);
-    final panelBackground = isDarkTheme ? cardColor.lighter(6).withAlpha(255) : cardColor.darker(2).withAlpha(255);
+    final cardColor = getThemePopupSurfaceColor();
+    final outlineColor = getThemePopupOutlineColor();
+    final panelBackground = darkTheme ? cardColor.lighter(6).withAlpha(255) : cardColor.darker(2).withAlpha(255);
     final chipBorderColor = getThemeDividerColor().withValues(alpha: 0.45);
-    final selectedChipColor = accentColor.withValues(alpha: isDarkTheme ? 0.30 : 0.20);
+    final selectedChipColor = accentColor.withValues(alpha: darkTheme ? 0.30 : 0.20);
     final currentGroup = WoxImageSelector.emojiGroups[selectedGroupIndex];
     final baseTheme = Theme.of(context);
     final dialogTheme = baseTheme.copyWith(
-      colorScheme: ColorScheme.fromSeed(seedColor: accentColor, brightness: isDarkTheme ? Brightness.dark : Brightness.light),
+      colorScheme: ColorScheme.fromSeed(seedColor: accentColor, brightness: darkTheme ? Brightness.dark : Brightness.light),
       scaffoldBackgroundColor: Colors.transparent,
       cardColor: cardColor,
       shadowColor: textColor.withAlpha(50),

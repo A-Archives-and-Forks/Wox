@@ -514,18 +514,16 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final Color themeBackground = getThemeBackgroundColor();
-      final bool isDarkTheme = themeBackground.computeLuminance() < 0.5;
-      final Color baseSurface = themeBackground.withAlpha(255);
+      final bool darkTheme = isThemeDark();
       final Color accentColor = getThemeActiveBackgroundColor();
-      final Color cardColor = (isDarkTheme ? baseSurface.lighter(12) : baseSurface.darker(6)).withAlpha(255);
+      final Color cardColor = getThemePopupSurfaceColor();
       final Color textColor = getThemeTextColor();
       final double maxLabelWidth = getMaxColumnWidth();
       final double dialogContentWidth = math.max(600, maxLabelWidth + 320);
-      final Color outlineColor = accentColor.withValues(alpha: isDarkTheme ? 0.22 : 0.15);
+      final Color outlineColor = getThemePopupOutlineColor();
       final baseTheme = Theme.of(context);
       final dialogTheme = baseTheme.copyWith(
-        colorScheme: ColorScheme.fromSeed(seedColor: accentColor, brightness: isDarkTheme ? Brightness.dark : Brightness.light),
+        colorScheme: ColorScheme.fromSeed(seedColor: accentColor, brightness: darkTheme ? Brightness.dark : Brightness.light),
         scaffoldBackgroundColor: Colors.transparent,
         cardColor: cardColor,
         shadowColor: textColor.withAlpha(50),
