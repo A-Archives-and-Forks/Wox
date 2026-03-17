@@ -10,7 +10,7 @@
 - **Comments**: English only, concise. Add code comments where appropriate to explain the intent.
 - **Refactors**: Scan `AGENTS.md` and `README.md` files first
 - **Build**: Verify with `make build` in wox.core (you can skip UI build for small changes)
-- **Tests**: Run narrowest relevant tests after changes, avoid breaking unrelated tests
+- **Tests**: 不要写单元测试, 除非用户要求
 - **Format**: When formatting code, you must adhere to the coding style guidelines specified in Wox.code-workspace file.
 
 ## User Coding Style Preferences

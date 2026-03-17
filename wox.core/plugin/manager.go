@@ -1279,6 +1279,8 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 		if result.Actions[actionIndex].Icon.IsEmpty() {
 			// set default action icon if not present
 			result.Actions[actionIndex].Icon = common.ExecuteRunIcon
+		} else {
+			result.Actions[actionIndex].Icon = common.ConvertIcon(ctx, result.Actions[actionIndex].Icon, pluginInstance.PluginDirectory)
 		}
 		if result.Actions[actionIndex].Type == "" {
 			if len(result.Actions[actionIndex].Form) > 0 || result.Actions[actionIndex].OnSubmit != nil {
@@ -1459,6 +1461,8 @@ func (m *Manager) PolishUpdatableResult(ctx context.Context, pluginInstance *Ins
 			}
 			if actions[actionIndex].Icon.IsEmpty() {
 				actions[actionIndex].Icon = common.ExecuteRunIcon
+			} else {
+				actions[actionIndex].Icon = common.ConvertIcon(ctx, actions[actionIndex].Icon, pluginInstance.PluginDirectory)
 			}
 			if actions[actionIndex].Type == "" {
 				if len(actions[actionIndex].Form) > 0 || actions[actionIndex].OnSubmit != nil {
