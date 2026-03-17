@@ -28,8 +28,6 @@ type WoxSetting struct {
 	StartPage            *WoxSettingValue[StartPage]
 	ShowPosition         *WoxSettingValue[PositionType]
 	AIProviders          *WoxSettingValue[[]AIProvider]
-	EnableMCPServer      *WoxSettingValue[bool]
-	MCPServerPort        *WoxSettingValue[int]
 	EnableAutoBackup     *WoxSettingValue[bool]
 	EnableAutoUpdate     *WoxSettingValue[bool]
 	CustomPythonPath     *PlatformValue[string]
@@ -183,8 +181,6 @@ func NewWoxSetting(store *WoxSettingStore) *WoxSetting {
 		QueryShortcuts:   NewWoxSettingValue(store, "QueryShortcuts", []QueryShortcut{}),
 		TrayQueries:      NewWoxSettingValue(store, "TrayQueries", []TrayQuery{}),
 		AIProviders:      NewWoxSettingValue(store, "AIProviders", []AIProvider{}),
-		EnableMCPServer:  NewWoxSettingValue(store, "EnableMCPServer", true),
-		MCPServerPort:    NewWoxSettingValue(store, "MCPServerPort", 29867),
 		QueryHistories:   NewWoxSettingValue(store, "QueryHistories", []QueryHistory{}),
 		PinedResults:     NewWoxSettingValue(store, "PinedResults", util.NewHashMap[ResultHash, bool]()),
 		ActionedResults:  NewWoxSettingValue(store, "ActionedResults", util.NewHashMap[ResultHash, []ActionedResult]()),

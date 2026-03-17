@@ -28,9 +28,6 @@ var appIconWindows []byte
 //go:embed others
 var OthersFS embed.FS
 
-//go:embed ai
-var AISkillsFS embed.FS
-
 var embedThemes = []string{}
 
 func Extract(ctx context.Context) error {
@@ -74,19 +71,6 @@ func Extract(ctx context.Context) error {
 	othersErr := extractFiles(ctx, OthersFS, othersDirectory, "others", true)
 	if othersErr != nil {
 		return othersErr
-	}
-
-	// ai skills and prompts
-	aiDirectory := util.GetLocation().GetAIDirectory()
-	if util.IsDirExists(aiDirectory) {
-		rmErr := os.RemoveAll(aiDirectory)
-		if rmErr != nil {
-			return rmErr
-		}
-	}
-	aiSkillsErr := extractFiles(ctx, AISkillsFS, aiDirectory, "ai", true)
-	if aiSkillsErr != nil {
-		return aiSkillsErr
 	}
 
 	// themes

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"wox/ai"
 	"wox/analytics"
 	"wox/database"
 	"wox/migration"
@@ -203,14 +202,6 @@ func run() {
 
 	// Start auto update checker if enabled
 	updater.StartAutoUpdateChecker(ctx)
-
-	// Start MCP Server if enabled
-	if woxSetting.EnableMCPServer.Get() {
-		mcpPort := woxSetting.MCPServerPort.Get()
-		if mcpErr := ai.StartMCPServer(ctx, mcpPort); mcpErr != nil {
-			util.GetLogger().Error(ctx, fmt.Sprintf("failed to start MCP server: %s", mcpErr.Error()))
-		}
-	}
 
 	// Platform-specific keyboard implementations handle their own main-thread dispatch.
 	registerMainHotkeyErr := ui.GetUIManager().RegisterMainHotkey(ctx, woxSetting.MainHotkey.Get())

@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"wox/ai"
 	"wox/analytics"
 	"wox/common"
 	"wox/i18n"
@@ -658,29 +657,6 @@ func (m *Manager) PostSettingUpdate(ctx context.Context, key string, value strin
 		updater.CheckForUpdatesWithCallback(ctx, nil)
 	case "AIProviders":
 		plugin.GetPluginManager().GetUI().ReloadChatResources(ctx, "models")
-	case "EnableMCPServer":
-		woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
-		if vb {
-			// Start MCP server
-			port := woxSetting.MCPServerPort.Get()
-			if err := ai.StartMCPServer(ctx, port); err != nil {
-				logger.Error(ctx, fmt.Sprintf("failed to start MCP server: %s", err.Error()))
-			}
-		} else {
-			// Stop MCP server
-			if err := ai.StopMCPServer(ctx); err != nil {
-				logger.Error(ctx, fmt.Sprintf("failed to stop MCP server: %s", err.Error()))
-			}
-		}
-	case "MCPServerPort":
-		woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
-		if woxSetting.EnableMCPServer.Get() {
-			// Restart MCP server with new port
-			port := woxSetting.MCPServerPort.Get()
-			if err := ai.RestartMCPServer(ctx, port); err != nil {
-				logger.Error(ctx, fmt.Sprintf("failed to restart MCP server: %s", err.Error()))
-			}
-		}
 	}
 }
 

@@ -30,10 +30,6 @@ type WoxSettingDto struct {
 	CustomPythonPath     string
 	CustomNodejsPath     string
 
-	// AI/MCP related
-	EnableMCPServer bool
-	MCPServerPort   int
-
 	// UI related
 	AppWidth       int
 	MaxResultCount int
