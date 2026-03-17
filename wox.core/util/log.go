@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -18,6 +19,8 @@ import (
 
 var logInstance *Log
 var logOnce sync.Once
+
+const logCleanupInterval = 24 * time.Hour
 
 type Log struct {
 	logger      *zap.Logger
@@ -33,6 +36,7 @@ func GetLogger() *Log {
 		logFolder := GetLocation().GetLogDirectory()
 		logInstance = CreateLogger(logFolder)
 		setCrashOutput(logInstance)
+		logInstance.startCleanupRoutine()
 	})
 	return logInstance
 }
@@ -162,6 +166,91 @@ func (l *Log) ClearHistory() error {
 	return crashFile.Close()
 }
 
+func (l *Log) startCleanupRoutine() {
+	ctx := NewTraceContext()
+
+	Go(ctx, "log cleanup", func() {
+		ticker := time.NewTicker(logCleanupInterval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			l.cleanupExpiredLogs(NewTraceContext())
+		}
+	})
+}
+
+func (l *Log) cleanupExpiredLogs(ctx context.Context) {
+	if l.fileWriter == nil {
+		return
+	}
+
+	l.clearLogMux.Lock()
+	defer l.clearLogMux.Unlock()
+
+	if err := l.fileWriter.millRunOnce(); err != nil {
+		l.Error(ctx, fmt.Sprintf("failed to cleanup rotated logs: %s", err.Error()))
+	}
+
+	removedCount, err := l.cleanupStandaloneLogFiles()
+	if err != nil {
+		l.Error(ctx, fmt.Sprintf("failed to cleanup standalone logs: %s", err.Error()))
+		return
+	}
+	if removedCount > 0 {
+		l.Info(ctx, fmt.Sprintf("cleaned up %d expired standalone log files", removedCount))
+	}
+}
+
+func (l *Log) cleanupStandaloneLogFiles() (int, error) {
+	if l.fileWriter == nil || l.fileWriter.MaxAge <= 0 {
+		return 0, nil
+	}
+
+	cutoff := currentTime().Add(-time.Duration(l.fileWriter.MaxAge) * 24 * time.Hour)
+	entries, err := os.ReadDir(l.logFolder)
+	if err != nil {
+		return 0, err
+	}
+
+	removedCount := 0
+	currentLogFileName := path.Base(l.fileWriter.Filename)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if name == currentLogFileName || (name != "crash.log" && name != "update.log") {
+			continue
+		}
+
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return removedCount, infoErr
+		}
+		if !info.ModTime().Before(cutoff) {
+			continue
+		}
+
+		filePath := path.Join(l.logFolder, name)
+		if name == "crash.log" {
+			// Keep the crash log inode because the runtime may still write to it after startup.
+			truncateErr := os.Truncate(filePath, 0)
+			if truncateErr != nil && !os.IsNotExist(truncateErr) {
+				return removedCount, truncateErr
+			}
+		} else {
+			removeErr := os.Remove(filePath)
+			if removeErr != nil && !os.IsNotExist(removeErr) {
+				return removedCount, removeErr
+			}
+		}
+		removedCount++
+	}
+
+	return removedCount, nil
+}
+
 func NormalizeLogLevel(level string) string {
 	normalizedLevel := strings.ToUpper(strings.TrimSpace(level))
 	if normalizedLevel == "DEBUG" {
@@ -182,7 +271,7 @@ func createLogger(logFolder string, initialLevel zapcore.Level) (*zap.Logger, io
 		Filename:  path.Join(logFolder, "log"),
 		LocalTime: true,
 		MaxSize:   500, // megabytes
-		MaxAge:    3,   // days
+		MaxAge:    30,  // days
 	}
 	writeSyncer := zapcore.AddSync(fileWriter)
 	atomicLevel := zap.NewAtomicLevelAt(initialLevel)

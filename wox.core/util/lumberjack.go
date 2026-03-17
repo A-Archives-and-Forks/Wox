@@ -4,7 +4,7 @@
 // Note that this is v2.0 of lumberjack, and should be imported using gopkg.in
 // thusly:
 //
-//   import "gopkg.in/natefinch/lumberjack.v2"
+//	import "gopkg.in/natefinch/lumberjack.v2"
 //
 // The package name remains simply lumberjack, and the code resides at
 // https://github.com/natefinch/lumberjack under the v2.0 branch.
@@ -67,7 +67,7 @@ var _ io.WriteCloser = (*Lumberjack)(nil)
 // `/var/log/foo/server.log`, a backup created at 6:30pm on Nov 11 2016 would
 // use the filename `/var/log/foo/server-2016-11-04T18-30-00.000.log`
 //
-// Cleaning Up Old Log Files
+// # Cleaning Up Old Log Files
 //
 // Whenever a new logfile gets created, old log files may be deleted.  The most
 // recent files according to the encoded timestamp will be retained, up to a
@@ -405,17 +405,17 @@ func (l *Lumberjack) oldLogFiles() ([]logInfo, error) {
 	}
 	logFiles := []logInfo{}
 
-	prefix, ext := l.prefixAndExt()
+	prefixes, ext := l.prefixesAndExt()
 
 	for _, f := range files {
 		if f.IsDir() {
 			continue
 		}
-		if t, err := l.timeFromName(f.Name(), prefix, ext); err == nil {
+		if t, err := l.timeFromNameWithPrefixes(f.Name(), prefixes, ext); err == nil {
 			logFiles = append(logFiles, logInfo{t, f})
 			continue
 		}
-		if t, err := l.timeFromName(f.Name(), prefix, ext+compressSuffix); err == nil {
+		if t, err := l.timeFromNameWithPrefixes(f.Name(), prefixes, ext+compressSuffix); err == nil {
 			logFiles = append(logFiles, logInfo{t, f})
 			continue
 		}
@@ -426,6 +426,21 @@ func (l *Lumberjack) oldLogFiles() ([]logInfo, error) {
 	sort.Sort(byFormatTime(logFiles))
 
 	return logFiles, nil
+}
+
+func (l *Lumberjack) timeFromNameWithPrefixes(filename string, prefixes []string, ext string) (time.Time, error) {
+	var lastErr error
+	for _, prefix := range prefixes {
+		timestamp, err := l.timeFromName(filename, prefix, ext)
+		if err == nil {
+			return timestamp, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = errors.New("mismatched prefix")
+	}
+	return time.Time{}, lastErr
 }
 
 // timeFromName extracts the formatted time from the filename by stripping off
@@ -455,13 +470,12 @@ func (l *Lumberjack) dir() string {
 	return filepath.Dir(l.filename())
 }
 
-// prefixAndExt returns the filename part and extension part from the Lumberjack's
-// filename.
-func (l *Lumberjack) prefixAndExt() (prefix, ext string) {
+// prefixesAndExt returns the filename prefixes and extension for rotated files.
+func (l *Lumberjack) prefixesAndExt() (prefixes []string, ext string) {
 	filename := filepath.Base(l.filename())
 	ext = filepath.Ext(filename)
-	prefix = filename[:len(filename)-len(ext)] + "-"
-	return prefix, ext
+	prefix := filename[:len(filename)-len(ext)]
+	return []string{prefix + ".", prefix + "-"}, ext
 }
 
 // compressLogFile compresses the given log file, removing the

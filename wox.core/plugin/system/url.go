@@ -101,6 +101,12 @@ func (r *UrlPlugin) Query(ctx context.Context, query plugin.Query) (results []pl
 		})
 
 		for _, history := range existingUrlHistory {
+			icon := r.getRecentUrlIcon(ctx, history)
+			displayIcon := urlIcon
+			if icon.IsValid() && icon != urlIcon {
+				displayIcon = icon.Overlay(urlIcon, 0.4, 0.6, 0.6)
+			}
+
 			contextData := common.ContextData{
 				"url":   history.Url,
 				"title": history.Title,
@@ -111,7 +117,7 @@ func (r *UrlPlugin) Query(ctx context.Context, query plugin.Query) (results []pl
 				Title:    history.Url,
 				SubTitle: history.Title,
 				Score:    100,
-				Icon:     history.Icon.Overlay(urlIcon, 0.4, 0.6, 0.6),
+				Icon:     displayIcon,
 				Actions: []plugin.QueryResultAction{
 					{
 						Name:        "i18n:plugin_url_open",
@@ -205,6 +211,44 @@ func (r *UrlPlugin) saveRecentUrl(ctx context.Context, url string) {
 		return item.Url != url
 	})
 	r.recentUrls = append([]UrlHistory{newHistory}, r.recentUrls...)
+
+	urlsJson, err := json.Marshal(r.recentUrls)
+	if err != nil {
+		r.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("save url setting error: %s", err.Error()))
+		return
+	}
+
+	r.api.SaveSetting(ctx, "recentUrls", string(urlsJson), false)
+}
+
+func (r *UrlPlugin) getRecentUrlIcon(ctx context.Context, history UrlHistory) common.WoxImage {
+	if history.Icon.IsValid() {
+		return history.Icon
+	}
+
+	icon, err := getWebsiteIconWithCache(ctx, history.Url)
+	if err != nil {
+		r.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("recover url icon error: %s", err.Error()))
+		return urlIcon
+	}
+
+	r.updateRecentUrlIcon(ctx, history.Url, icon)
+	return icon
+}
+
+func (r *UrlPlugin) updateRecentUrlIcon(ctx context.Context, url string, icon common.WoxImage) {
+	updated := false
+	for i := range r.recentUrls {
+		if r.recentUrls[i].Url == url {
+			r.recentUrls[i].Icon = icon
+			updated = true
+			break
+		}
+	}
+
+	if !updated {
+		return
+	}
 
 	urlsJson, err := json.Marshal(r.recentUrls)
 	if err != nil {
