@@ -23,6 +23,7 @@ import 'package:wox/entity/wox_hotkey.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/enums/wox_image_type_enum.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/wox_text_measure_util.dart';
 import 'package:get/get.dart';
 
 class WoxSettingPluginTableUpdate extends StatefulWidget {
@@ -184,6 +185,25 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
     }
 
     return max > 0 ? max : 100;
+  }
+
+  double measureMaxLabelWidth(BuildContext context) {
+    double max = 60;
+    const labelStyle = TextStyle(fontSize: 14, fontWeight: FontWeight.w600);
+
+    for (final column in columns) {
+      final translatedLabel = tr(column.label).trim();
+      if (translatedLabel.isEmpty) {
+        continue;
+      }
+
+      final measuredWidth = WoxTextMeasureUtil.measureTextWidth(context: context, text: translatedLabel, style: labelStyle) + 8;
+      if (measuredWidth > max) {
+        max = measuredWidth;
+      }
+    }
+
+    return max.clamp(60, 180).toDouble();
   }
 
   String tr(String key) {
@@ -518,8 +538,8 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
       final Color accentColor = getThemeActiveBackgroundColor();
       final Color cardColor = getThemePopupSurfaceColor();
       final Color textColor = getThemeTextColor();
-      final double maxLabelWidth = getMaxColumnWidth();
-      final double dialogContentWidth = math.max(600, maxLabelWidth + 320);
+      final double maxLabelWidth = measureMaxLabelWidth(context);
+      final double dialogContentWidth = math.max(600, maxLabelWidth + math.max(320, getMaxColumnWidth()));
       final Color outlineColor = getThemePopupOutlineColor();
       final baseTheme = Theme.of(context);
       final dialogTheme = baseTheme.copyWith(

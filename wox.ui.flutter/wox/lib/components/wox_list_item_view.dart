@@ -29,7 +29,7 @@ class WoxListItemView extends StatelessWidget {
   static const _strutStyle = StrutStyle(forceStrutHeight: true);
   static const _iconSize = 30.0;
   static const _quickSelectSize = 24.0;
-  static const _tailImageSize = 100.0;
+  static const _tailImageSize = 20.0;
 
   const WoxListItemView({super.key, required this.item, required this.woxTheme, required this.isActive, required this.isHovered, required this.listViewType});
 

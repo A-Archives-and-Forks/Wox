@@ -66,6 +66,7 @@ func (p *PluginSettingValueTable) GetDefaultValue() string {
 func (p *PluginSettingValueTable) Translate(translator func(ctx context.Context, key string) string) PluginSettingDefinitionValue {
 	copy := *p
 	copy.Title = translator(context.Background(), p.Title)
+	copy.Tooltip = translator(context.Background(), p.Tooltip)
 	// Deep copy Columns
 	copy.Columns = make([]PluginSettingValueTableColumn, len(p.Columns))
 	for i := range p.Columns {

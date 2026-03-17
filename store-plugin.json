@@ -537,5 +537,37 @@
         "plugin_description": "搜索 Iconify 图标资源"
       }
     }
+  },
+  {
+    "Id": "2f326a0c-cd9f-4ddf-9b45-f8abf082283f",
+    "Name": "i18n:plugin_name",
+    "Author": "Wox-launcher",
+    "Version": "0.1.0",
+    "MinWoxVersion": "2.0.0",
+    "Runtime": "nodejs",
+    "Description": "i18n:plugin_desc",
+    "IconUrl": "https://raw.githubusercontent.com/Wox-launcher/Wox.Plugin.CodexUsage/master/images/app.svg",
+    "Website": "https://github.com/Wox-launcher/Wox.Plugin.CodexUsage",
+    "DownloadUrl": "https://github.com/Wox-launcher/Wox.Plugin.CodexUsage/releases/latest/download/Wox.Plugin.CodexUsage.wox",
+    "ScreenshotUrls": [
+      "https://raw.githubusercontent.com/Wox-launcher/Wox.Plugin.CodexUsage/master/screenshot.png"
+    ],
+    "SupportedOS": [
+      "Windows",
+      "Darwin",
+      "Linux"
+    ],
+    "DateCreated": "2026-03-08 15:56:00",
+    "DateUpdated": "2026-03-08 15:56:00",
+    "I18n": {
+      "en_US": {
+        "plugin_name": "Codex Usage",
+        "plugin_desc": "Show Codex rate limits inside Wox"
+      },
+      "zh_CN": {
+        "plugin_name": "Codex Usage",
+        "plugin_desc": "在 Wox 中显示 Codex 限额用量"
+      }
+    }
   }
 ]
