@@ -482,7 +482,7 @@ export interface Result {
  * { Type: "text", Text: "✓ Verified", Id: "status-tail" }
  *
  * // Image tail for icon
- * { Type: "image", Image: { ImageType: "emoji", ImageData: "🔥" } }
+ * { Type: "image", Image: { ImageType: "emoji", ImageData: "🔥" }, ImageWidth: 24, ImageHeight: 24 }
  * ```
  */
 export interface ResultTail {
@@ -507,6 +507,20 @@ export interface ResultTail {
    * Only used when Type is "image".
    */
   Image?: WoxImage
+
+  /**
+   * Optional width for image tails.
+   *
+   * Only used when Type is "image". If omitted, Wox uses the default tail image width.
+   */
+  ImageWidth?: number
+
+  /**
+   * Optional height for image tails.
+   *
+   * Only used when Type is "image". If omitted, Wox uses the default tail image height.
+   */
+  ImageHeight?: number
 
   /**
    * Unique identifier for this tail.

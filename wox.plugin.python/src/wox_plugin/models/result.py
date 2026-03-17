@@ -113,6 +113,8 @@ class ResultTail:
         type: The type of tail (TEXT or IMAGE)
         text: Text content (for TEXT type)
         image: Image to display (for IMAGE type)
+        image_width: Optional width for IMAGE type tails
+        image_height: Optional height for IMAGE type tails
         id: Unique identifier for this tail
         context_data: Additional data for later retrieval
 
@@ -162,6 +164,20 @@ class ResultTail:
     Only used when type is IMAGE.
     """
 
+    image_width: Optional[float] = field(default=None)
+    """
+    Optional width for IMAGE type tails.
+
+    If None, Wox uses the default tail image width.
+    """
+
+    image_height: Optional[float] = field(default=None)
+    """
+    Optional height for IMAGE type tails.
+
+    If None, Wox uses the default tail image height.
+    """
+
     id: str = field(default="")
     """
     Unique identifier for this tail.
@@ -208,6 +224,8 @@ class ResultTail:
                 "Type": self.type,
                 "Text": self.text,
                 "Image": json.loads(self.image.to_json()),
+                "ImageWidth": self.image_width,
+                "ImageHeight": self.image_height,
                 "Id": self.id,
                 "ContextData": self.context_data,
             }
@@ -234,6 +252,8 @@ class ResultTail:
             type=ResultTailType(data.get("Type")),
             text=data.get("Text", ""),
             image=WoxImage.from_json(json.dumps(data["Image"])),
+            image_width=data.get("ImageWidth"),
+            image_height=data.get("ImageHeight"),
             id=data.get("Id", ""),
             context_data=data.get("ContextData", {}) or {},
         )

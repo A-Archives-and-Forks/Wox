@@ -690,6 +690,19 @@ func getFloatFromMap(m map[string]interface{}, key string) float64 {
 	return 0
 }
 
+func getFirstFloatPtrFromMap(m map[string]interface{}, keys []string) *float64 {
+	for _, key := range keys {
+		if _, exists := m[key]; !exists {
+			continue
+		}
+
+		value := getFloatFromMap(m, key)
+		return &value
+	}
+
+	return nil
+}
+
 func getSliceFromMap(m map[string]interface{}, key string) []interface{} {
 	if value, exists := m[key]; exists {
 		if result, ok := value.([]interface{}); ok {
@@ -832,9 +845,11 @@ func parseScriptTails(ctx context.Context, metadata plugin.Metadata, itemMap map
 				continue
 			}
 			tails = append(tails, plugin.QueryResultTail{
-				Id:    getFirstStringFromMap(tailMap, []string{"id", "Id"}),
-				Type:  plugin.QueryResultTailTypeImage,
-				Image: img,
+				Id:          getFirstStringFromMap(tailMap, []string{"id", "Id"}),
+				Type:        plugin.QueryResultTailTypeImage,
+				Image:       img,
+				ImageWidth:  getFirstFloatPtrFromMap(tailMap, []string{"imageWidth", "ImageWidth", "width", "Width"}),
+				ImageHeight: getFirstFloatPtrFromMap(tailMap, []string{"imageHeight", "ImageHeight", "height", "Height"}),
 			})
 		default:
 			text := getFirstStringFromMap(tailMap, []string{"text", "Text"})

@@ -136,10 +136,12 @@ type QueryResult struct {
 
 type QueryResultTail struct {
 	// Tail id, should be unique. It's optional, if you don't set it, Wox will assign a random id for you
-	Id    string
-	Type  QueryResultTailType
-	Text  string          // only available when type is QueryResultTailTypeText
-	Image common.WoxImage // only available when type is QueryResultTailTypeImage
+	Id          string
+	Type        QueryResultTailType
+	Text        string          // only available when type is QueryResultTailTypeText
+	Image       common.WoxImage // only available when type is QueryResultTailTypeImage
+	ImageWidth  *float64        // optional width for image tails
+	ImageHeight *float64        // optional height for image tails
 	// Additional data associate with this tail, can be retrieved later
 	ContextData map[string]string
 

@@ -29,7 +29,7 @@ class WoxListItemView extends StatelessWidget {
   static const _strutStyle = StrutStyle(forceStrutHeight: true);
   static const _iconSize = 30.0;
   static const _quickSelectSize = 24.0;
-  static const _tailImageSize = 20.0;
+  static const _tailImageSize = 100.0;
 
   const WoxListItemView({super.key, required this.item, required this.woxTheme, required this.isActive, required this.isHovered, required this.listViewType});
 
@@ -73,7 +73,10 @@ class WoxListItemView extends StatelessWidget {
                     child: WoxHotkeyView(hotkey: tail.hotkey!, backgroundColor: isActive ? activeBgColor : actionBgColor, borderColor: tailTextColor, textColor: tailTextColor),
                   )
                 else if (tail.type == WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_IMAGE.code && tail.image != null && tail.image!.imageData.isNotEmpty)
-                  Padding(padding: _tailItemPadding, child: WoxImageView(woxImage: tail.image!, width: _tailImageSize, height: _tailImageSize)),
+                  Padding(
+                    padding: _tailItemPadding,
+                    child: WoxImageView(woxImage: tail.image!, width: tail.imageWidth ?? _tailImageSize, height: tail.imageHeight ?? _tailImageSize),
+                  ),
             ],
           ),
         ),
@@ -96,7 +99,9 @@ class WoxListItemView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (LoggerSwitch.enablePaintLog) Logger.instance.debug(const UuidV4().generate(), "repaint: list item view ${item.title} - container");
+    if (LoggerSwitch.enablePaintLog) {
+      Logger.instance.debug(const UuidV4().generate(), "repaint: list item view ${item.title} - container");
+    }
 
     final bool isResultList = listViewType == WoxListViewTypeEnum.WOX_LIST_VIEW_TYPE_RESULT.code;
     final bool isActionList = listViewType == WoxListViewTypeEnum.WOX_LIST_VIEW_TYPE_ACTION.code;

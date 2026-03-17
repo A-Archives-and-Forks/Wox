@@ -76,16 +76,7 @@ class WoxListItem<T> {
       }
     }
 
-    return WoxListItem<WoxResultAction>(
-      id: action.id,
-      icon: action.icon,
-      title: action.name,
-      subTitle: "",
-      tails: tails,
-      isGroup: false,
-      hotkey: action.hotkey,
-      data: action,
-    );
+    return WoxListItem<WoxResultAction>(id: action.id, icon: action.icon, title: action.name, subTitle: "", tails: tails, isGroup: false, hotkey: action.hotkey, data: action);
   }
 
   @override
@@ -99,8 +90,10 @@ class WoxListItemTail {
   late String? text;
   late WoxImage? image;
   late HotkeyX? hotkey;
+  late double? imageWidth;
+  late double? imageHeight;
 
-  WoxListItemTail({required this.type, this.text, this.image, this.hotkey});
+  WoxListItemTail({required this.type, this.text, this.image, this.hotkey, this.imageWidth, this.imageHeight});
 
   WoxListItemTail.fromJson(Map<String, dynamic> json) {
     type = json['Type'];
@@ -115,6 +108,9 @@ class WoxListItemTail {
     } else {
       image = null;
     }
+
+    imageWidth = (json['ImageWidth'] as num?)?.toDouble();
+    imageHeight = (json['ImageHeight'] as num?)?.toDouble();
 
     if (json['Hotkey'] != null) {
       hotkey = WoxHotkey.parseHotkeyFromString(json['Hotkey']);
@@ -139,6 +135,9 @@ class WoxListItemTail {
       data['Image'] = null;
     }
 
+    data['ImageWidth'] = imageWidth;
+    data['ImageHeight'] = imageHeight;
+
     if (hotkey != null) {
       data['Hotkey'] = hotkey!.toString();
     } else {
@@ -155,7 +154,7 @@ class WoxListItemTail {
     return WoxListItemTail(type: WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_HOTKEY.code, hotkey: hotkey);
   }
 
-  factory WoxListItemTail.image(WoxImage image) {
-    return WoxListItemTail(type: WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_IMAGE.code, image: image);
+  factory WoxListItemTail.image(WoxImage image, {double? width, double? height}) {
+    return WoxListItemTail(type: WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_IMAGE.code, image: image, imageWidth: width, imageHeight: height);
   }
 }
