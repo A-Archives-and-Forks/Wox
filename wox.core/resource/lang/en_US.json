@@ -136,6 +136,8 @@
   "ui_tray_queries_icon_tooltip": "Tray icon for this query.",
   "ui_tray_queries_query": "Query",
   "ui_tray_queries_query_tooltip": "The query to run when this tray icon is clicked.",
+  "ui_tray_queries_show_query_box": "Show Query Box",
+  "ui_tray_queries_show_query_box_tooltip": "When enabled, show the query box after this tray query opens.",
   "ui_tray_queries_width": "Width",
   "ui_tray_queries_width_tooltip": "Optional. Window width in pixels for this tray query. Empty means app width / 2.",
   "ui_ai_providers_name": "Provider Name",

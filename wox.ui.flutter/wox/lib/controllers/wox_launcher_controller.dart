@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:io';
 import 'dart:convert';
 import 'dart:ui';
@@ -126,6 +127,7 @@ class WoxLauncherController extends GetxController {
 
   // UI Control Flags
   final isQueryBoxAtBottom = false.obs;
+  final isQueryBoxVisible = true.obs;
   final isToolbarHiddenForce = false.obs;
   double forceWindowWidth = 0;
   var forceHideOnBlur = false;
@@ -620,6 +622,7 @@ class WoxLauncherController extends GetxController {
     // Handle explorer layout mode
     if (params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_EXPLORER.code) {
       isQueryBoxAtBottom.value = true;
+      isQueryBoxVisible.value = true;
       isToolbarHiddenForce.value = true;
       forceWindowWidth = WoxSettingUtil.instance.currentSetting.appWidth.toDouble() / 2;
       forceHideOnBlur = true;
@@ -627,6 +630,7 @@ class WoxLauncherController extends GetxController {
 
     if (params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_TRAY_QUERY.code) {
       isQueryBoxAtBottom.value = Platform.isWindows;
+      isQueryBoxVisible.value = params.showQueryBox;
       isToolbarHiddenForce.value = true;
       final configuredTrayWidth = params.windowWidth;
       forceWindowWidth = configuredTrayWidth > 0 ? configuredTrayWidth.toDouble() : WoxSettingUtil.instance.currentSetting.appWidth.toDouble() / 2;
@@ -704,6 +708,7 @@ class WoxLauncherController extends GetxController {
 
   void setDefaultLayoutMode(String traceId) {
     isQueryBoxAtBottom.value = false;
+    isQueryBoxVisible.value = true;
     isToolbarHiddenForce.value = false;
     forceWindowWidth = 0;
     forceHideOnBlur = false;
@@ -825,6 +830,10 @@ class WoxLauncherController extends GetxController {
 
     // request focus to action query box since it will lose focus when tap
     queryBoxFocusNode.requestFocus();
+    if (!isQueryBoxVisible.value) {
+      return;
+    }
+
     // force to focus the editable text state to ensure keyboard input works
     // on macos sometimes the keyboard input does not work after requestFocus in certain scenarios
     // E.g. when in explorer layout mode, sometimes the keyboard input does not work after requestFocus
@@ -1652,7 +1661,16 @@ class WoxLauncherController extends GetxController {
       resultHeight += WoxThemeUtil.instance.getToolbarHeight();
     }
 
-    var totalHeight = getQueryBoxTotalHeight() + resultHeight;
+    if (!isQueryBoxVisible.value && (itemCount == 0 || isLoading.value)) {
+      resultHeight = math.max(resultHeight, WoxThemeUtil.instance.getResultListViewHeightByCount(1));
+    }
+
+    if (!isQueryBoxVisible.value) {
+      resultHeight += WoxThemeUtil.instance.currentTheme.value.appPaddingBottom.toDouble();
+    }
+
+    final queryBoxHeight = isQueryBoxVisible.value ? getQueryBoxTotalHeight() : 0.0;
+    var totalHeight = queryBoxHeight + resultHeight;
 
     // On Windows with high DPI, add one pixel to avoid fractional cut-off.
     if (Platform.isWindows) {
@@ -1662,7 +1680,7 @@ class WoxLauncherController extends GetxController {
     }
 
     // If toolbar is shown without results, remove bottom padding to blend with query box.
-    if (isToolbarShowedWithoutResults) {
+    if (isToolbarShowedWithoutResults && isQueryBoxVisible.value) {
       totalHeight -= WoxThemeUtil.instance.currentTheme.value.appPaddingBottom;
     }
 

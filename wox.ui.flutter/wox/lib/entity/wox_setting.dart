@@ -212,10 +212,11 @@ class TrayQuery {
 
   late String query;
   late String width;
+  late bool showQueryBox;
 
   late bool disabled;
 
-  TrayQuery({required this.icon, required this.query, required this.width, required this.disabled});
+  TrayQuery({required this.icon, required this.query, required this.width, required this.showQueryBox, required this.disabled});
 
   TrayQuery.fromJson(Map<String, dynamic> json) {
     if (json['Icon'] is Map<String, dynamic>) {
@@ -231,6 +232,7 @@ class TrayQuery {
     } else {
       width = json['Width'].toString();
     }
+    showQueryBox = json['ShowQueryBox'] ?? false;
     disabled = json['Disabled'] ?? false;
   }
 
@@ -239,6 +241,7 @@ class TrayQuery {
     data['Icon'] = icon;
     data['Query'] = query;
     data['Width'] = width;
+    data['ShowQueryBox'] = showQueryBox;
     data['Disabled'] = disabled;
     return data;
   }

@@ -133,6 +133,8 @@
   "ui_tray_queries_icon_tooltip": "Ícone da bandeja para esta consulta.",
   "ui_tray_queries_query": "Consulta",
   "ui_tray_queries_query_tooltip": "Consulta a ser executada ao clicar neste ícone da bandeja.",
+  "ui_tray_queries_show_query_box": "Mostrar caixa de consulta",
+  "ui_tray_queries_show_query_box_tooltip": "Quando ativado, mostra a caixa de consulta ao abrir esta consulta da bandeja.",
   "ui_tray_queries_width": "Largura",
   "ui_tray_queries_width_tooltip": "Opcional. Largura da janela (px) para esta consulta da bandeja. Vazio usa metade da largura do app.",
   "ui_ai_providers_name": "Nome do provedor",

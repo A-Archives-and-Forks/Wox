@@ -658,6 +658,17 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 				Query: query,
 			}
 
+			if rawShowQueryBox, ok := rawTrayQuery["ShowQueryBox"]; ok {
+				switch showQueryBox := rawShowQueryBox.(type) {
+				case bool:
+					trayQuery.ShowQueryBox = showQueryBox
+				case string:
+					if parsed, parseErr := strconv.ParseBool(showQueryBox); parseErr == nil {
+						trayQuery.ShowQueryBox = parsed
+					}
+				}
+			}
+
 			if rawDisabled, ok := rawTrayQuery["Disabled"]; ok {
 				switch disabled := rawDisabled.(type) {
 				case bool:

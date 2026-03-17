@@ -136,6 +136,8 @@
   "ui_tray_queries_icon_tooltip": "该查询的托盘图标。",
   "ui_tray_queries_query": "查询",
   "ui_tray_queries_query_tooltip": "点击该托盘图标时要执行的查询。",
+  "ui_tray_queries_show_query_box": "显示查询框",
+  "ui_tray_queries_show_query_box_tooltip": "启用后，该托盘查询打开时会显示查询框。",
   "ui_tray_queries_width": "宽度",
   "ui_tray_queries_width_tooltip": "可选。该托盘查询窗口宽度（像素）。留空时使用应用宽度的一半。",
   "ui_ai_providers_name": "模型提供者",

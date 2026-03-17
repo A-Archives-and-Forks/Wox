@@ -111,10 +111,11 @@ type QueryHotkey struct {
 }
 
 type TrayQuery struct {
-	Icon     common.WoxImage
-	Query    string
-	Width    int `json:",omitempty"`
-	Disabled bool
+	Icon         common.WoxImage
+	Query        string
+	Width        int `json:",omitempty"`
+	ShowQueryBox bool
+	Disabled     bool
 }
 
 // ResultHash is a unique identifier for a result.

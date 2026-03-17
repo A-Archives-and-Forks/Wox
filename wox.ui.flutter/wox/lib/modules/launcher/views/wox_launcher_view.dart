@@ -16,6 +16,29 @@ class WoxLauncherView extends GetView<WoxLauncherController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
+      final theme = WoxThemeUtil.instance.currentTheme.value;
+      final isQueryBoxVisible = controller.isQueryBoxVisible.value;
+      final isToolbarShowedWithoutResults = controller.isToolbarShowedWithoutResults;
+      final queryBoxView = const WoxQueryBoxView();
+      final resultView = const WoxQueryResultView();
+      final topPadding = isQueryBoxVisible ? theme.appPaddingTop.toDouble() : 0.0;
+
+      double bottomPadding = theme.appPaddingBottom.toDouble();
+      if (isQueryBoxVisible && isToolbarShowedWithoutResults) {
+        bottomPadding = 0.0;
+      }
+
+      Widget content = resultView;
+      if (isQueryBoxVisible) {
+        content = Column(
+          children: [
+            if (controller.isQueryBoxAtBottom.value) const Expanded(child: WoxQueryResultView()),
+            queryBoxView,
+            if (!controller.isQueryBoxAtBottom.value) const Expanded(child: WoxQueryResultView()),
+          ],
+        );
+      }
+
       return WoxPlatformFocus(
         onKeyEvent: (node, event) {
           if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.escape) {
@@ -30,27 +53,19 @@ class WoxLauncherView extends GetView<WoxLauncherController> {
           return KeyEventResult.handled;
         },
         child: Scaffold(
-          backgroundColor: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.appBackgroundColor),
+          backgroundColor: safeFromCssColor(theme.appBackgroundColor),
           body: DropTarget(
             onDragDone: (DropDoneDetails details) {
               controller.handleDropFiles(details);
             },
             child: Column(
               children: [
-                Expanded(
+                if (!isQueryBoxVisible) const Offstage(offstage: true, child: WoxQueryBoxView()),
+                Flexible(
+                  fit: isQueryBoxVisible ? FlexFit.tight : FlexFit.loose,
                   child: Padding(
-                    padding: EdgeInsets.only(
-                      top: WoxThemeUtil.instance.currentTheme.value.appPaddingTop.toDouble(),
-                      right: WoxThemeUtil.instance.currentTheme.value.appPaddingRight.toDouble(),
-                      bottom: controller.isToolbarShowedWithoutResults ? 0 : WoxThemeUtil.instance.currentTheme.value.appPaddingBottom.toDouble(),
-                      left: WoxThemeUtil.instance.currentTheme.value.appPaddingLeft.toDouble(),
-                    ),
-                    child: Column(
-                      children:
-                          controller.isQueryBoxAtBottom.value
-                              ? [const Expanded(child: WoxQueryResultView()), const WoxQueryBoxView()]
-                              : [const WoxQueryBoxView(), const Expanded(child: WoxQueryResultView())],
-                    ),
+                    padding: EdgeInsets.only(top: topPadding, right: theme.appPaddingRight.toDouble(), bottom: bottomPadding, left: theme.appPaddingLeft.toDouble()),
+                    child: content,
                   ),
                 ),
                 if (controller.isShowToolbar && !controller.isToolbarHiddenForce.value) const SizedBox(height: 40, child: WoxQueryToolbarView()),

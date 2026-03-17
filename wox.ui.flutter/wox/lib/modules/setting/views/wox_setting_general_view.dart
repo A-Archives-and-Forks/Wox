@@ -299,6 +299,13 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
                         {"Type": "not_empty"},
                       ],
                     },
+                    {
+                      "Key": "ShowQueryBox",
+                      "Label": "i18n:ui_tray_queries_show_query_box",
+                      "Tooltip": "i18n:ui_tray_queries_show_query_box_tooltip",
+                      "Width": 90,
+                      "Type": "checkbox",
+                    },
                     {"Key": "Width", "Label": "i18n:ui_tray_queries_width", "Tooltip": "i18n:ui_tray_queries_width_tooltip", "Type": "text", "Width": 90, "TextMaxLines": 1},
                     {"Key": "Disabled", "Label": "i18n:ui_disabled", "Tooltip": "i18n:ui_disabled_tooltip", "Width": 60, "Type": "checkbox"},
                   ],

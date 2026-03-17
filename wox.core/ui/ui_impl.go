@@ -262,9 +262,13 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
 	var position Position
 	var windowRect map[string]int
+	showQueryBox := showContext.ShowQueryBox
 
 	if showContext.LayoutMode == "" {
 		showContext.LayoutMode = common.LayoutModeDefault
+	}
+	if showContext.LayoutMode != common.LayoutModeTrayQuery {
+		showQueryBox = true
 	}
 
 	// if specific position provided, use it
@@ -305,6 +309,7 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 	return map[string]any{
 		"SelectAll":      showContext.SelectAll,
 		"IsQueryFocus":   showContext.IsQueryFocus,
+		"ShowQueryBox":   showQueryBox,
 		"Position":       position,
 		"WindowRect":     windowRect,
 		"WindowWidth":    showContext.WindowWidth,

@@ -91,6 +91,7 @@ type ActiveWindowSnapshot struct {
 type ShowContext struct {
 	SelectAll    bool
 	IsQueryFocus bool // auto focus chat input on next ui update
+	ShowQueryBox bool
 
 	WindowPosition *WindowPosition
 	// WindowRect is only effective in LayoutModeExplorer.

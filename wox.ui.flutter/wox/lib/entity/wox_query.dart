@@ -414,6 +414,7 @@ class ShowAppParams {
   late String launchMode;
   late String startPage;
   late bool isQueryFocus;
+  late bool showQueryBox;
   late String? layoutMode;
 
   ShowAppParams({
@@ -425,6 +426,7 @@ class ShowAppParams {
     required this.launchMode,
     required this.startPage,
     this.isQueryFocus = false,
+    this.showQueryBox = true,
     this.layoutMode,
   });
 
@@ -445,6 +447,7 @@ class ShowAppParams {
     launchMode = json['LaunchMode'] ?? 'continue';
     startPage = json['StartPage'] ?? 'mru';
     isQueryFocus = json['IsQueryFocus'] ?? false;
+    showQueryBox = json['ShowQueryBox'] ?? true;
     layoutMode = json['LayoutMode'];
   }
 }

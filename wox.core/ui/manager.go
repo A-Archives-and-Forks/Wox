@@ -725,6 +725,7 @@ func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQu
 	m.ui.ShowApp(queryCtx, common.ShowContext{
 		SelectAll:      false,
 		IsQueryFocus:   isQueryFocus,
+		ShowQueryBox:   trayQuery.ShowQueryBox,
 		WindowPosition: &position,
 		WindowWidth:    windowWidth,
 		LayoutMode:     common.LayoutModeTrayQuery,
