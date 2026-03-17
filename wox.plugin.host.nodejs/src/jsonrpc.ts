@@ -24,6 +24,36 @@ function parseContextData(raw?: string): MapString {
   }
 }
 
+function cacheResultActions(plugin: PluginInstance, result: Result): void {
+  if (result.Id === undefined || result.Id === null) {
+    result.Id = crypto.randomUUID()
+  }
+
+  if (!result.Actions) {
+    return
+  }
+
+  result.Actions.forEach(action => {
+    if (action.Id === undefined || action.Id === null) {
+      action.Id = crypto.randomUUID()
+    }
+
+    const actionType = action.Type ?? "execute"
+    if (actionType === "form") {
+      const submit = (action as Extract<ResultAction, { Type: "form" }>).OnSubmit
+      if (submit) {
+        plugin.FormActions.set(action.Id, submit)
+      }
+      return
+    }
+
+    const exec = (action as Extract<ResultAction, { Type?: "execute" }>).Action
+    if (exec) {
+      plugin.Actions.set(action.Id, exec)
+    }
+  })
+}
+
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 export async function handleRequestFromWox(ctx: Context, request: PluginJsonRpcRequest, ws: WebSocket): unknown {
@@ -234,29 +264,7 @@ async function query(ctx: Context, request: PluginJsonRpcRequest) {
   }
 
   results.forEach(result => {
-    if (result.Id === undefined || result.Id === null) {
-      result.Id = crypto.randomUUID()
-    }
-    if (result.Actions) {
-      result.Actions.forEach(action => {
-        if (action.Id === undefined || action.Id === null) {
-          action.Id = crypto.randomUUID()
-        }
-
-        const actionType = action.Type ?? "execute"
-        if (actionType === "form") {
-          const submit = (action as Extract<ResultAction, { Type: "form" }>).OnSubmit
-          if (submit) {
-            plugin.FormActions.set(action.Id, submit)
-          }
-        } else {
-          const exec = (action as Extract<ResultAction, { Type?: "execute" }>).Action
-          if (exec) {
-            plugin.Actions.set(action.Id, exec)
-          }
-        }
-      })
-    }
+    cacheResultActions(plugin, result)
   })
 
   return results
@@ -322,15 +330,16 @@ async function onMRURestore(ctx: Context, request: PluginJsonRpcRequest): Promis
     throw new Error(`plugin instance not found: ${request.PluginId}`)
   }
 
-  const callbackId = request.Params.callbackId
-  const mruDataRaw = JSON.parse(request.Params.mruData)
+  const callbackId = request.Params.CallbackId
+  const rawMRUData = request.Params.MRUData ?? "{}"
+  const mruDataRaw = JSON.parse(rawMRUData)
 
   // Convert raw data to MRUData type
   const mruData: MRUData = {
-    PluginID: mruDataRaw.PluginID || "",
-    Title: mruDataRaw.Title || "",
-    SubTitle: mruDataRaw.SubTitle || "",
-    Icon: mruDataRaw.Icon || { ImageType: "absolute", ImageData: "" },
+    PluginID: mruDataRaw.PluginID ?? "",
+    Title: mruDataRaw.Title ?? "",
+    SubTitle: mruDataRaw.SubTitle ?? "",
+    Icon: mruDataRaw.Icon ?? { ImageType: "absolute", ImageData: "" },
     ContextData: typeof mruDataRaw.ContextData === "string" ? parseContextData(mruDataRaw.ContextData) : mruDataRaw.ContextData ?? {}
   }
 
@@ -341,6 +350,9 @@ async function onMRURestore(ctx: Context, request: PluginJsonRpcRequest): Promis
 
   try {
     const result = await callback(ctx, mruData)
+    if (result) {
+      cacheResultActions(pluginInstance, result)
+    }
     return result
   } catch (error) {
     logger.error(ctx, `MRU restore callback error: ${error}`)

@@ -145,6 +145,30 @@ func (w *WebsocketHost) invokeMethod(ctx context.Context, metadata plugin.Metada
 	}
 }
 
+func (w *WebsocketHost) decodeHostResult(result any, target any) error {
+	if result == nil {
+		return fmt.Errorf("result is nil")
+	}
+
+	var raw []byte
+	switch typed := result.(type) {
+	case string:
+		raw = []byte(typed)
+	default:
+		marshalResult, marshalErr := json.Marshal(typed)
+		if marshalErr != nil {
+			return fmt.Errorf("failed to marshal host result: %w", marshalErr)
+		}
+		raw = marshalResult
+	}
+
+	if err := json.Unmarshal(raw, target); err != nil {
+		return fmt.Errorf("failed to unmarshal host result: %w", err)
+	}
+
+	return nil
+}
+
 func (w *WebsocketHost) startWebsocketServer(ctx context.Context, port int) {
 	w.ws = util.NewWebsocketClient(fmt.Sprintf("ws://127.0.0.1:%d", port))
 	w.ws.OnMessage(ctx, func(data []byte) {
@@ -407,15 +431,14 @@ func (w *WebsocketHost) handleRequestFromPlugin(ctx context.Context, request Jso
 				}
 			}
 
-			// validate the result is a valid definition.PluginSettingDefinitionItem json string
 			var setting definition.PluginSettingDefinitionItem
-			unmarshalErr := json.Unmarshal([]byte(result.(string)), &setting)
-			if unmarshalErr != nil {
-				util.GetLogger().Error(callbackCtx, fmt.Sprintf("[%s] failed to unmarshal dynamic setting: %s", request.PluginName, unmarshalErr))
+			decodeErr := w.decodeHostResult(result, &setting)
+			if decodeErr != nil {
+				util.GetLogger().Error(callbackCtx, fmt.Sprintf("[%s] failed to decode dynamic setting: %s", request.PluginName, decodeErr))
 				return definition.PluginSettingDefinitionItem{
 					Type: definition.PluginSettingDefinitionTypeLabel,
 					Value: &definition.PluginSettingValueLabel{
-						Content: fmt.Sprintf("failed to unmarshal dynamic setting: %s", unmarshalErr),
+						Content: fmt.Sprintf("failed to decode dynamic setting: %s", decodeErr),
 					},
 				}
 			}
@@ -475,7 +498,7 @@ func (w *WebsocketHost) handleRequestFromPlugin(ctx context.Context, request Jso
 
 			result, invokeErr := w.invokeMethod(callbackCtx, metadata, "onMRURestore", map[string]string{
 				"CallbackId": callbackId,
-				"mruData":    string(mruDataJson),
+				"MRUData":    string(mruDataJson),
 			})
 			if invokeErr != nil {
 				util.GetLogger().Error(callbackCtx, fmt.Sprintf("[%s] failed to invoke MRU restore callback: %s", request.PluginName, invokeErr))
@@ -486,18 +509,11 @@ func (w *WebsocketHost) handleRequestFromPlugin(ctx context.Context, request Jso
 				return nil, nil
 			}
 
-			// Parse the result back to QueryResult
 			var queryResult plugin.QueryResult
-			resultStr, ok := result.(string)
-			if !ok {
-				util.GetLogger().Error(callbackCtx, fmt.Sprintf("[%s] MRU restore result is not a string", request.PluginName))
-				return nil, fmt.Errorf("MRU restore result is not a string")
-			}
-
-			unmarshalErr := json.Unmarshal([]byte(resultStr), &queryResult)
-			if unmarshalErr != nil {
-				util.GetLogger().Error(ctx, fmt.Sprintf("[%s] failed to unmarshal MRU restore result: %s", request.PluginName, unmarshalErr))
-				return nil, unmarshalErr
+			decodeErr := w.decodeHostResult(result, &queryResult)
+			if decodeErr != nil {
+				util.GetLogger().Error(ctx, fmt.Sprintf("[%s] failed to decode MRU restore result: %s", request.PluginName, decodeErr))
+				return nil, decodeErr
 			}
 
 			return &queryResult, nil
@@ -574,41 +590,6 @@ func (w *WebsocketHost) handleRequestFromPlugin(ctx context.Context, request Jso
 		if unmarshalResultsErr != nil {
 			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] failed to unmarshal results: %s", request.PluginName, unmarshalResultsErr))
 			return
-		}
-
-		for i, r := range results {
-			result := r
-			for j, action := range result.Actions {
-				capturedAction := action
-				if capturedAction.Type == plugin.QueryResultActionTypeForm {
-					result.Actions[j].OnSubmit = func(ctx context.Context, actionContext plugin.FormActionContext) {
-						valuesJson, _ := json.Marshal(actionContext.Values)
-						_, actionErr := w.invokeMethod(ctx, pluginInstance.Metadata, "formAction", map[string]string{
-							"ResultId":       actionContext.ResultId,
-							"ActionId":       capturedAction.Id,
-							"ResultActionId": actionContext.ResultActionId,
-							"ContextData":    actionContext.ContextData.Marshal(),
-							"Values":         string(valuesJson),
-						})
-						if actionErr != nil {
-							util.GetLogger().Error(ctx, fmt.Sprintf("[%s] form action failed: %s", pluginInstance.Metadata.GetName(ctx), actionErr.Error()))
-						}
-					}
-				} else {
-					result.Actions[j].Action = func(ctx context.Context, actionContext plugin.ActionContext) {
-						_, actionErr := w.invokeMethod(ctx, pluginInstance.Metadata, "action", map[string]string{
-							"ResultId":       actionContext.ResultId,
-							"ActionId":       capturedAction.Id,
-							"ResultActionId": actionContext.ResultActionId,
-							"ContextData":    actionContext.ContextData.Marshal(),
-						})
-						if actionErr != nil {
-							util.GetLogger().Error(ctx, fmt.Sprintf("[%s] action failed: %s", pluginInstance.Metadata.GetName(ctx), actionErr.Error()))
-						}
-					}
-				}
-			}
-			results[i] = result
 		}
 
 		success := pluginInstance.API.PushResults(ctx, query, results)

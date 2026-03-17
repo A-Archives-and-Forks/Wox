@@ -411,8 +411,8 @@ func ConvertIcon(ctx context.Context, image WoxImage, pluginDirectory string) (n
 	newImage = ConvertFileIconToAbsolutePath(ctx, image)
 	newImage = ConvertRelativePathToAbsolutePath(ctx, newImage, pluginDirectory)
 
-	// skip svg image as it will be rendered directly by wox, no need to crop or resize
-	if newImage.ImageType == WoxImageTypeSvg {
+	// Keep SVG data and SVG files as-is so Flutter can render vectors directly.
+	if newImage.ImageType == WoxImageTypeSvg || (newImage.ImageType == WoxImageTypeAbsolutePath && isSvgFilePath(newImage.ImageData)) {
 		return newImage
 	}
 

@@ -1290,6 +1290,7 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 			}
 		}
 	}
+	m.attachExternalActionCallbacks(pluginInstance, result.Actions)
 	// convert icon
 	result.Icon = common.ConvertIcon(ctx, result.Icon, pluginInstance.PluginDirectory)
 	for i := range result.Tails {
@@ -1472,26 +1473,7 @@ func (m *Manager) PolishUpdatableResult(ctx context.Context, pluginInstance *Ins
 				}
 			}
 		}
-
-		// For external plugins (Node.js/Python), create proxy action callbacks
-		// These callbacks will invoke the host's action method, which will then
-		// call the actual cached callback in the plugin host
-		if proxyCreator, ok := pluginInstance.Plugin.(ActionProxyCreator); ok {
-			for actionIndex := range actions {
-				// Always create proxy callback for external plugins
-				// because the Action field is not serialized and will be nil
-				if actions[actionIndex].Type == QueryResultActionTypeExecute && actions[actionIndex].Action == nil {
-					actions[actionIndex].Action = proxyCreator.CreateActionProxy(actions[actionIndex].Id)
-				}
-			}
-		}
-		if proxyCreator, ok := pluginInstance.Plugin.(FormActionProxyCreator); ok {
-			for actionIndex := range actions {
-				if actions[actionIndex].Type == QueryResultActionTypeForm && actions[actionIndex].OnSubmit == nil {
-					actions[actionIndex].OnSubmit = proxyCreator.CreateFormActionProxy(actions[actionIndex].Id)
-				}
-			}
-		}
+		m.attachExternalActionCallbacks(pluginInstance, actions)
 
 		// Set first action as default if no default action is set
 		defaultActionCount := lo.CountBy(actions, func(item QueryResultAction) bool {
@@ -1639,6 +1621,27 @@ func (m *Manager) PolishUpdatableResult(ctx context.Context, pluginInstance *Ins
 	}
 
 	return result
+}
+
+// For external plugins (Node.js/Python), create proxy action callbacks
+// These callbacks will invoke the host's action method, which will then
+// call the actual cached callback in the plugin host
+func (m *Manager) attachExternalActionCallbacks(pluginInstance *Instance, actions []QueryResultAction) {
+	if proxyCreator, ok := pluginInstance.Plugin.(ActionProxyCreator); ok {
+		for actionIndex := range actions {
+			if actions[actionIndex].Type == QueryResultActionTypeExecute && actions[actionIndex].Action == nil {
+				actions[actionIndex].Action = proxyCreator.CreateActionProxy(actions[actionIndex].Id)
+			}
+		}
+	}
+
+	if proxyCreator, ok := pluginInstance.Plugin.(FormActionProxyCreator); ok {
+		for actionIndex := range actions {
+			if actions[actionIndex].Type == QueryResultActionTypeForm && actions[actionIndex].OnSubmit == nil {
+				actions[actionIndex].OnSubmit = proxyCreator.CreateFormActionProxy(actions[actionIndex].Id)
+			}
+		}
+	}
 }
 
 func (m *Manager) GetUpdatableResult(ctx context.Context, resultId string) *UpdatableResult {

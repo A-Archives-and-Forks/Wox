@@ -179,6 +179,29 @@ def _get_action_type_value(action_type: Any) -> str:
     return str(action_type)
 
 
+def _cache_result_actions(plugin_instance: PluginInstance, result: Any) -> None:
+    if not result.id:
+        result.id = str(uuid.uuid4())
+
+    if not result.actions:
+        return
+
+    for action in result.actions:
+        if not action.id:
+            action.id = str(uuid.uuid4())
+
+        action_type = _get_action_type_value(getattr(action, "type", None))
+        if action_type == ResultActionType.FORM.value:
+            on_submit = getattr(action, "on_submit", None)
+            if on_submit is not None:
+                plugin_instance.form_actions[action.id] = on_submit
+            continue
+
+        action_func = getattr(action, "action", None)
+        if action_func is not None:
+            plugin_instance.actions[action.id] = action_func
+
+
 async def query(ctx: Context, request: Dict[str, Any]) -> list[dict[str, Any]]:
     """Handle query request"""
     plugin_id = request.get("PluginId", "")
@@ -198,22 +221,7 @@ async def query(ctx: Context, request: Dict[str, Any]) -> list[dict[str, Any]]:
         # Ensure each result has an ID and cache actions
         if results:
             for result in results:
-                if not result.id:
-                    result.id = str(uuid.uuid4())
-                if result.actions:
-                    for action in result.actions:
-                        if not action.id:
-                            action.id = str(uuid.uuid4())
-
-                        action_type = _get_action_type_value(getattr(action, "type", None))
-                        if action_type == ResultActionType.FORM.value:
-                            on_submit = getattr(action, "on_submit", None)
-                            if on_submit is not None:
-                                plugin_instance.form_actions[action.id] = on_submit
-                        else:
-                            action_func = getattr(action, "action", None)
-                            if action_func is not None:
-                                plugin_instance.actions[action.id] = action_func
+                _cache_result_actions(plugin_instance, result)
 
         # to avoid json serialization error, convert Result to dict and omit functions
         return [
@@ -387,8 +395,8 @@ async def on_mru_restore(ctx: Context, request: Dict[str, Any]) -> Any:
         raise Exception("PluginId is required")
 
     params = request.get("Params", {})
-    callback_id = params.get("callbackId")
-    mru_data_dict = json.loads(params.get("mruData", "{}"))
+    callback_id = params.get("CallbackId")
+    mru_data_dict = json.loads(params.get("MRUData", "{}"))
 
     plugin_instance = plugin_instances.get(plugin_id)
     if not plugin_instance:
@@ -417,6 +425,9 @@ async def on_mru_restore(ctx: Context, request: Dict[str, Any]) -> Any:
         if hasattr(result, "__await__"):
             result = await result  # type: ignore
 
+        if result is not None:
+            _cache_result_actions(plugin_instance, result)
+
         # Convert Result object back to dict for JSON serialization
         if result is not None:
             return result.__dict__
@@ -433,8 +444,8 @@ async def on_deep_link(ctx: Context, request: Dict[str, Any]) -> None:
         raise Exception("PluginId is required")
 
     params = request.get("Params", {})
-    callback_id = params.get("CallbackId") or params.get("callbackId")
-    arguments_raw = params.get("Arguments") or params.get("arguments") or "{}"
+    callback_id = params.get("CallbackId")
+    arguments_raw = params.get("Arguments", "{}")
 
     if not callback_id:
         raise Exception("CallbackId is required")
@@ -473,9 +484,9 @@ async def on_plugin_setting_change(ctx: Context, request: Dict[str, Any]) -> Non
         raise Exception("PluginId is required")
 
     params = request.get("Params", {})
-    callback_id = params.get("CallbackId") or params.get("callbackId")
-    key = params.get("Key") or params.get("key") or ""
-    value = params.get("Value") or params.get("value") or ""
+    callback_id = params.get("CallbackId")
+    key = params.get("Key", "")
+    value = params.get("Value", "")
 
     if not callback_id:
         raise Exception("CallbackId is required")
@@ -513,8 +524,8 @@ async def on_get_dynamic_setting(ctx: Context, request: Dict[str, Any]) -> str:
         raise Exception("PluginId is required")
 
     params = request.get("Params", {})
-    callback_id = params.get("CallbackId") or params.get("callbackId")
-    key = params.get("Key") or params.get("key") or ""
+    callback_id = params.get("CallbackId")
+    key = params.get("Key", "")
 
     if not callback_id:
         raise Exception("CallbackId is required")
@@ -562,7 +573,7 @@ async def on_unload(ctx: Context, request: Dict[str, Any]) -> None:
         raise Exception("PluginId is required")
 
     params = request.get("Params", {})
-    callback_id = params.get("CallbackId") or params.get("callbackId")
+    callback_id = params.get("CallbackId")
 
     if not callback_id:
         raise Exception("CallbackId is required")
