@@ -21,6 +21,7 @@ description: Create, scaffold, implement, and package Wox plugins (nodejs, pytho
 - Use `scripts/scaffold_wox_plugin.py` for `nodejs`, `python`, `script-nodejs`, or `script-python`.
 - Pass `--name` and `--trigger-keywords` for every runtime. The scaffold exits without them.
 - For Node.js and Python, the scaffold clones the official template repos and replaces placeholders like `{{.ID}}`, `{{.Name}}`, `{{.Description}}`, `{{.TriggerKeywordsJSON}}`, `{{.Author}}`.
+- Before starting work in a new SDK plugin project, run `make init` in the project root when the project has not been initialized yet.
 - Script plugins are **single-file** plugins. Prefer filenames like `Wox.Plugin.Script.<Name>.<ext>` (e.g., `Wox.Plugin.Script.Memos.py`).
 - For script plugins, the scaffold copies Wox script templates from `~/.wox/ai/skills/wox-plugin-creator/assets/script_plugin_templates/` and fills metadata placeholders.
 - Prefer standard library features; avoid third-party dependencies unless absolutely necessary.
