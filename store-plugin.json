@@ -613,6 +613,9 @@
     "IconUrl": "https://raw.githubusercontent.com/qianlifeng/Wox.Plugin.Awake/main/images/app.svg",
     "Website": "https://github.com/qianlifeng/Wox.Plugin.Awake",
     "DownloadUrl": "https://github.com/qianlifeng/Wox.Plugin.Awake/releases/latest/download/wox.plugin.awake.wox",
+    "ScreenshotUrls": [
+      "https://raw.githubusercontent.com/qianlifeng/Wox.Plugin.Awake/main/screenshot.png"
+    ],
     "SupportedOS": [
       "Windows",
       "Darwin",
