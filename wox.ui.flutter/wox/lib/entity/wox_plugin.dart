@@ -74,7 +74,8 @@ class PluginDetail {
     isUpgradable = json['IsUpgradable'] ?? false;
 
     if (json['TriggerKeywords'] != null) {
-      triggerKeywords = (json['TriggerKeywords'] as List).map((e) => e.toString()).toList();
+      triggerKeywords =
+          (json['TriggerKeywords'] as List).map((e) => e.toString()).toList();
     } else {
       triggerKeywords = <String>[];
     }
@@ -89,13 +90,15 @@ class PluginDetail {
     }
 
     if (json['SupportedOS'] != null) {
-      supportedOS = (json['SupportedOS'] as List).map((e) => e.toString()).toList();
+      supportedOS =
+          (json['SupportedOS'] as List).map((e) => e.toString()).toList();
     } else {
       supportedOS = <String>[];
     }
 
     if (json['ScreenshotUrls'] != null) {
-      screenshotUrls = (json['ScreenshotUrls'] as List).map((e) => e.toString()).toList();
+      screenshotUrls =
+          (json['ScreenshotUrls'] as List).map((e) => e.toString()).toList();
     } else {
       screenshotUrls = <String>[];
     }
@@ -146,13 +149,11 @@ class MetadataCommand {
 class PluginSetting {
   late bool disabled;
   late List<String> triggerKeywords;
-  late List<PluginQueryCommand> queryCommands;
   late Map<String, String> settings;
 
   PluginSetting.empty() {
     disabled = false;
     triggerKeywords = <String>[];
-    queryCommands = <PluginQueryCommand>[];
     settings = <String, String>{};
   }
 
@@ -162,16 +163,8 @@ class PluginSetting {
     if (json['TriggerKeywords'] == null) {
       triggerKeywords = <String>[];
     } else {
-      triggerKeywords = (json['TriggerKeywords'] as List).map((e) => e.toString()).toList();
-    }
-
-    if (json['QueryCommands'] == null) {
-      queryCommands = <PluginQueryCommand>[];
-    } else {
-      queryCommands = <PluginQueryCommand>[];
-      json['QueryCommands'].forEach((v) {
-        queryCommands.add(PluginQueryCommand.fromJson(v));
-      });
+      triggerKeywords =
+          (json['TriggerKeywords'] as List).map((e) => e.toString()).toList();
     }
 
     if (json['Settings'] == null) {
@@ -179,16 +172,6 @@ class PluginSetting {
     } else {
       settings = json['Settings'].cast<String, String>();
     }
-  }
-}
-
-class PluginQueryCommand {
-  late String command;
-  late String description;
-
-  PluginQueryCommand.fromJson(Map<String, dynamic> json) {
-    command = json['Command'];
-    description = json['Description'];
   }
 }
 

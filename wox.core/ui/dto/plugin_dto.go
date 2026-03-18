@@ -37,7 +37,6 @@ type PluginDto struct {
 type PluginSettingDto struct {
 	Disabled        bool
 	TriggerKeywords []string
-	QueryCommands   []PluginQueryCommandDto
 	Settings        map[string]string
 }
 

@@ -8,7 +8,6 @@ import (
 	"time"
 	"wox/ai"
 	"wox/common"
-	"wox/setting"
 	"wox/setting/definition"
 	"wox/util"
 	"wox/util/clipboard"
@@ -300,12 +299,7 @@ func (a *APIImpl) OnUnload(ctx context.Context, callback func(ctx context.Contex
 }
 
 func (a *APIImpl) RegisterQueryCommands(ctx context.Context, commands []MetadataCommand) {
-	a.pluginInstance.Setting.QueryCommands.Set(lo.Map(commands, func(command MetadataCommand, _ int) setting.PluginQueryCommand {
-		return setting.PluginQueryCommand{
-			Command:     command.Command,
-			Description: string(command.Description),
-		}
-	}))
+	a.pluginInstance.RuntimeQueryCommands = append([]MetadataCommand(nil), commands...)
 }
 
 func (a *APIImpl) AIChatStream(ctx context.Context, model common.Model, conversations []common.Conversation, options common.ChatOptions, callback common.ChatStreamFunc) error {

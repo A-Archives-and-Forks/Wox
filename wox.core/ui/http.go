@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"wox/plugin"
-	"wox/setting"
 	"wox/setting/definition"
 	"wox/ui/dto"
 	"wox/util"
@@ -282,12 +281,6 @@ func convertPluginDto(ctx context.Context, pluginDto dto.PluginDto, pluginInstan
 		pluginDto.Setting = dto.PluginSettingDto{
 			Disabled:        pluginInstance.Setting.Disabled.Get(),
 			TriggerKeywords: pluginInstance.Setting.TriggerKeywords.Get(),
-			QueryCommands: lo.Map(pluginInstance.Setting.QueryCommands.Get(), func(item setting.PluginQueryCommand, _ int) dto.PluginQueryCommandDto {
-				return dto.PluginQueryCommandDto{
-					Command:     item.Command,
-					Description: item.Description,
-				}
-			}),
 			//only return user pre-defined settings
 			Settings: nonDynamicSettings,
 		}
@@ -297,11 +290,6 @@ func convertPluginDto(ctx context.Context, pluginDto dto.PluginDto, pluginInstan
 		pluginDto.Name = pluginInstance.GetName(ctx)
 		pluginDto.Description = pluginInstance.GetDescription(ctx)
 		pluginDto.Commands = pluginInstance.GetQueryCommands()
-		for i := range pluginDto.Setting.QueryCommands {
-			if strings.HasPrefix(pluginDto.Setting.QueryCommands[i].Description, "i18n:") {
-				pluginDto.Setting.QueryCommands[i].Description = pluginInstance.API.GetTranslation(ctx, pluginDto.Setting.QueryCommands[i].Description)
-			}
-		}
 	}
 
 	return pluginDto
