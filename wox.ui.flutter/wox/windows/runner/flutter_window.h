@@ -47,6 +47,10 @@ private:
   // Previous active window handle
   HWND previous_active_window_;
 
+  // Only restore the saved foreground window when Wox has stayed focused since
+  // the last show/focus request.
+  bool restore_previous_window_on_hide_ = false;
+
   // Guard transient WM_ACTIVATE/WA_INACTIVE blur events between show() and focus().
   // show() sets this to true; focus() and hide() clear it.
   bool blur_guard_active_ = false;

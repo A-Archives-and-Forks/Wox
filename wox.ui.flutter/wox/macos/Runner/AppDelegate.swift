@@ -5,10 +5,27 @@ import FlutterMacOS
 class AppDelegate: FlutterAppDelegate {
   // Store the previous active application
   private var previousActiveApp: NSRunningApplication?
+  // Only restore the previous app when Wox has stayed focused since the last show/focus.
+  private var shouldRestorePreviousAppOnHide = false
   // Flutter method channel for window events
   private var windowEventChannel: FlutterMethodChannel?
   // Current appearance (light/dark)
   private var currentAppearance: String = "light"
+
+  private func savePreviousActiveAppIfNeeded() {
+    if let frontApp = NSWorkspace.shared.frontmostApplication,
+      frontApp != NSRunningApplication.current,
+      !frontApp.isTerminated
+    {
+      log(
+        "Saving previous active app: \(frontApp.localizedName ?? "Unknown") (bundleID: \(frontApp.bundleIdentifier ?? "Unknown"))"
+      )
+      previousActiveApp = frontApp
+      shouldRestorePreviousAppOnHide = true
+    } else {
+      log("No new previous app to save, keeping existing restore state")
+    }
+  }
 
   private func log(_ message: String) {
     DispatchQueue.main.async { [weak self] in
@@ -72,6 +89,9 @@ class AppDelegate: FlutterAppDelegate {
   // Handle window loss of focus
   @objc private func windowDidResignKey(_: Notification) {
     log("Window did resign key (blur)")
+    if mainFlutterWindow?.isVisible == true {
+      shouldRestorePreviousAppOnHide = false
+    }
     // Notify Flutter about the window blur event
     DispatchQueue.main.async {
       self.windowEventChannel?.invokeMethod("onWindowBlur", arguments: nil)
@@ -256,15 +276,7 @@ class AppDelegate: FlutterAppDelegate {
 
         case "show":
           self?.log("Showing Wox window")
-          // Save the current frontmost application before activating Wox
-          if let frontApp = NSWorkspace.shared.frontmostApplication,
-            frontApp != NSRunningApplication.current
-          {
-            self?.log("Saving previous active app: \(frontApp.localizedName ?? "Unknown") (bundleID: \(frontApp.bundleIdentifier ?? "Unknown"))")
-            self?.previousActiveApp = frontApp
-          } else {
-            self?.log("No suitable previous app to save")
-          }
+          self?.savePreviousActiveAppIfNeeded()
 
           window.makeKeyAndOrderFront(nil)
           NSApp.activate(ignoringOtherApps: true)
@@ -272,19 +284,28 @@ class AppDelegate: FlutterAppDelegate {
 
         case "hide":
           self?.log("Hiding Wox window")
+          let isWoxFrontmost = NSApp.isActive || NSWorkspace.shared.frontmostApplication == NSRunningApplication.current
+          let shouldRestorePreviousApp = self?.shouldRestorePreviousAppOnHide == true
           window.orderOut(nil)
-          // Activate the previous active application after hiding Wox
-          if let prevApp = self?.previousActiveApp {
-            self?.log(
-              "Activating previous app: \(prevApp.localizedName ?? "Unknown") (bundleID: \(prevApp.bundleIdentifier ?? "Unknown"))"
-            )
-            prevApp.activate(options: .activateIgnoringOtherApps)
+          // Only restore the previous app when Wox stayed focused since the last show/focus.
+          if isWoxFrontmost && shouldRestorePreviousApp {
+            if let prevApp = self?.previousActiveApp, prevApp != NSRunningApplication.current, !prevApp.isTerminated {
+              self?.log("Activating previous app: \(prevApp.localizedName ?? "Unknown") (bundleID: \(prevApp.bundleIdentifier ?? "Unknown"))")
+              prevApp.activate(options: .activateIgnoringOtherApps)
+            } else {
+              self?.log("No valid previous app saved for activation")
+            }
+          } else if !shouldRestorePreviousApp {
+            self?.log("Skipping previous app activation because Wox already lost focus before hiding")
           } else {
-            self?.log("No previous app saved, looking for any other app to activate")
+            self?.log("Wox is not frontmost when hiding, skipping previous app activation")
           }
+          self?.previousActiveApp = nil
+          self?.shouldRestorePreviousAppOnHide = false
           result(nil)
 
         case "focus":
+          self?.savePreviousActiveAppIfNeeded()
           window.makeKeyAndOrderFront(nil)
           NSApp.activate(ignoringOtherApps: true)
           result(nil)

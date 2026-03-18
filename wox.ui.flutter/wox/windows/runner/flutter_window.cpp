@@ -87,6 +87,7 @@ void FlutterWindow::SavePreviousActiveWindow(HWND selfHwnd)
   }
 
   previous_active_window_ = root;
+  restore_previous_window_on_hide_ = true;
 
   char fgStr[32];
   sprintf_s(fgStr, "%p", previous_active_window_);
@@ -578,6 +579,8 @@ LRESULT CALLBACK FlutterWindow::WindowProc(HWND hwnd, UINT message, WPARAM wpara
       }
       else
       {
+        g_window_instance->restore_previous_window_on_hide_ = false;
+        g_window_instance->previous_active_window_ = nullptr;
         g_window_instance->SendWindowEvent("onWindowBlur");
       }
     }
@@ -911,10 +914,11 @@ void FlutterWindow::HandleWindowManagerMethodCall(
 
       HWND fg = GetForegroundWindow();
       bool isForeground = (fg == hwnd || fg == GetAncestor(hwnd, GA_ROOT));
+      bool shouldRestorePreviousWindow = restore_previous_window_on_hide_;
 
       ShowWindow(hwnd, SW_HIDE);
 
-      if (isForeground)
+      if (isForeground && shouldRestorePreviousWindow)
       {
         RestorePreviousActiveWindow(hwnd);
 
@@ -924,6 +928,13 @@ void FlutterWindow::HandleWindowManagerMethodCall(
         SetTimer(hwnd, kRestoreForegroundTimerId1, 30, nullptr);
         SetTimer(hwnd, kRestoreForegroundTimerId2, 200, nullptr);
       }
+      else if (!shouldRestorePreviousWindow)
+      {
+        Log("Window: Wox already lost focus before hiding, skipping restore");
+        previous_active_window_ = nullptr;
+        KillTimer(hwnd, kRestoreForegroundTimerId1);
+        KillTimer(hwnd, kRestoreForegroundTimerId2);
+      }
       else
       {
         Log("Window: Wox is not foreground when hiding, skipping restore");
@@ -931,6 +942,8 @@ void FlutterWindow::HandleWindowManagerMethodCall(
         KillTimer(hwnd, kRestoreForegroundTimerId1);
         KillTimer(hwnd, kRestoreForegroundTimerId2);
       }
+
+      restore_previous_window_on_hide_ = false;
 
       result->Success();
     }

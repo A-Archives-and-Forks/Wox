@@ -18,6 +18,8 @@ struct _MyApplication
   GtkApplication parent_instance;
   char **dart_entrypoint_arguments;
   GtkWindow *window; // Store reference to the main window
+  gulong previous_active_window;
+  gboolean restore_previous_window_on_hide;
 };
 
 // Global variable to store method channel for window events
@@ -90,7 +92,14 @@ static void on_size_allocate(GtkWidget *widget, GdkRectangle *allocation,
 static gboolean on_window_focus_out(GtkWidget *widget, GdkEventFocus *event,
                                     gpointer user_data)
 {
+  MyApplication *self = MY_APPLICATION(user_data);
   log("FLUTTER: Window lost focus");
+
+  if (self != nullptr && gtk_widget_get_visible(widget))
+  {
+    self->restore_previous_window_on_hide = FALSE;
+    self->previous_active_window = 0;
+  }
 
   // Notify Flutter through method channel
   if (g_method_channel != nullptr)
@@ -103,6 +112,153 @@ static gboolean on_window_focus_out(GtkWidget *widget, GdkEventFocus *event,
   // Return FALSE to allow the event to propagate further
   return FALSE;
 }
+
+#ifdef GDK_WINDOWING_X11
+static Display *get_x11_display(GtkWindow *window)
+{
+  GdkWindow *gdk_window = gtk_widget_get_window(GTK_WIDGET(window));
+  if (gdk_window == nullptr || !GDK_IS_X11_WINDOW(gdk_window))
+  {
+    return nullptr;
+  }
+
+  return GDK_DISPLAY_XDISPLAY(gdk_window_get_display(gdk_window));
+}
+
+static Window get_x11_window_id(GtkWindow *window)
+{
+  GdkWindow *gdk_window = gtk_widget_get_window(GTK_WIDGET(window));
+  if (gdk_window == nullptr || !GDK_IS_X11_WINDOW(gdk_window))
+  {
+    return None;
+  }
+
+  return GDK_WINDOW_XID(gdk_window);
+}
+
+static Window get_active_x11_window(GtkWindow *window)
+{
+  Display *display = get_x11_display(window);
+  if (display == nullptr)
+  {
+    return None;
+  }
+
+  Atom net_active_window = XInternAtom(display, "_NET_ACTIVE_WINDOW", True);
+  if (net_active_window == None)
+  {
+    return None;
+  }
+
+  Atom actual_type = None;
+  int actual_format = 0;
+  unsigned long item_count = 0;
+  unsigned long bytes_after = 0;
+  unsigned char *data = nullptr;
+  Window active_window = None;
+
+  int status = XGetWindowProperty(display, DefaultRootWindow(display),
+                                  net_active_window, 0, 1, False, XA_WINDOW,
+                                  &actual_type, &actual_format, &item_count,
+                                  &bytes_after, &data);
+  if (status == Success && actual_type == XA_WINDOW && actual_format == 32 &&
+      item_count == 1 && data != nullptr)
+  {
+    active_window = *(reinterpret_cast<Window *>(data));
+  }
+
+  if (data != nullptr)
+  {
+    XFree(data);
+  }
+
+  return active_window;
+}
+
+static void save_previous_active_window(MyApplication *self)
+{
+  if (self == nullptr || self->window == nullptr)
+  {
+    return;
+  }
+
+  Window current_window = get_x11_window_id(self->window);
+  Window active_window = get_active_x11_window(self->window);
+  if (active_window == None || active_window == current_window)
+  {
+    return;
+  }
+
+  self->previous_active_window = active_window;
+  self->restore_previous_window_on_hide = TRUE;
+}
+
+static void restore_previous_active_window(MyApplication *self)
+{
+  if (self == nullptr || self->window == nullptr)
+  {
+    return;
+  }
+
+  Window previous_window = static_cast<Window>(self->previous_active_window);
+  self->previous_active_window = 0;
+  if (previous_window == None)
+  {
+    return;
+  }
+
+  Display *display = get_x11_display(self->window);
+  Window current_window = get_x11_window_id(self->window);
+  if (display == nullptr || previous_window == current_window)
+  {
+    return;
+  }
+
+  XWindowAttributes attributes;
+  if (XGetWindowAttributes(display, previous_window, &attributes) == 0 ||
+      attributes.map_state != IsViewable)
+  {
+    return;
+  }
+
+  Atom net_active_window = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
+  if (net_active_window == None)
+  {
+    return;
+  }
+
+  XEvent event;
+  memset(&event, 0, sizeof(event));
+  event.xclient.type = ClientMessage;
+  event.xclient.window = previous_window;
+  event.xclient.message_type = net_active_window;
+  event.xclient.format = 32;
+  event.xclient.data.l[0] = 2;
+  event.xclient.data.l[1] = CurrentTime;
+
+  XSendEvent(display, DefaultRootWindow(display), False,
+             SubstructureRedirectMask | SubstructureNotifyMask, &event);
+  XFlush(display);
+}
+#else
+static void save_previous_active_window(MyApplication *self)
+{
+  if (self != nullptr)
+  {
+    self->previous_active_window = 0;
+    self->restore_previous_window_on_hide = FALSE;
+  }
+}
+
+static void restore_previous_active_window(MyApplication *self)
+{
+  if (self != nullptr)
+  {
+    self->previous_active_window = 0;
+    self->restore_previous_window_on_hide = FALSE;
+  }
+}
+#endif
 
 // Method channel handler
 static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
@@ -243,19 +399,32 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
   }
   else if (strcmp(method, "show") == 0)
   {
+    save_previous_active_window(self);
     gtk_widget_show(GTK_WIDGET(window));
     response =
         FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
   }
   else if (strcmp(method, "hide") == 0)
   {
+    gboolean is_active = gtk_window_is_active(window);
+    gboolean should_restore_previous_window = self->restore_previous_window_on_hide;
     gtk_widget_hide(GTK_WIDGET(window));
+    if (is_active && should_restore_previous_window)
+    {
+      restore_previous_active_window(self);
+    }
+    else
+    {
+      self->previous_active_window = 0;
+    }
+    self->restore_previous_window_on_hide = FALSE;
     response =
         FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
   }
   else if (strcmp(method, "focus") == 0)
   {
     log("FLUTTER: focus - attempting to focus window");
+    save_previous_active_window(self);
 
     GdkWindow *gdk_window = gtk_widget_get_window(GTK_WIDGET(window));
     if (gdk_window)
@@ -435,7 +604,7 @@ static void my_application_activate(GApplication *application)
 
   // Add signal connection for window focus-out event
   g_signal_connect(window, "focus-out-event", G_CALLBACK(on_window_focus_out),
-                   NULL);
+                   self);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
@@ -509,7 +678,12 @@ static void my_application_class_init(MyApplicationClass *klass)
   G_OBJECT_CLASS(klass)->dispose = my_application_dispose;
 }
 
-static void my_application_init(MyApplication *self) { self->window = NULL; }
+static void my_application_init(MyApplication *self)
+{
+  self->window = NULL;
+  self->previous_active_window = 0;
+  self->restore_previous_window_on_hide = FALSE;
+}
 
 MyApplication *my_application_new()
 {
