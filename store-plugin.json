@@ -601,5 +601,34 @@
         "plugin_description": "快速搜索和管理本地 Git 项目"
       }
     }
+  },
+  {
+    "Id": "6dd42f91-009d-4d14-909c-97f25454eea7",
+    "Name": "i18n:plugin_name",
+    "Author": "qianlifeng",
+    "Version": "0.0.2",
+    "MinWoxVersion": "2.0.0",
+    "Runtime": "nodejs",
+    "Description": "i18n:plugin_description",
+    "IconUrl": "https://raw.githubusercontent.com/qianlifeng/Wox.Plugin.Awake/main/images/app.svg",
+    "Website": "https://github.com/qianlifeng/Wox.Plugin.Awake",
+    "DownloadUrl": "https://github.com/qianlifeng/Wox.Plugin.Awake/releases/latest/download/wox.plugin.awake.wox",
+    "SupportedOS": [
+      "Windows",
+      "Darwin",
+      "Linux"
+    ],
+    "DateCreated": "2026-03-18 11:14:02",
+    "DateUpdated": "2026-03-18 11:14:02",
+    "I18n": {
+      "en_US": {
+        "plugin_name": "Awake",
+        "plugin_description": "Keep your computer awake"
+      },
+      "zh_CN": {
+        "plugin_name": "Awake",
+        "plugin_description": "保持电脑唤醒，阻止休眠"
+      }
+    }
   }
 ]

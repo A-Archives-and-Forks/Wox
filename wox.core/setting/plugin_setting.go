@@ -14,7 +14,7 @@ type PluginSetting struct {
 	// So don't use this property directly, use Instance.TriggerKeywords instead
 	TriggerKeywords *PluginSettingValue[[]string]
 
-	// plugin author can register query command dynamically
+	// query commands that plugin creator register dynamically
 	// the final query command will be the combination of plugin's metadata commands defined in plugin.json and customized query command registered here
 	//
 	// So don't use this directly, use Instance.GetQueryCommands instead
