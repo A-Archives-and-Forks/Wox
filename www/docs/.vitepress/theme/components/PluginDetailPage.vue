@@ -173,8 +173,7 @@ function sharePlugin() {
   if (typeof window === "undefined" || !plugin.value) return;
 
   const shareIntentUrl = new URL("https://x.com/intent/post");
-  shareIntentUrl.searchParams.set("text", `${plugin.value.LocalizedName} · Wox Plugin Store`);
-  shareIntentUrl.searchParams.set("url", window.location.href);
+  shareIntentUrl.searchParams.set("text", `${plugin.value.LocalizedName} - ${plugin.value.LocalizedDescription}\n${window.location.href}`);
 
   const openedWindow = window.open(shareIntentUrl.toString(), "_blank", "noopener,noreferrer");
   if (!openedWindow) {
@@ -368,10 +367,8 @@ onUnmounted(() => {
   border: 1px solid color-mix(in srgb, var(--vp-c-divider) 82%, white 18%);
   border-radius: 30px;
   background:
-    radial-gradient(circle at top left, rgba(100, 108, 255, 0.18), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(56, 189, 248, 0.12), transparent 28%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 30%),
-    var(--vp-c-bg-soft);
+    radial-gradient(circle at top left, rgba(100, 108, 255, 0.18), transparent 34%), radial-gradient(circle at bottom right, rgba(56, 189, 248, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 30%), var(--vp-c-bg-soft);
   box-shadow: 0 28px 50px rgba(15, 23, 42, 0.08);
 }
 
@@ -485,9 +482,7 @@ onUnmounted(() => {
 .hero-panel {
   padding: 22px;
   border-radius: 24px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 36%),
-    color-mix(in srgb, var(--vp-c-bg) 90%, white 10%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 36%), color-mix(in srgb, var(--vp-c-bg) 90%, white 10%);
   border: 1px solid color-mix(in srgb, var(--vp-c-divider) 84%, white 16%);
 }
 
@@ -688,9 +683,7 @@ onUnmounted(() => {
   padding: 20px;
   border: 1px solid color-mix(in srgb, var(--vp-c-divider) 82%, white 18%);
   border-radius: 22px;
-  background:
-    radial-gradient(circle at top right, rgba(100, 108, 255, 0.1), transparent 30%),
-    var(--vp-c-bg-soft);
+  background: radial-gradient(circle at top right, rgba(100, 108, 255, 0.1), transparent 30%), var(--vp-c-bg-soft);
   cursor: pointer;
   transition:
     transform 0.2s,
