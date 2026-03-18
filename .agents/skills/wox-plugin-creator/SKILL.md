@@ -1,6 +1,6 @@
 ---
 name: wox-plugin-creator
-description: Create, scaffold, implement, and publish Wox plugins (nodejs, python, script-nodejs, script-python). Use when cloning official SDK templates, generating script plugin templates, editing plugin.json metadata, defining SettingDefinitions and validators, wiring i18n, implementing plugin APIs, or preparing plugins for publish.
+description: Create, scaffold, implement, and package Wox plugins (nodejs, python, script-nodejs, script-python). Use when cloning official SDK templates, generating script plugin templates, editing plugin.json metadata, defining SettingDefinitions and validators, wiring i18n, implementing plugin APIs, or preparing plugin repositories for local packaging. If the user wants to publish a plugin to the official Wox store or check whether it is already listed, prefer wox-plugin-submit2store.
 ---
 
 # Wox Plugin Creator
@@ -35,15 +35,14 @@ description: Create, scaffold, implement, and publish Wox plugins (nodejs, pytho
 - When the requested icon semantics already match a bundled generic icon under `assets/iconify/`, prefer reusing that local reference before searching for a new one.
 - Use `scripts/search_iconify.py` to search Iconify collections and fetch ready-to-inline SVG constants for `icons.ts` or `icons.py`.
 
-### 3) Package and publish
+### 3) Package and submit plugin
 
-- For SDK plugins cloned from templates, run `make publish` inside the template repo.
-- Publishing notes: `references/publishing.md`.
-- For publishing a plugin into the Wox store, read `references/store_publishing.md`.
+- For SDK plugins cloned from templates, run `make package` inside the template repo.
+- For submitting a plugin to the official Wox store, prefer `wox-plugin-submit2store` skill.
 - Script plugins do not use `plugin.json`; they embed a JSON metadata block in the script header comments.
 
 ## Resources
 
 - scripts: `scripts/scaffold_wox_plugin.py`, `scripts/search_iconify.py`
-- references: `references/plugin_overview.md`, `references/scaffold_nodejs.md`, `references/scaffold_python.md`, `references/sdk_nodejs.md`, `references/sdk_python.md`, `references/plugin_json_schema.md`, `references/settings_patterns.md`, `references/plugin_i18n.md`, `references/icons.md`, `references/publishing.md`, `references/store_publishing.md`
+- references: `references/plugin_overview.md`, `references/scaffold_nodejs.md`, `references/scaffold_python.md`, `references/sdk_nodejs.md`, `references/sdk_python.md`, `references/plugin_json_schema.md`, `references/settings_patterns.md`, `references/plugin_i18n.md`, `references/icons.md`
 - assets: `assets/script_plugin_templates/`, `assets/iconify/`
