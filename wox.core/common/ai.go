@@ -117,8 +117,9 @@ type Conversation struct {
 }
 
 type AIProviderInfo struct {
-	Name ProviderName
-	Icon WoxImage
+	Name        ProviderName
+	Icon        WoxImage
+	DefaultHost string
 }
 
 type Model struct {

@@ -288,11 +288,13 @@ class AIProvider {
 class AIProviderInfo {
   late String name;
   late WoxImage icon;
+  late String defaultHost;
 
-  AIProviderInfo({required this.name, required this.icon});
+  AIProviderInfo({required this.name, required this.icon, required this.defaultHost});
 
   AIProviderInfo.fromJson(Map<String, dynamic> json) {
     name = json['Name'];
     icon = WoxImage.fromJson(json['Icon']);
+    defaultHost = json['DefaultHost'] ?? "";
   }
 }

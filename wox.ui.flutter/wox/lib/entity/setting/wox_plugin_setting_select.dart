@@ -46,13 +46,15 @@ class PluginSettingValueSelectOption {
   late String value;
   late WoxImage icon;
   late bool isSelectAll;
+  late Map<String, dynamic> extra;
 
-  PluginSettingValueSelectOption({required this.label, required this.value, required this.icon, this.isSelectAll = false});
+  PluginSettingValueSelectOption({required this.label, required this.value, required this.icon, this.isSelectAll = false, Map<String, dynamic>? extra}) : extra = extra ?? {};
 
   PluginSettingValueSelectOption.fromJson(Map<String, dynamic> json) {
     label = json['Label'] ?? "";
     value = json['Value'] ?? "";
     icon = json['Icon'] != null ? WoxImage.fromJson(json['Icon']) : WoxImage.empty();
     isSelectAll = json['IsSelectAll'] ?? false;
+    extra = json['Extra'] is Map ? Map<String, dynamic>.from(json['Extra']) : <String, dynamic>{};
   }
 }

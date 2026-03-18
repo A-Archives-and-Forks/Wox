@@ -70,6 +70,7 @@ class PluginSettingValueTableColumn {
   late bool hideInTable; // Hide this column in the table, but still show it in the setting dialog
   late bool hideInUpdate; // Hide this column in the update dialog
   late List<PluginSettingValidatorItem> validators;
+  late List<PluginSettingValueTableColumnChangeAction> onChangedActions;
 
   PluginSettingValueTableColumn.fromJson(Map<String, dynamic> json) {
     key = json['Key'];
@@ -94,5 +95,39 @@ class PluginSettingValueTableColumn {
     } else {
       validators = [];
     }
+
+    if (json['OnChangedActions'] != null) {
+      onChangedActions = (json['OnChangedActions'] as List).map((e) => PluginSettingValueTableColumnChangeAction.fromJson(e)).toList();
+    } else {
+      onChangedActions = [];
+    }
   }
+}
+
+class PluginSettingValueTableColumnChangeAction {
+  // The field key that should receive the derived value.
+  late String targetKey;
+
+  // Read the value from the selected option's Extra map using this key.
+  late String valueFromSelectedOptionExtra;
+
+  // Controls when the target field can be overwritten: always or empty.
+  late String overwriteMode;
+
+  // Apply this action when a new row is initialized.
+  late bool applyOnInit;
+
+  PluginSettingValueTableColumnChangeAction.fromJson(Map<String, dynamic> json) {
+    targetKey = json['TargetKey'] ?? "";
+    valueFromSelectedOptionExtra = json['ValueFromSelectedOptionExtra'] ?? "";
+    overwriteMode = json['OverwriteMode'] ?? "always";
+    applyOnInit = json['ApplyOnInit'] ?? false;
+  }
+}
+
+class PluginSettingTableValidationError {
+  final String key;
+  final String errorMsg;
+
+  const PluginSettingTableValidationError({required this.key, required this.errorMsg});
 }

@@ -30,7 +30,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   final columnSpacing = 10.0;
   final columnTooltipWidth = 20.0;
   final bool readonly;
-  final Future<String?> Function(Map<String, dynamic> rowValues)? onUpdateValidate;
+  final Future<List<PluginSettingTableValidationError>> Function(Map<String, dynamic> rowValues)? onUpdateValidate;
   final ScrollController horizontalHeaderScrollController = ScrollController();
   final ScrollController horizontalBodyScrollController = ScrollController();
   final ScrollController verticalBodyScrollController = ScrollController();
@@ -855,6 +855,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                             return WoxSettingPluginTableUpdate(
                               item: item,
                               row: const {},
+                              onUpdateValidate: onUpdateValidate,
                               onUpdate: (key, row) {
                                 final rows = decodeRowsJson(getSetting(key));
                                 rows.add(row);

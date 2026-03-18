@@ -30,7 +30,7 @@ class WoxSettingPluginTableUpdate extends StatefulWidget {
   final PluginSettingValueTable item;
   final Map<String, dynamic> row;
   final Function onUpdate;
-  final Future<String?> Function(Map<String, dynamic> rowValues)? onUpdateValidate;
+  final Future<List<PluginSettingTableValidationError>> Function(Map<String, dynamic> rowValues)? onUpdateValidate;
 
   const WoxSettingPluginTableUpdate({super.key, required this.item, required this.row, required this.onUpdate, this.onUpdateValidate});
 
@@ -45,7 +45,7 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
   Map<String, TextEditingController> textboxEditingController = {};
   final Map<String, FocusNode> _focusNodes = {};
   List<PluginSettingValueTableColumn> columns = [];
-  String? customValidationError;
+  final Set<String> _customValidationErrorKeys = {};
 
   // Store tool list to avoid repeated requests
   List<AIMCPTool> allMCPTools = [];
@@ -128,6 +128,12 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
         }
       }
     }
+
+    if (!isUpdate) {
+      for (final column in columns) {
+        applyColumnInitActions(column);
+      }
+    }
   }
 
   @override
@@ -143,6 +149,16 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
 
   dynamic getValue(String key) {
     return values[key] ?? "";
+  }
+
+  PluginSettingValueTableColumn? getColumn(String key) {
+    for (final column in columns) {
+      if (column.key == key) {
+        return column;
+      }
+    }
+
+    return null;
   }
 
   bool getValueBool(String key) {
@@ -163,6 +179,83 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
     values[key] = value;
   }
 
+  void updateTextValue(String key, String value) {
+    updateValue(key, value);
+    final controller = textboxEditingController[key];
+    if (controller != null && controller.text != value) {
+      controller.text = value;
+    }
+  }
+
+  String getSelectOptionExtraValue(String columnKey, String optionValue, String extraKey) {
+    final column = getColumn(columnKey);
+    if (column == null) {
+      return "";
+    }
+
+    for (final option in column.selectOptions) {
+      if (option.value == optionValue) {
+        final value = option.extra[extraKey];
+        return value is String ? value : "";
+      }
+    }
+
+    return "";
+  }
+
+  bool shouldOverwriteByMode({required String overwriteMode, required String currentValue, required bool force}) {
+    if (force) {
+      return true;
+    }
+
+    switch (overwriteMode) {
+      case "always":
+        return true;
+      case "empty":
+        return currentValue.isEmpty;
+      default:
+        return false;
+    }
+  }
+
+  void applySelectColumnChangeActions(PluginSettingValueTableColumn column, {bool force = false, bool initOnly = false}) {
+    if (column.type != PluginSettingValueType.pluginSettingValueTableColumnTypeSelect) {
+      return;
+    }
+
+    final selectedValue = getValue(column.key).toString();
+    if (selectedValue.isEmpty) {
+      return;
+    }
+
+    for (final action in column.onChangedActions) {
+      if (initOnly && !action.applyOnInit) {
+        continue;
+      }
+
+      final mappedValue = getSelectOptionExtraValue(column.key, selectedValue, action.valueFromSelectedOptionExtra);
+      if (mappedValue.isEmpty) {
+        continue;
+      }
+
+      final currentTargetValue = getValue(action.targetKey).toString();
+      final shouldOverwrite = shouldOverwriteByMode(overwriteMode: action.overwriteMode, currentValue: currentTargetValue, force: force);
+      if (!shouldOverwrite) {
+        continue;
+      }
+
+      updateTextValue(action.targetKey, mappedValue);
+      final targetColumn = getColumn(action.targetKey);
+      if (targetColumn != null) {
+        setFieldValidationError(action.targetKey, validateValue(mappedValue, targetColumn.validators));
+      }
+    }
+  }
+
+  void applyColumnInitActions(PluginSettingValueTableColumn column) {
+    applySelectColumnChangeActions(column, force: true, initOnly: true);
+  }
+
   String validateValue(dynamic value, List<PluginSettingValidatorItem> validators) {
     return PluginSettingValidators.validateAll(value, validators);
   }
@@ -174,6 +267,13 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
     }
 
     fieldValidationErrors[key] = errorMessage;
+  }
+
+  void clearCustomValidationErrors() {
+    for (final key in _customValidationErrorKeys) {
+      fieldValidationErrors.remove(key);
+    }
+    _customValidationErrorKeys.clear();
   }
 
   double getMaxColumnWidth() {
@@ -269,20 +369,17 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
 
     // validate with onUpdateValidate if provided
     if (widget.onUpdateValidate != null) {
-      String? validationError = await widget.onUpdateValidate!(values);
-      if (validationError != null) {
+      clearCustomValidationErrors();
+      final validationErrors = await widget.onUpdateValidate!(values);
+      if (validationErrors.isNotEmpty) {
+        for (final validationError in validationErrors) {
+          setFieldValidationError(validationError.key, validationError.errorMsg);
+          _customValidationErrorKeys.add(validationError.key);
+        }
         if (mounted) {
-          setState(() {
-            customValidationError = validationError;
-          });
+          setState(() {});
         }
         return;
-      } else {
-        if (mounted) {
-          setState(() {
-            customValidationError = null;
-          });
-        }
       }
     }
 
@@ -357,6 +454,7 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
                 underline: Container(height: 1, color: getThemeDividerColor().withValues(alpha: 0.6)),
                 onChanged: (value) {
                   updateValue(column.key, value);
+                  applySelectColumnChangeActions(column);
                   setFieldValidationError(column.key, validateValue(value ?? "", column.validators));
                   setState(() {});
                 },
@@ -617,11 +715,6 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
                             ],
                           ),
                         ),
-                    if (customValidationError != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: Row(children: [Expanded(child: Text(customValidationError!, style: const TextStyle(color: Colors.red)))]),
-                      ),
                   ],
                 ),
               ),

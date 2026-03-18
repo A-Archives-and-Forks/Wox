@@ -141,7 +141,7 @@
   "ui_tray_queries_width": "Width",
   "ui_tray_queries_width_tooltip": "Optional. Window width in pixels for this tray query. Empty means app width / 2.",
   "ui_ai_providers_name": "Provider Name",
-  "ui_ai_providers_name_tooltip": "The name of the AI provider.",
+  "ui_ai_providers_name_tooltip": "The AI provider name. If your provider is not listed, choose openai and configure it with an alias and custom API host. Many providers are compatible with the OpenAI host format.",
   "ui_ai_providers_alias": "Alias",
   "ui_ai_providers_alias_tooltip": "Optional. Used to distinguish multiple configs for the same provider.",
   "ui_ai_providers_api_key": "API Key",

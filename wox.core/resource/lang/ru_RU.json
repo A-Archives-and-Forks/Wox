@@ -138,7 +138,7 @@
   "ui_tray_queries_width": "Ширина",
   "ui_tray_queries_width_tooltip": "Необязательно. Ширина окна (px) для этого запроса в трее. Пусто: половина ширины приложения.",
   "ui_ai_providers_name": "Имя поставщика",
-  "ui_ai_providers_name_tooltip": "Имя поставщика",
+  "ui_ai_providers_name_tooltip": "Имя поставщика ИИ. Если нужного поставщика нет в списке, выберите openai и настройте его через алиас и пользовательский API host. Многие поставщики совместимы с форматом host OpenAI.",
   "ui_ai_providers_alias": "Псевдоним",
   "ui_ai_providers_alias_tooltip": "Необязательно. Используется для различения нескольких конфигураций одного поставщика.",
   "ui_ai_providers_api_key": "API-ключ",

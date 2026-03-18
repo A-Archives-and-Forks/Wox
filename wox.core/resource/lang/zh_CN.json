@@ -141,7 +141,7 @@
   "ui_tray_queries_width": "宽度",
   "ui_tray_queries_width_tooltip": "可选。该托盘查询窗口宽度（像素）。留空时使用应用宽度的一半。",
   "ui_ai_providers_name": "模型提供者",
-  "ui_ai_providers_name_tooltip": "模型提供者名称",
+  "ui_ai_providers_name_tooltip": "模型提供者名称。如果选不到你需要的提供商，可以选择 openai，然后通过别名和自定义 API 地址的方式来配置，一般这类提供商都会兼容 OpenAI Host。",
   "ui_ai_providers_alias": "别名",
   "ui_ai_providers_alias_tooltip": "可选，用于区分同一提供者的多个配置",
   "ui_ai_providers_api_key": "API密钥",

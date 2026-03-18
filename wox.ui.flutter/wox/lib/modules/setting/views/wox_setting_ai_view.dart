@@ -33,10 +33,23 @@ class WoxSettingAIView extends WoxSettingBaseView {
                           "Tooltip": "i18n:ui_ai_providers_name_tooltip",
                           "Width": 100,
                           "Type": "select",
-                          "SelectOptions": snapshot.data!.map((e) => {"Label": e.name, "Value": e.name, "Icon": e.icon.toJson()}).toList(),
+                          "SelectOptions":
+                              snapshot.data!
+                                  .map(
+                                    (e) => {
+                                      "Label": e.name,
+                                      "Value": e.name,
+                                      "Icon": e.icon.toJson(),
+                                      "Extra": {"DefaultHost": e.defaultHost},
+                                    },
+                                  )
+                                  .toList(),
                           "TextMaxLines": 1,
                           "Validators": [
                             {"Type": "not_empty"},
+                          ],
+                          "OnChangedActions": [
+                            {"TargetKey": "Host", "ValueFromSelectedOptionExtra": "DefaultHost", "OverwriteMode": "always", "ApplyOnInit": true},
                           ],
                         },
                         {"Key": "Alias", "Label": "i18n:ui_ai_providers_alias", "Tooltip": "i18n:ui_ai_providers_alias_tooltip", "Width": 120, "Type": "text", "TextMaxLines": 1},
@@ -59,10 +72,10 @@ class WoxSettingAIView extends WoxSettingBaseView {
                     onUpdateValidate: (rowValues) async {
                       if (rowValues["Name"] != "ollama") {
                         if (rowValues["ApiKey"] == null || rowValues["ApiKey"] == "") {
-                          return controller.tr("ui_ai_providers_api_key_required");
+                          return const [PluginSettingTableValidationError(key: "ApiKey", errorMsg: "ui_ai_providers_api_key_required")];
                         }
                       }
-                      return null;
+                      return const [];
                     },
                   );
                 }),

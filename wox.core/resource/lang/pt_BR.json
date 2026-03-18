@@ -138,7 +138,7 @@
   "ui_tray_queries_width": "Largura",
   "ui_tray_queries_width_tooltip": "Opcional. Largura da janela (px) para esta consulta da bandeja. Vazio usa metade da largura do app.",
   "ui_ai_providers_name": "Nome do provedor",
-  "ui_ai_providers_name_tooltip": "O nome do provedor de IA.",
+  "ui_ai_providers_name_tooltip": "O nome do provedor de IA. Se o provedor desejado nao estiver na lista, escolha openai e configure um alias e um host de API personalizado. Muitos provedores sao compativeis com o formato de host da OpenAI.",
   "ui_ai_providers_alias": "Alias",
   "ui_ai_providers_alias_tooltip": "Opcional. Usado para distinguir várias configurações do mesmo provedor.",
   "ui_ai_providers_api_key": "Chave de API",
