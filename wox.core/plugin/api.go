@@ -195,10 +195,16 @@ func (a *APIImpl) ShowApp(ctx context.Context) {
 }
 
 func (a *APIImpl) Notify(ctx context.Context, message string) {
+	icon := a.pluginInstance.Metadata.Icon
+	if parsedIcon, err := common.ParseWoxImage(icon); err == nil {
+		convertedIcon := common.ConvertIcon(ctx, parsedIcon, a.pluginInstance.PluginDirectory)
+		icon = convertedIcon.String()
+	}
+
 	GetPluginManager().GetUI().Notify(ctx, common.NotifyMsg{
 		PluginId:       a.pluginInstance.Metadata.Id,
 		Text:           a.GetTranslation(ctx, message),
-		Icon:           a.pluginInstance.Metadata.Icon,
+		Icon:           icon,
 		DisplaySeconds: 5,
 	})
 }
