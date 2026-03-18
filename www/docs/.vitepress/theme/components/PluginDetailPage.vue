@@ -122,6 +122,10 @@ function pluginDetailHref(pluginId: string) {
   return withBase(`${prefix}?id=${encodeURIComponent(pluginId)}`);
 }
 
+function installHref(pluginName: string) {
+  return `wox://query?q=${encodeURIComponent(`wpm install ${pluginName}`)}`;
+}
+
 function platformIconPath(osKey: string) {
   if (osKey === "windows") {
     return "M3 4.2 11 3v8.5H3zm9.5-1.3L21 1.6v9.1h-8.5zM3 12.9h8v8.6L3 20.3zm9.5 0H21v9.5l-8.5-1.2z";
@@ -134,7 +138,7 @@ function platformIconPath(osKey: string) {
   return "M12 2.2c2.2 0 4.1 1.5 4.6 3.6 1.6.6 2.7 2.1 2.7 3.9 0 1.2-.5 2.4-1.4 3.2v4.4c0 .5-.3 1-.8 1.2l-1.6.8-.8 2c-.2.5-.7.8-1.2.8h-3c-.5 0-1-.3-1.2-.8l-.8-2-1.6-.8c-.5-.2-.8-.7-.8-1.2V13c-.9-.8-1.4-2-1.4-3.2 0-1.8 1.1-3.3 2.7-3.9.5-2.1 2.4-3.7 4.6-3.7Zm-2.4 18.1.4 1h4l.4-1Zm-.4-9.2c-.7 0-1.2.6-1.2 1.2s.5 1.2 1.2 1.2 1.2-.5 1.2-1.2-.6-1.2-1.2-1.2Zm5.6 0c-.7 0-1.2.6-1.2 1.2s.5 1.2 1.2 1.2 1.2-.5 1.2-1.2-.5-1.2-1.2-1.2Z";
 }
 
-function readCurrentPluginId() {
+function syncCurrentPluginIdFromUrl(replaceHistory = false) {
   if (typeof window === "undefined") return;
 
   const queryPluginId = new URLSearchParams(window.location.search).get("id") || "";
@@ -151,7 +155,23 @@ function readCurrentPluginId() {
 
   const currentUrl = new URL(window.location.href);
   currentUrl.searchParams.set("id", lastPluginId);
-  window.history.replaceState({}, "", currentUrl.toString());
+  if (replaceHistory) {
+    window.history.replaceState({}, "", currentUrl.toString());
+  }
+}
+
+function openPluginDetail(pluginId: string) {
+  if (typeof window === "undefined" || !pluginId) return;
+  if (currentPluginId.value === pluginId) return;
+
+  currentPluginId.value = pluginId;
+  activeScreenshot.value = 0;
+  window.sessionStorage.setItem(lastPluginStorageKey, pluginId);
+
+  const currentUrl = new URL(window.location.href);
+  currentUrl.searchParams.set("id", pluginId);
+  window.history.pushState({}, "", currentUrl.toString());
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function loadPlugins() {
@@ -160,7 +180,7 @@ async function loadPlugins() {
   try {
     const storePlugins = await fetchStorePlugins();
     plugins.value = storePlugins.map((item) => localizePlugin(item, lang.value));
-    readCurrentPluginId();
+    syncCurrentPluginIdFromUrl(true);
     activeScreenshot.value = 0;
   } catch (error) {
     console.error(error);
@@ -181,9 +201,18 @@ function sharePlugin() {
   }
 }
 
+function handlePopState() {
+  syncCurrentPluginIdFromUrl();
+  activeScreenshot.value = 0;
+}
+
 onMounted(() => {
   if (typeof document !== "undefined") {
     document.body.classList.add(pluginDetailBodyClass);
+  }
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("popstate", handlePopState);
   }
 
   loadPlugins();
@@ -192,6 +221,10 @@ onMounted(() => {
 onUnmounted(() => {
   if (typeof document !== "undefined") {
     document.body.classList.remove(pluginDetailBodyClass);
+  }
+
+  if (typeof window !== "undefined") {
+    window.removeEventListener("popstate", handlePopState);
   }
 });
 </script>
@@ -224,9 +257,17 @@ onUnmounted(() => {
         </div>
 
         <div class="hero-actions">
-          <a :href="`wox://query?q=wpm install ${plugin.Id}`" class="primary-action">{{ uiText.install }}</a>
+          <a :href="installHref(plugin.LocalizedName)" class="primary-action">{{ uiText.install }}</a>
           <a v-if="plugin.Website" :href="plugin.Website" target="_blank" rel="noreferrer" class="secondary-action">{{ uiText.source }}</a>
-          <button type="button" class="secondary-action" @click="sharePlugin">{{ uiText.share }}</button>
+          <button type="button" class="secondary-action share-action" @click="sharePlugin">
+            <svg viewBox="0 0 24 24" aria-hidden="true" class="share-icon">
+              <path
+                d="M18.9 2H22l-6.8 7.8L23.2 22h-6.3l-4.9-7.4L5.6 22H2.5l7.3-8.3L1.8 2h6.4l4.4 6.8L18.9 2Zm-1.1 18h1.8L7.2 3.9H5.3Z"
+                fill="currentColor"
+              />
+            </svg>
+            <span>{{ uiText.share }}</span>
+          </button>
         </div>
       </div>
 
@@ -315,7 +356,7 @@ onUnmounted(() => {
       </div>
 
       <div class="related-grid">
-        <a v-for="item in relatedPlugins" :key="item.Id" :href="pluginDetailHref(item.Id)" class="related-card">
+        <a v-for="item in relatedPlugins" :key="item.Id" :href="pluginDetailHref(item.Id)" class="related-card" @click.prevent="openPluginDetail(item.Id)">
           <div class="related-top">
             <img v-if="item.IconUrl" :src="item.IconUrl" class="related-icon" alt="plugin icon" />
             <div v-else class="related-icon related-placeholder">{{ item.IconEmoji || "🧩" }}</div>
@@ -450,6 +491,7 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   min-height: 42px;
   padding: 0 18px;
   border-radius: 999px;
@@ -477,6 +519,20 @@ onUnmounted(() => {
 .primary-action:hover,
 .secondary-action:hover {
   transform: translateY(-1px);
+}
+
+.primary-action:hover {
+  color: white;
+}
+
+.secondary-action:hover {
+  color: var(--vp-c-text-1);
+}
+
+.share-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
 }
 
 .hero-panel {

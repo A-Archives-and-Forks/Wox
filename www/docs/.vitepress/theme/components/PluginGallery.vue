@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useData, withBase } from "vitepress";
-import { fetchStorePlugins, localizePlugin, normalizeOsLabel, type LocalizedStorePluginManifest } from "./pluginStore";
+import { fetchStorePlugins, localizePlugin, type LocalizedStorePluginManifest } from "./pluginStore";
 
 const plugins = ref<LocalizedStorePluginManifest[]>([]);
 const searchQuery = ref("");
@@ -51,6 +51,10 @@ function pluginDetailHref(pluginId: string) {
   const prefix = (lang.value || "").toLowerCase().startsWith("zh") ? "/zh/store/plugin.html" : "/store/plugin.html";
   return withBase(`${prefix}?id=${encodeURIComponent(pluginId)}`);
 }
+
+function installHref(pluginName: string) {
+  return `wox://query?q=${encodeURIComponent(`wpm install ${pluginName}`)}`;
+}
 </script>
 
 <template>
@@ -88,7 +92,7 @@ function pluginDetailHref(pluginId: string) {
             <a v-if="plugin.Website" :href="plugin.Website" class="secondary-btn" target="_blank" rel="noreferrer" @click.stop>
               {{ uiText.source }}
             </a>
-            <a :href="`wox://query?q=wpm install ${plugin.Id}`" class="primary-btn" @click.stop>{{ uiText.install }}</a>
+            <a :href="installHref(plugin.LocalizedName)" class="primary-btn" @click.stop>{{ uiText.install }}</a>
           </div>
         </div>
       </article>
@@ -295,6 +299,7 @@ function pluginDetailHref(pluginId: string) {
 
 .primary-btn:hover {
   background: var(--vp-c-brand-2);
+  color: white;
 }
 
 .secondary-btn {
@@ -306,6 +311,10 @@ function pluginDetailHref(pluginId: string) {
 .secondary-btn:hover,
 .primary-btn:hover {
   transform: translateY(-1px);
+}
+
+.secondary-btn:hover {
+  color: var(--vp-c-text-1);
 }
 
 .empty-state {
