@@ -46,16 +46,28 @@ void setTrayIcon(const char *tooltip, HICON icon)
 	{
 		Shell_NotifyIcon(NIM_ADD, &nid);
 	}
+
+	nid.uVersion = NOTIFYICON_VERSION_4;
+	Shell_NotifyIcon(NIM_SETVERSION, &nid);
 }
 
 void removeTrayIcon()
 {
 	clearQueryTrayIcons();
 	Shell_NotifyIcon(NIM_DELETE, &nid);
+	if (hwnd != NULL)
+	{
+		PostMessage(hwnd, WM_CLOSE, 0, 0);
+	}
 }
 
 void showMenu()
 {
+	if (hwnd == NULL || hMenu == NULL)
+	{
+		return;
+	}
+
 	POINT p;
 	GetCursorPos(&p);
 	SetForegroundWindow(hwnd); // Set the foreground window before showing the menu for proper focus
@@ -68,22 +80,33 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	switch (uMsg)
 	{
 	case WM_APP + 1:
-		if (lParam == WM_RBUTTONUP)
+	{
+		UINT eventCode = LOWORD((DWORD)lParam);
+		if (eventCode == WM_CONTEXTMENU || eventCode == WM_RBUTTONUP)
 		{
 			showMenu();
 		}
-		else if (lParam == WM_LBUTTONUP)
+		else if (eventCode == NIN_SELECT || eventCode == NIN_KEYSELECT || eventCode == WM_LBUTTONUP)
 		{
 			reportLeftClick();
 		}
 		break;
+	}
 	case WM_APP + 2:
-		if (lParam == WM_LBUTTONUP)
+	{
+		UINT eventCode = LOWORD((DWORD)lParam);
+		UINT iconId = HIWORD((DWORD)lParam);
+		if (iconId == 0)
+		{
+			iconId = (UINT)wParam;
+		}
+
+		if (eventCode == NIN_SELECT || eventCode == NIN_KEYSELECT || eventCode == WM_LBUTTONUP)
 		{
 			NOTIFYICONIDENTIFIER nidIdentifier = {0};
 			nidIdentifier.cbSize = sizeof(NOTIFYICONIDENTIFIER);
 			nidIdentifier.hWnd = hwnd;
-			nidIdentifier.uID = (UINT)wParam;
+			nidIdentifier.uID = iconId;
 
 			RECT rect;
 			HRESULT hr = Shell_NotifyIconGetRect(&nidIdentifier, &rect);
@@ -114,14 +137,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				int width = (int)((rect.right - rect.left) / scale);
 				int height = (int)((rect.bottom - rect.top) / scale);
 
-				reportQueryClick((UINT_PTR)wParam, x, y, width, height);
+				reportQueryClick((UINT_PTR)iconId, x, y, width, height);
 			}
 			else
 			{
-				reportQueryClick((UINT_PTR)wParam, 0, 0, 0, 0);
+				int anchorX = (int)(short)LOWORD((DWORD)wParam);
+				int anchorY = (int)(short)HIWORD((DWORD)wParam);
+				reportQueryClick((UINT_PTR)iconId, anchorX, anchorY, 0, 0);
 			}
 		}
 		break;
+	}
 	case WM_COMMAND:
 		if (lParam == 0)
 		{
@@ -129,6 +155,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		}
 		break;
 	case WM_DESTROY:
+		if (hMenu != NULL)
+		{
+			DestroyMenu(hMenu);
+			hMenu = NULL;
+		}
+		if (nid.hIcon != NULL)
+		{
+			DestroyIcon(nid.hIcon);
+			nid.hIcon = NULL;
+		}
+		hwnd = NULL;
+		nextMenuId = 1;
 		PostQuitMessage(0);
 		break;
 	default:
@@ -156,6 +194,7 @@ HICON loadIcon(const char *iconName)
 void init(const char *iconName, const char *tooltip)
 {
 	hMenu = CreatePopupMenu();
+	nextMenuId = 1;
 	HICON icon = loadIcon(iconName);
 
 	WNDCLASSW wc = {0};
@@ -213,6 +252,8 @@ void addQueryTrayIcon(UINT id, const char *iconName, const char *tooltip)
 	}
 
 	Shell_NotifyIcon(NIM_ADD, &queryNid);
+	queryNid.uVersion = NOTIFYICON_VERSION_4;
+	Shell_NotifyIcon(NIM_SETVERSION, &queryNid);
 	queryIconIds[queryIconCount] = id;
 	queryIconHandles[queryIconCount] = icon;
 	queryIconCount++;

@@ -2224,7 +2224,7 @@ class WoxLauncherController extends GetxController {
 
   Future<void> handleDropFiles(DropDoneDetails details) async {
     final traceId = const UuidV4().generate();
-    Logger.instance.info(traceId, "Received drop files: $details");
+    Logger.instance.info(traceId, "Received drop files: ${details.files.map((e) => e.path).join(", ")}");
 
     await windowManager.focus();
     focusQueryBox();
