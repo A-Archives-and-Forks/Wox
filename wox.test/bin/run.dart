@@ -6,6 +6,7 @@ const Duration coreStartupTimeout = Duration(minutes: 3);
 const String testWoxDataDirEnv = 'WOX_TEST_DATA_DIR';
 const String testUserDataDirEnv = 'WOX_TEST_USER_DIR';
 const String testServerPortEnv = 'WOX_TEST_SERVER_PORT';
+const String testDisableTelemetryEnv = 'WOX_TEST_DISABLE_TELEMETRY';
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty || args.first == 'help' || args.first == '--help') {
@@ -46,6 +47,7 @@ Future<int> _runSmoke() async {
   environment[testWoxDataDirEnv] = woxDataDir.path;
   environment[testUserDataDirEnv] = userDataDir.path;
   environment[testServerPortEnv] = '$serverPort';
+  environment[testDisableTelemetryEnv] = 'true';
 
   stdout.writeln('Artifacts: ${artifactsDir.path}');
   stdout.writeln('Wox data dir: ${woxDataDir.path}');

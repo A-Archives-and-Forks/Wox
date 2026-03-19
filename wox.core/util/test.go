@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	TestWoxDataDirEnv  = "WOX_TEST_DATA_DIR"
-	TestUserDataDirEnv = "WOX_TEST_USER_DIR"
-	TestServerPortEnv  = "WOX_TEST_SERVER_PORT"
+	TestWoxDataDirEnv       = "WOX_TEST_DATA_DIR"
+	TestUserDataDirEnv      = "WOX_TEST_USER_DIR"
+	TestServerPortEnv       = "WOX_TEST_SERVER_PORT"
+	TestDisableTelemetryEnv = "WOX_TEST_DISABLE_TELEMETRY"
 )
 
 func GetTestWoxDataDirectoryOverride() string {
@@ -21,6 +22,12 @@ func GetTestUserDataDirectoryOverride() string {
 	return strings.TrimSpace(os.Getenv(TestUserDataDirEnv))
 }
 
+func IsTestMode() bool {
+	return GetTestWoxDataDirectoryOverride() != "" ||
+		GetTestUserDataDirectoryOverride() != "" ||
+		strings.TrimSpace(os.Getenv(TestServerPortEnv)) != ""
+}
+
 func GetTestServerPortOverride() (int, error) {
 	portOverride := strings.TrimSpace(os.Getenv(TestServerPortEnv))
 	port, err := strconv.Atoi(portOverride)
@@ -29,4 +36,12 @@ func GetTestServerPortOverride() (int, error) {
 	}
 
 	return port, nil
+}
+
+func ShouldDisableTelemetryForTest() bool {
+	if !IsTestMode() {
+		return false
+	}
+
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(TestDisableTelemetryEnv)), "true")
 }

@@ -1,4 +1,4 @@
-.PHONY: build clean host _bundle_mac_app plugins help dev test test-all test-calculator test-converter test-plugin test-time test-network test-quick test-legacy only_test check_deps release appimage
+.PHONY: build clean host _bundle_mac_app plugins help dev test test-all test-calculator test-converter test-plugin test-time test-network test-quick test-legacy only_test check_deps release appimage smoke
 
 # Determine the current platform
 ifeq ($(OS),Windows_NT)
@@ -39,6 +39,7 @@ help:
 	@echo "  dev        Setup development environment"
 	@echo "  test       Run tests"
 	@echo "  build      Build all components"
+	@echo "  smoke      Run the desktop smoke E2E flow"
 	@echo "  appimage   Build Linux AppImage"
 	@echo "  plugins    Update plugin store"
 	@echo "  clean      Clean release directory"
@@ -138,6 +139,9 @@ test-verbose:
 # Test with custom directories and no cleanup (for debugging)
 test-debug:
 	cd wox.core && WOX_TEST_DATA_DIR=/tmp/wox-test-debug WOX_TEST_CLEANUP=false WOX_TEST_VERBOSE=true go test ./test -v
+
+smoke:
+	$(MAKE) -C wox.test smoke
 
 
 build: clean dev

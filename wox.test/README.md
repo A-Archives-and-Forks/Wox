@@ -47,5 +47,6 @@ Each run creates a timestamped directory under `wox.test/artifacts/` with:
 - The runner prefers port `34987` and automatically falls back to a free port.
 - The runner overrides `WOX_TEST_DATA_DIR` and `WOX_TEST_USER_DIR` so the test
   run does not touch the developer's normal Wox data.
+- The runner disables telemetry for smoke runs.
 - On Windows, stop a locally running `build/windows/.../wox-ui.exe` before
   running smoke tests, or the linker will fail to overwrite that binary.
