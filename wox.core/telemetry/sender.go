@@ -17,7 +17,7 @@ import (
 
 const (
 	// telemetryEndpoint can be overridden via TELEMETRY_ENDPOINT environment variable
-	defaultTelemetryEndpoint = "https://api.wox.io/api/v1/telemetry/presence"
+	defaultTelemetryEndpoint = "https://wox-telemetry.qlf.workers.dev/api/v1/telemetry/presence"
 	userAgentPrefix          = "Wox/"
 	heartbeatIntervalHours   = 24 // hours
 )
