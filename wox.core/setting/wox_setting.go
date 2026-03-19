@@ -51,6 +51,9 @@ type WoxSetting struct {
 	QueryHistories  *WoxSettingValue[[]QueryHistory]
 	PinedResults    *WoxSettingValue[*util.HashMap[ResultHash, bool]]
 	ActionedResults *WoxSettingValue[*util.HashMap[ResultHash, []ActionedResult]]
+
+	// Anonymous usage statistics
+	EnableAnonymousUsageStats *WoxSettingValue[bool]
 }
 
 type LaunchMode = string
@@ -171,28 +174,29 @@ func NewWoxSetting(store *WoxSettingStore) *WoxSetting {
 		LangCode: NewWoxSettingValueWithValidator(store, "LangCode", defaultLangCode, func(code i18n.LangCode) bool {
 			return i18n.IsSupportedLangCode(string(code))
 		}),
-		LaunchMode:       NewWoxSettingValue(store, "LaunchMode", LaunchModeContinue),
-		StartPage:        NewWoxSettingValue(store, "StartPage", StartPageMRU),
-		ShowPosition:     NewWoxSettingValue(store, "ShowPosition", PositionTypeMouseScreen),
-		AppWidth:         NewWoxSettingValue(store, "AppWidth", 800),
-		MaxResultCount:   NewWoxSettingValue(store, "MaxResultCount", 10),
-		ThemeId:          NewWoxSettingValue(store, "ThemeId", DefaultThemeId),
-		AppFontFamily:    NewPlatformValue(store, "AppFontFamily", "", "", ""),
-		EnableAutostart:  NewPlatformValue(store, "EnableAutostart", false, false, false),
-		HttpProxyEnabled: NewPlatformValue(store, "HttpProxyEnabled", false, false, false),
-		HttpProxyUrl:     NewPlatformValue(store, "HttpProxyUrl", "", "", ""),
-		CustomPythonPath: NewPlatformValue(store, "CustomPythonPath", "", "", ""),
-		CustomNodejsPath: NewPlatformValue(store, "CustomNodejsPath", "", "", ""),
-		EnableAutoBackup: NewWoxSettingValue(store, "EnableAutoBackup", true),
-		EnableAutoUpdate: NewWoxSettingValue(store, "EnableAutoUpdate", true),
-		LastWindowX:      NewWoxSettingValue(store, "LastWindowX", -1),
-		LastWindowY:      NewWoxSettingValue(store, "LastWindowY", -1),
-		QueryHotkeys:     NewPlatformValue(store, "QueryHotkeys", []QueryHotkey{}, []QueryHotkey{}, []QueryHotkey{}),
-		QueryShortcuts:   NewWoxSettingValue(store, "QueryShortcuts", []QueryShortcut{}),
-		TrayQueries:      NewWoxSettingValue(store, "TrayQueries", []TrayQuery{}),
-		AIProviders:      NewWoxSettingValue(store, "AIProviders", []AIProvider{}),
-		QueryHistories:   NewWoxSettingValue(store, "QueryHistories", []QueryHistory{}),
-		PinedResults:     NewWoxSettingValue(store, "PinedResults", util.NewHashMap[ResultHash, bool]()),
-		ActionedResults:  NewWoxSettingValue(store, "ActionedResults", util.NewHashMap[ResultHash, []ActionedResult]()),
+		LaunchMode:                NewWoxSettingValue(store, "LaunchMode", LaunchModeContinue),
+		StartPage:                 NewWoxSettingValue(store, "StartPage", StartPageMRU),
+		ShowPosition:              NewWoxSettingValue(store, "ShowPosition", PositionTypeMouseScreen),
+		AppWidth:                  NewWoxSettingValue(store, "AppWidth", 800),
+		MaxResultCount:            NewWoxSettingValue(store, "MaxResultCount", 10),
+		ThemeId:                   NewWoxSettingValue(store, "ThemeId", DefaultThemeId),
+		AppFontFamily:             NewPlatformValue(store, "AppFontFamily", "", "", ""),
+		EnableAutostart:           NewPlatformValue(store, "EnableAutostart", false, false, false),
+		HttpProxyEnabled:          NewPlatformValue(store, "HttpProxyEnabled", false, false, false),
+		HttpProxyUrl:              NewPlatformValue(store, "HttpProxyUrl", "", "", ""),
+		CustomPythonPath:          NewPlatformValue(store, "CustomPythonPath", "", "", ""),
+		CustomNodejsPath:          NewPlatformValue(store, "CustomNodejsPath", "", "", ""),
+		EnableAutoBackup:          NewWoxSettingValue(store, "EnableAutoBackup", true),
+		EnableAutoUpdate:          NewWoxSettingValue(store, "EnableAutoUpdate", true),
+		LastWindowX:               NewWoxSettingValue(store, "LastWindowX", -1),
+		LastWindowY:               NewWoxSettingValue(store, "LastWindowY", -1),
+		QueryHotkeys:              NewPlatformValue(store, "QueryHotkeys", []QueryHotkey{}, []QueryHotkey{}, []QueryHotkey{}),
+		QueryShortcuts:            NewWoxSettingValue(store, "QueryShortcuts", []QueryShortcut{}),
+		TrayQueries:               NewWoxSettingValue(store, "TrayQueries", []TrayQuery{}),
+		AIProviders:               NewWoxSettingValue(store, "AIProviders", []AIProvider{}),
+		QueryHistories:            NewWoxSettingValue(store, "QueryHistories", []QueryHistory{}),
+		PinedResults:              NewWoxSettingValue(store, "PinedResults", util.NewHashMap[ResultHash, bool]()),
+		ActionedResults:           NewWoxSettingValue(store, "ActionedResults", util.NewHashMap[ResultHash, []ActionedResult]()),
+		EnableAnonymousUsageStats: NewWoxSettingValue(store, "EnableAnonymousUsageStats", true),
 	}
 }

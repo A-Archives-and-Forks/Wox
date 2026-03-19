@@ -27,6 +27,7 @@ class WoxSetting {
   late String httpProxyUrl;
   late bool enableAutoBackup;
   late bool enableAutoUpdate;
+  late bool enableAnonymousUsageStats;
   late String customPythonPath;
   late String customNodejsPath;
 
@@ -57,6 +58,7 @@ class WoxSetting {
     required this.httpProxyUrl,
     required this.enableAutoBackup,
     required this.enableAutoUpdate,
+    required this.enableAnonymousUsageStats,
     required this.customPythonPath,
     required this.customNodejsPath,
   });
@@ -128,6 +130,7 @@ class WoxSetting {
     httpProxyUrl = json['HttpProxyUrl'] ?? '';
     enableAutoBackup = json['EnableAutoBackup'] ?? false;
     enableAutoUpdate = json['EnableAutoUpdate'] ?? true;
+    enableAnonymousUsageStats = json['EnableAnonymousUsageStats'] ?? true;
     customPythonPath = json['CustomPythonPath'] ?? '';
     customNodejsPath = json['CustomNodejsPath'] ?? '';
   }
@@ -160,6 +163,7 @@ class WoxSetting {
     data['HttpProxyUrl'] = httpProxyUrl;
     data['EnableAutoBackup'] = enableAutoBackup;
     data['EnableAutoUpdate'] = enableAutoUpdate;
+    data['EnableAnonymousUsageStats'] = enableAnonymousUsageStats;
     data['CustomPythonPath'] = customPythonPath;
     data['CustomNodejsPath'] = customNodejsPath;
     return data;

@@ -22,6 +22,7 @@ import (
 	"wox/plugin/host"
 	appplugin "wox/plugin/system/app"
 	"wox/setting"
+	"wox/telemetry"
 	"wox/ui/dto"
 	"wox/updater"
 	"wox/util"
@@ -558,6 +559,7 @@ func handleSettingWox(w http.ResponseWriter, r *http.Request) {
 	settingDto.ShowPosition = woxSetting.ShowPosition.Get()
 	settingDto.EnableAutoBackup = woxSetting.EnableAutoBackup.Get()
 	settingDto.EnableAutoUpdate = woxSetting.EnableAutoUpdate.Get()
+	settingDto.EnableAnonymousUsageStats = woxSetting.EnableAnonymousUsageStats.Get()
 	settingDto.CustomPythonPath = woxSetting.CustomPythonPath.Get()
 	settingDto.CustomNodejsPath = woxSetting.CustomNodejsPath.Get()
 
@@ -765,6 +767,12 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 		woxSetting.ThemeId.Set(vs)
 	case "AppFontFamily":
 		woxSetting.AppFontFamily.Set(vs)
+	case "EnableAnonymousUsageStats":
+		woxSetting.EnableAnonymousUsageStats.Set(vb)
+		// When disabled, delete telemetry state to stop tracking
+		if !vb {
+			telemetry.DeleteTelemetryState(ctx)
+		}
 	default:
 		writeErrorResponse(w, "unknown setting key: "+kv.Key)
 		return

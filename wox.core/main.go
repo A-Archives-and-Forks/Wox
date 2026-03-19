@@ -7,6 +7,7 @@ import (
 	"wox/analytics"
 	"wox/database"
 	"wox/migration"
+	"wox/telemetry"
 
 	"runtime"
 	"strconv"
@@ -202,6 +203,12 @@ func run() {
 
 	// Start auto update checker if enabled
 	updater.StartAutoUpdateChecker(ctx)
+
+	// Send anonymous usage telemetry if enabled
+	telemetry.SendPresenceIfNeeded(ctx)
+
+	// Start periodic telemetry heartbeat for long-running processes
+	telemetry.StartPeriodicHeartbeat(ctx)
 
 	// Platform-specific keyboard implementations handle their own main-thread dispatch.
 	registerMainHotkeyErr := ui.GetUIManager().RegisterMainHotkey(ctx, woxSetting.MainHotkey.Get())

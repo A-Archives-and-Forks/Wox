@@ -6,30 +6,31 @@ import (
 )
 
 type WoxSettingDto struct {
-	EnableAutostart      bool
-	MainHotkey           string
-	SelectionHotkey      string
-	IgnoredHotkeyApps    []setting.IgnoredHotkeyApp
-	LogLevel             string
-	UsePinYin            bool
-	SwitchInputMethodABC bool
-	HideOnStart          bool
-	HideOnLostFocus      bool
-	ShowTray             bool
-	LangCode             i18n.LangCode
-	QueryHotkeys         []setting.QueryHotkey
-	QueryShortcuts       []setting.QueryShortcut
-	TrayQueries          []setting.TrayQuery
-	LaunchMode           setting.LaunchMode
-	StartPage            setting.StartPage
-	AIProviders          []setting.AIProvider
-	HttpProxyEnabled     bool
-	HttpProxyUrl         string
-	ShowPosition         setting.PositionType
-	EnableAutoBackup     bool
-	EnableAutoUpdate     bool
-	CustomPythonPath     string
-	CustomNodejsPath     string
+	EnableAutostart           bool
+	MainHotkey                string
+	SelectionHotkey           string
+	IgnoredHotkeyApps         []setting.IgnoredHotkeyApp
+	LogLevel                  string
+	UsePinYin                 bool
+	SwitchInputMethodABC      bool
+	HideOnStart               bool
+	HideOnLostFocus           bool
+	ShowTray                  bool
+	LangCode                  i18n.LangCode
+	QueryHotkeys              []setting.QueryHotkey
+	QueryShortcuts            []setting.QueryShortcut
+	TrayQueries               []setting.TrayQuery
+	LaunchMode                setting.LaunchMode
+	StartPage                 setting.StartPage
+	AIProviders               []setting.AIProvider
+	HttpProxyEnabled          bool
+	HttpProxyUrl              string
+	ShowPosition              setting.PositionType
+	EnableAutoBackup          bool
+	EnableAutoUpdate          bool
+	EnableAnonymousUsageStats bool
+	CustomPythonPath          string
+	CustomNodejsPath          string
 
 	// UI related
 	AppWidth       int

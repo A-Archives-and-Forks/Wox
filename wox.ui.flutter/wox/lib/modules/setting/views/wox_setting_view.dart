@@ -10,6 +10,7 @@ import 'package:wox/modules/setting/views/wox_setting_data_view.dart';
 import 'package:wox/modules/setting/views/wox_setting_theme_view.dart';
 import 'package:wox/modules/setting/views/wox_setting_about_view.dart';
 import 'package:wox/modules/setting/views/wox_setting_usage_view.dart';
+import 'package:wox/modules/setting/views/wox_setting_privacy_view.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/color_util.dart';
 import 'package:wox/utils/colors.dart';
@@ -160,6 +161,7 @@ class _WoxSettingViewState extends State<WoxSettingView> {
           ],
         ),
         _NavItem(id: 'usage', icon: Icons.query_stats_outlined, title: controller.tr('ui_usage'), body: const WoxSettingUsageView()),
+        _NavItem(id: 'privacy', icon: Icons.privacy_tip_outlined, title: controller.tr('ui_privacy'), body: const WoxSettingPrivacyView()),
         _NavItem(id: 'about', icon: Icons.info_outline, title: controller.tr('ui_about'), body: const WoxSettingAboutView()),
       ];
 
