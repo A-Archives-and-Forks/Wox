@@ -229,7 +229,11 @@ func (m *Manager) RegisterMainHotkey(ctx context.Context, combineKey string) err
 
 	managerInstance.mainHotkey = &hotkey.Hotkey{}
 	return m.mainHotkey.Register(ctx, combineKey, func() {
-		m.ui.ToggleApp(util.NewTraceContext())
+		triggerCtx := util.NewTraceContext()
+		if m.shouldIgnoreHotkeyTrigger(triggerCtx) {
+			return
+		}
+		m.ui.ToggleApp(triggerCtx)
 	})
 }
 
@@ -251,7 +255,11 @@ func (m *Manager) RegisterSelectionHotkey(ctx context.Context, combineKey string
 
 	managerInstance.selectionHotkey = &hotkey.Hotkey{}
 	return m.selectionHotkey.Register(ctx, combineKey, func() {
-		m.QuerySelection(ctx)
+		triggerCtx := util.NewTraceContext()
+		if m.shouldIgnoreHotkeyTrigger(triggerCtx) {
+			return
+		}
+		m.QuerySelection(triggerCtx)
 	})
 }
 
@@ -287,6 +295,9 @@ func (m *Manager) RegisterQueryHotkey(ctx context.Context, queryHotkey setting.Q
 
 	err := hk.Register(ctx, queryHotkey.Hotkey, func() {
 		queryCtx := util.WithCoreSessionContext(util.NewTraceContext())
+		if m.shouldIgnoreHotkeyTrigger(queryCtx) {
+			return
+		}
 		query := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, queryHotkey.Query)
 		plainQuery := common.PlainQuery{
 			QueryId:   uuid.NewString(),
@@ -894,6 +905,33 @@ func (m *Manager) RefreshActiveWindowSnapshot(ctx context.Context) {
 	} else {
 		m.activeWindowSnapshot.IsOpenSaveDialog = false
 	}
+}
+
+func (m *Manager) shouldIgnoreHotkeyTrigger(ctx context.Context) bool {
+	ignoredApps := setting.GetSettingManager().GetWoxSetting(ctx).IgnoredHotkeyApps.Get()
+	if len(ignoredApps) == 0 {
+		return false
+	}
+
+	activeWindowName := window.GetActiveWindowName()
+	activeWindowPid := window.GetActiveWindowPid()
+	if m.isUIWindow(activeWindowName, activeWindowPid) {
+		return false
+	}
+
+	identity := strings.TrimSpace(window.GetProcessIdentity(activeWindowPid))
+	if identity == "" {
+		return false
+	}
+
+	for _, app := range ignoredApps {
+		if strings.EqualFold(strings.TrimSpace(app.Identity), identity) {
+			logger.Info(ctx, fmt.Sprintf("ignore hotkey trigger for app identity=%s name=%s pid=%d", identity, activeWindowName, activeWindowPid))
+			return true
+		}
+	}
+
+	return false
 }
 
 func (m *Manager) isUIWindow(activeWindowName string, activeWindowPid int) bool {

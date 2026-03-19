@@ -57,6 +57,7 @@ class PluginSettingValueType {
   static const pluginSettingValueTableColumnTypeAISelectMCPServerTools = "aiSelectMCPServerTools";
   static const pluginSettingValueTableColumnTypeWoxImage = "woxImage";
   static const pluginSettingValueTableColumnTypeHotkey = "hotkey";
+  static const pluginSettingValueTableColumnTypeApp = "app";
 }
 
 class PluginSettingValueTableColumn {

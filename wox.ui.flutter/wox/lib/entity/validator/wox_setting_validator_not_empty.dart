@@ -22,6 +22,16 @@ class PluginSettingValidatorNotEmpty implements PluginSettingValidator {
         }
       }
     }
+    if (value is Map) {
+      if (value.isEmpty) {
+        return "i18n:ui_validator_value_can_not_be_empty";
+      }
+
+      final identity = value["Identity"] ?? value["identity"];
+      if (identity is String && identity.trim().isEmpty) {
+        return "i18n:ui_validator_value_can_not_be_empty";
+      }
+    }
 
     return "";
   }

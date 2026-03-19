@@ -32,6 +32,10 @@ class WoxApi {
     await WoxHttpUtil.instance.postData(traceId, "/setting/wox/update", {"Key": key, "Value": value});
   }
 
+  Future<List<IgnoredHotkeyApp>> getHotkeyAppCandidates(String traceId) async {
+    return await WoxHttpUtil.instance.postData<List<IgnoredHotkeyApp>>(traceId, "/setting/hotkey/apps", null);
+  }
+
   Future<List<String>> getSystemFontFamilies(String traceId) async {
     return await WoxHttpUtil.instance.postData<List<String>>(traceId, "/setting/ui/fonts", null);
   }

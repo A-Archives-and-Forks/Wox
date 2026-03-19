@@ -36,6 +36,10 @@ func (a *LinuxRetriever) ParseAppInfo(ctx context.Context, path string) (appInfo
 	return appInfo{}, errors.New("not implemented")
 }
 
+func resolveAppIdentityForPlatform(ctx context.Context, info appInfo) string {
+	return ""
+}
+
 func (a *LinuxRetriever) GetExtraApps(ctx context.Context) ([]appInfo, error) {
 	return []appInfo{}, nil
 }

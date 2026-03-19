@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"wox/analytics"
 	"wox/common"
 	"wox/plugin"
+	"wox/setting"
 	"wox/setting/definition"
 	"wox/setting/validator"
 	"wox/util"
@@ -47,6 +49,7 @@ type appInfo struct {
 	// On macOS without Spotlight metadata, the searchable value may come from the localized bundle name,
 	// Info.plist, or the .app filename, and those names can differ for non-Latin apps.
 	SearchableNames  []string        `json:"searchable_names,omitempty"`
+	Identity         string          `json:"identity,omitempty"`
 	Path             string          `json:"path"`
 	Icon             common.WoxImage `json:"icon"`
 	Type             AppType         `json:"type,omitempty"`
@@ -135,6 +138,8 @@ type ApplicationPlugin struct {
 	apps      []appInfo
 	retriever Retriever
 
+	hotkeyAppCandidates []setting.IgnoredHotkeyApp
+
 	// Track results that need periodic refresh (running apps with CPU/memory stats)
 	trackedResults *util.HashMap[string, appInfo] // resultId -> appInfo
 }
@@ -206,6 +211,7 @@ func (a *ApplicationPlugin) Init(ctx context.Context, initParams plugin.InitPara
 	appCache, cacheErr := a.loadAppCache(ctx)
 	if cacheErr == nil {
 		a.apps = appCache
+		a.rebuildHotkeyAppCandidates(ctx)
 	}
 
 	util.Go(ctx, "index apps", func() {
@@ -239,7 +245,12 @@ func (a *ApplicationPlugin) pathCacheKey(appPath string) string {
 	return appPath
 }
 
-func (a *ApplicationPlugin) populateAppMetadata(appPath string, info *appInfo, fileInfo os.FileInfo) {
+func (a *ApplicationPlugin) populateAppMetadata(ctx context.Context, appPath string, info *appInfo, fileInfo os.FileInfo) {
+	if strings.TrimSpace(info.Path) == "" {
+		info.Path = appPath
+	}
+	info.Identity = strings.TrimSpace(resolveAppIdentityForPlatform(ctx, *info))
+
 	if fileInfo == nil {
 		stat, err := os.Stat(appPath)
 		if err == nil {
@@ -278,6 +289,9 @@ func (a *ApplicationPlugin) reuseAppFromCache(ctx context.Context, appPath strin
 	}
 
 	cached.Pid = 0
+	if strings.TrimSpace(cached.Identity) == "" {
+		cached.Identity = strings.TrimSpace(resolveAppIdentityForPlatform(ctx, cached))
+	}
 	return cached, true
 }
 
@@ -307,6 +321,7 @@ func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plu
 								}
 								// clear in-memory app list
 								a.apps = []appInfo{}
+								a.hotkeyAppCandidates = []setting.IgnoredHotkeyApp{}
 
 								a.indexApps(ctx)
 								a.api.Notify(ctx, "i18n:plugin_app_reindex_completed")
@@ -510,6 +525,7 @@ func (a *ApplicationPlugin) watchAppChanges(ctx context.Context) {
 				for i, app := range a.apps {
 					if app.Path == appPath {
 						a.apps = append(a.apps[:i], a.apps[i+1:]...)
+						a.rebuildHotkeyAppCandidates(ctx)
 						a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app %s removed", appPath))
 						a.saveAppToCache(ctx)
 						break
@@ -542,11 +558,12 @@ func (a *ApplicationPlugin) watchAppChanges(ctx context.Context) {
 					time.Sleep(time.Second * time.Duration(i+1))
 				}
 
-				a.populateAppMetadata(appPath, &info, nil)
+				a.populateAppMetadata(ctx, appPath, &info, nil)
 				info.Icon = common.ConvertIcon(ctx, info.Icon, a.pluginDirectory)
 
 				a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app %s added", e.Name))
 				a.apps = append(a.apps, info)
+				a.rebuildHotkeyAppCandidates(ctx)
 				a.saveAppToCache(ctx)
 			}
 		})
@@ -579,6 +596,7 @@ func (a *ApplicationPlugin) indexApps(ctx context.Context) {
 	appInfos = a.removeDuplicateApps(ctx, appInfos)
 
 	a.apps = appInfos
+	a.rebuildHotkeyAppCandidates(ctx)
 	a.saveAppToCache(ctx)
 
 	a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("indexed %d apps, cost %d ms", len(a.apps), util.GetSystemTimestamp()-startTimestamp))
@@ -663,7 +681,7 @@ func (a *ApplicationPlugin) indexAppsByDirectory(ctx context.Context) []appInfo 
 					continue
 				}
 
-				a.populateAppMetadata(appPath, &info, fileInfo)
+				a.populateAppMetadata(ctx, appPath, &info, fileInfo)
 
 				// preprocess icon
 				info.Icon = common.ConvertIcon(ctx, info.Icon, a.pluginDirectory)
@@ -705,6 +723,7 @@ func (a *ApplicationPlugin) indexExtraApps(ctx context.Context) []appInfo {
 
 	//preprocess icon
 	for i := range apps {
+		a.populateAppMetadata(ctx, apps[i].Path, &apps[i], nil)
 		apps[i].Icon = common.ConvertIcon(ctx, apps[i].Icon, a.pluginDirectory)
 	}
 
@@ -837,6 +856,13 @@ func (a *ApplicationPlugin) loadAppCache(ctx context.Context) ([]appInfo, error)
 	if err != nil {
 		a.api.Log(ctx, plugin.LogLevelWarning, err.Error())
 		return nil, err
+	}
+
+	for i := range apps {
+		apps[i].Pid = 0
+		if strings.TrimSpace(apps[i].Identity) == "" {
+			apps[i].Identity = strings.TrimSpace(resolveAppIdentityForPlatform(ctx, apps[i]))
+		}
 	}
 
 	a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("loaded %d apps from cache, cost %d ms", len(apps), util.GetSystemTimestamp()-startTimestamp))
@@ -1029,4 +1055,94 @@ func (a *ApplicationPlugin) refreshRunningApps(ctx context.Context) {
 	for _, resultId := range toRemove {
 		a.trackedResults.Delete(resultId)
 	}
+}
+
+func GetHotkeyAppCandidates(ctx context.Context) []setting.IgnoredHotkeyApp {
+	manager := plugin.GetPluginManager()
+	if manager == nil {
+		return []setting.IgnoredHotkeyApp{}
+	}
+
+	for _, instance := range manager.GetPluginInstances() {
+		appPlugin, ok := instance.Plugin.(*ApplicationPlugin)
+		if !ok {
+			continue
+		}
+
+		return appPlugin.getHotkeyAppCandidates(ctx)
+	}
+
+	return []setting.IgnoredHotkeyApp{}
+}
+
+func (a *ApplicationPlugin) getHotkeyAppCandidates(ctx context.Context) []setting.IgnoredHotkeyApp {
+	if len(a.hotkeyAppCandidates) == 0 && len(a.apps) > 0 {
+		a.rebuildHotkeyAppCandidates(ctx)
+	}
+
+	candidates := make([]setting.IgnoredHotkeyApp, len(a.hotkeyAppCandidates))
+	copy(candidates, a.hotkeyAppCandidates)
+	return candidates
+}
+
+func (a *ApplicationPlugin) rebuildHotkeyAppCandidates(ctx context.Context) {
+	candidates := make([]setting.IgnoredHotkeyApp, 0, len(a.apps))
+	seen := make(map[string]bool)
+
+	for _, info := range a.apps {
+		if strings.TrimSpace(info.Identity) == "" {
+			info.Identity = strings.TrimSpace(resolveAppIdentityForPlatform(ctx, info))
+		}
+
+		candidate, ok := a.toIgnoredHotkeyApp(info)
+		if !ok {
+			continue
+		}
+
+		key := strings.ToLower(strings.TrimSpace(candidate.Identity))
+		if key == "" || seen[key] {
+			continue
+		}
+
+		seen[key] = true
+		candidates = append(candidates, candidate)
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		leftName := strings.ToLower(candidates[i].Name)
+		rightName := strings.ToLower(candidates[j].Name)
+		if leftName == rightName {
+			return strings.ToLower(candidates[i].Identity) < strings.ToLower(candidates[j].Identity)
+		}
+		return leftName < rightName
+	})
+
+	a.hotkeyAppCandidates = candidates
+}
+
+func (a *ApplicationPlugin) toIgnoredHotkeyApp(info appInfo) (setting.IgnoredHotkeyApp, bool) {
+	identity := strings.TrimSpace(info.Identity)
+	if identity == "" {
+		return setting.IgnoredHotkeyApp{}, false
+	}
+
+	name := strings.TrimSpace(info.Name)
+	if name == "" {
+		name = strings.TrimSpace(info.Path)
+	}
+	if name == "" {
+		name = identity
+	}
+
+	icon := info.Icon
+	if icon.IsEmpty() {
+		icon = common.PluginAppIcon
+	}
+
+	return setting.IgnoredHotkeyApp{
+		Name:     name,
+		Identity: identity,
+		Path:     info.Path,
+		Icon:     icon,
+	}, true
 }

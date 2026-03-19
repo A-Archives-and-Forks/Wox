@@ -38,6 +38,7 @@ class EntityFactory {
     'List<AIModel>': (json) => _createList<AIModel>(json, (e) => AIModel.fromJson(e)),
     'List<WoxLang>': (json) => _createList<WoxLang>(json, (e) => WoxLang.fromJson(e)),
     'List<WoxBackup>': (json) => _createList<WoxBackup>(json, (e) => WoxBackup.fromJson(e)),
+    'List<IgnoredHotkeyApp>': (json) => _createList<IgnoredHotkeyApp>(json, (e) => IgnoredHotkeyApp.fromJson(e)),
     'List<AIMCPTool>': (json) => _createList<AIMCPTool>(json, (e) => AIMCPTool.fromJson(e)),
     'List<AIProviderInfo>': (json) => _createList<AIProviderInfo>(json, (e) => AIProviderInfo.fromJson(e)),
     'List<AIAgent>': (json) => _createList<AIAgent>(json, (e) => AIAgent.fromJson(e)),

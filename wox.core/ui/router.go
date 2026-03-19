@@ -20,6 +20,7 @@ import (
 	"wox/i18n"
 	"wox/plugin"
 	"wox/plugin/host"
+	appplugin "wox/plugin/system/app"
 	"wox/setting"
 	"wox/ui/dto"
 	"wox/updater"
@@ -55,6 +56,7 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	// settings
 	"/setting/wox":                      handleSettingWox,
 	"/setting/wox/update":               handleSettingWoxUpdate,
+	"/setting/hotkey/apps":              handleHotkeyAppCandidates,
 	"/setting/ui/fonts":                 handleSettingUIFontList,
 	"/setting/plugin/update":            handleSettingPluginUpdate,
 	"/setting/userdata/location":        handleUserDataLocation,
@@ -537,6 +539,7 @@ func handleSettingWox(w http.ResponseWriter, r *http.Request) {
 	settingDto.EnableAutostart = woxSetting.EnableAutostart.Get()
 	settingDto.MainHotkey = woxSetting.MainHotkey.Get()
 	settingDto.SelectionHotkey = woxSetting.SelectionHotkey.Get()
+	settingDto.IgnoredHotkeyApps = woxSetting.IgnoredHotkeyApps.Get()
 	settingDto.LogLevel = util.NormalizeLogLevel(woxSetting.LogLevel.Get())
 	settingDto.UsePinYin = woxSetting.UsePinYin.Get()
 	settingDto.SwitchInputMethodABC = woxSetting.SwitchInputMethodABC.Get()
@@ -570,6 +573,10 @@ func handleSettingWox(w http.ResponseWriter, r *http.Request) {
 	settingDto.AppFontFamily = normalizedAppFontFamily
 
 	writeSuccessResponse(w, settingDto)
+}
+
+func handleHotkeyAppCandidates(w http.ResponseWriter, r *http.Request) {
+	writeSuccessResponse(w, appplugin.GetHotkeyAppCandidates(getTraceContext(r)))
 }
 
 func handleSettingUIFontList(w http.ResponseWriter, r *http.Request) {
@@ -612,6 +619,13 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 		woxSetting.MainHotkey.Set(vs)
 	case "SelectionHotkey":
 		woxSetting.SelectionHotkey.Set(vs)
+	case "IgnoredHotkeyApps":
+		var ignoredApps []setting.IgnoredHotkeyApp
+		if err := json.Unmarshal([]byte(vs), &ignoredApps); err != nil {
+			writeErrorResponse(w, err.Error())
+			return
+		}
+		woxSetting.IgnoredHotkeyApps.Set(normalizeIgnoredHotkeyApps(ignoredApps))
 	case "LogLevel":
 		updatedValue = util.NormalizeLogLevel(vs)
 		if err := woxSetting.LogLevel.Set(updatedValue); err != nil {
@@ -759,6 +773,30 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 	GetUIManager().PostSettingUpdate(getTraceContext(r), kv.Key, updatedValue)
 
 	writeSuccessResponse(w, "")
+}
+
+func normalizeIgnoredHotkeyApps(apps []setting.IgnoredHotkeyApp) []setting.IgnoredHotkeyApp {
+	normalized := make([]setting.IgnoredHotkeyApp, 0, len(apps))
+	seen := make(map[string]bool)
+
+	for _, app := range apps {
+		app.Name = strings.TrimSpace(app.Name)
+		app.Identity = strings.TrimSpace(app.Identity)
+		app.Path = strings.TrimSpace(app.Path)
+		if app.Identity == "" {
+			continue
+		}
+
+		key := strings.ToLower(app.Identity)
+		if seen[key] {
+			continue
+		}
+
+		seen[key] = true
+		normalized = append(normalized, app)
+	}
+
+	return normalized
 }
 
 func handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {

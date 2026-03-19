@@ -14,6 +14,7 @@ type WoxSetting struct {
 	EnableAutostart      *PlatformValue[bool]
 	MainHotkey           *PlatformValue[string]
 	SelectionHotkey      *PlatformValue[string]
+	IgnoredHotkeyApps    *PlatformValue[[]IgnoredHotkeyApp]
 	LogLevel             *WoxSettingValue[string]
 	UsePinYin            *WoxSettingValue[bool]
 	SwitchInputMethodABC *WoxSettingValue[bool]
@@ -88,6 +89,13 @@ type QueryShortcut struct {
 	Disabled bool
 }
 
+type IgnoredHotkeyApp struct {
+	Name     string
+	Identity string
+	Path     string
+	Icon     common.WoxImage
+}
+
 func (q *QueryShortcut) HasPlaceholder() bool {
 	return strings.Contains(q.Query, "{0}")
 }
@@ -149,8 +157,9 @@ func NewWoxSetting(store *WoxSettingStore) *WoxSetting {
 	}
 
 	return &WoxSetting{
-		MainHotkey:      NewPlatformValue(store, "MainHotkey", "alt+space", "option+space", "ctrl+space"),
-		SelectionHotkey: NewPlatformValue(store, "SelectionHotkey", "ctrl+alt+space", "command+option+space", "ctrl+shift+j"),
+		MainHotkey:        NewPlatformValue(store, "MainHotkey", "alt+space", "option+space", "ctrl+space"),
+		SelectionHotkey:   NewPlatformValue(store, "SelectionHotkey", "ctrl+alt+space", "command+option+space", "ctrl+shift+j"),
+		IgnoredHotkeyApps: NewPlatformValue(store, "IgnoredHotkeyApps", []IgnoredHotkeyApp{}, []IgnoredHotkeyApp{}, []IgnoredHotkeyApp{}),
 		LogLevel: NewWoxSettingValueWithValidator(store, "LogLevel", LogLevelInfo, func(level string) bool {
 			return strings.EqualFold(level, LogLevelInfo) || strings.EqualFold(level, LogLevelDebug)
 		}),

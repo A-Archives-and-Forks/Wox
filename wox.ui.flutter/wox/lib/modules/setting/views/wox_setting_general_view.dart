@@ -197,6 +197,41 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
             ),
           ),
           formField(
+            label: controller.tr("ui_hotkey_ignore_apps"),
+            tips: controller.tr("ui_hotkey_ignore_apps_tips"),
+            child: Obx(() {
+              final rows = controller.woxSetting.value.ignoredHotkeyApps.map((app) => <String, dynamic>{"App": app.toJson()}).toList();
+
+              return WoxSettingPluginTable(
+                value: json.encode(rows),
+                item: PluginSettingValueTable.fromJson({
+                  "Key": "IgnoredHotkeyAppsTable",
+                  "MaxHeight": 220,
+                  "Columns": [
+                    {
+                      "Key": "App",
+                      "Label": "i18n:ui_hotkey_ignore_apps_app",
+                      "Tooltip": "i18n:ui_hotkey_ignore_apps_tips",
+                      "Type": "app",
+                      "Width": 420,
+                      "Validators": [
+                        {"Type": "not_empty"},
+                      ],
+                    },
+                  ],
+                  "SortColumnKey": "",
+                }),
+                onUpdate: (key, value) async {
+                  final decodedRows = json.decode(value) as List<dynamic>;
+                  final apps = decodedRows.map((row) => row is Map<String, dynamic> ? row["App"] : null).whereType<Map<String, dynamic>>().toList();
+
+                  await controller.updateConfig("IgnoredHotkeyApps", json.encode(apps));
+                  return null;
+                },
+              );
+            }),
+          ),
+          formField(
             label: controller.tr("ui_query_hotkeys"),
             tips: controller.tr("ui_query_hotkeys_tips"),
             child: Obx(() {

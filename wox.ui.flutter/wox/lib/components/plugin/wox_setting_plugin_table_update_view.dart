@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +7,7 @@ import 'package:wox/api/wox_api.dart';
 import 'package:wox/components/wox_ai_model_selector_view.dart';
 import 'package:wox/components/wox_button.dart';
 import 'package:wox/components/wox_dropdown_button.dart';
+import 'package:wox/components/wox_app_selector.dart';
 import 'package:wox/components/wox_hotkey_recorder_view.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_image_selector.dart';
@@ -21,6 +23,7 @@ import 'package:wox/entity/validator/wox_setting_validator.dart';
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_hotkey.dart';
 import 'package:wox/entity/wox_image.dart';
+import 'package:wox/entity/wox_setting.dart';
 import 'package:wox/enums/wox_image_type_enum.dart';
 import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/wox_text_measure_util.dart';
@@ -84,6 +87,8 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
           }
         } else if (column.type == PluginSettingValueType.pluginSettingValueTableColumnTypeWoxImage) {
           values[column.key] = WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_EMOJI.code, imageData: "🤖");
+        } else if (column.type == PluginSettingValueType.pluginSettingValueTableColumnTypeApp) {
+          values[column.key] = IgnoredHotkeyApp.empty().toJson();
         } else {
           values[column.key] = "";
         }
@@ -173,6 +178,29 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
     }
 
     return false;
+  }
+
+  IgnoredHotkeyApp getIgnoredHotkeyAppValue(String key) {
+    final rawValue = values[key];
+    if (rawValue is IgnoredHotkeyApp) {
+      return rawValue;
+    }
+    if (rawValue is Map<String, dynamic>) {
+      return IgnoredHotkeyApp.fromJson(rawValue);
+    }
+    if (rawValue is Map) {
+      return IgnoredHotkeyApp.fromJson(Map<String, dynamic>.from(rawValue));
+    }
+    if (rawValue is String && rawValue.trim().isNotEmpty) {
+      try {
+        final jsonValue = rawValue.trim();
+        return IgnoredHotkeyApp.fromJson(Map<String, dynamic>.from(jsonDecode(jsonValue)));
+      } catch (_) {
+        return IgnoredHotkeyApp.empty();
+      }
+    }
+
+    return IgnoredHotkeyApp.empty();
   }
 
   void updateValue(String key, dynamic value) {
@@ -434,6 +462,18 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
             onChanged: (path) {
               updateValue(column.key, path);
               setFieldValidationError(column.key, validateValue(path, column.validators));
+              setState(() {});
+            },
+          ),
+        );
+      case PluginSettingValueType.pluginSettingValueTableColumnTypeApp:
+        return Expanded(
+          child: WoxAppSelector(
+            value: getIgnoredHotkeyAppValue(column.key),
+            onChanged: (app) {
+              final appJson = app.toJson();
+              updateValue(column.key, appJson);
+              setFieldValidationError(column.key, validateValue(appJson, column.validators));
               setState(() {});
             },
           ),

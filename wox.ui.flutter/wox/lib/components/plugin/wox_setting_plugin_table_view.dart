@@ -10,6 +10,7 @@ import 'package:wox/entity/setting/wox_plugin_setting_select.dart';
 import 'package:wox/entity/setting/wox_plugin_setting_table.dart';
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_image.dart';
+import 'package:wox/entity/wox_setting.dart';
 import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/color_util.dart';
@@ -105,6 +106,30 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     } catch (_) {
       return null;
     }
+  }
+
+  IgnoredHotkeyApp? decodeIgnoredHotkeyApp(dynamic value) {
+    if (value is IgnoredHotkeyApp) {
+      return value.identity.trim().isEmpty ? null : value;
+    }
+    if (value is Map<String, dynamic>) {
+      final app = IgnoredHotkeyApp.fromJson(value);
+      return app.identity.trim().isEmpty ? null : app;
+    }
+    if (value is Map) {
+      final app = IgnoredHotkeyApp.fromJson(Map<String, dynamic>.from(value));
+      return app.identity.trim().isEmpty ? null : app;
+    }
+    if (value is String && value.trim().isNotEmpty) {
+      try {
+        final app = IgnoredHotkeyApp.fromJson(Map<String, dynamic>.from(jsonDecode(value.trim())));
+        return app.identity.trim().isEmpty ? null : app;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    return null;
   }
 
   PluginSettingValueTableColumn buildOperationColumnDefinition() {
@@ -236,6 +261,31 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
         isHeader: false,
         isOperation: false,
         child: Text(value, style: TextStyle(overflow: TextOverflow.ellipsis, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemTitleColor))),
+      );
+    }
+    if (column.type == PluginSettingValueType.pluginSettingValueTableColumnTypeApp) {
+      final app = decodeIgnoredHotkeyApp(value);
+      if (app == null) {
+        return columnWidth(column: column, isHeader: false, isOperation: false, child: const SizedBox.shrink());
+      }
+
+      return columnWidth(
+        column: column,
+        isHeader: false,
+        isOperation: false,
+        child: Row(
+          children: [
+            if (app.icon.imageData.isNotEmpty) ...[WoxImageView(woxImage: app.icon, width: 18, height: 18), const SizedBox(width: 8)],
+            Expanded(
+              child: Text(
+                app.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemTitleColor)),
+              ),
+            ),
+          ],
+        ),
       );
     }
     if (column.type == PluginSettingValueType.pluginSettingValueTableColumnTypeCheckbox) {

@@ -125,6 +125,47 @@ func (a *MacRetriever) ParseAppInfo(ctx context.Context, path string) (appInfo, 
 	return info, nil
 }
 
+func resolveAppIdentityForPlatform(ctx context.Context, info appInfo) string {
+	lowerPath := strings.ToLower(strings.TrimSpace(info.Path))
+	if !strings.HasSuffix(lowerPath, ".app") {
+		return ""
+	}
+
+	bundleID, err := getBundleIdentifierFromAppPath(info.Path)
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(bundleID)
+}
+
+func getBundleIdentifierFromAppPath(appPath string) (string, error) {
+	plistPaths := []string{
+		path.Join(appPath, "Contents", "Info.plist"),
+		path.Join(appPath, "WrappedBundle", "Info.plist"),
+	}
+
+	for _, plistPath := range plistPaths {
+		plistFile, err := os.Open(plistPath)
+		if err != nil {
+			continue
+		}
+
+		var plistData map[string]any
+		decodeErr := plist.NewDecoder(plistFile).Decode(&plistData)
+		_ = plistFile.Close()
+		if decodeErr != nil {
+			return "", fmt.Errorf("failed to decode Info.plist: %w", decodeErr)
+		}
+
+		if bundleID, ok := plistData["CFBundleIdentifier"].(string); ok && strings.TrimSpace(bundleID) != "" {
+			return bundleID, nil
+		}
+	}
+
+	return "", fmt.Errorf("bundle identifier not found")
+}
+
 func (a *MacRetriever) getAppNameFromMdls(path string) (string, error) {
 	out, err := shell.RunOutput("mdls", "-name", "kMDItemDisplayName", "-raw", path)
 	if err != nil {

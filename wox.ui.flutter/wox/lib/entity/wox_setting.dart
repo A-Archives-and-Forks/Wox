@@ -4,6 +4,7 @@ class WoxSetting {
   late bool enableAutostart;
   late String mainHotkey;
   late String selectionHotkey;
+  late List<IgnoredHotkeyApp> ignoredHotkeyApps;
   late String logLevel;
   late bool usePinYin;
   late bool switchInputMethodABC;
@@ -33,6 +34,7 @@ class WoxSetting {
     required this.enableAutostart,
     required this.mainHotkey,
     required this.selectionHotkey,
+    required this.ignoredHotkeyApps,
     required this.logLevel,
     required this.usePinYin,
     required this.switchInputMethodABC,
@@ -63,6 +65,14 @@ class WoxSetting {
     enableAutostart = json['EnableAutostart'] ?? false;
     mainHotkey = json['MainHotkey'];
     selectionHotkey = json['SelectionHotkey'];
+    if (json['IgnoredHotkeyApps'] != null) {
+      ignoredHotkeyApps = <IgnoredHotkeyApp>[];
+      json['IgnoredHotkeyApps'].forEach((v) {
+        ignoredHotkeyApps.add(IgnoredHotkeyApp.fromJson(v));
+      });
+    } else {
+      ignoredHotkeyApps = <IgnoredHotkeyApp>[];
+    }
     logLevel = json['LogLevel'] ?? 'INFO';
     usePinYin = json['UsePinYin'] ?? false;
     switchInputMethodABC = json['SwitchInputMethodABC'] ?? false;
@@ -127,6 +137,7 @@ class WoxSetting {
     data['EnableAutostart'] = enableAutostart;
     data['MainHotkey'] = mainHotkey;
     data['SelectionHotkey'] = selectionHotkey;
+    data['IgnoredHotkeyApps'] = ignoredHotkeyApps;
     data['LogLevel'] = logLevel;
     data['UsePinYin'] = usePinYin;
     data['SwitchInputMethodABC'] = switchInputMethodABC;
@@ -180,6 +191,35 @@ class QueryHotkey {
     data['IsSilentExecution'] = isSilentExecution;
     data['Disabled'] = disabled;
     return data;
+  }
+}
+
+class IgnoredHotkeyApp {
+  late String name;
+  late String identity;
+  late String path;
+  late WoxImage icon;
+
+  IgnoredHotkeyApp({required this.name, required this.identity, required this.path, required this.icon});
+
+  IgnoredHotkeyApp.fromJson(Map<String, dynamic> json) {
+    name = json['Name'] ?? '';
+    identity = json['Identity'] ?? '';
+    path = json['Path'] ?? '';
+    icon = json['Icon'] != null ? WoxImage.fromJson(json['Icon']) : WoxImage.empty();
+  }
+
+  Map<String, dynamic> toJson() {
+    final Map<String, dynamic> data = <String, dynamic>{};
+    data['Name'] = name;
+    data['Identity'] = identity;
+    data['Path'] = path;
+    data['Icon'] = icon.toJson();
+    return data;
+  }
+
+  static IgnoredHotkeyApp empty() {
+    return IgnoredHotkeyApp(name: '', identity: '', path: '', icon: WoxImage.empty());
   }
 }
 

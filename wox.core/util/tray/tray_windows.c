@@ -54,7 +54,7 @@ void removeTrayIcon()
 	Shell_NotifyIcon(NIM_DELETE, &nid);
 }
 
-void showMenu(HWND hwnd)
+void showMenu()
 {
 	POINT p;
 	GetCursorPos(&p);
@@ -70,7 +70,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	case WM_APP + 1:
 		if (lParam == WM_RBUTTONUP)
 		{
-			showMenu(hwnd);
+			showMenu();
 		}
 		else if (lParam == WM_LBUTTONUP)
 		{

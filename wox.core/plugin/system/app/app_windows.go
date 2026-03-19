@@ -173,6 +173,30 @@ func (a *WindowsRetriever) ParseAppInfo(ctx context.Context, path string) (appIn
 	return appInfo{}, errors.New("not implemented")
 }
 
+func resolveAppIdentityForPlatform(ctx context.Context, info appInfo) string {
+	if info.Type == AppTypeUWP || info.Type == AppTypeWindowsSetting {
+		return ""
+	}
+
+	lowerPath := strings.ToLower(strings.TrimSpace(info.Path))
+	switch {
+	case strings.HasSuffix(lowerPath, ".exe"):
+		return strings.ToLower(filepath.Base(lowerPath))
+	case strings.HasSuffix(lowerPath, ".lnk"):
+		targetPath, err := resolveShortcutTarget(ctx, info.Path)
+		if err != nil {
+			return ""
+		}
+		targetPath = strings.ToLower(strings.TrimSpace(targetPath))
+		if !strings.HasSuffix(targetPath, ".exe") {
+			return ""
+		}
+		return filepath.Base(targetPath)
+	default:
+		return ""
+	}
+}
+
 func (a *WindowsRetriever) parseShortcut(ctx context.Context, appPath string) (appInfo, error) {
 	targetPath, resolveErr := a.resolveShortcutWithAPI(ctx, appPath)
 	if resolveErr != nil {
