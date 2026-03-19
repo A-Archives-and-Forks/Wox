@@ -3,6 +3,9 @@ import 'dart:io';
 
 const int defaultDevServerPort = 34987;
 const Duration coreStartupTimeout = Duration(minutes: 3);
+const String testWoxDataDirEnv = 'WOX_TEST_DATA_DIR';
+const String testUserDataDirEnv = 'WOX_TEST_USER_DIR';
+const String testServerPortEnv = 'WOX_TEST_SERVER_PORT';
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty || args.first == 'help' || args.first == '--help') {
@@ -40,9 +43,9 @@ Future<int> _runSmoke() async {
   final serverPort = await _reserveServerPort();
 
   final environment = Map<String, String>.from(Platform.environment);
-  environment['WOX_TEST_DATA_DIR'] = woxDataDir.path;
-  environment['WOX_TEST_USER_DIR'] = userDataDir.path;
-  environment['WOX_DEV_SERVER_PORT'] = '$serverPort';
+  environment[testWoxDataDirEnv] = woxDataDir.path;
+  environment[testUserDataDirEnv] = userDataDir.path;
+  environment[testServerPortEnv] = '$serverPort';
 
   stdout.writeln('Artifacts: ${artifactsDir.path}');
   stdout.writeln('Wox data dir: ${woxDataDir.path}');
@@ -71,7 +74,7 @@ Future<int> _runSmoke() async {
 
     final flutterProcess = await _startCommand(
       'flutter',
-      ['test', '--dart-define=WOX_TEST_SERVER_PORT=$serverPort', 'integration_test/launcher_smoke_test.dart'],
+      ['test', '--dart-define=$testServerPortEnv=$serverPort', 'integration_test/launcher_smoke_test.dart'],
       workingDirectory: '${repoRoot.path}${Platform.pathSeparator}wox.ui.flutter${Platform.pathSeparator}wox',
       environment: environment,
     );

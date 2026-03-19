@@ -37,7 +37,7 @@ func (l *Location) Init() error {
 		return fmt.Errorf("failed to get user home dir: %w", err)
 	}
 
-	woxDataDirectory := strings.TrimSpace(os.Getenv("WOX_TEST_DATA_DIR"))
+	woxDataDirectory := GetTestWoxDataDirectoryOverride()
 	if woxDataDirectory == "" {
 		woxDataDirectory = path.Join(dirname, ".wox")
 	}
@@ -49,7 +49,7 @@ func (l *Location) Init() error {
 	}
 
 	l.userDataDirectoryShortcutPath = path.Join(l.woxDataDirectory, ".userdata.location")
-	userDataDirectoryOverride := strings.TrimSpace(os.Getenv("WOX_TEST_USER_DIR"))
+	userDataDirectoryOverride := GetTestUserDataDirectoryOverride()
 	if userDataDirectoryOverride != "" {
 		l.userDataDirectory = userDataDirectoryOverride
 	} else {

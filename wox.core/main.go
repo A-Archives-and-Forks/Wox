@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"wox/analytics"
 	"wox/database"
 	"wox/migration"
 	"wox/telemetry"
 
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 	"wox/common"
@@ -241,15 +241,12 @@ func resolveServerPort(ctx context.Context) (int, error) {
 		return util.GetAvailableTcpPort(ctx)
 	}
 
-	if portOverride := strings.TrimSpace(os.Getenv("WOX_DEV_SERVER_PORT")); portOverride != "" {
-		port, err := strconv.Atoi(portOverride)
-		if err != nil || port <= 0 {
-			return 0, fmt.Errorf("invalid WOX_DEV_SERVER_PORT: %q", portOverride)
-		}
-		return port, nil
+	testPort, testErr := util.GetTestServerPortOverride()
+	if testErr == nil {
+		return testPort, nil
 	}
 
-	return 34987, nil
+	return util.DefaultDevServerPort, nil
 }
 
 // retrieves the instance port from the existing instance lock file.

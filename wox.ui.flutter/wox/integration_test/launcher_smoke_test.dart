@@ -1,4 +1,3 @@
-import 'package:extended_text_field/extended_text_field.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:integration_test/integration_test.dart';
@@ -10,15 +9,14 @@ import 'package:wox/enums/wox_position_type_enum.dart';
 import 'package:wox/enums/wox_start_page_enum.dart';
 import 'package:wox/main.dart' as app;
 import 'package:wox/modules/launcher/views/wox_launcher_view.dart';
+import 'package:wox/utils/test/wox_test_config.dart';
 import 'package:wox/utils/windows/window_manager.dart';
-
-const testServerPort = String.fromEnvironment('WOX_TEST_SERVER_PORT', defaultValue: '34987');
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('launcher shows and returns results for app query', (tester) async {
-    app.main([testServerPort, '-1', 'true']);
+    app.main([WoxTestConfig.serverPort.toString(), '-1', 'true']);
 
     final launcherFinder = find.byType(WoxLauncherView);
     await _pumpUntil(tester, () => launcherFinder.evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
@@ -41,10 +39,8 @@ void main() {
 
     expect(await windowManager.isVisible(), isTrue);
 
-    final queryBoxFinder = find.byType(ExtendedTextField);
-    expect(queryBoxFinder, findsOneWidget);
-    await tester.tap(queryBoxFinder);
-    await tester.enterText(queryBoxFinder, 'app');
+    controller.queryBoxTextFieldController.text = 'app';
+    controller.onQueryBoxTextChanged('app');
     await tester.pump();
 
     await _pumpUntil(

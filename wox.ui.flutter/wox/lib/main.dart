@@ -33,7 +33,7 @@ Future<void> initArgs(List<String> arguments) async {
   if (arguments.isEmpty) {
     // dev env
     Env.isDev = true;
-    Env.serverPort = 34987;
+    Env.serverPort = Env.defaultDevServerPort;
     Env.serverPid = -1;
     Env.sessionId = const UuidV4().generate();
     return;
