@@ -23,6 +23,7 @@ import 'package:wox/enums/wox_layout_mode_enum.dart';
 import 'package:wox/models/doctor_check_result.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/windows/window_manager.dart';
+import 'package:wox/utils/windows/windows_window_manager.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/entity/wox_hotkey.dart';
 import 'package:wox/entity/wox_image.dart';
@@ -2377,6 +2378,8 @@ class WoxLauncherController extends GetxController {
   bool isQuickSelectModifierPressed() {
     if (Platform.isMacOS) {
       return HardwareKeyboard.instance.isMetaPressed;
+    } else if (Platform.isWindows) {
+      return WindowsWindowManager.instance.currentModifierStates.isAltPressed;
     } else {
       return HardwareKeyboard.instance.isAltPressed;
     }
@@ -2445,6 +2448,7 @@ class WoxLauncherController extends GetxController {
 
       // Update quick select properties
       var updatedItem = item.copyWith(isShowQuickSelect: shouldShowQuickSelect, quickSelectNumber: shouldShowQuickSelect ? quickSelectNumber.toString() : '');
+      final hasQuickSelectChanged = item.isShowQuickSelect != updatedItem.isShowQuickSelect || item.quickSelectNumber != updatedItem.quickSelectNumber;
 
       // Increment number only for non-group items in visible range that get a number
       if (shouldShowQuickSelect) {
@@ -2453,6 +2457,9 @@ class WoxLauncherController extends GetxController {
 
       // Directly update the reactive item to trigger UI refresh
       items[i].value = updatedItem;
+      if (hasQuickSelectChanged) {
+        activeResultViewController.refreshItemByIndex(i);
+      }
     }
   }
 
@@ -2511,7 +2518,6 @@ class WoxLauncherController extends GetxController {
         }
       }
     }
-
     return false;
   }
 
