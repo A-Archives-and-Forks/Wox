@@ -12,6 +12,7 @@ import 'package:wox/utils/wox_theme_util.dart';
 import 'package:flutter/material.dart' as material;
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/utils/color_util.dart';
+import 'package:wox/utils/wox_setting_focus_util.dart';
 
 class WoxSettingDataView extends WoxSettingBaseView {
   const WoxSettingDataView({super.key});
@@ -161,8 +162,8 @@ class WoxSettingDataView extends WoxSettingBaseView {
                                   children: [
                                     WoxButton.text(
                                       text: controller.tr("ui_data_backup_restore"),
-                                      onPressed: () {
-                                        showDialog(
+                                      onPressed: () async {
+                                        await showDialog(
                                           context: context,
                                           barrierColor: getThemePopupBarrierColor(),
                                           builder: (context) {
@@ -190,6 +191,7 @@ class WoxSettingDataView extends WoxSettingBaseView {
                                             );
                                           },
                                         );
+                                        WoxSettingFocusUtil.restoreIfInSettingView();
                                       },
                                     ),
                                     WoxButton.text(
@@ -247,8 +249,8 @@ class WoxSettingDataView extends WoxSettingBaseView {
                   onPressed:
                       isClearing
                           ? null
-                          : () {
-                            showDialog(
+                          : () async {
+                            await showDialog(
                               context: context,
                               barrierColor: getThemePopupBarrierColor(),
                               builder: (dialogContext) {
@@ -276,6 +278,7 @@ class WoxSettingDataView extends WoxSettingBaseView {
                                 );
                               },
                             );
+                            WoxSettingFocusUtil.restoreIfInSettingView();
                           },
                 ),
                 const SizedBox(width: 10),

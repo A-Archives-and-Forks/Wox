@@ -34,6 +34,7 @@ import 'package:wox/components/wox_button.dart';
 import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/strings.dart';
+import 'package:wox/utils/wox_setting_focus_util.dart';
 import 'package:wox/utils/wox_text_measure_util.dart';
 import 'package:wox/enums/wox_plugin_runtime_enum.dart';
 
@@ -134,6 +135,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
         );
       },
     );
+    WoxSettingFocusUtil.restoreIfInSettingView();
   }
 
   Widget pluginList(BuildContext context) {

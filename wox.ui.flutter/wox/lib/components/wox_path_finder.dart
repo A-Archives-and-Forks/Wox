@@ -6,6 +6,7 @@ import 'package:wox/components/wox_textfield.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/picker.dart';
+import 'package:wox/utils/wox_setting_focus_util.dart';
 
 /// Reusable directory path picker field
 /// - Shows a text field with consistent Wox border style
@@ -94,6 +95,7 @@ class _WoxPathFinderState extends State<WoxPathFinder> {
                 ],
               ),
         );
+        WoxSettingFocusUtil.restoreIfInSettingView();
       } else {
         widget.onChanged(picked);
       }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wox/components/wox_checkbox.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/wox_setting_focus_util.dart';
 
 /// Data model for dropdown items with optional tooltip
 class WoxDropdownItem<T> {
@@ -266,6 +267,7 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
     _overlayEntry = null;
     _filterController.clear();
     _filteredItems = widget.items;
+    WoxSettingFocusUtil.restoreIfInSettingView();
   }
 
   void _showFilterableMenu() {

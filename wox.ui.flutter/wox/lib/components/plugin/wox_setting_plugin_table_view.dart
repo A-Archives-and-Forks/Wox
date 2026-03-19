@@ -14,6 +14,7 @@ import 'package:wox/entity/wox_setting.dart';
 import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/color_util.dart';
+import 'package:wox/utils/wox_setting_focus_util.dart';
 
 import 'wox_setting_plugin_item_view.dart';
 import 'wox_setting_plugin_table_update_view.dart';
@@ -484,8 +485,8 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
               text: '',
               icon: Icon(Icons.edit, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
               padding: const EdgeInsets.symmetric(horizontal: 4),
-              onPressed: () {
-                showDialog(
+              onPressed: () async {
+                await showDialog(
                   context: context,
                   barrierColor: getThemePopupBarrierColor(),
                   builder: (context) {
@@ -512,15 +513,16 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                     );
                   },
                 );
+                WoxSettingFocusUtil.restoreIfInSettingView();
               },
             ),
             WoxButton.text(
               text: '',
               icon: Icon(Icons.delete, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
               padding: const EdgeInsets.symmetric(horizontal: 4),
-              onPressed: () {
+              onPressed: () async {
                 //confirm delete
-                showDialog(
+                await showDialog(
                   context: context,
                   barrierColor: getThemePopupBarrierColor(),
                   builder: (context) {
@@ -561,6 +563,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                     );
                   },
                 );
+                WoxSettingFocusUtil.restoreIfInSettingView();
               },
             ),
           ],
@@ -897,8 +900,8 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                       text: tr("ui_add"),
                       icon: Icon(Icons.add, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
                       padding: EdgeInsets.zero,
-                      onPressed: () {
-                        showDialog(
+                      onPressed: () async {
+                        await showDialog(
                           context: context,
                           barrierColor: getThemePopupBarrierColor(),
                           builder: (context) {
@@ -919,6 +922,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                             );
                           },
                         );
+                        WoxSettingFocusUtil.restoreIfInSettingView();
                       },
                     ),
                   ],
