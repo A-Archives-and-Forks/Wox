@@ -93,14 +93,10 @@ func run() {
 		// In some cases, we might want to exit if migration fails, but for now we just log it.
 	}
 
-	serverPort := 34987
-	if util.IsProd() {
-		availablePort, portErr := util.GetAvailableTcpPort(ctx)
-		if portErr != nil {
-			util.GetLogger().Error(ctx, fmt.Sprintf("failed to get server port: %s", portErr.Error()))
-			return
-		}
-		serverPort = availablePort
+	serverPort, serverPortErr := resolveServerPort(ctx)
+	if serverPortErr != nil {
+		util.GetLogger().Error(ctx, fmt.Sprintf("failed to get server port: %s", serverPortErr.Error()))
+		return
 	}
 	util.GetLogger().Info(ctx, fmt.Sprintf("server port: %d", serverPort))
 	ui.GetUIManager().UpdateServerPort(serverPort)
@@ -238,6 +234,22 @@ func run() {
 	}
 
 	ui.GetUIManager().StartWebsocketAndWait(ctx)
+}
+
+func resolveServerPort(ctx context.Context) (int, error) {
+	if util.IsProd() {
+		return util.GetAvailableTcpPort(ctx)
+	}
+
+	if portOverride := strings.TrimSpace(os.Getenv("WOX_DEV_SERVER_PORT")); portOverride != "" {
+		port, err := strconv.Atoi(portOverride)
+		if err != nil || port <= 0 {
+			return 0, fmt.Errorf("invalid WOX_DEV_SERVER_PORT: %q", portOverride)
+		}
+		return port, nil
+	}
+
+	return 34987, nil
 }
 
 // retrieves the instance port from the existing instance lock file.

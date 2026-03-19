@@ -25,6 +25,10 @@
 			"path": "wox.plugin.host.nodejs"
 		},
 		{
+			"name": "wox.test",
+			"path": "wox.test"
+		},
+		{
 			"name": "wox.ui.flutter",
 			"path": "wox.ui.flutter/wox"
 		}
