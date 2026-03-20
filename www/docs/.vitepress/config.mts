@@ -16,6 +16,7 @@ export default defineConfig({
           { text: "Home", link: "/" },
           { text: "Guide", link: "/guide/installation" },
           { text: "Development", link: "/development/setup" },
+          { text: "Blog", link: "/blog/" },
           { text: "Plugin Store", link: "/store/plugins" },
           { text: "Theme Store", link: "/store/themes" },
         ],
@@ -84,6 +85,15 @@ export default defineConfig({
               ],
             },
           ],
+          "/blog/": [
+            {
+              text: "Blog",
+              items: [
+                { text: "Overview", link: "/blog/" },
+                { text: "Smoke Tests as the Last Gatekeeper", link: "/blog/smoke-tests-as-the-last-gatekeeper" },
+              ],
+            },
+          ],
           "/store/": [
             {
               text: "Store",
@@ -111,6 +121,7 @@ export default defineConfig({
           { text: "首页", link: "/zh/" },
           { text: "指南", link: "/zh/guide/installation" },
           { text: "开发", link: "/zh/development/setup" },
+          { text: "博客", link: "/zh/blog/" },
           { text: "插件商店", link: "/zh/store/plugins" },
           { text: "主题商店", link: "/zh/store/themes" },
         ],
@@ -175,6 +186,15 @@ export default defineConfig({
                 { text: "查询模型", link: "/zh/development/plugins/query-model" },
                 { text: "脚本插件", link: "/zh/development/plugins/script-plugin" },
                 { text: "全功能插件", link: "/zh/development/plugins/full-featured-plugin" },
+              ],
+            },
+          ],
+          "/zh/blog/": [
+            {
+              text: "博客",
+              items: [
+                { text: "总览", link: "/zh/blog/" },
+                { text: "自动化 Smoke Test：AI 时代最后的 Gate Keeper", link: "/zh/blog/automated-smoke-test-gate-keeper" },
               ],
             },
           ],
