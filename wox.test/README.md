@@ -25,12 +25,14 @@ From this directory:
 
 ```bash
 make smoke
+make smoke "P0-SMK-08"
 ```
 
 Or directly:
 
 ```bash
 dart run bin/run.dart smoke
+dart run bin/run.dart smoke "P0-SMK-08"
 ```
 
 ## Artifacts

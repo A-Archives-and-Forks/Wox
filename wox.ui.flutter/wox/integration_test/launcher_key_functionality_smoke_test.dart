@@ -7,11 +7,9 @@ void registerLauncherKeyFunctionalitySmokeTests() {
   group('P1-SMK: Key Functionality Smoke Tests', () {
     testWidgets('P1-SMK-17: Theme settings accessible', (tester) async {
       final launcherController = await launchAndShowLauncher(tester);
-      final settingController = await openSettings(
-        tester,
-        launcherController,
-        'ui',
-      );
+      final settingController = await openSettings(tester, launcherController, 'general');
+
+      await tapSettingNavItem(tester, settingController, 'ui_ui');
 
       expect(find.byType(WoxSettingView), findsOneWidget);
 
@@ -20,11 +18,9 @@ void registerLauncherKeyFunctionalitySmokeTests() {
 
     testWidgets('P1-SMK-18: Data backup entry accessible', (tester) async {
       final launcherController = await launchAndShowLauncher(tester);
-      final settingController = await openSettings(
-        tester,
-        launcherController,
-        'data',
-      );
+      final settingController = await openSettings(tester, launcherController, 'general');
+
+      await tapSettingNavItem(tester, settingController, 'ui_data');
 
       expect(find.byType(WoxSettingView), findsOneWidget);
 
@@ -33,16 +29,13 @@ void registerLauncherKeyFunctionalitySmokeTests() {
 
     testWidgets('P1-SMK-19: Usage and About pages load', (tester) async {
       final launcherController = await launchAndShowLauncher(tester);
-      final settingController = await openSettings(
-        tester,
-        launcherController,
-        'usage',
-      );
+      final settingController = await openSettings(tester, launcherController, 'general');
+
+      await tapSettingNavItem(tester, settingController, 'ui_usage');
 
       expect(find.byType(WoxSettingView), findsOneWidget);
 
-      settingController.activeNavPath.value = 'about';
-      await tester.pumpAndSettle();
+      await tapSettingNavItem(tester, settingController, 'ui_about');
       expect(find.byType(WoxSettingView), findsOneWidget);
 
       await closeSettings(tester, settingController, launcherController);

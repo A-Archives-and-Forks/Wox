@@ -277,12 +277,59 @@ func (m *Manager) QuerySelection(ctx context.Context) {
 		return
 	}
 
+	if err := m.triggerSelectionQuery(newCtx, selection); err != nil {
+		logger.Error(newCtx, fmt.Sprintf("failed to trigger selection query: %s", err.Error()))
+	}
+}
+
+func (m *Manager) triggerSelectionQuery(ctx context.Context, selected selection.Selection) error {
+	if selected.IsEmpty() {
+		return errors.New("selection is empty")
+	}
+
 	m.RefreshActiveWindowSnapshot(ctx)
-	m.ui.ChangeQuery(newCtx, common.PlainQuery{
+	m.ui.ChangeQuery(ctx, common.PlainQuery{
 		QueryType:      plugin.QueryTypeSelection,
-		QuerySelection: selection,
+		QuerySelection: selected,
 	})
-	m.ui.ShowApp(newCtx, common.ShowContext{SelectAll: false})
+	m.ui.ShowApp(ctx, common.ShowContext{SelectAll: false, ShowSource: common.ShowSourceSelection})
+	return nil
+}
+
+func (m *Manager) triggerQueryHotkey(ctx context.Context, queryHotkey setting.QueryHotkey) error {
+	queryCtx := util.WithCoreSessionContext(ctx)
+	query := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, queryHotkey.Query)
+	plainQuery := common.PlainQuery{
+		QueryId:   uuid.NewString(),
+		QueryType: plugin.QueryTypeInput,
+		QueryText: query,
+	}
+
+	m.RefreshActiveWindowSnapshot(queryCtx)
+	q, _, err := plugin.GetPluginManager().NewQuery(queryCtx, plainQuery)
+	if err != nil {
+		return err
+	}
+
+	if queryHotkey.IsSilentExecution {
+		success := plugin.GetPluginManager().QuerySilent(queryCtx, q)
+		if !success {
+			return fmt.Errorf("failed to execute silent query: %s", query)
+		}
+		logger.Info(queryCtx, fmt.Sprintf("silent query executed: %s", query))
+		return nil
+	}
+
+	isQueryFocus := false
+	if plugin.GetPluginManager().IsTriggerKeywordAIChat(ctx, q.TriggerKeyword) {
+		if plugin.GetPluginManager().GetAIChatPluginChater(ctx).IsAutoFocusToChatInputWhenOpenWithQueryHotkey(ctx) {
+			isQueryFocus = true
+		}
+	}
+
+	m.ui.ChangeQuery(queryCtx, plainQuery)
+	m.ui.ShowApp(queryCtx, common.ShowContext{SelectAll: false, IsQueryFocus: isQueryFocus, ShowSource: common.ShowSourceQueryHotkey})
+	return nil
 }
 
 func (m *Manager) RegisterQueryHotkey(ctx context.Context, queryHotkey setting.QueryHotkey) error {
@@ -298,39 +345,8 @@ func (m *Manager) RegisterQueryHotkey(ctx context.Context, queryHotkey setting.Q
 		if m.shouldIgnoreHotkeyTrigger(queryCtx) {
 			return
 		}
-		query := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, queryHotkey.Query)
-		plainQuery := common.PlainQuery{
-			QueryId:   uuid.NewString(),
-			QueryType: plugin.QueryTypeInput,
-			QueryText: query,
-		}
-
-		// we need to refresh active window snapshot before new query
-		// because new query will use active window info in env and here is the
-		// first place we can get the latest active window info
-		m.RefreshActiveWindowSnapshot(ctx)
-		q, _, err := plugin.GetPluginManager().NewQuery(queryCtx, plainQuery)
-		if queryHotkey.IsSilentExecution {
-			if err != nil {
-				logger.Error(ctx, fmt.Sprintf("failed to create silent query: %s", err.Error()))
-				return
-			}
-			success := plugin.GetPluginManager().QuerySilent(queryCtx, q)
-			if !success {
-				logger.Error(ctx, fmt.Sprintf("failed to execute silent query: %s", query))
-			} else {
-				logger.Info(ctx, fmt.Sprintf("silent query executed: %s", query))
-			}
-		} else {
-			isQueryFocus := false
-			// check if query is chat plugin, and auto focus if enabled
-			if plugin.GetPluginManager().IsTriggerKeywordAIChat(ctx, q.TriggerKeyword) {
-				if plugin.GetPluginManager().GetAIChatPluginChater(ctx).IsAutoFocusToChatInputWhenOpenWithQueryHotkey(ctx) {
-					isQueryFocus = true
-				}
-			}
-			m.ui.ChangeQuery(queryCtx, plainQuery)
-			m.ui.ShowApp(queryCtx, common.ShowContext{SelectAll: false, IsQueryFocus: isQueryFocus})
+		if err := m.triggerQueryHotkey(queryCtx, queryHotkey); err != nil {
+			logger.Error(ctx, fmt.Sprintf("failed to trigger query hotkey: %s", err.Error()))
 		}
 	})
 	if err != nil {
@@ -737,6 +753,7 @@ func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQu
 		SelectAll:      false,
 		IsQueryFocus:   isQueryFocus,
 		ShowQueryBox:   trayQuery.ShowQueryBox,
+		ShowSource:     common.ShowSourceTrayQuery,
 		WindowPosition: &position,
 		WindowWidth:    windowWidth,
 		LayoutMode:     common.LayoutModeTrayQuery,

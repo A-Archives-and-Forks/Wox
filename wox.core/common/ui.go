@@ -6,11 +6,19 @@ import (
 )
 
 type LayoutMode string
+type ShowSource string
 
 const (
 	LayoutModeDefault   LayoutMode = "default"
 	LayoutModeExplorer  LayoutMode = "explorer"
 	LayoutModeTrayQuery LayoutMode = "tray_query"
+)
+
+const (
+	ShowSourceDefault     ShowSource = "default"
+	ShowSourceQueryHotkey ShowSource = "query_hotkey"
+	ShowSourceSelection   ShowSource = "selection"
+	ShowSourceTrayQuery   ShowSource = "tray_query"
 )
 
 type PlainQuery struct {
@@ -92,6 +100,7 @@ type ShowContext struct {
 	SelectAll    bool
 	IsQueryFocus bool // auto focus chat input on next ui update
 	ShowQueryBox bool
+	ShowSource   ShowSource
 
 	WindowPosition *WindowPosition
 	// WindowRect is only effective in LayoutModeExplorer.

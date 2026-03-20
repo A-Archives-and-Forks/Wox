@@ -1,5 +1,7 @@
 .PHONY: build clean host _bundle_mac_app plugins help dev test test-all test-calculator test-converter test-plugin test-time test-network test-quick test-legacy only_test check_deps release appimage smoke
 
+SMOKE_FILTER := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+
 # Determine the current platform
 ifeq ($(OS),Windows_NT)
     PLATFORM := windows
@@ -141,7 +143,10 @@ test-debug:
 	cd wox.core && WOX_TEST_DATA_DIR=/tmp/wox-test-debug WOX_TEST_CLEANUP=false WOX_TEST_VERBOSE=true go test ./test -v
 
 smoke:
-	$(MAKE) -C wox.test smoke
+	$(MAKE) -C wox.test smoke SMOKE_FILTER="$(SMOKE_FILTER)"
+
+%:
+	@:
 
 
 build: clean dev

@@ -263,9 +263,13 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 	var position Position
 	var windowRect map[string]int
 	showQueryBox := showContext.ShowQueryBox
+	showSource := showContext.ShowSource
 
 	if showContext.LayoutMode == "" {
 		showContext.LayoutMode = common.LayoutModeDefault
+	}
+	if showSource == "" {
+		showSource = common.ShowSourceDefault
 	}
 	if showContext.LayoutMode != common.LayoutModeTrayQuery {
 		showQueryBox = true
@@ -317,6 +321,7 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 		"LaunchMode":     woxSetting.LaunchMode.Get(),
 		"StartPage":      woxSetting.StartPage.Get(),
 		"LayoutMode":     showContext.LayoutMode,
+		"ShowSource":     showSource,
 	}
 }
 

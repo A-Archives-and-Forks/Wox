@@ -28,7 +28,9 @@ import (
 	"wox/util"
 	"wox/util/font"
 	"wox/util/hotkey"
+	utilselection "wox/util/selection"
 	"wox/util/shell"
+	"wox/util/tray"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/jinzhu/copier"
@@ -107,6 +109,12 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	"/query/metadata":   handleQueryMetadata,
 	"/deeplink":         handleDeeplink,
 	"/version":          handleVersion,
+
+	// test-only triggers
+	"/test/trigger/open_setting":     handleTestTriggerOpenSetting,
+	"/test/trigger/query_hotkey":     handleTestTriggerQueryHotkey,
+	"/test/trigger/selection_hotkey": handleTestTriggerSelectionHotkey,
+	"/test/trigger/tray_query":       handleTestTriggerTrayQuery,
 
 	// toolbar snooze/mute
 	"/toolbar/snooze": handleToolbarSnooze,
@@ -1065,6 +1073,172 @@ func handleHotkeyAvailable(w http.ResponseWriter, r *http.Request) {
 func handleShow(w http.ResponseWriter, r *http.Request) {
 	ctx := getTraceContext(r)
 	GetUIManager().GetUI(ctx).ShowApp(ctx, common.ShowContext{SelectAll: true})
+	writeSuccessResponse(w, "")
+}
+
+func ensureTestTriggerEnabled(w http.ResponseWriter) bool {
+	if util.IsDev() || util.IsTestMode() {
+		return true
+	}
+
+	writeErrorResponse(w, "test trigger endpoints are only available in dev/test mode")
+	return false
+}
+
+func handleTestTriggerQueryHotkey(w http.ResponseWriter, r *http.Request) {
+	if !ensureTestTriggerEnabled(w) {
+		return
+	}
+
+	type request struct {
+		Query             string
+		IsSilentExecution bool
+	}
+
+	var req request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		writeErrorResponse(w, "query is empty")
+		return
+	}
+
+	ctx := getTraceContext(r)
+	err := GetUIManager().triggerQueryHotkey(ctx, setting.QueryHotkey{
+		Query:             req.Query,
+		IsSilentExecution: req.IsSilentExecution,
+	})
+	if err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+
+	writeSuccessResponse(w, "")
+}
+
+func handleTestTriggerOpenSetting(w http.ResponseWriter, r *http.Request) {
+	if !ensureTestTriggerEnabled(w) {
+		return
+	}
+
+	type request struct {
+		Path  string
+		Param string
+	}
+
+	var req request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+
+	ctx := getTraceContext(r)
+	GetUIManager().GetUI(ctx).OpenSettingWindow(ctx, common.SettingWindowContext{
+		Path:  strings.TrimSpace(req.Path),
+		Param: strings.TrimSpace(req.Param),
+	})
+	writeSuccessResponse(w, "")
+}
+
+func handleTestTriggerSelectionHotkey(w http.ResponseWriter, r *http.Request) {
+	if !ensureTestTriggerEnabled(w) {
+		return
+	}
+
+	type request struct {
+		Type      string
+		Text      string
+		FilePaths []string
+	}
+
+	var req request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+
+	selected := utilselection.Selection{
+		Type:      utilselection.SelectionType(req.Type),
+		Text:      req.Text,
+		FilePaths: req.FilePaths,
+	}
+	switch selected.Type {
+	case utilselection.SelectionTypeText, utilselection.SelectionTypeFile:
+	default:
+		writeErrorResponse(w, "selection type is invalid")
+		return
+	}
+	if selected.IsEmpty() {
+		writeErrorResponse(w, "selection is empty")
+		return
+	}
+
+	ctx := getTraceContext(r)
+	uiManager := GetUIManager()
+	uiManager.RefreshActiveWindowSnapshot(ctx)
+	uiManager.GetUI(ctx).ChangeQuery(ctx, common.PlainQuery{
+		QueryType:      plugin.QueryTypeSelection,
+		QuerySelection: selected,
+	})
+	time.Sleep(150 * time.Millisecond)
+	uiManager.GetUI(ctx).ShowApp(ctx, common.ShowContext{SelectAll: false, ShowSource: common.ShowSourceSelection})
+
+	writeSuccessResponse(w, "")
+}
+
+func handleTestTriggerTrayQuery(w http.ResponseWriter, r *http.Request) {
+	if !ensureTestTriggerEnabled(w) {
+		return
+	}
+
+	type rectRequest struct {
+		X      int
+		Y      int
+		Width  int
+		Height int
+	}
+
+	type request struct {
+		Query        string
+		Width        int
+		ShowQueryBox bool
+		Disabled     bool
+		Rect         rectRequest
+	}
+
+	var req request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		writeErrorResponse(w, "query is empty")
+		return
+	}
+
+	clickRect := tray.ClickRect{
+		X:      req.Rect.X,
+		Y:      req.Rect.Y,
+		Width:  req.Rect.Width,
+		Height: req.Rect.Height,
+	}
+	if clickRect.Width <= 0 {
+		clickRect.Width = 40
+	}
+	if clickRect.Height <= 0 {
+		clickRect.Height = 40
+	}
+
+	ctx := getTraceContext(r)
+	GetUIManager().executeTrayQuery(ctx, setting.TrayQuery{
+		Query:        req.Query,
+		Width:        req.Width,
+		ShowQueryBox: req.ShowQueryBox,
+		Disabled:     req.Disabled,
+	}, clickRect)
+
 	writeSuccessResponse(w, "")
 }
 

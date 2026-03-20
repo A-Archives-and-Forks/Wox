@@ -1,6 +1,6 @@
 .PHONY: help smoke
 
-SMOKE_FILTER := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+SMOKE_FILTER ?= $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 
 help:
 	@echo "Available commands:"

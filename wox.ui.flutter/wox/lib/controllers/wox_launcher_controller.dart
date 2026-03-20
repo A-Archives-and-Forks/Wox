@@ -44,6 +44,7 @@ import 'package:wox/enums/wox_position_type_enum.dart';
 import 'package:wox/enums/wox_query_type_enum.dart';
 import 'package:wox/enums/wox_result_action_type_enum.dart';
 import 'package:wox/enums/wox_selection_type_enum.dart';
+import 'package:wox/enums/wox_show_source_enum.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/log.dart';
@@ -635,21 +636,39 @@ class WoxLauncherController extends GetxController {
       }
     }
 
-    // Handle launch mode: fresh or continue
-    final isInputWithText = currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code && currentQuery.value.queryText.isNotEmpty;
-    final isSelectionQuery = currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code;
+    // Query preservation has two different sources and they solve different cases:
+    // 1. Explicit incoming query source: query hotkey, selection query, and tray query inject a
+    //    new query for this show action, so fresh mode must preserve that incoming query.
+    // 2. Continue-mode fallback: when show source is default, reopening the launcher in continue
+    //    mode should keep the existing query already stored in the controller.
+    //
+    // We must detect input and selection queries separately here because their valid payloads are
+    // different:
+    // - Input query: only preserve when there is actual text. Empty input should fall back to MRU
+    //   or blank start page instead of being treated as an existing query.
+    // - Selection query: preserve by query type, not by queryText, because a valid selection query
+    //   may carry its real payload in querySelection while queryText stays empty.
+    //
+    // This split is why show source was introduced: without it, fresh mode cannot distinguish a
+    // newly injected query for this show action from stale query state left from the previous show.
+    final hasCurrentInputQuery = currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code && currentQuery.value.queryText.isNotEmpty;
+    final hasCurrentSelectionQuery = currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code;
+    final shouldPreserveIncomingQuery =
+        params.showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_QUERY_HOTKEY.code ||
+        params.showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_SELECTION.code ||
+        params.showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_TRAY_QUERY.code;
+    final shouldPreserveQueryOnShow =
+        shouldPreserveIncomingQuery || (lastLaunchMode == WoxLaunchModeEnum.WOX_LAUNCH_MODE_CONTINUE.code && (hasCurrentInputQuery || hasCurrentSelectionQuery));
 
     if (lastLaunchMode == WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code) {
-      // Fresh mode: clear query if not opened via query hotkey or selection
-      if (!isInputWithText && !isSelectionQuery) {
+      if (!shouldPreserveQueryOnShow) {
         currentQuery.value = PlainQuery.emptyInput();
         queryBoxTextFieldController.clear();
       }
     }
-    // Continue mode: keep last query (do nothing)
 
-    // Handle start page: show content when query is empty (works in both modes)
-    if (!isInputWithText && !isSelectionQuery) {
+    // Handle start page when the current show action does not carry a query into the launcher.
+    if (!shouldPreserveQueryOnShow) {
       if (lastStartPage == WoxStartPageEnum.WOX_START_PAGE_MRU.code) {
         queryMRU(traceId);
       } else {
@@ -758,8 +777,6 @@ class WoxLauncherController extends GetxController {
     if (currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code || lastLaunchMode == WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code) {
       currentQuery.value = PlainQuery.emptyInput();
       queryBoxTextFieldController.clear();
-      hideActionPanel(traceId);
-      hideFormActionPanel(traceId, reason: "hide app clear query");
       await clearQueryResults(traceId);
     }
 
