@@ -168,6 +168,44 @@ class WoxLauncherController extends GetxController {
   Timer? loadingTimer;
   final loadingDelay = const Duration(milliseconds: 500);
 
+  // doctor check timer
+  Timer? doctorCheckTimer;
+  static const doctorCheckInterval = Duration(minutes: 1);
+
+  /// Start the periodic doctor check timer. Call this after controller initialization.
+  void startDoctorCheckTimer() {
+    doctorCheckTimer?.cancel();
+    doctorCheckTimer = Timer.periodic(doctorCheckInterval, (_) {
+      doctorCheck();
+    });
+  }
+
+  /// Stop the periodic doctor check timer. Call this during cleanup.
+  void stopDoctorCheckTimer() {
+    doctorCheckTimer?.cancel();
+    doctorCheckTimer = null;
+  }
+
+  /// Reset controller state for integration testing without full disposal.
+  /// This clears pending timers, hides panels, and resets query state.
+  void resetForIntegrationTest() {
+    stopDoctorCheckTimer();
+    hideActionPanel(const UuidV4().generate());
+    hideFormActionPanel(const UuidV4().generate(), reason: "test reset");
+    if (isInSettingView.value) {
+      exitSetting(const UuidV4().generate());
+    }
+    queryBoxTextFieldController.clear();
+    onQueryBoxTextChanged('');
+    isGridLayout.value = false;
+    clearQueryResultsTimer.cancel();
+    quickSelectTimer?.cancel();
+    isQuickSelectMode.value = false;
+    resizeHeightDebounceTimer?.cancel();
+    loadingTimer?.cancel();
+    isLoading.value = false;
+  }
+
   @override
   void onInit() {
     super.onInit();
@@ -1944,6 +1982,7 @@ class WoxLauncherController extends GetxController {
 
   @override
   void dispose() {
+    stopDoctorCheckTimer();
     queryBoxFocusNode.dispose();
     queryBoxTextFieldController.dispose();
     actionListViewController.dispose();
