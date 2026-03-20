@@ -17,7 +17,8 @@ Future<void> main(List<String> args) async {
 
   switch (args.first) {
     case 'smoke':
-      exitCode = await _runSmoke();
+      final testName = args.length > 1 ? args.sublist(1).join(' ').trim() : null;
+      exitCode = await _runSmoke(testName: testName?.isEmpty == true ? null : testName);
       return;
     default:
       stderr.writeln('Unknown command: ${args.first}');
@@ -27,13 +28,13 @@ Future<void> main(List<String> args) async {
 }
 
 void _printHelp() {
-  stdout.writeln('Usage: dart run bin/run.dart <command>');
+  stdout.writeln('Usage: dart run bin/run.dart <command> [arguments]');
   stdout.writeln('');
   stdout.writeln('Commands:');
-  stdout.writeln('  smoke    Run the desktop smoke E2E flow');
+  stdout.writeln('  smoke [test name]    Run the desktop smoke E2E flow');
 }
 
-Future<int> _runSmoke() async {
+Future<int> _runSmoke({String? testName}) async {
   final packageRoot = _resolvePackageRoot();
   final repoRoot = packageRoot.parent;
   final artifactsDir = await _createArtifactsDir(packageRoot);
@@ -53,6 +54,9 @@ Future<int> _runSmoke() async {
   stdout.writeln('Wox data dir: ${woxDataDir.path}');
   stdout.writeln('Wox user dir: ${userDataDir.path}');
   stdout.writeln('Server port: $serverPort');
+  if (testName != null) {
+    stdout.writeln('Test filter: $testName');
+  }
 
   final coreLog = File('${artifactsDir.path}${Platform.pathSeparator}core.log');
   final testLog = File('${artifactsDir.path}${Platform.pathSeparator}flutter_test.log');
@@ -74,9 +78,16 @@ Future<int> _runSmoke() async {
       return 1;
     }
 
+    final flutterArgs = <String>[
+      'test',
+      '--dart-define=$testServerPortEnv=$serverPort',
+      if (testName != null) ...['--plain-name', testName],
+      'integration_test/launcher_smoke_test.dart',
+    ];
+
     final flutterProcess = await _startCommand(
       'flutter',
-      ['test', '--dart-define=$testServerPortEnv=$serverPort', 'integration_test/launcher_smoke_test.dart'],
+      flutterArgs,
       workingDirectory: '${repoRoot.path}${Platform.pathSeparator}wox.ui.flutter${Platform.pathSeparator}wox',
       environment: environment,
     );
