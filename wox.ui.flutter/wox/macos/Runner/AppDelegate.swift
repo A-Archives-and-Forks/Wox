@@ -1,5 +1,6 @@
 import Cocoa
 import FlutterMacOS
+import ApplicationServices
 
 @main
 class AppDelegate: FlutterAppDelegate {
@@ -31,6 +32,128 @@ class AppDelegate: FlutterAppDelegate {
     DispatchQueue.main.async { [weak self] in
       self?.windowEventChannel?.invokeMethod("log", arguments: message)
     }
+  }
+
+  private func keyCode(for key: String) -> CGKeyCode? {
+    switch key.lowercased() {
+    case "a": return 0
+    case "s": return 1
+    case "d": return 2
+    case "f": return 3
+    case "h": return 4
+    case "g": return 5
+    case "z": return 6
+    case "x": return 7
+    case "c": return 8
+    case "v": return 9
+    case "b": return 11
+    case "q": return 12
+    case "w": return 13
+    case "e": return 14
+    case "r": return 15
+    case "y": return 16
+    case "t": return 17
+    case "1": return 18
+    case "2": return 19
+    case "3": return 20
+    case "4": return 21
+    case "6": return 22
+    case "5": return 23
+    case "9": return 25
+    case "7": return 26
+    case "8": return 28
+    case "0": return 29
+    case "o": return 31
+    case "u": return 32
+    case "i": return 34
+    case "p": return 35
+    case "l": return 37
+    case "j": return 38
+    case "k": return 40
+    case "n": return 45
+    case "m": return 46
+    case "enter": return 36
+    case "tab": return 48
+    case "space": return 49
+    case "escape": return 53
+    case "meta": return 55
+    case "shift": return 56
+    case "alt": return 58
+    case "control": return 59
+    case "arrowleft": return 123
+    case "arrowright": return 124
+    case "arrowdown": return 125
+    case "arrowup": return 126
+    default: return nil
+    }
+  }
+
+  private func mouseButton(for button: String) -> CGMouseButton? {
+    switch button.lowercased() {
+    case "left": return .left
+    case "right": return .right
+    case "middle": return .center
+    default: return nil
+    }
+  }
+
+  private func mouseEventTypes(for button: CGMouseButton) -> (down: CGEventType, up: CGEventType) {
+    switch button {
+    case .left:
+      return (.leftMouseDown, .leftMouseUp)
+    case .right:
+      return (.rightMouseDown, .rightMouseUp)
+    default:
+      return (.otherMouseDown, .otherMouseUp)
+    }
+  }
+
+  private func screenPoint(fromTopLeft point: CGPoint) -> CGPoint {
+    let targetScreen =
+      NSScreen.screens.first { screen in
+        let frame = screen.frame
+        return point.x >= frame.origin.x && point.x < frame.origin.x + frame.width
+      } ?? NSScreen.main
+    let frame = targetScreen?.frame ?? .zero
+    let flippedY = (frame.origin.y + frame.height) - point.y
+    return CGPoint(x: point.x, y: flippedY)
+  }
+
+  private func currentMouseLocation() -> CGPoint {
+    return CGEvent(source: nil)?.location ?? NSEvent.mouseLocation
+  }
+
+  private func postKeyboardEvent(key: String, isDown: Bool) -> FlutterError? {
+    guard let keyCode = keyCode(for: key) else {
+      return FlutterError(code: "UNSUPPORTED_KEY", message: "Unsupported key for macOS system input", details: key)
+    }
+
+    guard let event = CGEvent(keyboardEventSource: CGEventSource(stateID: .hidSystemState), virtualKey: keyCode, keyDown: isDown) else {
+      return FlutterError(code: "INPUT_ERROR", message: "Failed to create macOS keyboard event", details: key)
+    }
+
+    event.post(tap: .cghidEventTap)
+    return nil
+  }
+
+  private func postMouseButtonEvent(button: String, isDown: Bool) -> FlutterError? {
+    guard let mouseButton = mouseButton(for: button) else {
+      return FlutterError(code: "UNSUPPORTED_BUTTON", message: "Unsupported mouse button for macOS system input", details: button)
+    }
+
+    let eventTypes = mouseEventTypes(for: mouseButton)
+    let eventType = isDown ? eventTypes.down : eventTypes.up
+    guard let event = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: eventType, mouseCursorPosition: currentMouseLocation(), mouseButton: mouseButton) else {
+      return FlutterError(code: "INPUT_ERROR", message: "Failed to create macOS mouse event", details: button)
+    }
+
+    event.post(tap: .cghidEventTap)
+    return nil
+  }
+
+  private func moveMouse(to point: CGPoint) -> FlutterError? {
+    CGWarpMouseCursorPosition(screenPoint(fromTopLeft: point))
+    return nil
   }
 
   override func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
@@ -150,6 +273,72 @@ class AppDelegate: FlutterAppDelegate {
               FlutterError(
                 code: "INVALID_ARGS", message: "Invalid arguments for setSize", details: nil
               ))
+          }
+
+        case "inputKeyDown":
+          if let args = call.arguments as? [String: Any],
+            let key = args["key"] as? String
+          {
+            if let error = self?.postKeyboardEvent(key: key, isDown: true) {
+              result(error)
+            } else {
+              result(nil)
+            }
+          } else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Missing key for keyboard input", details: nil))
+          }
+
+        case "inputKeyUp":
+          if let args = call.arguments as? [String: Any],
+            let key = args["key"] as? String
+          {
+            if let error = self?.postKeyboardEvent(key: key, isDown: false) {
+              result(error)
+            } else {
+              result(nil)
+            }
+          } else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Missing key for keyboard input", details: nil))
+          }
+
+        case "inputMouseMove":
+          if let args = call.arguments as? [String: Any],
+            let x = args["x"] as? Double,
+            let y = args["y"] as? Double
+          {
+            if let error = self?.moveMouse(to: CGPoint(x: x, y: y)) {
+              result(error)
+            } else {
+              result(nil)
+            }
+          } else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Missing coordinates for mouse move", details: nil))
+          }
+
+        case "inputMouseDown":
+          if let args = call.arguments as? [String: Any],
+            let button = args["button"] as? String
+          {
+            if let error = self?.postMouseButtonEvent(button: button, isDown: true) {
+              result(error)
+            } else {
+              result(nil)
+            }
+          } else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Missing mouse button", details: nil))
+          }
+
+        case "inputMouseUp":
+          if let args = call.arguments as? [String: Any],
+            let button = args["button"] as? String
+          {
+            if let error = self?.postMouseButtonEvent(button: button, isDown: false) {
+              result(error)
+            } else {
+              result(nil)
+            }
+          } else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Missing mouse button", details: nil))
           }
 
         case "setBounds":

@@ -122,7 +122,7 @@ void registerLauncherCoreSmokeTests() {
       await waitForQueryBoxFocus(tester, controller);
       expect(controller.queryBoxFocusNode.hasFocus, isTrue);
 
-      await hideLauncherByEscape(tester);
+      await hideLauncherByEscape(tester, controller);
 
       await triggerBackendShowApp(tester);
       await waitForQueryBoxFocus(tester, controller);
@@ -140,7 +140,7 @@ void registerLauncherCoreSmokeTests() {
 
       await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
 
-      await hideLauncherByEscape(tester);
+      await hideLauncherByEscape(tester, controller);
 
       await triggerBackendShowApp(tester);
       await waitForQueryBoxFocus(tester, controller);
@@ -220,13 +220,13 @@ void registerLauncherCoreSmokeTests() {
 
       expect(find.byType(WoxSettingView), findsOneWidget);
 
-      await tapSettingNavItem(tester, settingController, 'ui_general');
+      await tapSettingNavItem(tester, 'general');
       expect(find.byType(WoxSettingView), findsOneWidget);
 
-      await tapSettingNavItem(tester, settingController, 'ui_ui');
+      await tapSettingNavItem(tester, 'ui');
       expect(find.byType(WoxSettingView), findsOneWidget);
 
-      await tapSettingNavItem(tester, settingController, 'ui_data');
+      await tapSettingNavItem(tester, 'data');
       expect(find.byType(WoxSettingView), findsOneWidget);
 
       await closeSettings(tester, settingController, launcherController);

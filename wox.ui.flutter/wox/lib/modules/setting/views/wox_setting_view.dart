@@ -29,6 +29,9 @@ class WoxSettingView extends StatefulWidget {
 }
 
 class _WoxSettingViewState extends State<WoxSettingView> {
+  static const String navItemKeyPrefix = 'settings-nav-';
+  static const String backButtonKey = 'settings-back-button';
+
   WoxSettingController get controller => Get.find<WoxSettingController>();
 
   // Flatten the tree to get all items with their semantic IDs
@@ -67,6 +70,7 @@ class _WoxSettingViewState extends State<WoxSettingView> {
       final isParent = item.isParent;
 
       return GestureDetector(
+        key: ValueKey('$navItemKeyPrefix${flatItem.path}'),
         onTap: () {
           setState(() {
             if (isParent) {
@@ -193,6 +197,7 @@ class _WoxSettingViewState extends State<WoxSettingView> {
                     Container(
                       margin: const EdgeInsets.all(8),
                       child: GestureDetector(
+                        key: const ValueKey(backButtonKey),
                         onTap: () => controller.hideWindow(const UuidV4().generate()),
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),

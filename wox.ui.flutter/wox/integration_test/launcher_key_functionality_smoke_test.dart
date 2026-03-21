@@ -9,7 +9,7 @@ void registerLauncherKeyFunctionalitySmokeTests() {
       final launcherController = await launchAndShowLauncher(tester);
       final settingController = await openSettings(tester, launcherController, 'general');
 
-      await tapSettingNavItem(tester, settingController, 'ui_ui');
+      await tapSettingNavItem(tester, 'ui');
 
       expect(find.byType(WoxSettingView), findsOneWidget);
 
@@ -20,7 +20,7 @@ void registerLauncherKeyFunctionalitySmokeTests() {
       final launcherController = await launchAndShowLauncher(tester);
       final settingController = await openSettings(tester, launcherController, 'general');
 
-      await tapSettingNavItem(tester, settingController, 'ui_data');
+      await tapSettingNavItem(tester, 'data');
 
       expect(find.byType(WoxSettingView), findsOneWidget);
 
@@ -31,11 +31,11 @@ void registerLauncherKeyFunctionalitySmokeTests() {
       final launcherController = await launchAndShowLauncher(tester);
       final settingController = await openSettings(tester, launcherController, 'general');
 
-      await tapSettingNavItem(tester, settingController, 'ui_usage');
+      await tapSettingNavItem(tester, 'usage');
 
       expect(find.byType(WoxSettingView), findsOneWidget);
 
-      await tapSettingNavItem(tester, settingController, 'ui_about');
+      await tapSettingNavItem(tester, 'about');
       expect(find.byType(WoxSettingView), findsOneWidget);
 
       await closeSettings(tester, settingController, launcherController);

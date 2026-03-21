@@ -4,10 +4,13 @@
 #include <flutter_linux/flutter_linux.h>
 #include <gdk/gdk.h>
 #include <math.h>
+#include <string>
 #include <stdarg.h>
 #ifdef GDK_WINDOWING_X11
 #include <X11/Xatom.h>
+#include <X11/Xkeysym.h>
 #include <X11/Xlib.h>
+#include <X11/extensions/XTest.h>
 #include <gdk/gdkx.h>
 #endif
 
@@ -260,6 +263,113 @@ static void restore_previous_active_window(MyApplication *self)
 }
 #endif
 
+#ifdef GDK_WINDOWING_X11
+static KeySym parse_x11_key_sym(const std::string &key)
+{
+  if (key == "alt")
+    return XK_Alt_L;
+  if (key == "control")
+    return XK_Control_L;
+  if (key == "shift")
+    return XK_Shift_L;
+  if (key == "meta")
+    return XK_Super_L;
+  if (key == "escape")
+    return XK_Escape;
+  if (key == "enter")
+    return XK_Return;
+  if (key == "tab")
+    return XK_Tab;
+  if (key == "space")
+    return XK_space;
+  if (key == "arrowUp")
+    return XK_Up;
+  if (key == "arrowDown")
+    return XK_Down;
+  if (key == "arrowLeft")
+    return XK_Left;
+  if (key == "arrowRight")
+    return XK_Right;
+
+  if (key.size() == 1)
+  {
+    return XStringToKeysym(key.c_str());
+  }
+
+  return NoSymbol;
+}
+
+static gboolean send_x11_key_event(GtkWindow *window, const std::string &key,
+                                   bool is_press)
+{
+  Display *display = get_x11_display(window);
+  if (display == nullptr)
+  {
+    return FALSE;
+  }
+
+  KeySym key_sym = parse_x11_key_sym(key);
+  if (key_sym == NoSymbol)
+  {
+    return FALSE;
+  }
+
+  KeyCode key_code = XKeysymToKeycode(display, key_sym);
+  if (key_code == 0)
+  {
+    return FALSE;
+  }
+
+  XTestFakeKeyEvent(display, key_code, is_press ? True : False, CurrentTime);
+  XFlush(display);
+  return TRUE;
+}
+
+static gboolean move_x11_mouse(GtkWindow *window, int x, int y)
+{
+  Display *display = get_x11_display(window);
+  if (display == nullptr)
+  {
+    return FALSE;
+  }
+
+  XWarpPointer(display, None, DefaultRootWindow(display), 0, 0, 0, 0, x, y);
+  XFlush(display);
+  return TRUE;
+}
+
+static int parse_x11_mouse_button(const std::string &button)
+{
+  if (button == "left")
+    return Button1;
+  if (button == "middle")
+    return Button2;
+  if (button == "right")
+    return Button3;
+  return 0;
+}
+
+static gboolean send_x11_mouse_button(GtkWindow *window, const std::string &button,
+                                      bool is_press)
+{
+  Display *display = get_x11_display(window);
+  if (display == nullptr)
+  {
+    return FALSE;
+  }
+
+  int button_id = parse_x11_mouse_button(button);
+  if (button_id == 0)
+  {
+    return FALSE;
+  }
+
+  XTestFakeButtonEvent(display, button_id, is_press ? True : False, CurrentTime);
+  XFlush(display);
+  return TRUE;
+}
+#endif
+
 // Method channel handler
 static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
                            gpointer user_data)
@@ -270,7 +380,103 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
   FlValue *args = fl_method_call_get_args(method_call);
   g_autoptr(FlMethodResponse) response = nullptr;
 
-  if (strcmp(method, "setSize") == 0)
+  if (strcmp(method, "inputKeyDown") == 0 || strcmp(method, "inputKeyUp") == 0)
+  {
+#ifdef GDK_WINDOWING_X11
+    if (fl_value_get_type(args) == FL_VALUE_TYPE_MAP)
+    {
+      FlValue *key_value = fl_value_lookup_string(args, "key");
+      if (key_value != nullptr && fl_value_get_type(key_value) == FL_VALUE_TYPE_STRING)
+      {
+        std::string key = fl_value_get_string(key_value);
+        gboolean handled = send_x11_key_event(window, key, strcmp(method, "inputKeyDown") == 0);
+        if (handled)
+        {
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
+        }
+        else
+        {
+          response = FL_METHOD_RESPONSE(fl_method_error_response_new("INPUT_ERROR", "Failed to send X11 keyboard event", nullptr));
+        }
+      }
+      else
+      {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing key for keyboard input", nullptr));
+      }
+    }
+    else
+    {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing arguments for keyboard input", nullptr));
+    }
+#else
+    response = FL_METHOD_RESPONSE(fl_method_error_response_new("UNSUPPORTED", "System keyboard input is only implemented for X11 Linux sessions", nullptr));
+#endif
+  }
+  else if (strcmp(method, "inputMouseMove") == 0)
+  {
+#ifdef GDK_WINDOWING_X11
+    if (fl_value_get_type(args) == FL_VALUE_TYPE_MAP)
+    {
+      FlValue *x_value = fl_value_lookup_string(args, "x");
+      FlValue *y_value = fl_value_lookup_string(args, "y");
+      if (x_value != nullptr && y_value != nullptr && fl_value_get_type(x_value) == FL_VALUE_TYPE_FLOAT && fl_value_get_type(y_value) == FL_VALUE_TYPE_FLOAT)
+      {
+        gboolean handled = move_x11_mouse(window, (int)round(fl_value_get_float(x_value)), (int)round(fl_value_get_float(y_value)));
+        if (handled)
+        {
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
+        }
+        else
+        {
+          response = FL_METHOD_RESPONSE(fl_method_error_response_new("INPUT_ERROR", "Failed to move X11 mouse cursor", nullptr));
+        }
+      }
+      else
+      {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing coordinates for mouse move", nullptr));
+      }
+    }
+    else
+    {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing arguments for mouse move", nullptr));
+    }
+#else
+    response = FL_METHOD_RESPONSE(fl_method_error_response_new("UNSUPPORTED", "System mouse input is only implemented for X11 Linux sessions", nullptr));
+#endif
+  }
+  else if (strcmp(method, "inputMouseDown") == 0 || strcmp(method, "inputMouseUp") == 0)
+  {
+#ifdef GDK_WINDOWING_X11
+    if (fl_value_get_type(args) == FL_VALUE_TYPE_MAP)
+    {
+      FlValue *button_value = fl_value_lookup_string(args, "button");
+      if (button_value != nullptr && fl_value_get_type(button_value) == FL_VALUE_TYPE_STRING)
+      {
+        std::string button = fl_value_get_string(button_value);
+        gboolean handled = send_x11_mouse_button(window, button, strcmp(method, "inputMouseDown") == 0);
+        if (handled)
+        {
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
+        }
+        else
+        {
+          response = FL_METHOD_RESPONSE(fl_method_error_response_new("INPUT_ERROR", "Failed to send X11 mouse button event", nullptr));
+        }
+      }
+      else
+      {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing mouse button", nullptr));
+      }
+    }
+    else
+    {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing arguments for mouse button input", nullptr));
+    }
+#else
+    response = FL_METHOD_RESPONSE(fl_method_error_response_new("UNSUPPORTED", "System mouse input is only implemented for X11 Linux sessions", nullptr));
+#endif
+  }
+  else if (strcmp(method, "setSize") == 0)
   {
     if (fl_value_get_type(args) == FL_VALUE_TYPE_MAP)
     {

@@ -3,8 +3,8 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:extended_text_field/extended_text_field.dart';
-import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
@@ -23,6 +23,8 @@ import 'package:wox/utils/wox_http_util.dart';
 import 'package:wox/utils/wox_setting_util.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/test/wox_test_config.dart';
+import 'package:wox/utils/windows/system_input.dart';
+import 'package:wox/utils/windows/system_input_interface.dart';
 import 'package:wox/utils/windows/window_manager.dart';
 
 const Size smokeLargeWindowSize = Size(1200, 900);
@@ -93,7 +95,7 @@ Future<void> hideLauncherIfVisible(WidgetTester tester, WoxLauncherController co
     return;
   }
 
-  await hideLauncherByEscape(tester);
+  await hideLauncherByEscape(tester, controller);
 }
 
 Future<void> waitForWindowVisibility(WidgetTester tester, bool visible, {Duration timeout = const Duration(seconds: 30)}) async {
@@ -282,8 +284,19 @@ Future<void> ensureWindowSize(WidgetTester tester, Size size) async {
   await tester.pumpAndSettle();
 }
 
-Future<void> hideLauncherByEscape(WidgetTester tester, {Duration timeout = const Duration(seconds: 30)}) async {
-  await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+Future<void> hideLauncherByEscape(WidgetTester tester, WoxLauncherController controller, {Duration timeout = const Duration(seconds: 30)}) async {
+  await systemInput.keyPress(SystemInputKeys.escape);
+
+  final escapeDeliveryDeadline = DateTime.now().add(const Duration(seconds: 2));
+  while (DateTime.now().isBefore(escapeDeliveryDeadline)) {
+    await tester.pump(const Duration(milliseconds: 100));
+    if (!await windowManager.isVisible()) {
+      return;
+    }
+  }
+
+  // Windows desktop smoke does not deliver Escape reliably through tester key injection.
+  await controller.hideApp(const UuidV4().generate());
   await waitForWindowVisibility(tester, false, timeout: timeout);
 }
 
@@ -342,20 +355,28 @@ Future<void> releaseQuickSelectModifier(WidgetTester tester) async {
 Future<WoxSettingController> openSettings(WidgetTester tester, WoxLauncherController launcherController, String path) async {
   await triggerTestOpenSetting(tester, path: path);
 
+  await pumpUntil(
+    tester,
+    () => launcherController.isInSettingView.value && find.byType(WoxSettingView).evaluate().isNotEmpty,
+    timeout: const Duration(seconds: 30),
+  );
+
   expect(launcherController.isInSettingView.value, isTrue);
   expect(find.byType(WoxSettingView), findsOneWidget);
   return Get.find<WoxSettingController>();
 }
 
 Future<void> closeSettings(WidgetTester tester, WoxSettingController settingController, WoxLauncherController launcherController) async {
-  final backButtonFinder = find.text(settingController.tr('ui_back')).first;
+  final backButtonFinder = find.byKey(const ValueKey('settings-back-button'));
+  expect(backButtonFinder, findsOneWidget);
   await tester.tap(backButtonFinder);
   await tester.pumpAndSettle();
   await pumpUntil(tester, () => launcherController.isInSettingView.value == false, timeout: const Duration(seconds: 30));
 }
 
-Future<void> tapSettingNavItem(WidgetTester tester, WoxSettingController settingController, String translationKey, {Duration timeout = const Duration(seconds: 30)}) async {
-  final navItemFinder = find.text(settingController.tr(translationKey)).first;
+Future<void> tapSettingNavItem(WidgetTester tester, String navPath, {Duration timeout = const Duration(seconds: 30)}) async {
+  final navItemFinder = find.byKey(ValueKey('settings-nav-$navPath'));
+  expect(navItemFinder, findsOneWidget);
   await tester.tap(navItemFinder);
   await tester.pumpAndSettle();
   await pumpUntil(tester, () => navItemFinder.evaluate().isNotEmpty, timeout: timeout);

@@ -1,5 +1,7 @@
 #include "flutter_window.h"
 
+#include <cmath>
+#include <cctype>
 #include <optional>
 #include <thread>
 #include <string>
@@ -29,6 +31,92 @@ void LogMessage(const std::string &message)
   {
     g_window_instance->Log(message);
   }
+}
+
+static std::optional<WORD> ParseWindowsVirtualKey(const std::string &key)
+{
+  if (key.size() == 1)
+  {
+    const unsigned char ch = static_cast<unsigned char>(key[0]);
+    if (std::isalpha(ch))
+    {
+      return static_cast<WORD>(std::toupper(ch));
+    }
+
+    if (std::isdigit(ch))
+    {
+      return static_cast<WORD>(ch);
+    }
+  }
+
+  if (key == "alt")
+    return static_cast<WORD>(VK_LMENU);
+  if (key == "control")
+    return static_cast<WORD>(VK_LCONTROL);
+  if (key == "shift")
+    return static_cast<WORD>(VK_LSHIFT);
+  if (key == "meta")
+    return static_cast<WORD>(VK_LWIN);
+  if (key == "escape")
+    return static_cast<WORD>(VK_ESCAPE);
+  if (key == "enter")
+    return static_cast<WORD>(VK_RETURN);
+  if (key == "tab")
+    return static_cast<WORD>(VK_TAB);
+  if (key == "space")
+    return static_cast<WORD>(VK_SPACE);
+  if (key == "arrowUp")
+    return static_cast<WORD>(VK_UP);
+  if (key == "arrowDown")
+    return static_cast<WORD>(VK_DOWN);
+  if (key == "arrowLeft")
+    return static_cast<WORD>(VK_LEFT);
+  if (key == "arrowRight")
+    return static_cast<WORD>(VK_RIGHT);
+
+  return std::nullopt;
+}
+
+static bool PostWindowsKeyMessage(HWND hwnd, WORD virtual_key, bool key_up, bool system_key)
+{
+  if (hwnd == nullptr)
+  {
+    return false;
+  }
+
+  UINT message = key_up ? (system_key ? WM_SYSKEYUP : WM_KEYUP) : (system_key ? WM_SYSKEYDOWN : WM_KEYDOWN);
+  LPARAM lparam = 1;
+  lparam |= static_cast<LPARAM>(MapVirtualKey(virtual_key, MAPVK_VK_TO_VSC)) << 16;
+  if (system_key)
+  {
+    lparam |= static_cast<LPARAM>(1) << 29;
+  }
+  if (key_up)
+  {
+    lparam |= static_cast<LPARAM>(1) << 30;
+    lparam |= static_cast<LPARAM>(1) << 31;
+  }
+
+  return PostMessage(hwnd, message, virtual_key, lparam) != 0;
+}
+
+static std::optional<DWORD> ParseWindowsMouseFlag(const std::string &button, bool button_up)
+{
+  if (button == "left")
+    return button_up ? MOUSEEVENTF_LEFTUP : MOUSEEVENTF_LEFTDOWN;
+  if (button == "right")
+    return button_up ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_RIGHTDOWN;
+  if (button == "middle")
+    return button_up ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_MIDDLEDOWN;
+  return std::nullopt;
+}
+
+static bool SendWindowsMouseButtonInput(DWORD mouse_flag)
+{
+  INPUT input = {};
+  input.type = INPUT_MOUSE;
+  input.mi.dwFlags = mouse_flag;
+  return SendInput(1, &input, sizeof(INPUT)) == 1;
 }
 
 FlutterWindow::FlutterWindow(const flutter::DartProject &project)
@@ -606,7 +694,113 @@ void FlutterWindow::HandleWindowManagerMethodCall(
 
   try
   {
-    if (method_name == "setSize")
+    if (method_name == "inputKeyDown" || method_name == "inputKeyUp")
+    {
+      const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
+      if (arguments == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Missing arguments for keyboard input");
+        return;
+      }
+
+      auto key_it = arguments->find(flutter::EncodableValue("key"));
+      if (key_it == arguments->end())
+      {
+        result->Error("INVALID_ARGUMENTS", "Missing key for keyboard input");
+        return;
+      }
+
+      const auto *key = std::get_if<std::string>(&key_it->second);
+      if (key == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Key must be a string");
+        return;
+      }
+
+      auto virtual_key = ParseWindowsVirtualKey(*key);
+      if (!virtual_key.has_value())
+      {
+        result->Error("UNSUPPORTED_KEY", "Unsupported key for Windows system input");
+        return;
+      }
+
+      const bool key_up = method_name == "inputKeyUp";
+      const bool is_alt = *virtual_key == VK_MENU || *virtual_key == VK_LMENU || *virtual_key == VK_RMENU;
+      const bool handled = PostWindowsKeyMessage(hwnd, *virtual_key, key_up, is_alt);
+      if (!handled)
+      {
+        result->Error("INPUT_ERROR", "Failed to send keyboard input");
+        return;
+      }
+
+      result->Success();
+    }
+    else if (method_name == "inputMouseMove")
+    {
+      const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
+      if (arguments == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Missing arguments for mouse move");
+        return;
+      }
+
+      auto x_it = arguments->find(flutter::EncodableValue("x"));
+      auto y_it = arguments->find(flutter::EncodableValue("y"));
+      if (x_it == arguments->end() || y_it == arguments->end())
+      {
+        result->Error("INVALID_ARGUMENTS", "Missing coordinates for mouse move");
+        return;
+      }
+
+      double x = std::get<double>(x_it->second);
+      double y = std::get<double>(y_it->second);
+      if (!SetCursorPos(static_cast<int>(std::lround(x)), static_cast<int>(std::lround(y))))
+      {
+        result->Error("INPUT_ERROR", "Failed to move mouse cursor");
+        return;
+      }
+
+      result->Success();
+    }
+    else if (method_name == "inputMouseDown" || method_name == "inputMouseUp")
+    {
+      const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
+      if (arguments == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Missing arguments for mouse button input");
+        return;
+      }
+
+      auto button_it = arguments->find(flutter::EncodableValue("button"));
+      if (button_it == arguments->end())
+      {
+        result->Error("INVALID_ARGUMENTS", "Missing mouse button");
+        return;
+      }
+
+      const auto *button = std::get_if<std::string>(&button_it->second);
+      if (button == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Mouse button must be a string");
+        return;
+      }
+
+      auto mouse_flag = ParseWindowsMouseFlag(*button, method_name == "inputMouseUp");
+      if (!mouse_flag.has_value())
+      {
+        result->Error("UNSUPPORTED_BUTTON", "Unsupported mouse button for Windows system input");
+        return;
+      }
+
+      if (!SendWindowsMouseButtonInput(*mouse_flag))
+      {
+        result->Error("INPUT_ERROR", "Failed to send mouse button input");
+        return;
+      }
+
+      result->Success();
+    }
+    else if (method_name == "setSize")
     {
       const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
       if (arguments)
