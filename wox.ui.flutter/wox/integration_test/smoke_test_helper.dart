@@ -355,11 +355,7 @@ Future<void> releaseQuickSelectModifier(WidgetTester tester) async {
 Future<WoxSettingController> openSettings(WidgetTester tester, WoxLauncherController launcherController, String path) async {
   await triggerTestOpenSetting(tester, path: path);
 
-  await pumpUntil(
-    tester,
-    () => launcherController.isInSettingView.value && find.byType(WoxSettingView).evaluate().isNotEmpty,
-    timeout: const Duration(seconds: 30),
-  );
+  await pumpUntil(tester, () => launcherController.isInSettingView.value && find.byType(WoxSettingView).evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
 
   expect(launcherController.isInSettingView.value, isTrue);
   expect(find.byType(WoxSettingView), findsOneWidget);

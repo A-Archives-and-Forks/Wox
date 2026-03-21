@@ -340,9 +340,6 @@ void FlutterWindow::DismissStartMenuIfOpen()
   Sleep(200);
 }
 
-
-
-
 // Send keyboard event to Flutter (Windows-specific workaround)
 void FlutterWindow::SendKeyboardEvent(UINT message, WPARAM wparam, LPARAM lparam)
 {
