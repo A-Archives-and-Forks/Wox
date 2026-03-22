@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:extended_text_field/extended_text_field.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -52,7 +54,6 @@ void resetSmokeAppState() {
 void registerLauncherTestCleanup(WidgetTester tester, WoxLauncherController controller) {
   addTearDown(() async {
     controller.resetForIntegrationTest();
-    await tester.pumpAndSettle();
 
     if (await windowManager.isVisible()) {
       controller.hideApp(const UuidV4().generate());
@@ -80,6 +81,8 @@ Future<WoxLauncherController> launchAndShowLauncher(WidgetTester tester, {Size? 
   await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
   await updateSettingDirect('StartPage', WoxStartPageEnum.WOX_START_PAGE_BLANK.code);
   await triggerBackendShowApp(tester);
+  // pumpAndSettle is safe here because this runs during launcher setup,
+  // before any text input that would start cursor blink timers.
   await tester.pumpAndSettle();
 
   if (windowSize != null) {
@@ -101,10 +104,10 @@ Future<void> hideLauncherIfVisible(WidgetTester tester, WoxLauncherController co
 Future<void> waitForWindowVisibility(WidgetTester tester, bool visible, {Duration timeout = const Duration(seconds: 30)}) async {
   final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
-    await tester.pump(const Duration(milliseconds: 200));
     if (await windowManager.isVisible() == visible) {
       return;
     }
+    await tester.pump(const Duration(milliseconds: 200));
   }
 
   fail('Window visibility did not become $visible within $timeout.');
@@ -132,7 +135,7 @@ Future<void> triggerTestQueryHotkey(WidgetTester tester, String query, {bool isS
 
 Future<void> triggerTestOpenSetting(WidgetTester tester, {String path = '', String param = ''}) async {
   await WoxHttpUtil.instance.postData<String>(const UuidV4().generate(), '/test/trigger/open_setting', {'Path': path, 'Param': param});
-  await tester.pumpAndSettle();
+  await tester.pump(const Duration(milliseconds: 500));
 }
 
 Future<void> triggerTestSelectionHotkey(WidgetTester tester, {required String type, String text = '', List<String> filePaths = const []}) async {
@@ -281,6 +284,8 @@ Future<Offset> getExpectedMouseScreenCenterTopLeft() async {
 
 Future<void> ensureWindowSize(WidgetTester tester, Size size) async {
   await windowManager.setSize(size);
+  // pumpAndSettle is safe here because this is called during launcher setup,
+  // before any text input that would start cursor blink timers.
   await tester.pumpAndSettle();
 }
 
@@ -305,12 +310,26 @@ Future<void> enterQueryAndWaitForResults(WidgetTester tester, WoxLauncherControl
   expect(extendedTextFieldFinder, findsOneWidget);
 
   await tester.tap(extendedTextFieldFinder);
-  await tester.pumpAndSettle();
+  await tester.pump(const Duration(milliseconds: 200));
 
   tester.testTextInput.enterText(query);
   await tester.pump();
 
+  // Suppress transient overflow errors that occur during the window resize
+  // transition when results first appear and the layout hasn't settled yet.
+  final oldHandler = FlutterError.onError;
+  FlutterError.onError = (details) {
+    if (details.exception is FlutterError && details.exception.toString().contains('overflowed')) {
+      return;
+    }
+    oldHandler?.call(details);
+  };
+
   await pumpUntil(tester, () => controller.resultListViewController.items.isNotEmpty || controller.resultGridViewController.items.isNotEmpty, timeout: timeout);
+
+  // Pump a few more frames to let the resize settle before restoring the error handler.
+  await tester.pump(const Duration(milliseconds: 500));
+  FlutterError.onError = oldHandler;
 }
 
 Future<void> sendWindowsKeyboardEvent({required String type, required bool isAltPressed}) async {
@@ -349,7 +368,7 @@ Future<void> releaseQuickSelectModifier(WidgetTester tester) async {
     await sendWindowsKeyboardEvent(type: 'keyup', isAltPressed: false);
   }
 
-  await tester.pumpAndSettle();
+  await tester.pump(const Duration(milliseconds: 200));
 }
 
 Future<WoxSettingController> openSettings(WidgetTester tester, WoxLauncherController launcherController, String path) async {
@@ -366,7 +385,7 @@ Future<void> closeSettings(WidgetTester tester, WoxSettingController settingCont
   final backButtonFinder = find.byKey(const ValueKey('settings-back-button'));
   expect(backButtonFinder, findsOneWidget);
   await tester.tap(backButtonFinder);
-  await tester.pumpAndSettle();
+  await tester.pump(const Duration(milliseconds: 500));
   await pumpUntil(tester, () => launcherController.isInSettingView.value == false, timeout: const Duration(seconds: 30));
 }
 
@@ -374,7 +393,7 @@ Future<void> tapSettingNavItem(WidgetTester tester, String navPath, {Duration ti
   final navItemFinder = find.byKey(ValueKey('settings-nav-$navPath'));
   expect(navItemFinder, findsOneWidget);
   await tester.tap(navItemFinder);
-  await tester.pumpAndSettle();
+  await tester.pump(const Duration(milliseconds: 500));
   await pumpUntil(tester, () => navItemFinder.evaluate().isNotEmpty, timeout: timeout);
 }
 

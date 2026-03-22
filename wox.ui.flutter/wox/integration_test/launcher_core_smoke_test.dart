@@ -84,7 +84,7 @@ void registerLauncherCoreSmokeTests() {
 
       await queryAndWaitForResults(tester, controller, 'wox launcher test xyz123');
       controller.focusQueryBox();
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 200));
 
       expect(controller.isQuickSelectMode.value, isFalse);
       expect(controller.activeResultViewController.items.any((item) => item.value.isShowQuickSelect), isFalse);
@@ -200,7 +200,7 @@ void registerLauncherCoreSmokeTests() {
       await queryAndWaitForResults(tester, controller, 'wox launcher test xyz123');
 
       controller.openActionPanelForActiveResult(const UuidV4().generate());
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 500));
 
       expect(controller.isShowActionPanel.value, isTrue);
     }, skip: true);
