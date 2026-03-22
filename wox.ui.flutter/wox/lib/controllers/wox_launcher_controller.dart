@@ -191,11 +191,21 @@ class WoxLauncherController extends GetxController {
   /// This clears pending timers, hides panels, and resets query state.
   Future<void> resetForIntegrationTest() async {
     stopDoctorCheckTimer();
-    hideActionPanel(const UuidV4().generate());
-    hideFormActionPanel(const UuidV4().generate(), reason: "test reset");
+
+    // Avoid focus restoration during smoke teardown. The regular hide helpers
+    // call focusQueryBox(), which can outlive the test and touch a disposed
+    // FocusManager after Get.reset() starts tearing down the app.
+    isShowActionPanel.value = false;
+    actionListViewController.clearFilter(const UuidV4().generate());
+    activeFormAction.value = null;
+    activeFormResultId.value = "";
+    formActionValues.clear();
+    isShowFormActionPanel.value = false;
+
     if (isInSettingView.value) {
       await exitSetting(const UuidV4().generate());
     }
+
     queryBoxTextFieldController.clear();
     onQueryBoxTextChanged('');
     isGridLayout.value = false;

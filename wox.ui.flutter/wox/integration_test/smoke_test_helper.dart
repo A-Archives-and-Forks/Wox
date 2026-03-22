@@ -69,6 +69,12 @@ void registerLauncherTestCleanup(WidgetTester tester, WoxLauncherController cont
     if (await windowManager.isVisible()) {
       await windowManager.hide();
     }
+
+    // Fully unmount the previous app tree before the next smoke test launches
+    // app.main() again. This ensures Windows-specific focus listeners are
+    // disposed during teardown instead of surviving until the next key event.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
   });
 }
 
@@ -305,6 +311,8 @@ Future<void> sendWindowsKeyboardEvent({required String type, required bool isAlt
 Future<void> holdQuickSelectModifier(WidgetTester tester, {Duration holdDuration = const Duration(milliseconds: 350)}) async {
   if (Platform.isWindows) {
     await sendWindowsKeyboardEvent(type: 'keydown', isAltPressed: true);
+    await tester.pump(holdDuration);
+    return;
   }
 
   await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
@@ -312,12 +320,13 @@ Future<void> holdQuickSelectModifier(WidgetTester tester, {Duration holdDuration
 }
 
 Future<void> releaseQuickSelectModifier(WidgetTester tester) async {
-  await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
-
   if (Platform.isWindows) {
     await sendWindowsKeyboardEvent(type: 'keyup', isAltPressed: false);
+    await tester.pump(const Duration(milliseconds: 200));
+    return;
   }
 
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
   await tester.pump(const Duration(milliseconds: 200));
 }
 
