@@ -112,7 +112,7 @@ Future<int> _runSmoke({String? testName}) async {
     final result = await Future.any([
       processExit.then((code) => ('exited', code)),
       completionDetected.then((passed) => ('finished', passed ? 0 : 1)),
-      Future.delayed(const Duration(minutes: 10), () => ('timeout', 1)),
+      Future.delayed(const Duration(minutes: 5), () => ('timeout', 1)),
     ]);
 
     if (result.$1 == 'exited') {
@@ -122,7 +122,7 @@ Future<int> _runSmoke({String? testName}) async {
       // Give it a short grace period to exit cleanly, then force-terminate.
       flutterExitCode = result.$2;
       if (result.$1 == 'timeout') {
-        stderr.writeln('flutter test process hit hard timeout (10 min), terminating...');
+        stderr.writeln('flutter test process hit hard timeout (5 min), terminating...');
       }
       try {
         await processExit.timeout(const Duration(seconds: 10));

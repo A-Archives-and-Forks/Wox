@@ -70,11 +70,14 @@ void registerLauncherTestCleanup(WidgetTester tester, WoxLauncherController cont
       await windowManager.hide();
     }
 
-    // Fully unmount the previous app tree before the next smoke test launches
-    // app.main() again. This ensures Windows-specific focus listeners are
-    // disposed during teardown instead of surviving until the next key event.
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
+    // On Windows, fully unmount the previous app tree so that focus listeners
+    // are disposed during teardown instead of surviving until the next key event.
+    // This is NOT needed on macOS, and calling pumpWidget during teardown on macOS can cause
+    // issues with the hidden window's vsync signals, causing pump() to block indefinitely.  Only do this on Windows
+    if (Platform.isWindows) {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    }
   });
 }
 
