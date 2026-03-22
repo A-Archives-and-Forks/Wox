@@ -32,7 +32,6 @@ void registerLauncherCoreSmokeTests() {
       await hideLauncherIfVisible(tester, controller);
 
       await updateSettingDirect('ShowPosition', WoxPositionTypeEnum.POSITION_TYPE_MOUSE_SCREEN.code);
-
       final expectedPosition = await getExpectedMouseScreenCenterTopLeft();
       await triggerBackendShowApp(tester);
 
@@ -220,13 +219,13 @@ void registerLauncherCoreSmokeTests() {
 
       expect(find.byType(WoxSettingView), findsOneWidget);
 
-      await tapSettingNavItem(tester, 'general');
+      await tapSettingNavItem(tester, settingController, 'general');
       expect(find.byType(WoxSettingView), findsOneWidget);
 
-      await tapSettingNavItem(tester, 'ui');
+      await tapSettingNavItem(tester, settingController, 'ui');
       expect(find.byType(WoxSettingView), findsOneWidget);
 
-      await tapSettingNavItem(tester, 'data');
+      await tapSettingNavItem(tester, settingController, 'data');
       expect(find.byType(WoxSettingView), findsOneWidget);
 
       await closeSettings(tester, settingController, launcherController);

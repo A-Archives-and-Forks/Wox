@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 const int defaultDevServerPort = 34987;
@@ -18,8 +19,9 @@ Future<void> main(List<String> args) async {
   switch (args.first) {
     case 'smoke':
       final testName = args.length > 1 ? args.sublist(1).join(' ').trim() : null;
-      exitCode = await _runSmoke(testName: testName?.isEmpty == true ? null : testName);
-      return;
+      // Use exit() explicitly because Future.any leaves dangling futures
+      // (10-min timeout timer, file-polling loop) that keep the event loop alive.
+      exit(await _runSmoke(testName: testName?.isEmpty == true ? null : testName));
     default:
       stderr.writeln('Unknown command: ${args.first}');
       _printHelp();
@@ -38,6 +40,7 @@ Future<int> _runSmoke({String? testName}) async {
   final packageRoot = _resolvePackageRoot();
   final repoRoot = packageRoot.parent;
   final artifactsDir = await _createArtifactsDir(packageRoot);
+  final coreBinary = File('${artifactsDir.path}${Platform.pathSeparator}wox-core-smoke${Platform.isWindows ? '.exe' : ''}');
   final woxDataDir = Directory('${artifactsDir.path}${Platform.pathSeparator}wox-data');
   final userDataDir = Directory('${artifactsDir.path}${Platform.pathSeparator}user-data');
   await woxDataDir.create(recursive: true);
@@ -63,8 +66,11 @@ Future<int> _runSmoke({String? testName}) async {
 
   Process? coreProcess;
   try {
-    coreProcess = await _startCommand('go', ['run', '.'], workingDirectory: '${repoRoot.path}${Platform.pathSeparator}wox.core', environment: environment);
-    await _pipeProcessOutput(coreProcess, coreLog, '[core]');
+    stdout.writeln('Building core smoke binary...');
+    await _buildCoreBinary(workingDirectory: '${repoRoot.path}${Platform.pathSeparator}wox.core', outputPath: coreBinary.path, environment: environment);
+
+    coreProcess = await _startCommand(coreBinary.path, [], workingDirectory: '${repoRoot.path}${Platform.pathSeparator}wox.core', environment: environment);
+    _pipeProcessOutput(coreProcess, coreLog, '[core]');
 
     final ready = await _waitForPingReady(serverPort: serverPort, timeout: coreStartupTimeout);
     if (!ready) {
@@ -91,12 +97,65 @@ Future<int> _runSmoke({String? testName}) async {
       workingDirectory: '${repoRoot.path}${Platform.pathSeparator}wox.ui.flutter${Platform.pathSeparator}wox',
       environment: environment,
     );
-    await _pipeProcessOutput(flutterProcess, testLog, '[flutter-test]');
-    return await flutterProcess.exitCode;
+    const completionMarkers = ['All tests passed!', 'Some tests failed.'];
+    final testsFinished = _pipeProcessOutput(flutterProcess, testLog, '[flutter-test]', completionMarkers: completionMarkers);
+    final completionDetected = Future.any<bool>([testsFinished.future, _waitForCompletionMarkerInFile(testLog, completionMarkers)]);
+
+    // On macOS the integration test app may not exit on its own after all
+    // tests finish.  Wait for the completion marker, then give the process a
+    // short grace period before terminating it.
+    int flutterExitCode;
+
+    // First, wait for the process to exit naturally OR for tests to finish.
+    // Also add a hard timeout so CI never hangs indefinitely.
+    final processExit = flutterProcess.exitCode;
+    final result = await Future.any([
+      processExit.then((code) => ('exited', code)),
+      completionDetected.then((passed) => ('finished', passed ? 0 : 1)),
+      Future.delayed(const Duration(minutes: 10), () => ('timeout', 1)),
+    ]);
+
+    if (result.$1 == 'exited') {
+      flutterExitCode = result.$2;
+    } else {
+      // Tests finished (or hard timeout reached) but process is still running.
+      // Give it a short grace period to exit cleanly, then force-terminate.
+      flutterExitCode = result.$2;
+      if (result.$1 == 'timeout') {
+        stderr.writeln('flutter test process hit hard timeout (10 min), terminating...');
+      }
+      try {
+        await processExit.timeout(const Duration(seconds: 10));
+      } on TimeoutException {
+        stdout.writeln('flutter test process did not exit after tests completed, terminating...');
+        await _terminateProcess(flutterProcess);
+      }
+    }
+    return flutterExitCode;
   } finally {
     if (coreProcess != null) {
       await _terminateProcess(coreProcess);
     }
+  }
+}
+
+Future<void> _buildCoreBinary({required String workingDirectory, required String outputPath, required Map<String, String> environment}) async {
+  final buildArgs = ['build', '-o', outputPath, '.'];
+  final buildProcess = await _startCommand('go', buildArgs, workingDirectory: workingDirectory, environment: environment);
+
+  final stdoutBuffer = StringBuffer();
+  final stderrBuffer = StringBuffer();
+  buildProcess.stdout.transform(utf8.decoder).listen(stdoutBuffer.write);
+  buildProcess.stderr.transform(utf8.decoder).listen(stderrBuffer.write);
+
+  final exitCode = await buildProcess.exitCode;
+  if (exitCode != 0) {
+    final message = [
+      'Failed to build smoke core binary (exit $exitCode).',
+      if (stdoutBuffer.isNotEmpty) stdoutBuffer.toString().trimRight(),
+      if (stderrBuffer.isNotEmpty) stderrBuffer.toString().trimRight(),
+    ].where((part) => part.isNotEmpty).join('\n');
+    throw ProcessException('go', buildArgs, message, exitCode);
   }
 }
 
@@ -169,12 +228,36 @@ Future<int> _reserveServerPort() async {
   }
 }
 
-Future<void> _pipeProcessOutput(Process process, File outputFile, String prefix) async {
+/// Pipes process stdout/stderr to [outputFile] and the console.
+///
+/// When [completionMarkers] is provided, the returned [Completer] completes
+/// as soon as any marker string appears in stdout or stderr.  If
+/// [completionMarkers] is null the completer never completes on its own.
+Completer<bool> _pipeProcessOutput(Process process, File outputFile, String prefix, {List<String>? completionMarkers}) {
+  final testsFinished = Completer<bool>();
   final sink = outputFile.openWrite(mode: FileMode.writeOnlyAppend);
+  // Buffer recent output to detect markers that span chunk boundaries.
+  final _recentOutput = StringBuffer();
+
+  void _checkMarkers(String text) {
+    if (completionMarkers == null || testsFinished.isCompleted) return;
+    _recentOutput.write(text);
+    // Keep only the last 4 KB to bound memory usage.
+    if (_recentOutput.length > 4096) {
+      final s = _recentOutput.toString();
+      _recentOutput.clear();
+      _recentOutput.write(s.substring(s.length - 2048));
+    }
+    final buffer = _recentOutput.toString();
+    if (completionMarkers.any((m) => buffer.contains(m))) {
+      testsFinished.complete(buffer.contains('All tests passed!'));
+    }
+  }
 
   void forward(List<int> data, IOSink target) {
     sink.add(data);
     target.add(data);
+    _checkMarkers(utf8.decode(data, allowMalformed: true));
   }
 
   process.stdout.listen((data) => forward(data, stdout));
@@ -187,6 +270,37 @@ Future<void> _pipeProcessOutput(Process process, File outputFile, String prefix)
     }),
   );
   stdout.writeln('$prefix output -> ${outputFile.path}');
+  return testsFinished;
+}
+
+Future<bool> _waitForCompletionMarkerInFile(File outputFile, List<String> completionMarkers) async {
+  var previousLength = -1;
+
+  while (true) {
+    try {
+      if (await outputFile.exists()) {
+        final text = await outputFile.readAsString();
+        if (text.length != previousLength) {
+          previousLength = text.length;
+          if (text.contains('All tests passed!')) {
+            return true;
+          }
+          if (text.contains('Some tests failed.')) {
+            return false;
+          }
+          for (final marker in completionMarkers) {
+            if (text.contains(marker)) {
+              return marker == 'All tests passed!';
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Ignore transient file-read failures while the log file is still being written.
+    }
+
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+  }
 }
 
 Future<bool> _waitForPingReady({required int serverPort, required Duration timeout}) async {

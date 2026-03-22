@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
@@ -22,8 +21,10 @@ import 'package:wox/main.dart' as app;
 import 'package:wox/modules/launcher/views/wox_launcher_view.dart';
 import 'package:wox/modules/setting/views/wox_setting_view.dart';
 import 'package:wox/utils/wox_http_util.dart';
+import 'package:wox/utils/heartbeat_checker.dart';
 import 'package:wox/utils/wox_setting_util.dart';
 import 'package:wox/utils/wox_theme_util.dart';
+import 'package:wox/utils/wox_websocket_msg_util.dart';
 import 'package:wox/utils/test/wox_test_config.dart';
 import 'package:wox/utils/windows/system_input.dart';
 import 'package:wox/utils/windows/system_input_interface.dart';
@@ -43,21 +44,28 @@ class ScreenWorkArea {
   final int height;
 
   factory ScreenWorkArea.fromJson(Map<String, dynamic> json) {
-    return ScreenWorkArea(x: json['x'] as int, y: json['y'] as int, width: json['width'] as int, height: json['height'] as int);
+    return ScreenWorkArea(
+      x: (json['x'] ?? json['X']) as int,
+      y: (json['y'] ?? json['Y']) as int,
+      width: (json['width'] ?? json['Width']) as int,
+      height: (json['height'] ?? json['Height']) as int,
+    );
   }
 }
 
-void resetSmokeAppState() {
+Future<void> resetSmokeAppState() async {
+  HeartbeatChecker().init();
+  await WoxWebsocketMsgUtil.instance.init();
   Get.reset();
 }
 
 void registerLauncherTestCleanup(WidgetTester tester, WoxLauncherController controller) {
   addTearDown(() async {
-    controller.resetForIntegrationTest();
+    await controller.resetForIntegrationTest();
 
-    // Directly hide the window instead of using controller.hideApp(), which
-    // involves async API calls (onSetting, onHide) that may hang during
-    // tearDown. The next test calls Get.reset() so full cleanup isn't needed.
+    // Hide the window so the backend resets its visibility state.  Use
+    // windowManager.hide() directly — controller.hideApp() involves async API
+    // calls that may hang during tearDown.
     if (await windowManager.isVisible()) {
       await windowManager.hide();
     }
@@ -65,7 +73,14 @@ void registerLauncherTestCleanup(WidgetTester tester, WoxLauncherController cont
 }
 
 Future<WoxLauncherController> launchLauncherApp(WidgetTester tester) async {
-  resetSmokeAppState();
+  // Ensure the window is visible before any pump() call.  On macOS, a hidden
+  // window stops delivering vsync signals, which causes pump() to block.
+  // The previous test's tearDown hides the window for backend state cleanup.
+  if (!await windowManager.isVisible()) {
+    await windowManager.show();
+  }
+
+  await resetSmokeAppState();
   app.main([WoxTestConfig.serverPort.toString(), '-1', 'true']);
 
   final launcherFinder = find.byType(WoxLauncherView);
@@ -83,9 +98,10 @@ Future<WoxLauncherController> launchAndShowLauncher(WidgetTester tester, {Size? 
   await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
   await updateSettingDirect('StartPage', WoxStartPageEnum.WOX_START_PAGE_BLANK.code);
   await triggerBackendShowApp(tester);
-  // pumpAndSettle is safe here because this runs during launcher setup,
-  // before any text input that would start cursor blink timers.
-  await tester.pumpAndSettle();
+  // Use a bounded pump instead of pumpAndSettle because showApp() calls
+  // focusQueryBox() which starts the cursor blink timer. The periodic blink
+  // keeps scheduling frames, preventing pumpAndSettle from ever settling.
+  await tester.pump(const Duration(milliseconds: 500));
 
   if (windowSize != null) {
     await ensureWindowSize(tester, windowSize);
@@ -190,122 +206,19 @@ Future<Offset> waitForWindowPosition(
   fail('Window position did not reach expected $expected within $timeout. Actual: $actual');
 }
 
+Offset getCenteredTopLeftForWindowSize(ScreenWorkArea screen, Size windowSize) {
+  final expectedX = screen.x + ((screen.width - windowSize.width) / 2).round();
+  final expectedY = screen.y + ((screen.height - windowSize.height) / 2).round();
+  return Offset(expectedX.toDouble(), expectedY.toDouble());
+}
+
 bool isOffsetClose(Offset actual, Offset expected, {double tolerance = smokeWindowPositionTolerance}) {
   return (actual.dx - expected.dx).abs() <= tolerance && (actual.dy - expected.dy).abs() <= tolerance;
 }
 
 Future<ScreenWorkArea> getMouseScreenWorkArea() async {
-  if (Platform.isMacOS) {
-    const script = '''
-ObjC.import("Cocoa");
-var mouseLoc = \$.NSEvent.mouseLocation;
-var screens = \$.NSScreen.screens;
-var result = "{}";
-for (var i = 0; i < screens.count; i++) {
-    var screen = screens.objectAtIndex(i);
-    var frame = screen.frame;
-    var mx = mouseLoc.x;
-    var my = mouseLoc.y;
-    if (mx >= frame.origin.x && mx <= frame.origin.x + frame.size.width &&
-        my >= frame.origin.y && my <= frame.origin.y + frame.size.height) {
-        var vf = screen.visibleFrame;
-        result = JSON.stringify({
-            x: Math.round(vf.origin.x),
-            y: Math.round(frame.size.height - vf.size.height),
-            width: Math.round(vf.size.width),
-            height: Math.round(vf.size.height)
-        });
-        break;
-    }
-}
-result;
-''';
-
-    final result = await Process.run('osascript', ['-l', 'JavaScript', '-e', script]);
-    if (result.exitCode != 0) {
-      throw StateError('Failed to query mouse screen work area on macOS: ${result.stderr}');
-    }
-    return ScreenWorkArea.fromJson(jsonDecode((result.stdout as String).trim()) as Map<String, dynamic>);
-  }
-
-  if (Platform.isWindows) {
-    const script = r'''
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-
-public static class NativeMethods {
-    [StructLayout(LayoutKind.Sequential)]
-    public struct POINT {
-        public int X;
-        public int Y;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct RECT {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-    public struct MONITORINFO {
-        public int cbSize;
-        public RECT rcMonitor;
-        public RECT rcWork;
-        public uint dwFlags;
-    }
-
-    [DllImport("user32.dll")]
-    public static extern bool GetCursorPos(out POINT lpPoint);
-
-    [DllImport("user32.dll")]
-    public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
-
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
-
-    [DllImport("Shcore.dll")]
-    public static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
-}
-"@
-
-$cursor = New-Object NativeMethods+POINT
-[NativeMethods]::GetCursorPos([ref]$cursor) | Out-Null
-
-$monitor = [NativeMethods]::MonitorFromPoint($cursor, 2)
-$monitorInfo = New-Object NativeMethods+MONITORINFO
-$monitorInfo.cbSize = [Runtime.InteropServices.Marshal]::SizeOf([type][NativeMethods+MONITORINFO])
-[NativeMethods]::GetMonitorInfo($monitor, [ref]$monitorInfo) | Out-Null
-
-$dpiX = [uint32]96
-$dpiY = [uint32]96
-try {
-    [NativeMethods]::GetDpiForMonitor($monitor, 0, [ref]$dpiX, [ref]$dpiY) | Out-Null
-} catch {
-    $dpiX = [uint32]96
-    $dpiY = [uint32]96
-}
-
-$scale = $dpiX / 96.0
-[pscustomobject]@{
-    x = [int]($monitorInfo.rcWork.Left / $scale)
-    y = [int]($monitorInfo.rcWork.Top / $scale)
-    width = [int](($monitorInfo.rcWork.Right - $monitorInfo.rcWork.Left) / $scale)
-    height = [int](($monitorInfo.rcWork.Bottom - $monitorInfo.rcWork.Top) / $scale)
-} | ConvertTo-Json -Compress
-''';
-
-    final result = await Process.run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script]);
-    if (result.exitCode != 0) {
-      throw StateError('Failed to query mouse screen work area: ${result.stderr}');
-    }
-
-    return ScreenWorkArea.fromJson(jsonDecode((result.stdout as String).trim()) as Map<String, dynamic>);
-  }
-
-  throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
+  final response = await WoxHttpUtil.instance.getData<Map<String, dynamic>>(const UuidV4().generate(), '/test/screen/mouse');
+  return ScreenWorkArea.fromJson(response);
 }
 
 Future<Offset> getExpectedMouseScreenCenterTopLeft() async {
@@ -332,17 +245,12 @@ Future<void> ensureWindowSize(WidgetTester tester, Size size) async {
 }
 
 Future<void> hideLauncherByEscape(WidgetTester tester, WoxLauncherController controller, {Duration timeout = const Duration(seconds: 30)}) async {
-  await systemInput.keyPress(SystemInputKeys.escape);
-
-  final escapeDeliveryDeadline = DateTime.now().add(const Duration(seconds: 2));
-  while (DateTime.now().isBefore(escapeDeliveryDeadline)) {
-    await tester.pump(const Duration(milliseconds: 100));
-    if (!await windowManager.isVisible()) {
-      return;
-    }
-  }
-
-  // Windows desktop smoke does not deliver Escape reliably through tester key injection.
+  // Do NOT use systemInput.keyPress(escape) here.  Native OS-level key events
+  // travel through the macOS event pipeline asynchronously — the KeyUpEvent
+  // for Escape can arrive after Get.reset() clears Flutter's HardwareKeyboard
+  // state in the next test, triggering a "physical key is not pressed"
+  // assertion failure.  Calling hideApp directly is reliable and avoids the
+  // async keyboard state mismatch.
   await controller.hideApp(const UuidV4().generate());
   await waitForWindowVisibility(tester, false, timeout: timeout);
 }
@@ -426,17 +334,35 @@ Future<WoxSettingController> openSettings(WidgetTester tester, WoxLauncherContro
 Future<void> closeSettings(WidgetTester tester, WoxSettingController settingController, WoxLauncherController launcherController) async {
   final backButtonFinder = find.byKey(const ValueKey('settings-back-button'));
   expect(backButtonFinder, findsOneWidget);
-  await tester.tap(backButtonFinder);
+  // Avoid tester.ensureVisible which calls pumpAndSettle (10-min timeout).
+  // If the cursor blink timer is still active, pumpAndSettle never settles.
+  // The back button is always visible at the bottom of the fixed sidebar.
+  await tester.pump();
+  await tester.tap(backButtonFinder, warnIfMissed: false);
   await tester.pump(const Duration(milliseconds: 500));
+
+  final fallbackDeadline = DateTime.now().add(const Duration(seconds: 2));
+  while (DateTime.now().isBefore(fallbackDeadline)) {
+    await tester.pump(const Duration(milliseconds: 200));
+    if (!launcherController.isInSettingView.value) {
+      return;
+    }
+  }
+
+  settingController.hideWindow(const UuidV4().generate());
   await pumpUntil(tester, () => launcherController.isInSettingView.value == false, timeout: const Duration(seconds: 30));
 }
 
-Future<void> tapSettingNavItem(WidgetTester tester, String navPath, {Duration timeout = const Duration(seconds: 30)}) async {
+Future<void> tapSettingNavItem(WidgetTester tester, WoxSettingController settingController, String navPath, {Duration timeout = const Duration(seconds: 30)}) async {
   final navItemFinder = find.byKey(ValueKey('settings-nav-$navPath'));
   expect(navItemFinder, findsOneWidget);
-  await tester.tap(navItemFinder);
+  // Avoid tester.ensureVisible which calls pumpAndSettle (10-min timeout).
+  // If the cursor blink timer is still active from the query box, pumpAndSettle
+  // will never settle. Nav items are always visible in the fixed sidebar.
+  await tester.pump();
+  await tester.tap(navItemFinder, warnIfMissed: false);
   await tester.pump(const Duration(milliseconds: 500));
-  await pumpUntil(tester, () => navItemFinder.evaluate().isNotEmpty, timeout: timeout);
+  await pumpUntil(tester, () => settingController.activeNavPath.value == navPath, timeout: timeout);
 }
 
 Future<void> queryAndWaitForResults(WidgetTester tester, WoxLauncherController controller, String query, {Duration timeout = const Duration(seconds: 30)}) async {

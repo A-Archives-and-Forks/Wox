@@ -189,12 +189,12 @@ class WoxLauncherController extends GetxController {
 
   /// Reset controller state for integration testing without full disposal.
   /// This clears pending timers, hides panels, and resets query state.
-  void resetForIntegrationTest() {
+  Future<void> resetForIntegrationTest() async {
     stopDoctorCheckTimer();
     hideActionPanel(const UuidV4().generate());
     hideFormActionPanel(const UuidV4().generate(), reason: "test reset");
     if (isInSettingView.value) {
-      exitSetting(const UuidV4().generate());
+      await exitSetting(const UuidV4().generate());
     }
     queryBoxTextFieldController.clear();
     onQueryBoxTextChanged('');
@@ -2054,7 +2054,6 @@ class WoxLauncherController extends GetxController {
       });
     }
 
-    await windowManager.setAlwaysOnTop(false);
     await windowManager.setSize(const Size(1200, 800));
     if (Platform.isLinux) {
       // On Linux we need to show first before positioning works reliably
@@ -2065,6 +2064,7 @@ class WoxLauncherController extends GetxController {
       await windowManager.show();
     }
     await windowManager.focus();
+    await windowManager.setAlwaysOnTop(false);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await Future.delayed(const Duration(milliseconds: 50));

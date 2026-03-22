@@ -54,6 +54,8 @@ Future<void> initialServices(List<String> arguments) async {
 
   WidgetsFlutterBinding.ensureInitialized();
   await Logger.instance.initLogger();
+  HeartbeatChecker().init();
+  await WoxWebsocketMsgUtil.instance.init();
   await initArgs(arguments);
   await WoxThemeUtil.instance.loadTheme(traceId);
   await WoxSettingUtil.instance.loadSetting(traceId);

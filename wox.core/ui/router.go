@@ -28,6 +28,7 @@ import (
 	"wox/util"
 	"wox/util/font"
 	"wox/util/hotkey"
+	"wox/util/screen"
 	utilselection "wox/util/selection"
 	"wox/util/shell"
 	"wox/util/tray"
@@ -114,6 +115,7 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	"/test/trigger/open_setting":     handleTestTriggerOpenSetting,
 	"/test/trigger/query_hotkey":     handleTestTriggerQueryHotkey,
 	"/test/trigger/selection_hotkey": handleTestTriggerSelectionHotkey,
+	"/test/screen/mouse":             handleTestMouseScreen,
 	"/test/trigger/tray_query":       handleTestTriggerTrayQuery,
 
 	// toolbar snooze/mute
@@ -1186,6 +1188,14 @@ func handleTestTriggerSelectionHotkey(w http.ResponseWriter, r *http.Request) {
 	uiManager.GetUI(ctx).ShowApp(ctx, common.ShowContext{SelectAll: false, ShowSource: common.ShowSourceSelection})
 
 	writeSuccessResponse(w, "")
+}
+
+func handleTestMouseScreen(w http.ResponseWriter, r *http.Request) {
+	if !ensureTestTriggerEnabled(w) {
+		return
+	}
+
+	writeSuccessResponse(w, screen.GetMouseScreen())
 }
 
 func handleTestTriggerTrayQuery(w http.ResponseWriter, r *http.Request) {

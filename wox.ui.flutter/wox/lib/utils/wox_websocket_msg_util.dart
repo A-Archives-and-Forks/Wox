@@ -18,6 +18,8 @@ class WoxWebsocketMsgUtil {
   static const String _coreSessionPrefix = "core-";
 
   WebSocketChannel? _channel;
+  StreamSubscription? _subscription;
+  Timer? _reconnectTimer;
 
   late Uri uri;
 
@@ -26,17 +28,25 @@ class WoxWebsocketMsgUtil {
   int connectionAttempts = 1;
 
   bool isConnecting = false;
+  bool _isDisposed = false;
 
   final Map<String, Completer> _completers = {};
 
   void _connect() {
+    _reconnectTimer?.cancel();
+    _subscription?.cancel();
     _channel?.sink.close();
     _channel = null;
 
+    if (_isDisposed) {
+      return;
+    }
+
     _channel = WebSocketChannel.connect(uri);
-    _channel!.stream.listen(
+    _subscription = _channel!.stream.listen(
       (event) {
         isConnecting = false;
+        connectionAttempts = 1;
         var msg = WoxWebsocketMsg.fromJson(jsonDecode(event));
         if (msg.sessionId.isNotEmpty && msg.sessionId != Env.sessionId && !msg.sessionId.startsWith(_coreSessionPrefix)) {
           return;
@@ -55,13 +65,24 @@ class WoxWebsocketMsgUtil {
         onMessageReceived(msg);
       },
       onDone: () {
-        _reconnect();
+        if (!_isDisposed) {
+          _reconnect();
+        }
+      },
+      onError: (_) {
+        if (!_isDisposed) {
+          _reconnect();
+        }
       },
     );
   }
 
   void _reconnect() {
-    Future.delayed(Duration(milliseconds: 200 * (connectionAttempts > 5 ? 5 : connectionAttempts)), () {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(Duration(milliseconds: 200 * (connectionAttempts > 5 ? 5 : connectionAttempts)), () {
+      if (_isDisposed) {
+        return;
+      }
       Logger.instance.info(const UuidV4().generate(), "Attempting to reconnect to WebSocket... $connectionAttempts");
       isConnecting = true;
       connectionAttempts++;
@@ -71,9 +92,28 @@ class WoxWebsocketMsgUtil {
 
   // before calling other methods, make sure to call initialize() first
   Future<void> initialize(Uri uri, {required Function onMessageReceived}) async {
+    await init();
+    _isDisposed = false;
     this.uri = uri;
     this.onMessageReceived = onMessageReceived;
     _connect();
+  }
+
+  Future<void> init() async {
+    _isDisposed = true;
+    isConnecting = false;
+    connectionAttempts = 1;
+
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+
+    await _subscription?.cancel();
+    _subscription = null;
+
+    await _channel?.sink.close();
+    _channel = null;
+
+    _completers.clear();
   }
 
   bool isConnected() {
