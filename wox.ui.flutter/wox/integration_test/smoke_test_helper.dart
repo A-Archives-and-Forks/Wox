@@ -55,9 +55,11 @@ void registerLauncherTestCleanup(WidgetTester tester, WoxLauncherController cont
   addTearDown(() async {
     controller.resetForIntegrationTest();
 
+    // Directly hide the window instead of using controller.hideApp(), which
+    // involves async API calls (onSetting, onHide) that may hang during
+    // tearDown. The next test calls Get.reset() so full cleanup isn't needed.
     if (await windowManager.isVisible()) {
-      controller.hideApp(const UuidV4().generate());
-      await waitForWindowVisibility(tester, false);
+      await windowManager.hide();
     }
   });
 }
@@ -107,7 +109,14 @@ Future<void> waitForWindowVisibility(WidgetTester tester, bool visible, {Duratio
     if (await windowManager.isVisible() == visible) {
       return;
     }
-    await tester.pump(const Duration(milliseconds: 200));
+    // When waiting for the window to become hidden, use Future.delayed instead
+    // of tester.pump() because macOS stops delivering vsync signals for hidden
+    // windows, causing pump() to block indefinitely.
+    if (!visible) {
+      await Future.delayed(const Duration(milliseconds: 200));
+    } else {
+      await tester.pump(const Duration(milliseconds: 200));
+    }
   }
 
   fail('Window visibility did not become $visible within $timeout.');
@@ -186,11 +195,41 @@ bool isOffsetClose(Offset actual, Offset expected, {double tolerance = smokeWind
 }
 
 Future<ScreenWorkArea> getMouseScreenWorkArea() async {
-  if (!Platform.isWindows) {
-    throw UnsupportedError('Mouse screen work area helper is only implemented for Windows smoke tests.');
+  if (Platform.isMacOS) {
+    const script = '''
+ObjC.import("Cocoa");
+var mouseLoc = \$.NSEvent.mouseLocation;
+var screens = \$.NSScreen.screens;
+var result = "{}";
+for (var i = 0; i < screens.count; i++) {
+    var screen = screens.objectAtIndex(i);
+    var frame = screen.frame;
+    var mx = mouseLoc.x;
+    var my = mouseLoc.y;
+    if (mx >= frame.origin.x && mx <= frame.origin.x + frame.size.width &&
+        my >= frame.origin.y && my <= frame.origin.y + frame.size.height) {
+        var vf = screen.visibleFrame;
+        result = JSON.stringify({
+            x: Math.round(vf.origin.x),
+            y: Math.round(frame.size.height - vf.size.height),
+            width: Math.round(vf.size.width),
+            height: Math.round(vf.size.height)
+        });
+        break;
+    }
+}
+result;
+''';
+
+    final result = await Process.run('osascript', ['-l', 'JavaScript', '-e', script]);
+    if (result.exitCode != 0) {
+      throw StateError('Failed to query mouse screen work area on macOS: ${result.stderr}');
+    }
+    return ScreenWorkArea.fromJson(jsonDecode((result.stdout as String).trim()) as Map<String, dynamic>);
   }
 
-  const script = r'''
+  if (Platform.isWindows) {
+    const script = r'''
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -258,12 +297,15 @@ $scale = $dpiX / 96.0
 } | ConvertTo-Json -Compress
 ''';
 
-  final result = await Process.run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script]);
-  if (result.exitCode != 0) {
-    throw StateError('Failed to query mouse screen work area: ${result.stderr}');
+    final result = await Process.run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script]);
+    if (result.exitCode != 0) {
+      throw StateError('Failed to query mouse screen work area: ${result.stderr}');
+    }
+
+    return ScreenWorkArea.fromJson(jsonDecode((result.stdout as String).trim()) as Map<String, dynamic>);
   }
 
-  return ScreenWorkArea.fromJson(jsonDecode((result.stdout as String).trim()) as Map<String, dynamic>);
+  throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
 }
 
 Future<Offset> getExpectedMouseScreenCenterTopLeft() async {

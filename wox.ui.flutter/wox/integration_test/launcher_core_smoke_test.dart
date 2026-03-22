@@ -24,7 +24,7 @@ void registerLauncherCoreSmokeTests() {
     });
 
     testWidgets('P0-SMK-02: ShowPosition mouse_screen centers the launcher on the current screen', (tester) async {
-      if (!Platform.isWindows) {
+      if (!Platform.isWindows && !Platform.isMacOS) {
         return;
       }
 
