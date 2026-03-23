@@ -9,5 +9,4 @@ This section records engineering notes, tradeoffs, and implementation stories fr
 
 ## Posts
 
-- [Smoke Tests as the Last Gatekeeper](./smoke-tests-as-the-last-gatekeeper.md) - 2026-03-20
-
+- [Smoke Tests Before Release](./smoke-tests-as-the-last-gatekeeper.md) - 2026-03-20

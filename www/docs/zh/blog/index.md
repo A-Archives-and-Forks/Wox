@@ -9,5 +9,4 @@ description: 记录 Wox 开发过程中的知识点、取舍与实现过程。
 
 ## 文章
 
-- [自动化 Smoke Test：AI 时代最后的 Gate Keeper](./automated-smoke-test-gate-keeper.md) - 2026-03-20
-
+- [发布前的 Smoke Test](./automated-smoke-test-gate-keeper.md) - 2026-03-20
