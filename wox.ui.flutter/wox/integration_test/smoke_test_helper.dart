@@ -30,6 +30,13 @@ const int _windowsAltVirtualKey = 18;
 const int _windowsAltScanCode = 56;
 const Size _smokeBootstrapWindowSize = Size(800, 600);
 
+class SmokeLaunchResult {
+  const SmokeLaunchResult({required this.controller, required this.elapsed});
+
+  final WoxLauncherController controller;
+  final Duration elapsed;
+}
+
 class ScreenWorkArea {
   const ScreenWorkArea({required this.x, required this.y, required this.width, required this.height});
 
@@ -96,6 +103,33 @@ Future<WoxLauncherController> launchLauncherApp(WidgetTester tester) async {
   final controller = Get.find<WoxLauncherController>();
   registerLauncherTestCleanup(tester, controller);
   return controller;
+}
+
+Future<SmokeLaunchResult> launchLauncherAppAndMeasureStartup(WidgetTester tester, {Duration timeout = const Duration(seconds: 5)}) async {
+  if (!await windowManager.isVisible()) {
+    await windowManager.show();
+  }
+
+  await resetSmokeAppState();
+
+  final stopwatch = Stopwatch()..start();
+  app.main([WoxTestConfig.serverPort.toString(), '-1', 'true']);
+
+  final launcherFinder = find.byType(WoxLauncherView);
+  await pumpUntil(tester, () => launcherFinder.evaluate().isNotEmpty, timeout: timeout);
+
+  final remaining = timeout - stopwatch.elapsed;
+  if (remaining.isNegative) {
+    fail('Launcher widget appeared after ${stopwatch.elapsed}, exceeding timeout $timeout.');
+  }
+
+  await waitForWindowVisibility(tester, true, timeout: remaining);
+  stopwatch.stop();
+
+  expect(launcherFinder, findsOneWidget);
+  final controller = Get.find<WoxLauncherController>();
+  registerLauncherTestCleanup(tester, controller);
+  return SmokeLaunchResult(controller: controller, elapsed: stopwatch.elapsed);
 }
 
 Future<WoxLauncherController> launchAndShowLauncher(WidgetTester tester, {Size? windowSize}) async {
