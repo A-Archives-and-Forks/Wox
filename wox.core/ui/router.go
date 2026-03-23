@@ -112,6 +112,7 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	"/version":          handleVersion,
 
 	// test-only triggers
+	"/test/plugin/install_local":     handleTestInstallLocalPlugin,
 	"/test/trigger/open_setting":     handleTestTriggerOpenSetting,
 	"/test/trigger/query_hotkey":     handleTestTriggerQueryHotkey,
 	"/test/trigger/selection_hotkey": handleTestTriggerSelectionHotkey,
@@ -1113,6 +1114,40 @@ func handleTestTriggerQueryHotkey(w http.ResponseWriter, r *http.Request) {
 		IsSilentExecution: req.IsSilentExecution,
 	})
 	if err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+
+	writeSuccessResponse(w, "")
+}
+
+func handleTestInstallLocalPlugin(w http.ResponseWriter, r *http.Request) {
+	if !ensureTestTriggerEnabled(w) {
+		return
+	}
+
+	type request struct {
+		FilePath string
+	}
+
+	var req request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+
+	filePath := filepath.Clean(strings.TrimSpace(req.FilePath))
+	if filePath == "" {
+		writeErrorResponse(w, "filePath is empty")
+		return
+	}
+	if _, err := os.Stat(filePath); err != nil {
+		writeErrorResponse(w, fmt.Sprintf("plugin package does not exist: %s", filePath))
+		return
+	}
+
+	ctx := getTraceContext(r)
+	if err := plugin.GetStoreManager().InstallFromLocal(ctx, filePath); err != nil {
 		writeErrorResponse(w, err.Error())
 		return
 	}

@@ -8,6 +8,71 @@ const String testWoxDataDirEnv = 'WOX_TEST_DATA_DIR';
 const String testUserDataDirEnv = 'WOX_TEST_USER_DIR';
 const String testServerPortEnv = 'WOX_TEST_SERVER_PORT';
 const String testDisableTelemetryEnv = 'WOX_TEST_DISABLE_TELEMETRY';
+const String testNodeTemplatePluginIdEnv = 'WOX_TEST_NODE_TEMPLATE_PLUGIN_ID';
+const String testNodeTemplatePluginNameEnv = 'WOX_TEST_NODE_TEMPLATE_PLUGIN_NAME';
+const String testNodeTemplatePluginTriggerKeywordEnv = 'WOX_TEST_NODE_TEMPLATE_PLUGIN_TRIGGER_KEYWORD';
+const String testPythonTemplatePluginIdEnv = 'WOX_TEST_PYTHON_TEMPLATE_PLUGIN_ID';
+const String testPythonTemplatePluginNameEnv = 'WOX_TEST_PYTHON_TEMPLATE_PLUGIN_NAME';
+const String testPythonTemplatePluginTriggerKeywordEnv = 'WOX_TEST_PYTHON_TEMPLATE_PLUGIN_TRIGGER_KEYWORD';
+
+const String _templatePluginAuthor = 'Wox Smoke';
+const String _templatePluginWebsite = 'https://github.com/Wox-launcher/Wox';
+
+class _SmokeTemplatePluginDefinition {
+  const _SmokeTemplatePluginDefinition({
+    required this.runtime,
+    required this.repoUrl,
+    required this.name,
+    required this.description,
+    required this.triggerKeyword,
+    required this.idEnvKey,
+    required this.nameEnvKey,
+    required this.triggerKeywordEnvKey,
+  });
+
+  final String runtime;
+  final String repoUrl;
+  final String name;
+  final String description;
+  final String triggerKeyword;
+  final String idEnvKey;
+  final String nameEnvKey;
+  final String triggerKeywordEnvKey;
+}
+
+const List<_SmokeTemplatePluginDefinition> _templatePluginDefinitions = [
+  _SmokeTemplatePluginDefinition(
+    runtime: 'nodejs',
+    repoUrl: 'https://github.com/Wox-launcher/Wox.Plugin.Template.Nodejs',
+    name: 'SmokeTemplateNodejs',
+    description: 'Nodejs smoke template plugin',
+    triggerKeyword: 'zzwoxsmoke',
+    idEnvKey: testNodeTemplatePluginIdEnv,
+    nameEnvKey: testNodeTemplatePluginNameEnv,
+    triggerKeywordEnvKey: testNodeTemplatePluginTriggerKeywordEnv,
+  ),
+  _SmokeTemplatePluginDefinition(
+    runtime: 'python',
+    repoUrl: 'https://github.com/Wox-launcher/Wox.Plugin.Template.Python',
+    name: 'SmokeTemplatePython',
+    description: 'Python smoke template plugin',
+    triggerKeyword: 'pywoxsmoke',
+    idEnvKey: testPythonTemplatePluginIdEnv,
+    nameEnvKey: testPythonTemplatePluginNameEnv,
+    triggerKeywordEnvKey: testPythonTemplatePluginTriggerKeywordEnv,
+  ),
+];
+
+class _SmokeTemplatePluginPackage {
+  const _SmokeTemplatePluginPackage({required this.definition, required this.packagePath, required this.id, required this.name, required this.triggerKeyword});
+
+  final _SmokeTemplatePluginDefinition definition;
+
+  final String packagePath;
+  final String id;
+  final String name;
+  final String triggerKeyword;
+}
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty || args.first == 'help' || args.first == '--help') {
@@ -63,6 +128,20 @@ Future<int> _runSmoke({String? testName}) async {
 
   final coreLog = File('${artifactsDir.path}${Platform.pathSeparator}core.log');
   final testLog = File('${artifactsDir.path}${Platform.pathSeparator}flutter_test.log');
+  final templatePluginLog = File('${artifactsDir.path}${Platform.pathSeparator}template_plugin.log');
+
+  final templatePlugins = <_SmokeTemplatePluginPackage>[];
+  for (final definition in _templatePluginDefinitions) {
+    stdout.writeln('Preparing template ${definition.runtime} plugin package...');
+    final templatePlugin = await _prepareSmokeTemplatePlugin(definition: definition, artifactsDir: artifactsDir, environment: environment, logFile: templatePluginLog);
+    templatePlugins.add(templatePlugin);
+    environment[definition.idEnvKey] = templatePlugin.id;
+    environment[definition.nameEnvKey] = templatePlugin.name;
+    environment[definition.triggerKeywordEnvKey] = templatePlugin.triggerKeyword;
+    stdout.writeln('Template ${definition.runtime} plugin package: ${templatePlugin.packagePath}');
+    stdout.writeln('Template ${definition.runtime} plugin id: ${templatePlugin.id}');
+    stdout.writeln('Template ${definition.runtime} trigger keyword: ${templatePlugin.triggerKeyword}');
+  }
 
   Process? coreProcess;
   try {
@@ -76,6 +155,11 @@ Future<int> _runSmoke({String? testName}) async {
     if (!ready) {
       stderr.writeln('wox.core did not become ready on port $serverPort.');
       return 1;
+    }
+
+    for (final templatePlugin in templatePlugins) {
+      stdout.writeln('Installing packaged ${templatePlugin.definition.runtime} template plugin into isolated smoke environment...');
+      await _installLocalPluginPackage(serverPort: serverPort, packagePath: templatePlugin.packagePath);
     }
 
     final flutterBuildConflict = await _findRunningFlutterBuildExecutable(repoRoot);
@@ -112,7 +196,7 @@ Future<int> _runSmoke({String? testName}) async {
     final result = await Future.any([
       processExit.then((code) => ('exited', code)),
       completionDetected.then((passed) => ('finished', passed ? 0 : 1)),
-      Future.delayed(const Duration(minutes: 5), () => ('timeout', 1)),
+      Future.delayed(const Duration(minutes: 10), () => ('timeout', 1)),
     ]);
 
     if (result.$1 == 'exited') {
@@ -325,6 +409,173 @@ Future<bool> _isPingReady(int serverPort) async {
     return false;
   } finally {
     client.close(force: true);
+  }
+}
+
+Future<_SmokeTemplatePluginPackage> _prepareSmokeTemplatePlugin({
+  required _SmokeTemplatePluginDefinition definition,
+  required Directory artifactsDir,
+  required Map<String, String> environment,
+  required File logFile,
+}) async {
+  final workspaceDir = Directory('${artifactsDir.path}${Platform.pathSeparator}template-plugin-workspace');
+  final repoName = definition.repoUrl.split('/').last;
+  final pluginRoot = Directory('${workspaceDir.path}${Platform.pathSeparator}$repoName');
+  await workspaceDir.create(recursive: true);
+  if (await pluginRoot.exists()) {
+    await pluginRoot.delete(recursive: true);
+  }
+
+  await _runLoggedCommand(
+    'git',
+    ['clone', '--depth', '1', definition.repoUrl, pluginRoot.path],
+    workingDirectory: workspaceDir.path,
+    environment: environment,
+    outputFile: logFile,
+    prefix: '[template-plugin:${definition.runtime}]',
+  );
+
+  final initInput = [definition.name, definition.description, definition.triggerKeyword, _templatePluginAuthor, _templatePluginWebsite, 'y'].join('\n');
+
+  await _runLoggedCommand(
+    'make',
+    ['init'],
+    workingDirectory: pluginRoot.path,
+    environment: environment,
+    outputFile: logFile,
+    prefix: '[template-plugin:${definition.runtime}]',
+    stdinData: '$initInput\n',
+  );
+  await _runLoggedCommand('make', ['install'], workingDirectory: pluginRoot.path, environment: environment, outputFile: logFile, prefix: '[template-plugin:${definition.runtime}]');
+  await _runLoggedCommand('make', ['package'], workingDirectory: pluginRoot.path, environment: environment, outputFile: logFile, prefix: '[template-plugin:${definition.runtime}]');
+
+  final pluginJson = jsonDecode(await File('${pluginRoot.path}${Platform.pathSeparator}plugin.json').readAsString()) as Map<String, dynamic>;
+  final packageName = definition.name.trim().toLowerCase();
+  final packagePath = '${pluginRoot.path}${Platform.pathSeparator}wox.plugin.$packageName.wox';
+  if (!await File(packagePath).exists()) {
+    throw StateError('Expected packaged template plugin at $packagePath, but it was not created.');
+  }
+
+  return _SmokeTemplatePluginPackage(
+    definition: definition,
+    packagePath: packagePath,
+    id: pluginJson['Id'] as String,
+    name: pluginJson['Name'] as String,
+    triggerKeyword:
+        (() {
+          final keywords = pluginJson['TriggerKeywords'] as List<dynamic>;
+          if (keywords.isEmpty) {
+            return '';
+          }
+          return keywords.first.toString();
+        })(),
+  );
+}
+
+Future<void> _installLocalPluginPackage({required int serverPort, required String packagePath}) async {
+  final client = HttpClient();
+  final deadline = DateTime.now().add(const Duration(seconds: 45));
+  var lastError = 'unknown error';
+
+  try {
+    while (DateTime.now().isBefore(deadline)) {
+      try {
+        final request = await client.postUrl(Uri.parse('http://127.0.0.1:$serverPort/test/plugin/install_local'));
+        request.headers.contentType = ContentType.json;
+        request.write(jsonEncode({'FilePath': packagePath}));
+
+        final response = await request.close();
+        final body = await response.transform(utf8.decoder).join();
+        if (response.statusCode == 200 && _isSuccessfulRestResponse(body)) {
+          return;
+        }
+
+        lastError = _extractRestErrorMessage(body) ?? (body.trim().isEmpty ? 'HTTP ${response.statusCode}' : body.trim());
+      } catch (error) {
+        lastError = error.toString();
+      }
+
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
+  } finally {
+    client.close(force: true);
+  }
+
+  throw StateError('Failed to install local smoke template plugin package: $lastError');
+}
+
+bool _isSuccessfulRestResponse(String body) {
+  if (body.trim().isEmpty) {
+    return false;
+  }
+
+  try {
+    final decoded = jsonDecode(body);
+    if (decoded is Map<String, dynamic>) {
+      return decoded['Success'] == true;
+    }
+  } catch (_) {
+    return false;
+  }
+
+  return false;
+}
+
+String? _extractRestErrorMessage(String body) {
+  if (body.trim().isEmpty) {
+    return null;
+  }
+
+  try {
+    final decoded = jsonDecode(body);
+    if (decoded is Map<String, dynamic>) {
+      final message = decoded['Message']?.toString().trim() ?? '';
+      if (message.isNotEmpty) {
+        return message;
+      }
+    }
+  } catch (_) {
+    return null;
+  }
+
+  return null;
+}
+
+Future<void> _runLoggedCommand(
+  String command,
+  List<String> arguments, {
+  required String workingDirectory,
+  required Map<String, String> environment,
+  required File outputFile,
+  required String prefix,
+  String? stdinData,
+}) async {
+  final process = await _startCommand(command, arguments, workingDirectory: workingDirectory, environment: environment);
+  final sink = outputFile.openWrite(mode: FileMode.writeOnlyAppend);
+  sink.writeln('> $command ${arguments.join(' ')}');
+
+  if (stdinData != null) {
+    process.stdin.write(stdinData);
+  }
+  await process.stdin.close();
+
+  Future<void> forward(Stream<List<int>> stream, IOSink target) async {
+    await for (final chunk in stream) {
+      sink.add(chunk);
+      target.add(chunk);
+    }
+  }
+
+  final stdoutDone = forward(process.stdout, stdout);
+  final stderrDone = forward(process.stderr, stderr);
+  final exitCode = await process.exitCode;
+  await Future.wait([stdoutDone, stderrDone]);
+  sink.writeln('exitCode: $exitCode');
+  await sink.flush();
+  await sink.close();
+
+  if (exitCode != 0) {
+    throw ProcessException(command, arguments, '$prefix command failed with exit $exitCode. See ${outputFile.path} for details.', exitCode);
   }
 }
 

@@ -6,6 +6,7 @@ This directory is responsible for:
 
 - forcing `wox.core` to use isolated Wox data and user data directories
 - starting `wox.core` in development mode
+- cloning, initializing, packaging, and installing the official Node.js and Python plugin templates into the isolated smoke environment
 - running Flutter desktop `integration_test` cases
 - collecting test artifacts under `wox.test/artifacts/`
 
@@ -41,6 +42,7 @@ Each run creates a timestamped directory under `wox.test/artifacts/` with:
 
 - `core.log`
 - `flutter_test.log`
+- `template_plugin.log`
 - `wox-data/` (isolated backend data, logs, lock file, embedded resources)
 - `user-data/` (isolated backend settings, database, plugins, themes)
 
@@ -50,5 +52,6 @@ Each run creates a timestamped directory under `wox.test/artifacts/` with:
 - The runner overrides `WOX_TEST_DATA_DIR` and `WOX_TEST_USER_DIR` so the test
   run does not touch the developer's normal Wox data.
 - The runner disables telemetry for smoke runs.
+- Smoke plugin coverage currently depends on `git`, `make`, `pnpm`, `uv`, and network access so the official Node.js and Python templates can be cloned and packaged during the run.
 - On Windows, stop a locally running `build/windows/.../wox-ui.exe` before
   running smoke tests, or the linker will fail to overwrite that binary.
