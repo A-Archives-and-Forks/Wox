@@ -39,7 +39,7 @@ void registerLauncherCoreSmokeTests() {
       expect(isOffsetClose(actualPosition, expectedPosition), isTrue);
     });
 
-    testWidgets('P0-SMK-07: ShowPosition last_location restores the saved window coordinates exactly', (tester) async {
+    testWidgets('P0-SMK-03: ShowPosition last_location restores the saved window coordinates exactly', (tester) async {
       final controller = await launchLauncherApp(tester);
       await hideLauncherIfVisible(tester, controller);
 
@@ -53,7 +53,7 @@ void registerLauncherCoreSmokeTests() {
       expect(isOffsetClose(actualPosition, expectedPosition), isTrue);
     });
 
-    testWidgets('P0-SMK-03: Keyboard navigation works', (tester) async {
+    testWidgets('P0-SMK-04: Keyboard navigation works', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
 
       await queryAndWaitForResults(tester, controller, 'wox launcher test xyz123');
@@ -74,7 +74,7 @@ void registerLauncherCoreSmokeTests() {
       expect(await windowManager.isVisible(), isFalse);
     });
 
-    testWidgets('P0-SMK-08: Long press Alt shows quick select labels', (tester) async {
+    testWidgets('P0-SMK-05: Long press Alt shows quick select labels', (tester) async {
       if (!Platform.isWindows) {
         return;
       }
@@ -101,7 +101,7 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.activeResultViewController.items.any((item) => item.value.isShowQuickSelect), isFalse);
     });
 
-    testWidgets('P0-SMK-09: Closing settings returns focus to the launcher query box', (tester) async {
+    testWidgets('P0-SMK-06: Closing settings returns focus to the launcher query box', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final settingController = await openSettings(tester, controller, 'general');
 
@@ -115,7 +115,7 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.queryBoxFocusNode.hasFocus, isTrue);
     });
 
-    testWidgets('P0-SMK-10: Re-show restores query box focus for immediate typing', (tester) async {
+    testWidgets('P0-SMK-07: Re-show restores query box focus for immediate typing', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
 
       await waitForQueryBoxFocus(tester, controller);
@@ -131,7 +131,7 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.isInSettingView.value, isFalse);
     });
 
-    testWidgets('P0-SMK-11: Fresh launch clears stale query when shown from the default source', (tester) async {
+    testWidgets('P0-SMK-08: Fresh launch clears stale query when shown from the default source', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
 
       await queryAndWaitForResults(tester, controller, 'wox launcher test xyz123');
@@ -148,7 +148,7 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.queryBoxFocusNode.hasFocus, isTrue);
     });
 
-    testWidgets('P0-SMK-12: Fresh launch preserves a query-hotkey query source', (tester) async {
+    testWidgets('P0-SMK-09: Fresh launch preserves a query-hotkey query source', (tester) async {
       final controller = await launchLauncherApp(tester);
       await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
 
@@ -159,7 +159,7 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.queryBoxTextFieldController.text, equals('wox launcher test xyz123'));
     });
 
-    testWidgets('P0-SMK-13: Fresh launch preserves a selection query source payload', (tester) async {
+    testWidgets('P0-SMK-10: Fresh launch preserves a selection query source payload', (tester) async {
       final controller = await launchLauncherApp(tester);
       await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
 
@@ -180,7 +180,7 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.queryBoxTextFieldController.text, isEmpty);
     });
 
-    testWidgets('P0-SMK-14: Fresh launch preserves a tray-query source payload', (tester) async {
+    testWidgets('P0-SMK-11: Fresh launch preserves a tray-query source payload', (tester) async {
       final controller = await launchLauncherApp(tester);
       await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
 
@@ -193,7 +193,7 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.isToolbarHiddenForce.value, isTrue);
     });
 
-    testWidgets('P0-SMK-04: Action panel opens with Alt+J', (tester) async {
+    testWidgets('P0-SMK-12: Action panel opens with Alt+J', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
 
       await queryAndWaitForResults(tester, controller, 'wox launcher test xyz123');
@@ -204,7 +204,7 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.isShowActionPanel.value, isTrue);
     }, skip: true);
 
-    testWidgets('P0-SMK-05: Settings entry is reachable via openSetting', (tester) async {
+    testWidgets('P0-SMK-13: Settings entry is reachable via openSetting', (tester) async {
       final launcherController = await launchAndShowLauncher(tester);
 
       await openSettings(tester, launcherController, 'general');
@@ -213,7 +213,7 @@ void registerLauncherCoreSmokeTests() {
       expect(find.byType(WoxSettingView), findsOneWidget);
     });
 
-    testWidgets('P0-SMK-06: Settings page basic navigation', (tester) async {
+    testWidgets('P0-SMK-14: Settings page basic navigation', (tester) async {
       final launcherController = await launchAndShowLauncher(tester);
       final settingController = await openSettings(tester, launcherController, 'general');
 

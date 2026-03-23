@@ -1,9 +1,6 @@
 import 'dart:io';
-import 'dart:ui';
 
 import 'package:extended_text_field/extended_text_field.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,8 +9,6 @@ import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
-import 'package:wox/entity/wox_query.dart';
-import 'package:wox/entity/wox_setting.dart';
 import 'package:wox/enums/wox_launch_mode_enum.dart';
 import 'package:wox/enums/wox_position_type_enum.dart';
 import 'package:wox/enums/wox_start_page_enum.dart';
@@ -26,14 +21,13 @@ import 'package:wox/utils/wox_setting_util.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/wox_websocket_msg_util.dart';
 import 'package:wox/utils/test/wox_test_config.dart';
-import 'package:wox/utils/windows/system_input.dart';
-import 'package:wox/utils/windows/system_input_interface.dart';
 import 'package:wox/utils/windows/window_manager.dart';
 
 const Size smokeLargeWindowSize = Size(1200, 900);
 const double smokeWindowPositionTolerance = 1;
 const int _windowsAltVirtualKey = 18;
 const int _windowsAltScanCode = 56;
+const Size _smokeBootstrapWindowSize = Size(800, 600);
 
 class ScreenWorkArea {
   const ScreenWorkArea({required this.x, required this.y, required this.width, required this.height});
@@ -62,6 +56,8 @@ Future<void> resetSmokeAppState() async {
 void registerLauncherTestCleanup(WidgetTester tester, WoxLauncherController controller) {
   addTearDown(() async {
     await controller.resetForIntegrationTest();
+
+    await restoreSmokeWindowStateForNextTest();
 
     // Hide the window so the backend resets its visibility state.  Use
     // windowManager.hide() directly — controller.hideApp() involves async API
@@ -155,6 +151,19 @@ Future<void> updateSettingDirect(String key, String value) async {
 
 Future<void> saveLastWindowPosition(int x, int y) async {
   await WoxApi.instance.saveWindowPosition(const UuidV4().generate(), x, y);
+}
+
+Future<void> restoreSmokeWindowStateForNextTest() async {
+  await updateSettingDirect('ShowPosition', WoxPositionTypeEnum.POSITION_TYPE_MOUSE_SCREEN.code);
+  await saveLastWindowPosition(-1, -1);
+
+  if (!Platform.isWindows && !Platform.isMacOS) {
+    return;
+  }
+
+  final screen = await getMouseScreenWorkArea();
+  final position = getCenteredTopLeftForWindowSize(screen, _smokeBootstrapWindowSize);
+  await windowManager.setBounds(position, _smokeBootstrapWindowSize);
 }
 
 Future<void> triggerBackendShowApp(WidgetTester tester) async {
