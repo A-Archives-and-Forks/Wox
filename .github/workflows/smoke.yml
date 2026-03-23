@@ -73,6 +73,12 @@ jobs:
         shell: bash
         run: flutter config --enable-windows-desktop
 
+      - name: Prepare development environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          make dev
+
       - name: Run smoke tests
         shell: bash
         run: |
