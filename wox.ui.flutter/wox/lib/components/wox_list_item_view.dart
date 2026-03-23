@@ -26,10 +26,11 @@ class WoxListItemView extends StatelessWidget {
   static const _subtitlePadding = EdgeInsets.only(top: 2.0);
   static const _quickSelectPadding = EdgeInsets.only(left: 10.0, right: 5.0);
   static const _quickSelectBorderRadius = BorderRadius.all(Radius.circular(4));
-  static const _strutStyle = StrutStyle(forceStrutHeight: true);
   static const _iconSize = 30.0;
   static const _quickSelectSize = 24.0;
   static const _tailImageSize = 20.0;
+  static const _textTailPadding = EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0);
+  static const _textTailBorderRadius = BorderRadius.all(Radius.circular(999));
 
   const WoxListItemView({super.key, required this.item, required this.woxTheme, required this.isActive, required this.isHovered, required this.listViewType});
 
@@ -63,10 +64,7 @@ class WoxListItemView extends StatelessWidget {
             children: [
               for (final tail in item.tails)
                 if (tail.type == WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_TEXT.code && tail.text != null)
-                  Padding(
-                    padding: _tailItemPadding,
-                    child: Text(tail.text!, style: TextStyle(color: tailTextColor, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis, strutStyle: _strutStyle),
-                  )
+                  Padding(padding: _tailItemPadding, child: buildTextTailTag(tail.text!, tailTextColor))
                 else if (tail.type == WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_HOTKEY.code && tail.hotkey != null)
                   Padding(
                     padding: _tailItemPadding,
@@ -80,6 +78,19 @@ class WoxListItemView extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget buildTextTailTag(String text, Color tailTextColor) {
+    final tailBackgroundColor = tailTextColor.withValues(alpha: isActive ? 0.16 : 0.08);
+    final tailBorderColor = tailTextColor.withValues(alpha: isActive ? 0.42 : 0.24);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(color: tailBackgroundColor, borderRadius: _textTailBorderRadius, border: Border.all(color: tailBorderColor)),
+      child: Padding(
+        padding: _textTailPadding,
+        child: Center(widthFactor: 1, heightFactor: 1, child: Text(text, style: TextStyle(color: tailTextColor, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis)),
       ),
     );
   }

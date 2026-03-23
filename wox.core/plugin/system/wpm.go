@@ -21,7 +21,6 @@ import (
 	"wox/util/shell"
 	"wox/util/trash"
 
-	"github.com/Masterminds/semver/v3"
 	"github.com/fsnotify/fsnotify"
 	"github.com/google/uuid"
 	cp "github.com/otiai10/copy"
@@ -633,13 +632,7 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 		var tails []plugin.QueryResultTail
 		if inst, ok := lo.Find(installed, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id }); ok {
 			// plugin is installed, check if upgrade is available
-			// best-effort semver comparison; fall back to show installed if parse fails
-			upgrade := false
-			if vInstalled, err1 := semver.NewVersion(inst.Metadata.Version); err1 == nil {
-				if vStore, err2 := semver.NewVersion(pluginManifest.Version); err2 == nil {
-					upgrade = vStore.GreaterThan(vInstalled)
-				}
-			}
+			upgrade := plugin.IsVersionUpgradable(inst.Metadata.Version, pluginManifest.Version)
 			if upgrade {
 				// show an upgrade icon
 				tails = append(tails, plugin.QueryResultTail{Type: plugin.QueryResultTailTypeImage, Image: common.UpgradeIcon})
@@ -655,11 +648,7 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 		if installedFlag {
 			upgradeFlag := false
 			if inst, ok := lo.Find(installed, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id }); ok {
-				if vInstalled, err1 := semver.NewVersion(inst.Metadata.Version); err1 == nil {
-					if vStore, err2 := semver.NewVersion(pluginManifest.Version); err2 == nil {
-						upgradeFlag = vStore.GreaterThan(vInstalled)
-					}
-				}
+				upgradeFlag = plugin.IsVersionUpgradable(inst.Metadata.Version, pluginManifest.Version)
 			}
 			if upgradeFlag {
 				// show Upgrade action

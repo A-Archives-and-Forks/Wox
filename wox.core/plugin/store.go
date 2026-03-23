@@ -111,6 +111,16 @@ func (m StorePluginManifest) GetDescriptionEnUs() string {
 	return m.translateWithLang(m.Description, i18n.LangCodeEnUs)
 }
 
+func IsVersionUpgradable(installedVersion string, availableVersion string) bool {
+	installed, installedErr := semver.NewVersion(installedVersion)
+	available, availableErr := semver.NewVersion(availableVersion)
+	if installedErr != nil || availableErr != nil || installed == nil || available == nil {
+		return false
+	}
+
+	return available.GreaterThan(installed)
+}
+
 var storeInstance *Store
 var storeOnce sync.Once
 

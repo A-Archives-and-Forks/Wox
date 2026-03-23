@@ -33,7 +33,6 @@ import (
 	"wox/util/shell"
 	"wox/util/tray"
 
-	"github.com/Masterminds/semver/v3"
 	"github.com/jinzhu/copier"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
@@ -209,7 +208,7 @@ func handlePluginStore(w http.ResponseWriter, r *http.Request) {
 		plugins[i].IsInstalled = isInstalled
 		plugins[i].IsUpgradable = false
 		if isInstalled {
-			plugins[i].IsUpgradable = isPluginUpgradable(pluginInstance.Metadata.Version, manifests[i].Version)
+			plugins[i].IsUpgradable = plugin.IsVersionUpgradable(pluginInstance.Metadata.Version, manifests[i].Version)
 		}
 		plugins[i].Name = manifests[i].GetName(getCtx)
 		plugins[i].NameEn = manifests[i].GetNameEn(getCtx)
@@ -261,7 +260,7 @@ func convertPluginInstanceToDto(ctx context.Context, pluginInstance *plugin.Inst
 	storePlugin, foundErr := plugin.GetStoreManager().GetStorePluginManifestById(ctx, pluginInstance.Metadata.Id)
 	if foundErr == nil {
 		installedPlugin.ScreenshotUrls = storePlugin.ScreenshotUrls
-		installedPlugin.IsUpgradable = isPluginUpgradable(pluginInstance.Metadata.Version, storePlugin.Version)
+		installedPlugin.IsUpgradable = plugin.IsVersionUpgradable(pluginInstance.Metadata.Version, storePlugin.Version)
 	} else {
 		installedPlugin.ScreenshotUrls = []string{}
 		installedPlugin.IsUpgradable = false
@@ -279,16 +278,6 @@ func convertPluginInstanceToDto(ctx context.Context, pluginInstance *plugin.Inst
 	installedPlugin = convertPluginDto(ctx, installedPlugin, pluginInstance)
 
 	return installedPlugin, nil
-}
-
-func isPluginUpgradable(installedVersion string, storeVersion string) bool {
-	installed, installedErr := semver.NewVersion(installedVersion)
-	store, storeErr := semver.NewVersion(storeVersion)
-	if installedErr != nil || storeErr != nil || installed == nil || store == nil {
-		return false
-	}
-
-	return store.GreaterThan(installed)
 }
 
 func handlePluginInstall(w http.ResponseWriter, r *http.Request) {
