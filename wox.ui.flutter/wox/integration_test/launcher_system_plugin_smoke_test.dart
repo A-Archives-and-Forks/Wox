@@ -6,115 +6,110 @@ void registerSystemPluginSmokeTests() {
   group('P2-SMK: System Plugin Smoke Tests - Tier 1 (Deterministic)', () {
     testWidgets('P2-SMK-20: Calculator plugin basic arithmetic', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
-      await queryAndWaitForResults(tester, controller, '1+1');
-
-      expect(controller.activeResultViewController.items, isNotEmpty);
-      final result = controller.activeResultViewController.activeItem.data;
+      final result = await queryAndWaitForActiveResult(tester, controller, '1+1');
 
       expect(result.title, equals('2'));
-      final copyActions = result.actions.where((action) => action.name.toLowerCase().contains('copy')).toList();
-      expect(copyActions, isNotEmpty);
+      expect(result.isGroup, isFalse);
+      expectResultActionByName(result, 'copy');
     });
 
     testWidgets('P2-SMK-21: Calculator plugin sqrt function', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
-      await queryAndWaitForResults(tester, controller, 'sqrt(16)');
-
-      expect(controller.activeResultViewController.items, isNotEmpty);
-      final result = controller.activeResultViewController.activeItem.data;
+      final result = await queryAndWaitForActiveResult(tester, controller, 'sqrt(16)');
 
       expect(result.title, equals('4'));
+      expect(result.isGroup, isFalse);
+      expectResultActionByName(result, 'copy');
+    });
+
+    testWidgets('P2-SMK-21A: Calculator plugin respects operator precedence', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final result = await queryAndWaitForActiveResult(tester, controller, '2+3*4');
+
+      expect(result.title, equals('14'));
+      expect(result.isGroup, isFalse);
+      expectResultActionByName(result, 'copy');
     });
 
     testWidgets('P2-SMK-22: URL plugin opens URLs', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
-      await queryAndWaitForResults(tester, controller, 'https://githubgithugithub.com');
-
-      expect(controller.activeResultViewController.items, isNotEmpty);
-      final result = controller.activeResultViewController.activeItem.data;
+      final result = await queryAndWaitForActiveResult(tester, controller, 'https://githubgithugithub.com');
 
       expect(result.title, equals('https://githubgithugithub.com'));
-      final openActions = result.actions.where((action) => action.name.toLowerCase().contains('open')).toList();
-      expect(openActions, isNotEmpty);
+      expect(result.isGroup, isFalse);
+      expectResultActionByName(result, 'open');
     });
 
     testWidgets('P2-SMK-23: System plugin lock command', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
-      await queryAndWaitForResults(tester, controller, 'lock');
-
-      expect(controller.activeResultViewController.items, isNotEmpty);
-      final result = controller.activeResultViewController.activeItem.data;
+      final result = await queryAndWaitForActiveResult(tester, controller, 'lock');
+      final executeAction = expectResultActionByName(result, 'execute');
 
       expect(result.title.toLowerCase(), contains('lock'));
-      final executeActions = result.actions.where((action) => action.name.toLowerCase().contains('execute')).toList();
-      expect(executeActions, isNotEmpty);
+      expect(result.isGroup, isFalse);
+      expect(executeAction.preventHideAfterAction, isFalse);
     });
 
     testWidgets('P2-SMK-24: System plugin settings command', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
-      await queryAndWaitForResults(tester, controller, 'wox settings');
-
-      expect(controller.activeResultViewController.items, isNotEmpty);
-      final result = controller.activeResultViewController.activeItem.data;
+      final result = await queryAndWaitForActiveResult(tester, controller, 'wox settings');
+      final executeAction = expectResultActionByName(result, 'execute');
 
       expect(result.title, equals('Open Wox Settings'));
-      final executeActions = result.actions.where((action) => action.name.toLowerCase().contains('execute')).toList();
-      expect(executeActions, isNotEmpty);
+      expect(result.isGroup, isFalse);
+      expect(executeAction.preventHideAfterAction, isTrue);
     });
 
     testWidgets('P2-SMK-25: Doctor plugin returns diagnostic info', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
-      await queryAndWaitForResults(tester, controller, 'doctor');
-
-      expect(controller.activeResultViewController.items, isNotEmpty);
-      final result = controller.activeResultViewController.activeItem.data;
+      final result = await queryAndWaitForActiveResult(tester, controller, 'doctor');
 
       expect(result.title, isNotEmpty);
       expect(result.subTitle, isNotEmpty);
+      expect(result.isGroup, isFalse);
+      expect(result.actions, isNotEmpty);
     });
 
     testWidgets('P2-SMK-26: Emoji plugin returns emoji results', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
-      await queryAndWaitForResults(tester, controller, 'emoji smile');
+      final result = await queryAndWaitForActiveResult(tester, controller, 'emoji smile');
 
-      // Emoji plugin shows results in grid or list view
-      final hasGridItems = controller.resultGridViewController.items.isNotEmpty;
-      final hasListItems = controller.resultListViewController.items.isNotEmpty;
-      expect(hasGridItems || hasListItems, isTrue);
+      expect(controller.activeResultViewController.items, isNotEmpty);
+      expect(result.title, isNotEmpty);
+      expect(result.isGroup, isFalse);
     });
 
     testWidgets('P2-SMK-27: Indicator plugin shows plugin hints', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
-      await queryAndWaitForResults(tester, controller, '*');
+      final result = await queryAndWaitForActiveResult(tester, controller, '*');
 
-      // Indicator plugin should show plugin suggestions
       expect(controller.activeResultViewController.items, isNotEmpty);
-      final result = controller.activeResultViewController.activeItem.data;
-      // Result should contain some indicator text
-      expect(result.title.isNotEmpty || result.subTitle.isNotEmpty, isTrue);
+      expect(result.title, isNotEmpty);
+      expect(result.isGroup, isFalse);
     });
 
     testWidgets('P2-SMK-28: Converter plugin time conversion', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
-      await queryAndWaitForResults(tester, controller, '1h to minutes');
-
-      expect(controller.activeResultViewController.items, isNotEmpty);
-      final result = controller.activeResultViewController.activeItem.data;
+      final result = await queryAndWaitForActiveResult(tester, controller, '1h to minutes');
 
       expect(result.title, contains('60'));
+      expect(result.isGroup, isFalse);
+      expectResultActionByName(result, 'copy');
     });
 
     testWidgets('P2-SMK-29: Theme plugin returns theme options', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
-      await queryAndWaitForResults(tester, controller, 'theme');
+      final result = await queryAndWaitForActiveResult(tester, controller, 'theme');
 
       expect(controller.activeResultViewController.items, isNotEmpty);
-      // Should have at least a default theme option
       expect(controller.activeResultViewController.items.length, greaterThanOrEqualTo(1));
+      expect(result.title, isNotEmpty);
+      expect(result.isGroup, isFalse);
     });
   });
 
   group('P2-SMK: System Plugin Smoke Tests - Tier 2 (Conditional - requires environment)', () {
+    // Requires deterministic default Google configuration and network access.
     testWidgets('P2-SMK-30: WebSearch plugin searches Google - requires default Google config', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'g wox launcher');
@@ -125,6 +120,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.title, equals('Search Google for wox launcher'));
     }, skip: true);
 
+    // Requires a stable shell environment and command execution support.
     testWidgets('P2-SMK-31: Shell plugin executes shell commands - requires shell', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, '> echo hello');
@@ -135,6 +131,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.title.toLowerCase(), contains('echo hello'));
     }, skip: true);
 
+    // Requires seeded typing history to make the plugin deterministic.
     testWidgets('P2-SMK-32: WPM plugin returns word count - requires typing session', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'wpm');
@@ -142,6 +139,7 @@ void registerSystemPluginSmokeTests() {
       expect(controller.activeResultViewController.items, isNotEmpty);
     }, skip: true);
 
+    // Requires filesystem fixtures and predictable backup state.
     testWidgets('P2-SMK-33: Backup plugin returns backup options - requires filesystem', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'backup');
@@ -149,6 +147,7 @@ void registerSystemPluginSmokeTests() {
       expect(controller.activeResultViewController.items, isNotEmpty);
     }, skip: true);
 
+    // Requires network access and a stable update endpoint response.
     testWidgets('P2-SMK-34: Update plugin checks for updates - requires network', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'update');
@@ -156,6 +155,7 @@ void registerSystemPluginSmokeTests() {
       expect(controller.activeResultViewController.items, isNotEmpty);
     }, skip: true);
 
+    // Requires control over query history persistence for a fresh-install baseline.
     testWidgets('P2-SMK-35: Query History plugin does not crash on empty history - fresh install', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'h');
@@ -165,6 +165,7 @@ void registerSystemPluginSmokeTests() {
       expect(controller.activeResultViewController.items.isEmpty, isTrue);
     }, skip: true);
 
+    // Requires platform application discovery fixtures and macOS-specific availability.
     testWidgets('P2-SMK-36: Application plugin finds platform applications - macOS only', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       // Use a common application name based on platform
@@ -173,6 +174,7 @@ void registerSystemPluginSmokeTests() {
       expect(controller.activeResultViewController.items, isNotEmpty);
     }, skip: true);
 
+    // Requires deterministic clipboard history state.
     testWidgets('P2-SMK-37: Clipboard plugin handles clipboard history - no clipboard data', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'cb');

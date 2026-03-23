@@ -9,6 +9,7 @@ import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
+import 'package:wox/entity/wox_query.dart';
 import 'package:wox/enums/wox_launch_mode_enum.dart';
 import 'package:wox/enums/wox_position_type_enum.dart';
 import 'package:wox/enums/wox_start_page_enum.dart';
@@ -293,11 +294,42 @@ Future<void> enterQueryAndWaitForResults(WidgetTester tester, WoxLauncherControl
     oldHandler?.call(details);
   };
 
-  await pumpUntil(tester, () => controller.resultListViewController.items.isNotEmpty || controller.resultGridViewController.items.isNotEmpty, timeout: timeout);
+  await waitForActiveResults(tester, controller, timeout: timeout);
 
   // Pump a few more frames to let the resize settle before restoring the error handler.
   await tester.pump(const Duration(milliseconds: 500));
   FlutterError.onError = oldHandler;
+}
+
+String normalizeSmokeText(String value) {
+  return value.trim().toLowerCase();
+}
+
+List<WoxQueryResult> getActiveResults(WoxLauncherController controller) {
+  return controller.activeResultViewController.items.map((item) => item.value.data).toList();
+}
+
+WoxQueryResult expectActiveResult(WoxLauncherController controller) {
+  final activeResults = getActiveResults(controller);
+  expect(activeResults, isNotEmpty);
+  return controller.activeResultViewController.activeItem.data;
+}
+
+List<WoxResultAction> findResultActionsByName(WoxQueryResult result, String actionName, {bool exactMatch = false}) {
+  final normalizedActionName = normalizeSmokeText(actionName);
+  return result.actions.where((action) {
+    final normalizedName = normalizeSmokeText(action.name);
+    if (exactMatch) {
+      return normalizedName == normalizedActionName;
+    }
+    return normalizedName.contains(normalizedActionName);
+  }).toList();
+}
+
+WoxResultAction expectResultActionByName(WoxQueryResult result, String actionName, {bool exactMatch = false}) {
+  final actions = findResultActionsByName(result, actionName, exactMatch: exactMatch);
+  expect(actions, isNotEmpty, reason: 'Expected action "$actionName" in result "${result.title}".');
+  return actions.first;
 }
 
 Future<void> sendWindowsKeyboardEvent({required String type, required bool isAltPressed}) async {
@@ -388,6 +420,15 @@ Future<void> tapSettingNavItem(WidgetTester tester, WoxSettingController setting
 
 Future<void> queryAndWaitForResults(WidgetTester tester, WoxLauncherController controller, String query, {Duration timeout = const Duration(seconds: 30)}) async {
   await enterQueryAndWaitForResults(tester, controller, query, timeout: timeout);
+}
+
+Future<WoxQueryResult> queryAndWaitForActiveResult(WidgetTester tester, WoxLauncherController controller, String query, {Duration timeout = const Duration(seconds: 30)}) async {
+  await queryAndWaitForResults(tester, controller, query, timeout: timeout);
+  return expectActiveResult(controller);
+}
+
+Future<void> waitForActiveResults(WidgetTester tester, WoxLauncherController controller, {Duration timeout = const Duration(seconds: 30)}) async {
+  await pumpUntil(tester, () => controller.activeResultViewController.items.isNotEmpty, timeout: timeout);
 }
 
 Future<void> waitForQueryBoxFocus(WidgetTester tester, WoxLauncherController controller, {Duration timeout = const Duration(seconds: 30)}) async {
