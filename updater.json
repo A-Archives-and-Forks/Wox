@@ -1,12 +1,10 @@
 {
-  "Version": "2.0.1",
-  "MacArm64DownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.1/wox-mac-arm64.dmg",
-  "MacArm64Checksum": "5ee47aed971ad4f9bf96b88fa0700daf",
-  "WindowsDownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.1/wox-windows-amd64.exe",
-  "WindowsChecksum": "0283723f6b78a73c52e86bdf747f796b",
-  "LinuxDownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.1/wox-linux-amd64",
-  "LinuxChecksum": "dc539a089409a0fbf2d7ec34420519d5",
-  "ReleaseNotes": "\n- Add\n  - Add tray query feature. User can add custom queries to tray menu for quick access\n    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/tray_query.png)\n  - Add \"App font family\" setting to choose system font for Wox interface #4335\n  - [`Plugin Setting`] Add image emoji selector for plugin table image fields\n  - [`Plugin Setting`] Add `maxHeight` property support in plugin table setting value #4339\n  - [`Plugin Store`] Add filter functionality and upgrade indicators for plugins #4356\n  - [`Browser Bookmarks`] Add Firefox support #4354\n  - [`Script Plugin`] Add missing runtime notifications with install actions #4357\n  - Add secondary tap support for item actions in grid and list views #4358\n  - [`Web Search`] Allow user to select custom browser #3597\n  - [`Setting`] Add log management features including clearing logs and changing log level\n  - [`File Explorer Search`] Add quick jump paths and enhance file dialog interactions\n\n- Improve\n  - [`Shell`] Enhance Shell plugin terminal preview to support search/full-screen/scroll-to-load functions\n  - Improve query hotkey tooltips and add Wox Chrome extension link in settings #4333\n  - Improve app process exit handling when shutting down Wox #4338\n  - Improve the layout of the plugin settings page\n  - [`Plugin Setting`] Improve focus management and validation\n  - Improve preview functionality and local actions\n  - Improve Windows Start Menu handling by dismissing it when Wox opens #4341\n  - [`Calculator`] Improve history management and limit displayed history to top 100 entries #4340\n  - Improve listview rendering performance\n\n- Fix\n  - [`File Explorer Search`] Fix an issue that file explorer search plugin cannot navigate on open/save dialog\n  - [`Clipboard`] Fix self-triggering in clipboard watch #4309\n  - Fix Windows hotkey recording so the Win key and modifier combinations can be captured correctly\n  - Fix an issue that Wox setting table values can't be saved sometimes\n  - Fix query results not being cleared correctly when app visibility changes\n  - Fix transient focus loss when showing Wox window on Windows #4346\n  - Fix Base64 JPEG decode issue in image preview\n  - [`Plugin Setting`] Fix an issue with handling null and empty JSON responses in plugin table settings\n  - [`File`] Fix Windows Phone Link automatic downloads occurring when fetching file icons #4352\n  - [`Web Search`] Fix query URL formatting for escaped search text #4360\n  - Fix image loading error handling in image view\n\n",
-  "MacAmd64DownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.1/wox-mac-amd64.dmg",
-  "MacAmd64Checksum": "f38e968d51c11267a7147945987aebca"
+  "Version": "2.0.2",
+  "MacArm64DownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.2/wox-mac-arm64.dmg",
+  "MacArm64Checksum": "",
+  "WindowsDownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.2/wox-windows-amd64.exe",
+  "WindowsChecksum": "",
+  "LinuxDownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.2/wox-linux-amd64",
+  "LinuxChecksum": "",
+  "ReleaseNotes": ""
 }
