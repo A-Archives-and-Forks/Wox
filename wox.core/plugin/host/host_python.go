@@ -44,6 +44,11 @@ func FindPythonPath(ctx context.Context) string {
 	return (&PythonHost{}).findPythonPath(ctx)
 }
 
+// minimumPythonVersion is the minimum Python version required by Wox.
+// Python versions older than this are known to be incompatible with modern macOS
+// (e.g. Python 3.6 crashes on macOS 13+ due to missing CoreFoundation framework).
+var minimumPythonVersion, _ = semver.NewVersion("v3.9.0")
+
 func (n *PythonHost) findPythonPath(ctx context.Context) string {
 	util.GetLogger().Debug(ctx, "start finding python path")
 
@@ -79,6 +84,12 @@ func (n *PythonHost) findPythonPath(ctx context.Context) string {
 				continue
 			}
 			util.GetLogger().Debug(ctx, fmt.Sprintf("found python path: %s, version: %s", p, installedVersion.String()))
+
+			// Skip Python versions that are too old and known to be incompatible
+			if installedVersion.LessThan(minimumPythonVersion) {
+				util.GetLogger().Warn(ctx, fmt.Sprintf("skipping python %s at %s: version is below minimum required %s, please upgrade your Python installation", installedVersion.String(), p, minimumPythonVersion.String()))
+				continue
+			}
 
 			if installedVersion.GreaterThan(foundVersion) {
 				foundPath = p
