@@ -1,14 +1,22 @@
 # Changelog
 
-## v2.0.2 -
+## v2.0.2 - 2026-03-23
 
 - Add
   - [`Plugin`] Add action to open a plugin's settings directly from query results
   - [`Clipboard`] Add action to open directory paths directly from clipboard results
+  - [`AI`] Add MiniMax provider support
+  - [`Privacy`] Add optional anonymous usage statistics with privacy controls
+  - [`Hotkey`] Add ignored application list for global hotkeys #4372
+  - [`Tray`] Add `Show Query Box` option for tray queries
 
 - Improve
-  - [`App`] Improve app search metadata and indexing on macOS and Windows, including System32 apps and cleaner Windows icons #4291
+  - [`App`] Improve app search metadata and indexing on macOS and Windows, including System32 apps, Windows `.url` shortcuts, and cleaner Windows icons #4291 #4367
   - [`Plugin Setting`] Improve required-value validation in plugin tables and make AI model selection fall back to available provider configs #4365
+  - [`AI`] Improve provider setup with default host configs and clearer provider icons
+  - [`URL`] Improve URL results with dynamic website icons
+  - Improve restoring the previously active window when Wox hides, with better tray interaction and Quick Select behavior on Windows
+  - Improve locale detection when choosing the app language #4371
   - Improve switching to existing windows by matching window titles more reliably
 
 - Fix
@@ -16,6 +24,7 @@
   - [`Clipboard`] Fix cross-platform clipboard handling for text, images, and file paths #4309
   - Fix Windows DWM refresh and acrylic resize jitter issues
   - Fix Linux release bundles so bundled shared libraries can resolve their packaged dependencies correctly #4347
+  - [`Python Plugin`] Fix compatibility on modern macOS by requiring a newer Python runtime #4374
 
 ## v2.0.1 - 2026-03-07
 
