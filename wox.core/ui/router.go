@@ -577,13 +577,7 @@ func handleSettingWox(w http.ResponseWriter, r *http.Request) {
 	settingDto.AppWidth = woxSetting.AppWidth.Get()
 	settingDto.MaxResultCount = woxSetting.MaxResultCount.Get()
 	settingDto.ThemeId = woxSetting.ThemeId.Get()
-	appFontFamily := woxSetting.AppFontFamily.Get()
-	systemFontFamilies := font.GetSystemFontFamilies(ctx)
-	normalizedAppFontFamily := font.NormalizeConfiguredFontFamily(appFontFamily, systemFontFamilies)
-	if normalizedAppFontFamily != appFontFamily {
-		woxSetting.AppFontFamily.Set(normalizedAppFontFamily)
-	}
-	settingDto.AppFontFamily = normalizedAppFontFamily
+	settingDto.AppFontFamily = woxSetting.AppFontFamily.Get()
 
 	writeSuccessResponse(w, settingDto)
 }
@@ -777,6 +771,7 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 	case "ThemeId":
 		woxSetting.ThemeId.Set(vs)
 	case "AppFontFamily":
+		vs = font.NormalizeConfiguredFontFamily(vs, font.GetSystemFontFamilies(ctx))
 		woxSetting.AppFontFamily.Set(vs)
 	case "EnableAnonymousUsageStats":
 		woxSetting.EnableAnonymousUsageStats.Set(vb)
@@ -1000,7 +995,9 @@ func handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleBackupAll(w http.ResponseWriter, r *http.Request) {
-	backups, err := setting.GetSettingManager().FindAllBackups(getTraceContext(r))
+	ctx := getTraceContext(r)
+
+	backups, err := setting.GetSettingManager().FindAllBackups(ctx)
 	if err != nil {
 		writeErrorResponse(w, err.Error())
 		return

@@ -2045,9 +2045,8 @@ class WoxLauncherController extends GetxController {
     await settingController.reloadSetting(traceId);
     settingController.activeNavPath.value = 'general';
 
-    // Keep settings in sync with runtime and plugin state when opening.
-    unawaited(settingController.refreshRuntimeStatuses());
-    unawaited(settingController.reloadPlugins(traceId));
+    // Load settings-view data on demand instead of during app startup.
+    settingController.preloadSettingViewData(traceId, forceRefresh: true);
 
     if (context.path == "/plugin/setting") {
       WidgetsBinding.instance.addPostFrameCallback((_) async {

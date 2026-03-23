@@ -24,7 +24,9 @@ import 'package:wox/utils/wox_websocket_msg_util.dart';
 void main(List<String> arguments) async {
   await initialServices(arguments);
   await initWindow();
+
   await initDeepLink();
+
   runApp(const MyApp());
 }
 
@@ -74,7 +76,7 @@ Future<void> initialServices(List<String> arguments) async {
 
   //load lang
   var langCode = WoxSettingUtil.instance.currentSetting.langCode;
-  woxSettingController.updateLang(langCode);
+  unawaited(woxSettingController.loadLang(langCode));
 }
 
 Future<void> initDeepLink() async {
@@ -154,7 +156,7 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
       launcherController.resizeHeight();
 
       // Notify the backend that the UI is ready. The server-side will determine whether to display the UI window.
-      WoxApi.instance.onUIReady(startupTraceId);
+      await WoxApi.instance.onUIReady(startupTraceId);
     });
   }
 

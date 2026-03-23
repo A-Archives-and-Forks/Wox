@@ -73,17 +73,31 @@ class WoxSettingController extends GetxController {
   final isUpgradingPlugin = false.obs;
   final pluginInstallError = ''.obs;
   final FocusNode settingFocusNode = FocusNode();
+  bool _hasPreloadedSettingViewData = false;
 
   @override
   void onInit() {
     super.onInit();
-    refreshThemeList();
-    loadSystemFontFamilies();
-    loadUserDataLocation();
-    refreshBackups();
-    loadWoxVersion();
-    refreshRuntimeStatuses();
-    refreshUsageStats();
+  }
+
+  void preloadSettingViewData(String traceId, {bool forceRefresh = false}) {
+    if (_hasPreloadedSettingViewData && !forceRefresh) {
+      return;
+    }
+
+    _hasPreloadedSettingViewData = true;
+    unawaited(loadSystemFontFamilies());
+    unawaited(loadUserDataLocation());
+    unawaited(refreshBackups());
+    unawaited(loadWoxVersion());
+    unawaited(refreshRuntimeStatuses());
+    unawaited(refreshUsageStats());
+    unawaited(reloadPlugins(traceId));
+  }
+
+  Future<void> loadLang(String langCode) async {
+    final traceId = const UuidV4().generate();
+    langMap.value = await WoxApi.instance.getLangJson(traceId, langCode);
   }
 
   Future<void> loadWoxVersion() async {

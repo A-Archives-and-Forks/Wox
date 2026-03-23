@@ -53,6 +53,7 @@ class WoxAIChatController extends GetxController {
   // State for agents
   final RxList<AIAgent> availableAgents = <AIAgent>[].obs;
   final RxBool isLoadingAgents = false.obs;
+  final RxBool isLoadingModels = false.obs;
 
   // Tool call expanded/collapsed states
   final RxMap<String, bool> toolCallExpandedStates = <String, bool>{}.obs;
@@ -77,8 +78,6 @@ class WoxAIChatController extends GetxController {
       onFilterBoxEscPressed: (traceId) => hideChatSelectPanel(),
       itemHeightGetter: () => WoxThemeUtil.instance.getActionItemHeight(),
     );
-
-    reloadChatResources(const UuidV4().generate());
   }
 
   void reloadChatResources(String traceId, {String resourceName = "all"}) {
@@ -100,10 +99,44 @@ class WoxAIChatController extends GetxController {
   void reloadAIModels(String traceId) {
     Logger.instance.debug(traceId, "start reloading ai models");
 
-    WoxApi.instance.findAIModels(traceId).then((models) {
-      aiModels.assignAll(models);
-      Logger.instance.debug(traceId, "reload ai models: ${aiModels.length}");
-    });
+    isLoadingModels.value = true;
+    WoxApi.instance
+        .findAIModels(traceId)
+        .then((models) {
+          aiModels.assignAll(models);
+          Logger.instance.debug(traceId, "reload ai models: ${aiModels.length}");
+          if (isShowChatSelectPanel.value && currentChatSelectCategory.value == "models") {
+            updateChatSelectItems();
+          }
+        })
+        .catchError((error, stackTrace) {
+          Logger.instance.error(traceId, 'Error fetching AI models: $error $stackTrace');
+          aiModels.clear();
+        })
+        .whenComplete(() {
+          isLoadingModels.value = false;
+        });
+  }
+
+  void ensureModelsLoaded(String traceId) {
+    if (aiModels.isNotEmpty || isLoadingModels.value) {
+      return;
+    }
+    reloadAIModels(traceId);
+  }
+
+  void ensureToolsLoaded(String traceId) {
+    if (availableTools.isNotEmpty || isLoadingTools.value) {
+      return;
+    }
+    fetchAvailableTools(traceId);
+  }
+
+  void ensureAgentsLoaded(String traceId) {
+    if (availableAgents.isNotEmpty || isLoadingAgents.value) {
+      return;
+    }
+    fetchAvailableAgents(traceId);
   }
 
   void _onChatSelectItemExecuted(String traceId, WoxListItem<ChatSelectItem> item) {
@@ -363,6 +396,7 @@ class WoxAIChatController extends GetxController {
 
   // Show models panel directly
   void showModelsPanel() {
+    ensureModelsLoaded(const UuidV4().generate());
     showChatSelectPanel();
     currentChatSelectCategory.value = "models";
     updateChatSelectItems();
@@ -370,6 +404,7 @@ class WoxAIChatController extends GetxController {
 
   // Show tools panel directly
   void showToolsPanel() {
+    ensureToolsLoaded(const UuidV4().generate());
     showChatSelectPanel();
     currentChatSelectCategory.value = "tools";
     updateChatSelectItems();
@@ -377,6 +412,7 @@ class WoxAIChatController extends GetxController {
 
   // Show agents panel directly
   void showAgentsPanel() {
+    ensureAgentsLoaded(const UuidV4().generate());
     showChatSelectPanel();
     currentChatSelectCategory.value = "agents";
     updateChatSelectItems();
@@ -418,6 +454,9 @@ class WoxAIChatController extends GetxController {
       selectedTools.assignAll(tools.map((tool) => tool.name).toSet());
 
       Logger.instance.debug(traceId, "AI: loaded ${tools.length} tools");
+      if (isShowChatSelectPanel.value && currentChatSelectCategory.value == "tools") {
+        updateChatSelectItems();
+      }
     } catch (e, s) {
       Logger.instance.error(traceId, 'Error fetching AI tools: $e $s');
       availableTools.clear();
