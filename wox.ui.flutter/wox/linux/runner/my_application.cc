@@ -8,7 +8,7 @@
 #include <stdarg.h>
 #ifdef GDK_WINDOWING_X11
 #include <X11/Xatom.h>
-#include <X11/Xkeysym.h>
+#include <X11/keysym.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/XTest.h>
 #include <gdk/gdkx.h>
