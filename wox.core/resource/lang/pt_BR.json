@@ -142,6 +142,8 @@
   "ui_tray_queries_tips": "Adicione ícones de consulta na bandeja. Ao clicar em um ícone, o Wox abre perto da bandeja/barra de menu e executa a consulta configurada.",
   "ui_tray_queries_icon": "Ícone",
   "ui_tray_queries_icon_tooltip": "Ícone da bandeja para esta consulta.",
+  "ui_tray_queries_hotkey": "Tecla de atalho",
+  "ui_tray_queries_hotkey_tooltip": "Opcional. Acionar esta tecla de atalho se comporta como clicar com o botão esquerdo neste ícone de consulta da bandeja.",
   "ui_tray_queries_query": "Consulta",
   "ui_tray_queries_query_tooltip": "Consulta a ser executada ao clicar neste ícone da bandeja.",
   "ui_tray_queries_show_query_box": "Mostrar caixa de consulta",

@@ -123,6 +123,7 @@ type QueryHotkey struct {
 
 type TrayQuery struct {
 	Icon           common.WoxImage
+	Hotkey         string `json:",omitempty"`
 	Query          string
 	Width          int `json:",omitempty"`
 	MaxResultCount int `json:",omitempty"`

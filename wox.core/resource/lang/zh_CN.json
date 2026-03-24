@@ -145,6 +145,8 @@
   "ui_tray_queries_tips": "添加托盘查询图标。点击图标后，Wox 会在托盘/菜单栏附近打开并执行配置的查询。",
   "ui_tray_queries_icon": "图标",
   "ui_tray_queries_icon_tooltip": "该查询的托盘图标。",
+  "ui_tray_queries_hotkey": "快捷键",
+  "ui_tray_queries_hotkey_tooltip": "可选。触发该快捷键时，行为等同于左键点击这个托盘查询图标。",
   "ui_tray_queries_query": "查询",
   "ui_tray_queries_query_tooltip": "点击该托盘图标时要执行的查询。",
   "ui_tray_queries_show_query_box": "显示查询框",

@@ -330,6 +330,7 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
                   "Key": "TrayQueries",
                   "Columns": [
                     {"Key": "Icon", "Label": "i18n:ui_tray_queries_icon", "Tooltip": "i18n:ui_tray_queries_icon_tooltip", "Type": "woxImage", "Width": 40},
+                    {"Key": "Hotkey", "Label": "i18n:ui_tray_queries_hotkey", "Tooltip": "i18n:ui_tray_queries_hotkey_tooltip", "Type": "hotkey", "Width": 100},
                     {
                       "Key": "Query",
                       "Label": "i18n:ui_tray_queries_query",

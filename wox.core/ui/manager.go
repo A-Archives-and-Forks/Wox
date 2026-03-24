@@ -49,6 +49,7 @@ type Manager struct {
 	mainHotkey       *hotkey.Hotkey
 	selectionHotkey  *hotkey.Hotkey
 	queryHotkeys     []*hotkey.Hotkey
+	trayQueryHotkeys []*hotkey.Hotkey
 	ui               common.UI
 	serverPort       int
 	uiProcess        *os.Process
@@ -357,6 +358,42 @@ func (m *Manager) RegisterQueryHotkey(ctx context.Context, queryHotkey setting.Q
 	return nil
 }
 
+func (m *Manager) RegisterTrayQueryHotkey(ctx context.Context, trayQuery setting.TrayQuery) error {
+	combineKey := strings.TrimSpace(trayQuery.Hotkey)
+	if trayQuery.Disabled || combineKey == "" {
+		return nil
+	}
+
+	hk := &hotkey.Hotkey{}
+	if err := hk.Register(ctx, combineKey, func() {
+		queryCtx := util.WithCoreSessionContext(util.NewTraceContext())
+		if m.shouldIgnoreHotkeyTrigger(queryCtx) {
+			return
+		}
+
+		m.executeTrayQuery(queryCtx, trayQuery, tray.ClickRect{})
+	}); err != nil {
+		return err
+	}
+
+	m.trayQueryHotkeys = append(m.trayQueryHotkeys, hk)
+	return nil
+}
+
+func (m *Manager) unregisterQueryHotkeys(ctx context.Context) {
+	for _, hk := range m.queryHotkeys {
+		hk.Unregister(ctx)
+	}
+	m.queryHotkeys = nil
+}
+
+func (m *Manager) unregisterTrayQueryHotkeys(ctx context.Context) {
+	for _, hk := range m.trayQueryHotkeys {
+		hk.Unregister(ctx)
+	}
+	m.trayQueryHotkeys = nil
+}
+
 func (m *Manager) StartWebsocketAndWait(ctx context.Context) {
 	serveAndWait(ctx, m.serverPort)
 }
@@ -654,16 +691,22 @@ func (m *Manager) PostSettingUpdate(ctx context.Context, key string, value strin
 	case "QueryHotkeys":
 		// unregister previous hotkeys
 		logger.Info(ctx, "post update query hotkeys, unregister previous query hotkeys")
-		for _, hk := range m.queryHotkeys {
-			hk.Unregister(ctx)
-		}
-		m.queryHotkeys = nil
+		m.unregisterQueryHotkeys(ctx)
 
 		queryHotkeys := setting.GetSettingManager().GetWoxSetting(ctx).QueryHotkeys.Get()
 		for _, queryHotkey := range queryHotkeys {
 			m.RegisterQueryHotkey(ctx, queryHotkey)
 		}
 	case "TrayQueries":
+		logger.Info(ctx, "post update tray query hotkeys, unregister previous tray query hotkeys")
+		m.unregisterTrayQueryHotkeys(ctx)
+
+		for _, trayQuery := range setting.GetSettingManager().GetWoxSetting(ctx).TrayQueries.Get() {
+			if err := m.RegisterTrayQueryHotkey(ctx, trayQuery); err != nil {
+				logger.Error(ctx, fmt.Sprintf("failed to register tray query hotkey: %s", err.Error()))
+			}
+		}
+
 		woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
 		if woxSetting.ShowTray.Get() {
 			m.refreshTrayQueryIcons(ctx)

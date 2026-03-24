@@ -668,6 +668,12 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 				Query: query,
 			}
 
+			if rawHotkey, ok := rawTrayQuery["Hotkey"]; ok {
+				if hotkey, ok := rawHotkey.(string); ok {
+					trayQuery.Hotkey = strings.TrimSpace(hotkey)
+				}
+			}
+
 			if rawShowQueryBox, ok := rawTrayQuery["ShowQueryBox"]; ok {
 				switch showQueryBox := rawShowQueryBox.(type) {
 				case bool:

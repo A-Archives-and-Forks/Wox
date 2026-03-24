@@ -145,6 +145,8 @@
   "ui_tray_queries_tips": "Add tray query icons. Clicking an icon opens Wox near the tray/menu bar and runs the configured query.",
   "ui_tray_queries_icon": "Icon",
   "ui_tray_queries_icon_tooltip": "Tray icon for this query.",
+  "ui_tray_queries_hotkey": "Hotkey",
+  "ui_tray_queries_hotkey_tooltip": "Optional. Triggering this hotkey behaves the same as left-clicking this tray query icon.",
   "ui_tray_queries_query": "Query",
   "ui_tray_queries_query_tooltip": "The query to run when this tray icon is clicked.",
   "ui_tray_queries_show_query_box": "Show Query Box",

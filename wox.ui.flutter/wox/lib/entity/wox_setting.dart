@@ -254,6 +254,7 @@ class QueryShortcut {
 class TrayQuery {
   late WoxImage icon;
 
+  late String hotkey;
   late String query;
   late String width;
   late String maxResultCount;
@@ -261,7 +262,7 @@ class TrayQuery {
 
   late bool disabled;
 
-  TrayQuery({required this.icon, required this.query, required this.width, required this.maxResultCount, required this.showQueryBox, required this.disabled});
+  TrayQuery({required this.icon, required this.hotkey, required this.query, required this.width, required this.maxResultCount, required this.showQueryBox, required this.disabled});
 
   TrayQuery.fromJson(Map<String, dynamic> json) {
     if (json['Icon'] is Map<String, dynamic>) {
@@ -271,6 +272,7 @@ class TrayQuery {
     } else {
       icon = WoxImage.empty();
     }
+    hotkey = json['Hotkey'] ?? '';
     query = json['Query'];
     if (json['Width'] == null) {
       width = "";
@@ -289,6 +291,7 @@ class TrayQuery {
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> data = <String, dynamic>{};
     data['Icon'] = icon;
+    data['Hotkey'] = hotkey;
     data['Query'] = query;
     data['Width'] = width;
     data['MaxResultCount'] = maxResultCount;

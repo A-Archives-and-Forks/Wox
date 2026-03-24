@@ -225,6 +225,12 @@ func run() {
 			util.GetLogger().Error(ctx, fmt.Sprintf("failed to register query hotkey: %s", registerQueryHotkeyErr.Error()))
 		}
 	}
+	for _, trayQuery := range woxSetting.TrayQueries.Get() {
+		registerTrayQueryHotkeyErr := ui.GetUIManager().RegisterTrayQueryHotkey(ctx, trayQuery)
+		if registerTrayQueryHotkeyErr != nil {
+			util.GetLogger().Error(ctx, fmt.Sprintf("failed to register tray query hotkey: %s", registerTrayQueryHotkeyErr.Error()))
+		}
+	}
 
 	if util.IsProd() {
 		util.Go(ctx, "start ui", func() {
