@@ -725,6 +725,7 @@ func (m *Manager) refreshTrayQueryIcons(ctx context.Context) {
 
 func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQuery, rect tray.ClickRect) {
 	queryCtx := util.WithCoreSessionContext(ctx)
+	queryCtx = util.WithShowSourceContext(queryCtx, string(common.ShowSourceTrayQuery))
 	query := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, trayQuery.Query)
 	plainQuery := common.PlainQuery{
 		QueryId:   uuid.NewString(),

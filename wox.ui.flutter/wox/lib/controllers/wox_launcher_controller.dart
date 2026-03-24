@@ -50,7 +50,7 @@ import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/log.dart';
 import 'package:wox/utils/picker.dart';
 import 'package:wox/utils/wox_setting_util.dart';
-import 'package:wox/utils/wox_webview_preview_inspector.dart';
+import 'package:wox/utils/wox_webview_util.dart';
 
 import 'package:wox/utils/wox_websocket_msg_util.dart';
 import 'package:wox/enums/wox_preview_type_enum.dart';
@@ -63,6 +63,9 @@ class WoxLauncherController extends GetxController {
   static const String localActionPreviewSearchId = "__local_preview_search__";
   static const String localActionOpenUpdateId = "__local_open_update__";
   static const String localActionOpenWebViewInspectorId = "__local_open_webview_inspector__";
+  static const String localActionWebViewRefreshId = "__local_webview_refresh__";
+  static const String localActionWebViewBackId = "__local_webview_back__";
+  static const String localActionWebViewForwardId = "__local_webview_forward__";
 
   //query related variables
   final currentQuery = PlainQuery.empty().obs;
@@ -136,6 +139,8 @@ class WoxLauncherController extends GetxController {
   double forceWindowWidth = 0;
   int forceMaxResultCount = 0;
   var forceHideOnBlur = false;
+  // Used to store the current query before it is overwritten by a tray query, so that we can restore it when the app is hidden again.
+  PlainQuery? queryBeforeTrayQuery;
 
   var positionBeforeOpenSetting = const Offset(0, 0);
   // Whether settings was opened when window was hidden (e.g., from tray)
@@ -338,6 +343,9 @@ class WoxLauncherController extends GetxController {
   String get previewSearchHotkeyLabel => Platform.isMacOS ? "Cmd+F" : "Ctrl+F";
 
   String get previewInspectorHotkey => Platform.isMacOS ? "cmd+alt+i" : "";
+  String get previewRefreshHotkey => Platform.isMacOS ? "cmd+r" : "";
+  String get previewBackHotkey => Platform.isMacOS ? "cmd+[" : "";
+  String get previewForwardHotkey => Platform.isMacOS ? "cmd+]" : "";
 
   String get moreActionsHotkey => Platform.isMacOS ? "cmd+j" : "alt+j";
 
@@ -532,12 +540,48 @@ class WoxLauncherController extends GetxController {
     if (Platform.isMacOS && currentPreview.value.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_WEBVIEW.code) {
       actions.add(
         WoxResultAction.local(
+          id: localActionWebViewRefreshId,
+          name: tr("ui_action_webview_refresh"),
+          hotkey: previewRefreshHotkey,
+          emoji: "🔄",
+          handler: (_) {
+            unawaited(WoxWebViewUtil.refresh());
+            return true;
+          },
+        ),
+      );
+      actions.add(
+        WoxResultAction.local(
+          id: localActionWebViewBackId,
+          name: tr("ui_action_webview_go_back"),
+          hotkey: previewBackHotkey,
+          emoji: "◀️",
+          handler: (_) {
+            unawaited(WoxWebViewUtil.goBack());
+            return true;
+          },
+        ),
+      );
+      actions.add(
+        WoxResultAction.local(
+          id: localActionWebViewForwardId,
+          name: tr("ui_action_webview_go_forward"),
+          hotkey: previewForwardHotkey,
+          emoji: "▶️",
+          handler: (_) {
+            unawaited(WoxWebViewUtil.goForward());
+            return true;
+          },
+        ),
+      );
+      actions.add(
+        WoxResultAction.local(
           id: localActionOpenWebViewInspectorId,
-          name: "Open Inspector",
+          name: tr("ui_action_webview_open_inspector"),
           hotkey: previewInspectorHotkey,
           emoji: "🧰",
           handler: (_) {
-            unawaited(WoxWebViewPreviewInspector.openInspector());
+            unawaited(WoxWebViewUtil.openInspector());
             return true;
           },
         ),
@@ -821,6 +865,48 @@ class WoxLauncherController extends GetxController {
     return WoxThemeUtil.instance.getResultListViewHeightByCount(getMaxResultCount());
   }
 
+  double getMaxResultContainerHeight() {
+    return getMaxResultListViewHeight() +
+        WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingTop +
+        WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingBottom;
+  }
+
+  PlainQuery cloneQuery(PlainQuery query, {String? queryId}) {
+    return PlainQuery(
+      queryId: queryId ?? query.queryId,
+      queryType: query.queryType,
+      queryText: query.queryText,
+      querySelection: Selection(type: query.querySelection.type, text: query.querySelection.text, filePaths: List<String>.from(query.querySelection.filePaths)),
+    );
+  }
+
+  void preserveQueryBeforeTrayQuery(String traceId) {
+    if (queryBeforeTrayQuery != null) {
+      return;
+    }
+
+    final query = currentQuery.value;
+    if (query.isEmpty) {
+      queryBeforeTrayQuery = PlainQuery.emptyInput();
+    } else {
+      queryBeforeTrayQuery = cloneQuery(query);
+    }
+
+    Logger.instance.debug(traceId, "preserve current query before tray query: ${queryBeforeTrayQuery!.queryText}");
+  }
+
+  Future<void> restoreQueryAfterTrayQuery(String traceId) async {
+    final preservedQuery = queryBeforeTrayQuery;
+    queryBeforeTrayQuery = null;
+    if (preservedQuery == null) {
+      return;
+    }
+
+    final restoredQuery = cloneQuery(preservedQuery, queryId: const UuidV4().generate());
+    Logger.instance.debug(traceId, "restore preserved query after tray query: ${restoredQuery.queryText}");
+    await onQueryChanged(traceId, restoredQuery, "restore query after tray query");
+  }
+
   Future<void> hideApp(String traceId) async {
     //clear query box text if query type is selection or launch mode is fresh
     if (currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code || lastLaunchMode == WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code) {
@@ -845,6 +931,7 @@ class WoxLauncherController extends GetxController {
 
     await windowManager.hide();
     await WoxApi.instance.onHide(traceId);
+    await restoreQueryAfterTrayQuery(traceId);
   }
 
   void saveWindowPositionIfNeeded() {
@@ -1372,6 +1459,13 @@ class WoxLauncherController extends GetxController {
       showApp(msg.traceId, ShowAppParams.fromJson(msg.data));
       responseWoxWebsocketRequest(msg, true, null);
     } else if (msg.method == "ChangeQuery") {
+      // If the show source is tray query, it means the query change is triggered by the tray icon right click menu,
+      // in that case we need to preserve the current query before changing to the new query, and restore it when the app is hidden again.
+      // This is because the tray query is usually a temporary query that only used for quick actions, and user usually want to keep their original query after using the tray query.
+      final showSource = msg.data['ShowSource'] as String? ?? WoxShowSourceEnum.WOX_SHOW_SOURCE_DEFAULT.code;
+      if (showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_TRAY_QUERY.code) {
+        preserveQueryBeforeTrayQuery(msg.traceId);
+      }
       await onQueryChanged(msg.traceId, PlainQuery.fromJson(msg.data), "receive change query from wox", moveCursorToEnd: true);
       focusQueryBox();
       responseWoxWebsocketRequest(msg, true, null);

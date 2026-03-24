@@ -199,7 +199,7 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
-      constraints: BoxConstraints(maxHeight: WoxThemeUtil.instance.getMaxResultContainerHeight()),
+      constraints: BoxConstraints(maxHeight: controller.getMaxResultContainerHeight()),
       child: Obx(
         () => Stack(
           fit: controller.isShowActionPanel.value || controller.isShowPreviewPanel.value ? StackFit.expand : StackFit.loose,

@@ -33,11 +33,22 @@ type uiImpl struct {
 }
 
 func (u *uiImpl) ChangeQuery(ctx context.Context, query common.PlainQuery) {
-	u.invokeWebsocketMethod(ctx, "ChangeQuery", query)
+	data := map[string]any{
+		"QueryId":        query.QueryId,
+		"QueryType":      query.QueryType,
+		"QueryText":      query.QueryText,
+		"QuerySelection": query.QuerySelection,
+	}
+
+	if showSource := util.GetContextShowSource(ctx); showSource != "" {
+		data["ShowSource"] = showSource
+	}
+
+	u.invokeWebsocketMethod(ctx, "ChangeQuery", data)
 }
 
 func (u *uiImpl) RefreshQuery(ctx context.Context, preserveSelectedIndex bool) {
-	u.invokeWebsocketMethod(ctx, "RefreshQuery", map[string]interface{}{
+	u.invokeWebsocketMethod(ctx, "RefreshQuery", map[string]any{
 		"preserveSelectedIndex": preserveSelectedIndex,
 	})
 }

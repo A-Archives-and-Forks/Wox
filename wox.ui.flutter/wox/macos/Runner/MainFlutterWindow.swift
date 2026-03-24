@@ -22,6 +22,12 @@ class MainFlutterWindow: NSPanel {
       switch call.method {
       case "openInspector":
         result(WoxWebViewPreviewPlugin.openInspector())
+      case "refresh":
+        result(WoxWebViewPreviewPlugin.refresh())
+      case "goBack":
+        result(WoxWebViewPreviewPlugin.goBack())
+      case "goForward":
+        result(WoxWebViewPreviewPlugin.goForward())
       default:
         result(FlutterMethodNotImplemented)
       }

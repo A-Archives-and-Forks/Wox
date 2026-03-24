@@ -108,6 +108,33 @@ class WoxWebViewPreviewPlugin: NSObject {
     activeWebView.perform(showInspectorSelector)
     return true
   }
+
+  static func refresh() -> Bool {
+    guard let activeWebView else {
+      return false
+    }
+
+    activeWebView.reload()
+    return true
+  }
+
+  static func goBack() -> Bool {
+    guard let activeWebView, activeWebView.canGoBack else {
+      return false
+    }
+
+    activeWebView.goBack()
+    return true
+  }
+
+  static func goForward() -> Bool {
+    guard let activeWebView, activeWebView.canGoForward else {
+      return false
+    }
+
+    activeWebView.goForward()
+    return true
+  }
 }
 
 class WoxWebViewPreviewFactory: NSObject, FlutterPlatformViewFactory {
