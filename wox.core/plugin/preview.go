@@ -15,6 +15,7 @@ const (
 	WoxPreviewTypeFile     = "file"   // when type is file(can be *.md, *.jpg, *.pdf and so on), data should be url/filepath
 	WoxPreviewTypeRemote   = "remote" // when type is remote, data should be url to load WoxPreview
 	WoxPreviewTypeTerminal = "terminal"
+	WoxPreviewTypeWebView  = "webview" // when type is webview, data should be a remote url rendered by a native embedded webview
 
 	// internal use
 	WoxPreviewTypePluginDetail = "plugin_detail" // when type is plugin_detail, data should be JSON string of plugin metadata

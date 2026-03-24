@@ -148,6 +148,8 @@
   "ui_tray_queries_show_query_box_tooltip": "Quando ativado, mostra a caixa de consulta ao abrir esta consulta da bandeja.",
   "ui_tray_queries_width": "Largura",
   "ui_tray_queries_width_tooltip": "Opcional. Largura da janela (px) para esta consulta da bandeja. Vazio usa metade da largura do app.",
+  "ui_tray_queries_max_result_count": "Máximo de resultados",
+  "ui_tray_queries_max_result_count_tooltip": "Opcional. Número máximo de resultados mostrados para esta consulta da bandeja (5-15 itens). Vazio usa a configuração global de máximo de resultados.",
   "ui_ai_providers_name": "Nome do provedor",
   "ui_ai_providers_name_tooltip": "O nome do provedor de IA. Se o provedor desejado nao estiver na lista, escolha openai e configure um alias e um host de API personalizado. Muitos provedores sao compativeis com o formato de host da OpenAI.",
   "ui_ai_providers_alias": "Alias",

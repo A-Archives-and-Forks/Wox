@@ -709,6 +709,28 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			if rawMaxResultCount, ok := rawTrayQuery["MaxResultCount"]; ok {
+				switch maxResultCount := rawMaxResultCount.(type) {
+				case float64:
+					trayQuery.MaxResultCount = int(maxResultCount)
+				case int:
+					trayQuery.MaxResultCount = maxResultCount
+				case string:
+					maxResultCount = strings.TrimSpace(maxResultCount)
+					if maxResultCount != "" {
+						if parsed, parseErr := strconv.Atoi(maxResultCount); parseErr == nil {
+							trayQuery.MaxResultCount = parsed
+						}
+					}
+				}
+				if trayQuery.MaxResultCount < 0 {
+					trayQuery.MaxResultCount = 0
+				}
+				if trayQuery.MaxResultCount > 0 {
+					trayQuery.MaxResultCount = clampInt(trayQuery.MaxResultCount, 5, 15)
+				}
+			}
+
 			if rawIcon, ok := rawTrayQuery["Icon"]; ok {
 				switch icon := rawIcon.(type) {
 				case map[string]any:

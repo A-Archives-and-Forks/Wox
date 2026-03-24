@@ -151,6 +151,8 @@
   "ui_tray_queries_show_query_box_tooltip": "When enabled, show the query box after this tray query opens.",
   "ui_tray_queries_width": "Width",
   "ui_tray_queries_width_tooltip": "Optional. Window width in pixels for this tray query. Empty means app width / 2.",
+  "ui_tray_queries_max_result_count": "Maximum Results",
+  "ui_tray_queries_max_result_count_tooltip": "Optional. Maximum number of results shown for this tray query (5-15 items). Empty uses the global maximum results setting.",
   "ui_ai_providers_name": "Provider Name",
   "ui_ai_providers_name_tooltip": "The AI provider name. If your provider is not listed, choose openai and configure it with an alias and custom API host. Many providers are compatible with the OpenAI host format.",
   "ui_ai_providers_alias": "Alias",

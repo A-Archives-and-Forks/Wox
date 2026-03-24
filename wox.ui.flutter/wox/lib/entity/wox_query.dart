@@ -410,6 +410,7 @@ class ShowAppParams {
   // WindowRect is only used in LayoutModeExplorer to anchor Wox near explorer's bottom-right.
   WindowRect? windowRect;
   late int windowWidth;
+  late int maxResultCount;
   late List<QueryHistory> queryHistories;
   late String launchMode;
   late String startPage;
@@ -423,6 +424,7 @@ class ShowAppParams {
     required this.position,
     this.windowRect,
     this.windowWidth = 0,
+    this.maxResultCount = 0,
     required this.queryHistories,
     required this.launchMode,
     required this.startPage,
@@ -441,6 +443,7 @@ class ShowAppParams {
       windowRect = WindowRect.fromJson(json['WindowRect']);
     }
     windowWidth = json['WindowWidth'] ?? 0;
+    maxResultCount = json['MaxResultCount'] ?? 0;
     queryHistories = <QueryHistory>[];
     if (json['QueryHistories'] != null) {
       final List<dynamic> histories = json['QueryHistories'];

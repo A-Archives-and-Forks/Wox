@@ -21,6 +21,7 @@ import 'package:wox/components/wox_markdown.dart';
 import 'package:wox/components/wox_plugin_detail_view.dart';
 import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/components/wox_update_view.dart';
+import 'package:wox/components/wox_webview_preview.dart';
 import 'package:wox/components/wox_terminal_preview_view.dart';
 import 'package:wox/controllers/wox_ai_chat_controller.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
@@ -193,6 +194,9 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_TERMINAL.code) {
       isCustomScrollable = true;
       contentWidget = WoxTerminalPreviewView(woxPreview: widget.woxPreview, woxTheme: widget.woxTheme);
+    } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_WEBVIEW.code) {
+      isCustomScrollable = true;
+      contentWidget = WoxWebViewPreview(previewData: widget.woxPreview.previewData);
     }
 
     if (widget.woxPreview.scrollPosition == WoxPreviewScrollPositionEnum.WOX_PREVIEW_SCROLL_POSITION_BOTTOM.code) {

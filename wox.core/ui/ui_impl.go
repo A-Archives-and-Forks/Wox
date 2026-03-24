@@ -317,6 +317,7 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 		"Position":       position,
 		"WindowRect":     windowRect,
 		"WindowWidth":    showContext.WindowWidth,
+		"MaxResultCount": showContext.MaxResultCount,
 		"QueryHistories": setting.GetSettingManager().GetLatestQueryHistory(ctx, 10),
 		"LaunchMode":     woxSetting.LaunchMode.Get(),
 		"StartPage":      woxSetting.StartPage.Get(),

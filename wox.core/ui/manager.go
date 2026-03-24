@@ -756,6 +756,7 @@ func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQu
 		ShowSource:     common.ShowSourceTrayQuery,
 		WindowPosition: &position,
 		WindowWidth:    windowWidth,
+		MaxResultCount: trayQuery.MaxResultCount,
 		LayoutMode:     common.LayoutModeTrayQuery,
 	})
 }

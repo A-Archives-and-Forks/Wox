@@ -124,7 +124,7 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
         if (controller.isGridLayout.value) {
           return WoxGridView(
             controller: controller.resultGridViewController,
-            maxHeight: WoxThemeUtil.instance.getMaxResultListViewHeight(),
+            maxHeight: controller.getMaxResultListViewHeight(),
             onItemTapped: () {
               controller.hideActionPanel(const UuidV4().generate());
               controller.hideFormActionPanel(const UuidV4().generate(), reason: "grid result item tapped");
@@ -140,7 +140,7 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
           controller: controller.resultListViewController,
           listViewType: WoxListViewTypeEnum.WOX_LIST_VIEW_TYPE_RESULT.code,
           showFilter: false,
-          maxHeight: WoxThemeUtil.instance.getMaxResultListViewHeight(),
+          maxHeight: controller.getMaxResultListViewHeight(),
           onItemTapped: () {
             controller.hideActionPanel(const UuidV4().generate());
             controller.hideFormActionPanel(const UuidV4().generate(), reason: "list result item tapped");

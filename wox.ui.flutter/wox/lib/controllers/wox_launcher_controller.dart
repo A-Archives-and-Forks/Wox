@@ -50,6 +50,7 @@ import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/log.dart';
 import 'package:wox/utils/picker.dart';
 import 'package:wox/utils/wox_setting_util.dart';
+import 'package:wox/utils/wox_webview_preview_inspector.dart';
 
 import 'package:wox/utils/wox_websocket_msg_util.dart';
 import 'package:wox/enums/wox_preview_type_enum.dart';
@@ -61,6 +62,7 @@ class WoxLauncherController extends GetxController {
   static const String localActionTogglePreviewFullscreenId = "__local_toggle_preview_fullscreen__";
   static const String localActionPreviewSearchId = "__local_preview_search__";
   static const String localActionOpenUpdateId = "__local_open_update__";
+  static const String localActionOpenWebViewInspectorId = "__local_open_webview_inspector__";
 
   //query related variables
   final currentQuery = PlainQuery.empty().obs;
@@ -132,6 +134,7 @@ class WoxLauncherController extends GetxController {
   final isQueryBoxVisible = true.obs;
   final isToolbarHiddenForce = false.obs;
   double forceWindowWidth = 0;
+  int forceMaxResultCount = 0;
   var forceHideOnBlur = false;
 
   var positionBeforeOpenSetting = const Offset(0, 0);
@@ -334,6 +337,8 @@ class WoxLauncherController extends GetxController {
 
   String get previewSearchHotkeyLabel => Platform.isMacOS ? "Cmd+F" : "Ctrl+F";
 
+  String get previewInspectorHotkey => Platform.isMacOS ? "cmd+alt+i" : "";
+
   String get moreActionsHotkey => Platform.isMacOS ? "cmd+j" : "alt+j";
 
   String get moreActionsHotkeyLabel => Platform.isMacOS ? "Cmd+J" : "Alt+J";
@@ -524,6 +529,21 @@ class WoxLauncherController extends GetxController {
       );
     }
 
+    if (Platform.isMacOS && currentPreview.value.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_WEBVIEW.code) {
+      actions.add(
+        WoxResultAction.local(
+          id: localActionOpenWebViewInspectorId,
+          name: "Open Inspector",
+          hotkey: previewInspectorHotkey,
+          emoji: "🧰",
+          handler: (_) {
+            unawaited(WoxWebViewPreviewInspector.openInspector());
+            return true;
+          },
+        ),
+      );
+    }
+
     if (supportsPreviewFullscreen(currentPreview.value)) {
       actions.add(
         WoxResultAction.local(
@@ -693,6 +713,7 @@ class WoxLauncherController extends GetxController {
       isQueryBoxVisible.value = true;
       isToolbarHiddenForce.value = true;
       forceWindowWidth = WoxSettingUtil.instance.currentSetting.appWidth.toDouble() / 2;
+      forceMaxResultCount = 0;
       forceHideOnBlur = true;
     }
 
@@ -702,6 +723,7 @@ class WoxLauncherController extends GetxController {
       isToolbarHiddenForce.value = true;
       final configuredTrayWidth = params.windowWidth;
       forceWindowWidth = configuredTrayWidth > 0 ? configuredTrayWidth.toDouble() : WoxSettingUtil.instance.currentSetting.appWidth.toDouble() / 2;
+      forceMaxResultCount = params.maxResultCount;
       forceHideOnBlur = true;
     }
 
@@ -779,7 +801,24 @@ class WoxLauncherController extends GetxController {
     isQueryBoxVisible.value = true;
     isToolbarHiddenForce.value = false;
     forceWindowWidth = 0;
+    forceMaxResultCount = 0;
     forceHideOnBlur = false;
+  }
+
+  int getMaxResultCount() {
+    // we allow the show app params to override the max result count for special scenarios like tray query,
+    // because in that case, the user may want to show more results in a limited space,
+    // so they can configure a smaller window width and a larger max result count to show more results in the same space.
+    if (forceMaxResultCount > 0) {
+      return forceMaxResultCount;
+    }
+
+    final configuredCount = WoxSettingUtil.instance.currentSetting.maxResultCount;
+    return configuredCount > 0 ? configuredCount : MAX_LIST_VIEW_ITEM_COUNT;
+  }
+
+  double getMaxResultListViewHeight() {
+    return WoxThemeUtil.instance.getResultListViewHeightByCount(getMaxResultCount());
   }
 
   Future<void> hideApp(String traceId) async {
@@ -1701,7 +1740,7 @@ class WoxLauncherController extends GetxController {
   }
 
   double calculateWindowHeight() {
-    final maxResultCount = WoxSettingUtil.instance.currentSetting.maxResultCount;
+    final maxResultCount = getMaxResultCount();
     final maxHeight = WoxThemeUtil.instance.getResultListViewHeightByCount(maxResultCount);
     final itemCount = activeResultViewController.items.length;
     double resultHeight;

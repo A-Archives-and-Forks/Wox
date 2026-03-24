@@ -106,9 +106,10 @@ type ShowContext struct {
 	// WindowRect is only effective in LayoutModeExplorer.
 	// The Flutter side uses it as the explorer anchor rect and computes a sticky
 	// bottom-right overlay position from that rect.
-	WindowRect  *WindowRect
-	WindowWidth int
-	LayoutMode  LayoutMode
+	WindowRect     *WindowRect
+	WindowWidth    int
+	MaxResultCount int
+	LayoutMode     LayoutMode
 }
 
 type WindowPosition struct {
