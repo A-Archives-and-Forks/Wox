@@ -13,6 +13,10 @@ UINT queryIconIds[256] = {0};
 HICON queryIconHandles[256] = {0};
 UINT queryIconMenuIds[256] = {0};
 wchar_t *queryIconMenuTitles[256] = {0};
+DWORD lastActivateTick = 0;
+UINT lastActivateMessage = 0;
+UINT lastActivateIconId = 0;
+UINT lastActivateEventCode = 0;
 
 void reportClick(UINT_PTR menuId);
 void reportLeftClick();
@@ -58,6 +62,32 @@ static void showQueryIconMenu(UINT iconId)
 	TrackPopupMenu(queryMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, p.x, p.y, 0, hwnd, NULL);
 	PostMessage(hwnd, WM_NULL, 0, 0);
 	DestroyMenu(queryMenu);
+}
+
+static BOOL isTrayActivateEvent(UINT eventCode)
+{
+	return eventCode == NIN_SELECT || eventCode == NIN_KEYSELECT || eventCode == WM_LBUTTONUP;
+}
+
+static BOOL isDuplicateTrayActivateEvent(UINT callbackMessage, UINT iconId, UINT eventCode)
+{
+	if (!isTrayActivateEvent(eventCode))
+	{
+		return FALSE;
+	}
+
+	DWORD now = GetTickCount();
+	BOOL isSelectPair = (eventCode == NIN_SELECT && lastActivateEventCode == WM_LBUTTONUP) ||
+						(eventCode == WM_LBUTTONUP && lastActivateEventCode == NIN_SELECT);
+	BOOL isSameTarget = lastActivateMessage == callbackMessage && lastActivateIconId == iconId;
+	BOOL isRecentPair = now - lastActivateTick <= 250;
+
+	lastActivateTick = now;
+	lastActivateMessage = callbackMessage;
+	lastActivateIconId = iconId;
+	lastActivateEventCode = eventCode;
+
+	return isSameTarget && isSelectPair && isRecentPair;
 }
 
 void addMenuItem(UINT_PTR menuId, const char *title)
@@ -129,7 +159,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		{
 			showMenu();
 		}
-		else if (eventCode == NIN_SELECT || eventCode == NIN_KEYSELECT || eventCode == WM_LBUTTONUP)
+		else if (!isDuplicateTrayActivateEvent(WM_APP + 1, 1, eventCode) && isTrayActivateEvent(eventCode))
 		{
 			reportLeftClick();
 		}
@@ -144,7 +174,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			iconId = (UINT)wParam;
 		}
 
-		if (eventCode == NIN_SELECT || eventCode == NIN_KEYSELECT || eventCode == WM_LBUTTONUP)
+		if (!isDuplicateTrayActivateEvent(WM_APP + 2, iconId, eventCode) && isTrayActivateEvent(eventCode))
 		{
 			NOTIFYICONIDENTIFIER nidIdentifier = {0};
 			nidIdentifier.cbSize = sizeof(NOTIFYICONIDENTIFIER);

@@ -47,6 +47,7 @@
 			"wox.plugin.nodejs": true,
 			"wox.plugin.python": true,
 			"wox.ui.flutter": true,
+			"wox.test": true,
 			"wox.core": true
 		},
 		"[python]": {
