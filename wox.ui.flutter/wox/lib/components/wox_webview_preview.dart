@@ -1,8 +1,8 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:wox/entity/wox_preview_webview_data.dart';
 
 class WoxWebViewPreview extends StatelessWidget {
   static const String viewType = "wox/webview_preview";
@@ -11,25 +11,18 @@ class WoxWebViewPreview extends StatelessWidget {
 
   const WoxWebViewPreview({super.key, required this.previewData});
 
-  Map<String, dynamic> get creationParams {
-    try {
-      final decoded = jsonDecode(previewData);
-      if (decoded is Map<String, dynamic> && decoded["url"] is String) {
-        return decoded;
-      }
-    } catch (_) {
-      // Keep backward compatibility with plain URL payloads.
-    }
-
-    return {"url": previewData};
+  WoxPreviewWebviewData get webviewData {
+    return WoxPreviewWebviewData.fromPreviewData(previewData);
   }
 
   @override
   Widget build(BuildContext context) {
+    final preview = webviewData;
+
     if (!Platform.isMacOS) {
-      return SelectableText("WebView preview prototype is currently only available on macOS.\nURL: ${creationParams["url"] ?? previewData}");
+      return SelectableText("WebView preview prototype is currently only available on macOS.\nURL: ${preview.url}");
     }
 
-    return SizedBox.expand(child: AppKitView(key: ValueKey(previewData), viewType: viewType, creationParams: creationParams, creationParamsCodec: const StandardMessageCodec()));
+    return SizedBox.expand(child: AppKitView(key: ValueKey(previewData), viewType: viewType, creationParams: preview.toJson(), creationParamsCodec: const StandardMessageCodec()));
   }
 }

@@ -61,7 +61,8 @@
 			"editor.defaultFormatter": "swiftlang.swift-vscode"
 		},
 		"makefile.configureOnOpen": false,
-		"editor.formatOnSave": true
+		"editor.formatOnSave": true,
+		"go.lintOnSave": "off"
 	},
 	"extensions": {
 		"recommendations": [

@@ -15,7 +15,7 @@ const (
 	WoxPreviewTypeFile     = "file"   // when type is file(can be *.md, *.jpg, *.pdf and so on), data should be url/filepath
 	WoxPreviewTypeRemote   = "remote" // when type is remote, data should be url to load WoxPreview
 	WoxPreviewTypeTerminal = "terminal"
-	WoxPreviewTypeWebView  = "webview" // when type is webview, data should be a remote url rendered by a native embedded webview
+	WoxPreviewTypeWebView  = "webview" // when type is webview, data should be JSON string of WoxPreviewWebviewData
 
 	// internal use
 	WoxPreviewTypePluginDetail = "plugin_detail" // when type is plugin_detail, data should be JSON string of plugin metadata
@@ -41,4 +41,10 @@ func (p *WoxPreview) IsEmpty() bool {
 type WoxPreviewChatData struct {
 	Conversations []common.Conversation
 	Model         common.Model
+}
+
+type WoxPreviewWebviewData struct {
+	Url          string `json:"url"`
+	InjectCss    string `json:"injectCss,omitempty"`
+	CacheEnabled bool   `json:"cacheEnabled,omitempty"`
 }
