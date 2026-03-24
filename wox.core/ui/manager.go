@@ -814,6 +814,10 @@ func (m *Manager) toTrayIconBytes(ctx context.Context, icon common.WoxImage) []b
 		return resource.GetAppIcon()
 	}
 
+	if svgBytes, ok := m.toMacOSTrayVectorBytes(ctx, icon); ok {
+		return svgBytes
+	}
+
 	img, err := icon.ToImage()
 	if err != nil {
 		logger.Warn(ctx, fmt.Sprintf("failed to parse tray query icon, fallback to app icon: %s", err.Error()))
@@ -836,6 +840,32 @@ func (m *Manager) toTrayIconBytes(ctx context.Context, icon common.WoxImage) []b
 	}
 
 	return buf.Bytes()
+}
+
+func (m *Manager) toMacOSTrayVectorBytes(ctx context.Context, icon common.WoxImage) ([]byte, bool) {
+	if !util.IsMacOS() {
+		return nil, false
+	}
+
+	if icon.ImageType == common.WoxImageTypeSvg {
+		svgData := strings.TrimSpace(icon.ImageData)
+		if svgData == "" {
+			return nil, false
+		}
+		return []byte(svgData), true
+	}
+
+	if icon.ImageType == common.WoxImageTypeAbsolutePath && strings.EqualFold(filepath.Ext(icon.ImageData), ".svg") {
+		svgData, err := os.ReadFile(icon.ImageData)
+		if err != nil {
+			logger.Warn(ctx, fmt.Sprintf("failed to read tray query svg icon, fallback to raster path: %s", err.Error()))
+			return nil, false
+		}
+
+		return svgData, true
+	}
+
+	return nil, false
 }
 
 func wrapPNGAsICO(pngData []byte, width int, height int) ([]byte, error) {

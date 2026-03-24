@@ -122,12 +122,7 @@ func (w *WoxImage) ToPng() (image.Image, error) {
 		if imgErr != nil {
 			return nil, imgErr
 		}
-
-		buf := new(bytes.Buffer)
-		encodeErr := fastPngEncoder.Encode(buf, img)
-		if encodeErr != nil {
-			return nil, encodeErr
-		}
+		return img, nil
 	}
 
 	return nil, NOT_PNG_ERR

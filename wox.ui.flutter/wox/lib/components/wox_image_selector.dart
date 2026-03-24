@@ -27,6 +27,8 @@ class WoxImageSelector extends StatelessWidget {
 
   const WoxImageSelector({super.key, required this.value, required this.onChanged, this.previewSize = 80});
 
+  static const List<String> supportedUploadExtensions = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "svg"];
+
   static const List<EmojiGroupData> emojiGroups = [
     EmojiGroupData(
       labelKey: "ui_select_emoji_group_recommended",
@@ -438,6 +440,33 @@ class WoxImageSelector extends StatelessWidget {
     return Get.find<WoxSettingController>().tr(key);
   }
 
+  bool _isSvgFile(String filePath) {
+    return filePath.toLowerCase().endsWith(".svg");
+  }
+
+  Future<WoxImage?> _pickUploadedImage() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: supportedUploadExtensions, allowMultiple: false);
+
+    if (result == null || result.files.isEmpty || result.files.first.path == null) {
+      return null;
+    }
+
+    final filePath = result.files.first.path!;
+    final file = File(filePath);
+    if (!await file.exists()) {
+      return null;
+    }
+
+    if (_isSvgFile(filePath)) {
+      final svgContent = await file.readAsString();
+      return WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_SVG.code, imageData: svgContent);
+    }
+
+    final bytes = await file.readAsBytes();
+    final base64Image = base64Encode(bytes);
+    return WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_BASE64.code, imageData: "data:image/png;base64,$base64Image");
+  }
+
   Future<String?> showEmojiPicker(BuildContext context) async {
     final initialEmoji = value.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_EMOJI.code ? value.imageData : null;
 
@@ -482,16 +511,9 @@ class WoxImageSelector extends StatelessWidget {
               icon: Icon(Icons.file_upload_outlined, size: 14, color: getThemeTextColor()),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               onPressed: () async {
-                final result = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: false);
-
-                if (result != null && result.files.isNotEmpty && result.files.first.path != null) {
-                  final filePath = result.files.first.path!;
-                  final file = File(filePath);
-                  if (await file.exists()) {
-                    final bytes = await file.readAsBytes();
-                    final base64Image = base64Encode(bytes);
-                    onChanged(WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_BASE64.code, imageData: "data:image/png;base64,$base64Image"));
-                  }
+                final selectedImage = await _pickUploadedImage();
+                if (selectedImage != null) {
+                  onChanged(selectedImage);
                 }
               },
             ),
