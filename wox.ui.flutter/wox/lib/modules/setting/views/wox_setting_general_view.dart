@@ -323,7 +323,7 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
                 item: PluginSettingValueTable.fromJson({
                   "Key": "TrayQueries",
                   "Columns": [
-                    {"Key": "Icon", "Label": "i18n:ui_tray_queries_icon", "Tooltip": "i18n:ui_tray_queries_icon_tooltip", "Type": "woxImage", "Width": 100},
+                    {"Key": "Icon", "Label": "i18n:ui_tray_queries_icon", "Tooltip": "i18n:ui_tray_queries_icon_tooltip", "Type": "woxImage", "Width": 40},
                     {
                       "Key": "Query",
                       "Label": "i18n:ui_tray_queries_query",
@@ -338,10 +338,10 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
                       "Key": "ShowQueryBox",
                       "Label": "i18n:ui_tray_queries_show_query_box",
                       "Tooltip": "i18n:ui_tray_queries_show_query_box_tooltip",
-                      "Width": 90,
+                      "Width": 80,
                       "Type": "checkbox",
                     },
-                    {"Key": "Width", "Label": "i18n:ui_tray_queries_width", "Tooltip": "i18n:ui_tray_queries_width_tooltip", "Type": "text", "Width": 90, "TextMaxLines": 1},
+                    {"Key": "Width", "Label": "i18n:ui_tray_queries_width", "Tooltip": "i18n:ui_tray_queries_width_tooltip", "Type": "text", "Width": 40, "TextMaxLines": 1},
                     {
                       "Key": "MaxResultCount",
                       "Label": "i18n:ui_tray_queries_max_result_count",
@@ -350,7 +350,7 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
                       "Width": 90,
                       "TextMaxLines": 1,
                     },
-                    {"Key": "Disabled", "Label": "i18n:ui_disabled", "Tooltip": "i18n:ui_disabled_tooltip", "Width": 60, "Type": "checkbox"},
+                    {"Key": "Disabled", "Label": "i18n:ui_disabled", "Tooltip": "i18n:ui_disabled_tooltip", "Width": 50, "Type": "checkbox"},
                   ],
                   "SortColumnKey": "",
                 }),

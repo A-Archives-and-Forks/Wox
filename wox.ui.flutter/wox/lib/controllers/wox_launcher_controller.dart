@@ -334,6 +334,10 @@ class WoxLauncherController extends GetxController {
 
   bool get isToolbarShowedWithoutResults => isShowToolbar && activeResultViewController.items.isEmpty;
 
+  bool isFullscreenPreviewOnly() {
+    return !isQueryBoxVisible.value && isShowPreviewPanel.value && resultPreviewRatio.value == 0;
+  }
+
   String get previewFullscreenHotkey => "ctrl+b";
 
   String get previewFullscreenHotkeyLabel => "Ctrl+B";
@@ -1864,7 +1868,7 @@ class WoxLauncherController extends GetxController {
       resultHeight = math.max(resultHeight, WoxThemeUtil.instance.getResultListViewHeightByCount(1));
     }
 
-    if (!isQueryBoxVisible.value) {
+    if (!isQueryBoxVisible.value && !isFullscreenPreviewOnly()) {
       resultHeight += WoxThemeUtil.instance.currentTheme.value.appPaddingBottom.toDouble();
     }
 

@@ -208,7 +208,7 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
     }
 
     return Container(
-      padding: const EdgeInsets.only(top: 10.0, bottom: 10.0, left: 10.0),
+      padding: launcherController.isFullscreenPreviewOnly() ? EdgeInsets.zero : const EdgeInsets.only(top: 10.0, bottom: 10.0, left: 10.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

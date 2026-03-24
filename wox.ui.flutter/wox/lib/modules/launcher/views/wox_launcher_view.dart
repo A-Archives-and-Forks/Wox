@@ -28,6 +28,11 @@ class WoxLauncherView extends GetView<WoxLauncherController> {
         bottomPadding = 0.0;
       }
 
+      final contentPadding =
+          controller.isFullscreenPreviewOnly()
+              ? EdgeInsets.zero
+              : EdgeInsets.only(top: topPadding, right: theme.appPaddingRight.toDouble(), bottom: bottomPadding, left: theme.appPaddingLeft.toDouble());
+
       Widget content = resultView;
       if (isQueryBoxVisible) {
         content = Column(
@@ -61,13 +66,7 @@ class WoxLauncherView extends GetView<WoxLauncherController> {
             child: Column(
               children: [
                 if (!isQueryBoxVisible) const Offstage(offstage: true, child: WoxQueryBoxView()),
-                Flexible(
-                  fit: isQueryBoxVisible ? FlexFit.tight : FlexFit.loose,
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding, right: theme.appPaddingRight.toDouble(), bottom: bottomPadding, left: theme.appPaddingLeft.toDouble()),
-                    child: content,
-                  ),
-                ),
+                Flexible(fit: isQueryBoxVisible ? FlexFit.tight : FlexFit.loose, child: Padding(padding: contentPadding, child: content)),
                 if (controller.isShowToolbar && !controller.isToolbarHiddenForce.value) const SizedBox(height: 40, child: WoxQueryToolbarView()),
               ],
             ),
