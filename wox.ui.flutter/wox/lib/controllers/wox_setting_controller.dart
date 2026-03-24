@@ -73,7 +73,10 @@ class WoxSettingController extends GetxController {
   final isUpgradingPlugin = false.obs;
   final pluginInstallError = ''.obs;
   final FocusNode settingFocusNode = FocusNode();
+  final Map<String, GlobalKey> generalSectionKeys = <String, GlobalKey>{};
+  final RxnInt pendingTrayQueryEditRowIndex = RxnInt();
   bool _hasPreloadedSettingViewData = false;
+  String _pendingGeneralSectionAnchor = '';
 
   @override
   void onInit() {
@@ -93,6 +96,76 @@ class WoxSettingController extends GetxController {
     unawaited(refreshRuntimeStatuses());
     unawaited(refreshUsageStats());
     unawaited(reloadPlugins(traceId));
+  }
+
+  GlobalKey getGeneralSectionKey(String sectionId) {
+    return generalSectionKeys.putIfAbsent(sectionId, () => GlobalKey(debugLabel: 'settings-general-$sectionId'));
+  }
+
+  void focusGeneralSection(String sectionId) {
+    final request = _parseGeneralSectionFocusRequest(sectionId);
+    if (request.sectionId.isEmpty) {
+      return;
+    }
+
+    _pendingGeneralSectionAnchor = request.sectionId;
+    pendingTrayQueryEditRowIndex.value = request.trayQueryEditRowIndex;
+    _schedulePendingGeneralSectionFocus();
+  }
+
+  int? consumePendingTrayQueryEditRowIndex() {
+    final rowIndex = pendingTrayQueryEditRowIndex.value;
+    pendingTrayQueryEditRowIndex.value = null;
+    return rowIndex;
+  }
+
+  void notifyGeneralViewReady() {
+    if (_pendingGeneralSectionAnchor.isEmpty) {
+      return;
+    }
+
+    _schedulePendingGeneralSectionFocus();
+  }
+
+  void _schedulePendingGeneralSectionFocus({int attempt = 0}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_pendingGeneralSectionAnchor.isEmpty || activeNavPath.value != 'general') {
+        return;
+      }
+
+      final targetKey = generalSectionKeys[_pendingGeneralSectionAnchor];
+      final targetContext = targetKey?.currentContext;
+      if (targetContext == null) {
+        if (attempt >= 10) {
+          return;
+        }
+
+        Future.delayed(const Duration(milliseconds: 80), () {
+          _schedulePendingGeneralSectionFocus(attempt: attempt + 1);
+        });
+        return;
+      }
+
+      Scrollable.ensureVisible(targetContext, duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic, alignment: 0.1);
+      _pendingGeneralSectionAnchor = '';
+    });
+  }
+
+  _GeneralSectionFocusRequest _parseGeneralSectionFocusRequest(String rawRequest) {
+    final normalizedRequest = rawRequest.trim();
+    if (normalizedRequest.isEmpty) {
+      return const _GeneralSectionFocusRequest(sectionId: '');
+    }
+
+    final separatorIndex = normalizedRequest.indexOf(':');
+    if (separatorIndex < 0) {
+      return _GeneralSectionFocusRequest(sectionId: normalizedRequest);
+    }
+
+    final sectionId = normalizedRequest.substring(0, separatorIndex).trim();
+    final rawRowIndex = normalizedRequest.substring(separatorIndex + 1).trim();
+    final rowIndex = int.tryParse(rawRowIndex);
+    return _GeneralSectionFocusRequest(sectionId: sectionId, trayQueryEditRowIndex: rowIndex);
   }
 
   Future<void> loadLang(String langCode) async {
@@ -1030,4 +1103,11 @@ class WoxSettingController extends GetxController {
     settingFocusNode.dispose();
     super.onClose();
   }
+}
+
+class _GeneralSectionFocusRequest {
+  final String sectionId;
+  final int? trayQueryEditRowIndex;
+
+  const _GeneralSectionFocusRequest({required this.sectionId, this.trayQueryEditRowIndex});
 }

@@ -6,7 +6,7 @@ package tray
 
 extern void init(char *iconPath, char *tooltip);
 extern void addMenuItem(unsigned int id, char *title);
-extern void addQueryTrayIcon(unsigned int id, char *iconPath, char *tooltip);
+extern void addQueryTrayIcon(unsigned int id, char *iconPath, char *tooltip, unsigned int menuId, char *menuTitle);
 extern void clearQueryTrayIcons();
 extern void removeTrayIcon();
 extern void showMenu();
@@ -37,7 +37,9 @@ var queryIconCallbacks = make(map[uint32]func(ClickRect))
 var leftClickCallback func()
 var mainIconTempPath string
 var queryIconTempPaths []string
+var queryIconMenuIDs []uint32
 var nextQueryIconID uint32 = 1000
+var nextQueryMenuID uint32 = 10000
 
 //export reportClick
 func reportClick(menuId C.UINT_PTR) {
@@ -81,6 +83,7 @@ func CreateTray(appIcon []byte, onClick func(), items ...MenuItem) {
 	trayMu.Lock()
 	leftClickCallback = onClick
 	menuCallbacks = make(map[uint32]func(), len(items))
+	queryIconMenuIDs = nil
 	if mainIconTempPath != "" {
 		_ = os.Remove(mainIconTempPath)
 		mainIconTempPath = ""
@@ -154,6 +157,7 @@ func SetQueryIcons(items []QueryIconItem) {
 	trayMu.Lock()
 	queryIconCallbacks = make(map[uint32]func(ClickRect))
 	nextQueryIconID = 1000
+	nextQueryMenuID = 10000
 	trayMu.Unlock()
 
 	for _, item := range items {
@@ -172,11 +176,23 @@ func SetQueryIcons(items []QueryIconItem) {
 		queryIconTempPaths = append(queryIconTempPaths, temp.Name())
 		trayMu.Unlock()
 
+		var menuID uint32
+		if item.ContextMenuTitle != "" && item.ContextMenuCallback != nil {
+			trayMu.Lock()
+			menuID = nextQueryMenuID
+			nextQueryMenuID++
+			menuCallbacks[menuID] = item.ContextMenuCallback
+			queryIconMenuIDs = append(queryIconMenuIDs, menuID)
+			trayMu.Unlock()
+		}
+
 		iconPathC := C.CString(temp.Name())
 		tooltipC := C.CString(item.Tooltip)
-		C.addQueryTrayIcon(C.uint(nextQueryIconID), iconPathC, tooltipC)
+		menuTitleC := C.CString(item.ContextMenuTitle)
+		C.addQueryTrayIcon(C.uint(nextQueryIconID), iconPathC, tooltipC, C.uint(menuID), menuTitleC)
 		C.free(unsafe.Pointer(iconPathC))
 		C.free(unsafe.Pointer(tooltipC))
+		C.free(unsafe.Pointer(menuTitleC))
 
 		trayMu.Lock()
 		queryIconCallbacks[nextQueryIconID] = item.Callback
@@ -192,9 +208,17 @@ func clearQueryIconsInternal() {
 	tempPaths := queryIconTempPaths
 	queryIconTempPaths = nil
 	queryIconCallbacks = make(map[uint32]func(ClickRect))
+	menuIDs := queryIconMenuIDs
+	queryIconMenuIDs = nil
 	trayMu.Unlock()
 
 	for _, tempPath := range tempPaths {
 		_ = os.Remove(tempPath)
 	}
+
+	trayMu.Lock()
+	for _, menuID := range menuIDs {
+		delete(menuCallbacks, menuID)
+	}
+	trayMu.Unlock()
 }

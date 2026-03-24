@@ -2199,6 +2199,11 @@ class WoxLauncherController extends GetxController {
         await settingController.switchToDataView(traceId);
       });
     }
+    if (context.path == "/general" && context.param.trim().isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        settingController.focusGeneralSection(context.param);
+      });
+    }
 
     await windowManager.setSize(const Size(1200, 800));
     if (Platform.isLinux) {

@@ -11,11 +11,54 @@ HWND hwnd;
 UINT queryIconCount = 0;
 UINT queryIconIds[256] = {0};
 HICON queryIconHandles[256] = {0};
+UINT queryIconMenuIds[256] = {0};
+wchar_t *queryIconMenuTitles[256] = {0};
 
 void reportClick(UINT_PTR menuId);
 void reportLeftClick();
 void reportQueryClick(UINT_PTR iconId, int x, int y, int width, int height);
 void clearQueryTrayIcons();
+
+static int findQueryIconIndex(UINT iconId)
+{
+	for (UINT i = 0; i < queryIconCount; i++)
+	{
+		if (queryIconIds[i] == iconId)
+		{
+			return (int)i;
+		}
+	}
+	return -1;
+}
+
+static void showQueryIconMenu(UINT iconId)
+{
+	if (hwnd == NULL)
+	{
+		return;
+	}
+
+	int index = findQueryIconIndex(iconId);
+	if (index < 0 || queryIconMenuIds[index] == 0 || queryIconMenuTitles[index] == NULL)
+	{
+		return;
+	}
+
+	HMENU queryMenu = CreatePopupMenu();
+	if (queryMenu == NULL)
+	{
+		return;
+	}
+
+	AppendMenuW(queryMenu, MF_STRING, queryIconMenuIds[index], queryIconMenuTitles[index]);
+
+	POINT p;
+	GetCursorPos(&p);
+	SetForegroundWindow(hwnd);
+	TrackPopupMenu(queryMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, p.x, p.y, 0, hwnd, NULL);
+	PostMessage(hwnd, WM_NULL, 0, 0);
+	DestroyMenu(queryMenu);
+}
 
 void addMenuItem(UINT_PTR menuId, const char *title)
 {
@@ -146,6 +189,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				reportQueryClick((UINT_PTR)iconId, anchorX, anchorY, 0, 0);
 			}
 		}
+		else if (eventCode == WM_CONTEXTMENU || eventCode == WM_RBUTTONUP)
+		{
+			showQueryIconMenu(iconId);
+		}
 		break;
 	}
 	case WM_COMMAND:
@@ -224,7 +271,7 @@ void runMessageLoop()
 	}
 }
 
-void addQueryTrayIcon(UINT id, const char *iconName, const char *tooltip)
+void addQueryTrayIcon(UINT id, const char *iconName, const char *tooltip, UINT menuId, const char *menuTitle)
 {
 	if (queryIconCount >= 256)
 	{
@@ -256,6 +303,16 @@ void addQueryTrayIcon(UINT id, const char *iconName, const char *tooltip)
 	Shell_NotifyIcon(NIM_SETVERSION, &queryNid);
 	queryIconIds[queryIconCount] = id;
 	queryIconHandles[queryIconCount] = icon;
+	queryIconMenuIds[queryIconCount] = menuId;
+	if (menuId != 0 && menuTitle != NULL && menuTitle[0] != '\0')
+	{
+		int menuLen = MultiByteToWideChar(CP_UTF8, 0, menuTitle, -1, NULL, 0);
+		if (menuLen > 0)
+		{
+			queryIconMenuTitles[queryIconCount] = (wchar_t *)malloc(menuLen * sizeof(wchar_t));
+			MultiByteToWideChar(CP_UTF8, 0, menuTitle, -1, queryIconMenuTitles[queryIconCount], menuLen);
+		}
+	}
 	queryIconCount++;
 }
 
@@ -273,7 +330,13 @@ void clearQueryTrayIcons()
 			DestroyIcon(queryIconHandles[i]);
 			queryIconHandles[i] = NULL;
 		}
+		if (queryIconMenuTitles[i] != NULL)
+		{
+			free(queryIconMenuTitles[i]);
+			queryIconMenuTitles[i] = NULL;
+		}
 		queryIconIds[i] = 0;
+		queryIconMenuIds[i] = 0;
 	}
 	queryIconCount = 0;
 }

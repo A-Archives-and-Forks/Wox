@@ -1,11 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/components/wox_button.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_tooltip_icon_view.dart';
+import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/setting/wox_plugin_setting_select.dart';
 import 'package:wox/entity/setting/wox_plugin_setting_table.dart';
 import 'package:wox/entity/wox_ai.dart';
@@ -33,6 +35,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   final columnTooltipWidth = 20.0;
   final bool readonly;
   final Future<List<PluginSettingTableValidationError>> Function(Map<String, dynamic> rowValues)? onUpdateValidate;
+  final int? autoOpenEditRowIndex;
   final ScrollController horizontalHeaderScrollController = ScrollController();
   final ScrollController horizontalBodyScrollController = ScrollController();
   final ScrollController verticalBodyScrollController = ScrollController();
@@ -47,6 +50,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     this.tableWidth = 740.0,
     this.readonly = false,
     this.onUpdateValidate,
+    this.autoOpenEditRowIndex,
   }) {
     _setupScrollSync();
   }
@@ -469,8 +473,61 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     return -1;
   }
 
+  Future<void> _showEditRowDialog(BuildContext context, Map<String, dynamic> row) async {
+    final originalRow = json.decode(json.encode(row)) as Map<String, dynamic>;
+    originalRow.remove(rowUniqueIdKey);
+
+    await showDialog(
+      context: context,
+      barrierColor: getThemePopupBarrierColor(),
+      builder: (context) {
+        return WoxSettingPluginTableUpdate(
+          item: item,
+          row: row,
+          onUpdateValidate: onUpdateValidate,
+          onUpdate: (key, value) async {
+            final freshRows = decodeRowsJson(getSetting(key));
+
+            final idx = _findRowIndex(freshRows, originalRow);
+            if (idx >= 0) {
+              final updatedRow = Map<String, dynamic>.from(value);
+              updatedRow.remove(rowUniqueIdKey);
+              freshRows[idx] = updatedRow;
+            }
+
+            updateConfig(key, json.encode(freshRows));
+          },
+        );
+      },
+    );
+    WoxSettingFocusUtil.restoreIfInSettingView();
+  }
+
+  void _scheduleAutoOpenEditDialog(BuildContext context, List<dynamic> rows) {
+    if (readonly || autoOpenEditRowIndex == null) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final settingController = Get.find<WoxSettingController>();
+      if (autoOpenEditRowIndex! < 0 || autoOpenEditRowIndex! >= rows.length) {
+        if (settingController.pendingTrayQueryEditRowIndex.value == autoOpenEditRowIndex) {
+          settingController.consumePendingTrayQueryEditRowIndex();
+        }
+        return;
+      }
+
+      final requestedRowIndex = settingController.consumePendingTrayQueryEditRowIndex();
+      if (requestedRowIndex != autoOpenEditRowIndex || !context.mounted) {
+        return;
+      }
+
+      final row = rows[requestedRowIndex!] as Map<String, dynamic>;
+      await _showEditRowDialog(context, row);
+    });
+  }
+
   DataCell buildOperationCell(BuildContext context, Map<String, dynamic> row, List<dynamic> rows) {
-    // Deep-copy snapshot to avoid sharing nested List/Map references with update dialog state
     final originalRow = json.decode(json.encode(row)) as Map<String, dynamic>;
     originalRow.remove(rowUniqueIdKey);
 
@@ -486,34 +543,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
               icon: Icon(Icons.edit, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
               padding: const EdgeInsets.symmetric(horizontal: 4),
               onPressed: () async {
-                await showDialog(
-                  context: context,
-                  barrierColor: getThemePopupBarrierColor(),
-                  builder: (context) {
-                    return WoxSettingPluginTableUpdate(
-                      item: item,
-                      row: row,
-                      onUpdateValidate: onUpdateValidate,
-                      onUpdate: (key, value) async {
-                        // Re-read the latest rows from the current setting value
-                        // to avoid using stale closure-captured data
-                        final freshRows = decodeRowsJson(getSetting(key));
-
-                        // Find the target row in fresh data by matching original field values
-                        var idx = _findRowIndex(freshRows, originalRow);
-                        if (idx >= 0) {
-                          // Remove the unique key from the updated value before saving
-                          var updatedRow = Map<String, dynamic>.from(value);
-                          updatedRow.remove(rowUniqueIdKey);
-                          freshRows[idx] = updatedRow;
-                        }
-
-                        updateConfig(key, json.encode(freshRows));
-                      },
-                    );
-                  },
-                );
-                WoxSettingFocusUtil.restoreIfInSettingView();
+                await _showEditRowDialog(context, row);
               },
             ),
             WoxButton.text(
@@ -687,6 +717,8 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     for (var row in rows) {
       (row as Map<String, dynamic>)[rowUniqueIdKey] = const UuidV4().generate();
     }
+
+    _scheduleAutoOpenEditDialog(context, rows);
 
     //sort the rows if needed
     if (item.sortColumnKey.isNotEmpty) {

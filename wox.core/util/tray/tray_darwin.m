@@ -49,6 +49,7 @@ static MenuItemTarget *globalTarget = nil;
 
 @interface QueryTrayTarget : NSObject
 @property(nonatomic, assign) NSInteger tag;
+@property(nonatomic, retain) NSMenu *menu;
 - (instancetype)initWithTag:(NSInteger)tag;
 - (void)queryTrayClick:(id)sender;
 @end
@@ -62,7 +63,28 @@ static MenuItemTarget *globalTarget = nil;
   return self;
 }
 
+- (void)dealloc {
+  [_menu release];
+  [super dealloc];
+}
+
 - (void)queryTrayClick:(id)sender {
+  NSEvent *event = [NSApp currentEvent];
+  BOOL isContextClick =
+      event.type == NSEventTypeRightMouseUp ||
+      (event.type == NSEventTypeLeftMouseUp &&
+       (event.modifierFlags & NSEventModifierFlagControl));
+  if (isContextClick && self.menu != nil &&
+      [sender isKindOfClass:[NSStatusBarButton class]]) {
+    NSStatusBarButton *button = (NSStatusBarButton *)sender;
+    [button highlight:YES];
+    [self.menu popUpMenuPositioningItem:nil
+                             atLocation:NSMakePoint(0, NSHeight(button.bounds))
+                                 inView:button];
+    [button highlight:NO];
+    return;
+  }
+
   if (![sender isKindOfClass:[NSStatusBarButton class]]) {
     GoQueryTrayCallback((GoInt)self.tag, 0, 0, 0, 0);
     return;
@@ -116,7 +138,8 @@ void clearQueryTrayIcons() {
 }
 
 void addQueryTray(const char *iconBytes, int length, int tag,
-                  const char *tooltip) {
+                  const char *tooltip, int menuTag,
+                  const char *menuTitle) {
   @autoreleasepool {
     [NSApplication sharedApplication];
 
@@ -149,9 +172,26 @@ void addQueryTray(const char *iconBytes, int length, int tag,
     }
 
     QueryTrayTarget *target = [[QueryTrayTarget alloc] initWithTag:tag];
+    if (menuTag >= 0 && menuTitle != nil && menuTitle[0] != '\0' &&
+        globalTarget != nil) {
+      NSString *itemTitle = [NSString stringWithUTF8String:menuTitle];
+      NSMenu *menu = [[NSMenu alloc] init];
+      NSMenuItem *menuItem =
+          [[NSMenuItem alloc] initWithTitle:itemTitle
+                                     action:@selector(menuItemAction:)
+                              keyEquivalent:@""];
+      menuItem.tag = menuTag;
+      menuItem.target = globalTarget;
+      [menu addItem:menuItem];
+      [menuItem release];
+      target.menu = menu;
+      [menu release];
+    }
+
     [statusItem.button setAction:@selector(queryTrayClick:)];
     [statusItem.button setTarget:target];
-    [statusItem.button sendActionOn:(NSEventMaskLeftMouseUp)];
+    [statusItem.button
+        sendActionOn:(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)];
 
     [queryStatusItems addObject:statusItem];
     [queryTargets addObject:target];

@@ -20,8 +20,8 @@ abstract class WoxSettingBaseView extends GetView<WoxSettingController> {
     );
   }
 
-  Widget formField({required String label, required Widget child, String? tips, Widget? tipsWidget, double labelWidth = GENERAL_SETTING_LABEL_WIDTH}) {
+  Widget formField({Key? key, required String label, required Widget child, String? tips, Widget? tipsWidget, double labelWidth = GENERAL_SETTING_LABEL_WIDTH}) {
     final resolvedTips = tipsWidget ?? (tips == null ? null : Text(tips, style: TextStyle(color: getThemeSubTextColor(), fontSize: SETTING_TOOLTIP_DEFAULT_SIZE)));
-    return WoxSettingFormField(label: label, tips: resolvedTips, labelWidth: labelWidth, labelGap: 20, bottomSpacing: 20, tipsTopSpacing: 2, child: child);
+    return WoxSettingFormField(key: key, label: label, tips: resolvedTips, labelWidth: labelWidth, labelGap: 20, bottomSpacing: 20, tipsTopSpacing: 2, child: child);
   }
 }

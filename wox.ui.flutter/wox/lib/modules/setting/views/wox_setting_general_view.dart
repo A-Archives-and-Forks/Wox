@@ -22,6 +22,10 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        controller.notifyGeneralViewReady();
+      });
+
       return form(
         children: [
           formField(
@@ -315,11 +319,13 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
             }),
           ),
           formField(
+            key: controller.getGeneralSectionKey('tray_queries'),
             label: controller.tr("ui_tray_queries"),
             tips: controller.tr("ui_tray_queries_tips"),
             child: Obx(() {
               return WoxSettingPluginTable(
                 value: json.encode(controller.woxSetting.value.trayQueries),
+                autoOpenEditRowIndex: controller.pendingTrayQueryEditRowIndex.value,
                 item: PluginSettingValueTable.fromJson({
                   "Key": "TrayQueries",
                   "Columns": [

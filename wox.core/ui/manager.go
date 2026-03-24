@@ -695,7 +695,8 @@ func (m *Manager) refreshTrayQueryIcons(ctx context.Context) {
 
 	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
 	queryItems := make([]tray.QueryIconItem, 0, len(woxSetting.TrayQueries.Get()))
-	for _, trayQuery := range woxSetting.TrayQueries.Get() {
+	settingMenuTitle := i18n.GetI18nManager().TranslateWox(ctx, "ui_tray_open_setting_window")
+	for trayQueryIndex, trayQuery := range woxSetting.TrayQueries.Get() {
 		if trayQuery.Disabled {
 			continue
 		}
@@ -712,10 +713,18 @@ func (m *Manager) refreshTrayQueryIcons(ctx context.Context) {
 		}
 
 		queryItems = append(queryItems, tray.QueryIconItem{
-			Icon:    iconBytes,
-			Tooltip: tooltip,
+			Icon:             iconBytes,
+			Tooltip:          tooltip,
+			ContextMenuTitle: settingMenuTitle,
 			Callback: func(rect tray.ClickRect) {
 				m.executeTrayQuery(util.NewTraceContext(), trayQuery, rect)
+			},
+			ContextMenuCallback: func() {
+				openSettingCtx := util.NewTraceContext()
+				m.GetUI(openSettingCtx).OpenSettingWindow(openSettingCtx, common.SettingWindowContext{
+					Path:  "/general",
+					Param: fmt.Sprintf("tray_queries:%d", trayQueryIndex),
+				})
 			},
 		})
 	}
