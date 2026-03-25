@@ -135,6 +135,7 @@ Future<SmokeLaunchResult> launchLauncherAppAndMeasureStartup(WidgetTester tester
 Future<WoxLauncherController> launchAndShowLauncher(WidgetTester tester, {Size? windowSize}) async {
   final controller = await launchLauncherApp(tester);
 
+  await updateSettingDirect('LangCode', 'en_US');
   await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
   await updateSettingDirect('StartPage', WoxStartPageEnum.WOX_START_PAGE_BLANK.code);
   await triggerBackendShowApp(tester);
