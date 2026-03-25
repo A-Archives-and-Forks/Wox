@@ -404,11 +404,37 @@ class WindowRect {
   }
 }
 
+class LayoutModeTrayQueryParams {
+  late int windowAnchorBottom;
+  WindowRect? screenRect;
+
+  LayoutModeTrayQueryParams({this.windowAnchorBottom = 0, this.screenRect});
+
+  LayoutModeTrayQueryParams.fromJson(Map<String, dynamic> json) {
+    windowAnchorBottom = json['WindowAnchorBottom'] ?? 0;
+    if (json['ScreenRect'] != null) {
+      screenRect = WindowRect.fromJson(json['ScreenRect']);
+    }
+  }
+}
+
+class LayoutModeExplorerParams {
+  WindowRect? windowRect;
+
+  LayoutModeExplorerParams({this.windowRect});
+
+  LayoutModeExplorerParams.fromJson(Map<String, dynamic> json) {
+    if (json['WindowRect'] != null) {
+      windowRect = WindowRect.fromJson(json['WindowRect']);
+    }
+  }
+}
+
 class ShowAppParams {
   late bool selectAll;
   late Position position;
-  // WindowRect is only used in LayoutModeExplorer to anchor Wox near explorer's bottom-right.
-  WindowRect? windowRect;
+  LayoutModeExplorerParams? layoutModeExplorerParams;
+  LayoutModeTrayQueryParams? layoutModeTrayQueryParams;
   late int windowWidth;
   late int maxResultCount;
   late List<QueryHistory> queryHistories;
@@ -422,7 +448,8 @@ class ShowAppParams {
   ShowAppParams({
     required this.selectAll,
     required this.position,
-    this.windowRect,
+    this.layoutModeExplorerParams,
+    this.layoutModeTrayQueryParams,
     this.windowWidth = 0,
     this.maxResultCount = 0,
     required this.queryHistories,
@@ -439,8 +466,11 @@ class ShowAppParams {
     if (json['Position'] != null) {
       position = Position.fromJson(json['Position']);
     }
-    if (json['WindowRect'] != null) {
-      windowRect = WindowRect.fromJson(json['WindowRect']);
+    if (json['LayoutModeExplorerParams'] != null) {
+      layoutModeExplorerParams = LayoutModeExplorerParams.fromJson(json['LayoutModeExplorerParams']);
+    }
+    if (json['LayoutModeTrayQueryParams'] != null) {
+      layoutModeTrayQueryParams = LayoutModeTrayQueryParams.fromJson(json['LayoutModeTrayQueryParams']);
     }
     windowWidth = json['WindowWidth'] ?? 0;
     maxResultCount = json['MaxResultCount'] ?? 0;

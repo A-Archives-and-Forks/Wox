@@ -735,7 +735,9 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 			plugin.GetPluginManager().GetUI().ShowApp(localCtx, common.ShowContext{
 				SelectAll: false,
 				// LayoutModeExplorer: Flutter computes sticky bottom-right position from this rect.
-				WindowRect: &common.WindowRect{X: x, Y: y, Width: w, Height: h},
+				LayoutModeExplorerParams: &common.LayoutModeExplorerParams{
+					WindowRect: &common.WindowRect{X: x, Y: y, Width: w, Height: h},
+				},
 				LayoutMode: common.LayoutModeExplorer,
 			})
 			return true

@@ -272,7 +272,8 @@ func (u *uiImpl) invokeWebsocketMethod(ctx context.Context, method string, data 
 func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[string]any {
 	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
 	var position Position
-	var windowRect map[string]int
+	var layoutModeExplorerParams map[string]any
+	var layoutModeTrayQueryParams map[string]any
 	showQueryBox := showContext.ShowQueryBox
 	showSource := showContext.ShowSource
 
@@ -312,29 +313,56 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 		}
 	}
 
-	if showContext.WindowRect != nil {
-		windowRect = map[string]int{
-			"X":      showContext.WindowRect.X,
-			"Y":      showContext.WindowRect.Y,
-			"Width":  showContext.WindowRect.Width,
-			"Height": showContext.WindowRect.Height,
+	if showContext.LayoutModeExplorerParams != nil {
+		var windowRect map[string]int
+		if showContext.LayoutModeExplorerParams.WindowRect != nil {
+			windowRect = map[string]int{
+				"X":      showContext.LayoutModeExplorerParams.WindowRect.X,
+				"Y":      showContext.LayoutModeExplorerParams.WindowRect.Y,
+				"Width":  showContext.LayoutModeExplorerParams.WindowRect.Width,
+				"Height": showContext.LayoutModeExplorerParams.WindowRect.Height,
+			}
+		}
+
+		layoutModeExplorerParams = map[string]any{
+			"WindowRect": windowRect,
 		}
 	}
 
-	return map[string]any{
-		"SelectAll":      showContext.SelectAll,
-		"IsQueryFocus":   showContext.IsQueryFocus,
-		"ShowQueryBox":   showQueryBox,
-		"Position":       position,
-		"WindowRect":     windowRect,
-		"WindowWidth":    showContext.WindowWidth,
-		"MaxResultCount": showContext.MaxResultCount,
-		"QueryHistories": setting.GetSettingManager().GetLatestQueryHistory(ctx, 10),
-		"LaunchMode":     woxSetting.LaunchMode.Get(),
-		"StartPage":      woxSetting.StartPage.Get(),
-		"LayoutMode":     showContext.LayoutMode,
-		"ShowSource":     showSource,
+	if showContext.LayoutModeTrayQueryParams != nil {
+		var screenRect map[string]int
+		if showContext.LayoutModeTrayQueryParams.ScreenRect != nil {
+			screenRect = map[string]int{
+				"X":      showContext.LayoutModeTrayQueryParams.ScreenRect.X,
+				"Y":      showContext.LayoutModeTrayQueryParams.ScreenRect.Y,
+				"Width":  showContext.LayoutModeTrayQueryParams.ScreenRect.Width,
+				"Height": showContext.LayoutModeTrayQueryParams.ScreenRect.Height,
+			}
+		}
+
+		layoutModeTrayQueryParams = map[string]any{
+			"WindowAnchorBottom": showContext.LayoutModeTrayQueryParams.WindowAnchorBottom,
+			"ScreenRect":         screenRect,
+		}
 	}
+
+	params := map[string]any{
+		"SelectAll":                 showContext.SelectAll,
+		"IsQueryFocus":              showContext.IsQueryFocus,
+		"ShowQueryBox":              showQueryBox,
+		"Position":                  position,
+		"LayoutModeExplorerParams":  layoutModeExplorerParams,
+		"LayoutModeTrayQueryParams": layoutModeTrayQueryParams,
+		"WindowWidth":               showContext.WindowWidth,
+		"MaxResultCount":            showContext.MaxResultCount,
+		"QueryHistories":            setting.GetSettingManager().GetLatestQueryHistory(ctx, 10),
+		"LaunchMode":                woxSetting.LaunchMode.Get(),
+		"StartPage":                 woxSetting.StartPage.Get(),
+		"LayoutMode":                showContext.LayoutMode,
+		"ShowSource":                showSource,
+	}
+
+	return params
 }
 
 func onUIWebsocketRequest(ctx context.Context, request WebsocketMsg) {

@@ -800,7 +800,10 @@ func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQu
 	}
 
 	windowWidth := m.getTrayQueryWindowWidth(queryCtx, trayQuery)
-	position := m.getTrayQueryWindowPosition(queryCtx, rect, windowWidth)
+	screenRect := m.getTrayQueryScreenRect(queryCtx, rect)
+	windowHeight := m.getTrayQueryInitialWindowHeight(queryCtx, trayQuery)
+	windowAnchorBottom := m.getTrayQueryWindowAnchorBottom(rect, screenRect)
+	position := m.getTrayQueryWindowPosition(queryCtx, rect, screenRect, windowWidth, windowHeight, windowAnchorBottom)
 	m.ui.ChangeQuery(queryCtx, plainQuery)
 	m.ui.ShowApp(queryCtx, common.ShowContext{
 		SelectAll:      false,
@@ -808,6 +811,10 @@ func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQu
 		ShowQueryBox:   trayQuery.ShowQueryBox,
 		ShowSource:     common.ShowSourceTrayQuery,
 		WindowPosition: &position,
+		LayoutModeTrayQueryParams: &common.LayoutModeTrayQueryParams{
+			WindowAnchorBottom: windowAnchorBottom,
+			ScreenRect:         &screenRect,
+		},
 		WindowWidth:    windowWidth,
 		MaxResultCount: trayQuery.MaxResultCount,
 		LayoutMode:     common.LayoutModeTrayQuery,
@@ -826,39 +833,110 @@ func (m *Manager) getTrayQueryWindowWidth(ctx context.Context, trayQuery setting
 	return windowWidth
 }
 
-func (m *Manager) getTrayQueryWindowPosition(ctx context.Context, rect tray.ClickRect, windowWidth int) common.WindowPosition {
-	theme := m.GetCurrentTheme(ctx)
-	screenSize := screen.GetMouseScreen()
+func (m *Manager) getTrayQueryWindowPosition(ctx context.Context, rect tray.ClickRect, screenRect common.WindowRect, windowWidth int, windowHeight int, windowAnchorBottom int) common.WindowPosition {
+	margin := 8
+	x := screenRect.X + (screenRect.Width-windowWidth)/2
+	y := screenRect.Y + 10
 
+	if rect.Width > 0 && rect.Height > 0 {
+		x = rect.X + (rect.Width-windowWidth)/2
+		if util.IsWindows() {
+			y = windowAnchorBottom - windowHeight
+		} else {
+			y = rect.Y + rect.Height + margin
+		}
+	} else if util.IsWindows() {
+		y = windowAnchorBottom - windowHeight
+	}
+
+	minX := screenRect.X + 10
+	maxX := screenRect.X + screenRect.Width - windowWidth - 10
+	x = clampInt(x, minX, maxX)
+
+	minY := screenRect.Y + 10
+	maxY := screenRect.Y + screenRect.Height - windowHeight - 10
+	if maxY < minY {
+		maxY = minY
+	}
+	y = clampInt(y, minY, maxY)
+
+	return common.WindowPosition{X: x, Y: y}
+}
+
+func (m *Manager) getTrayQueryWindowAnchorBottom(rect tray.ClickRect, screenRect common.WindowRect) int {
+	margin := 8
+	if rect.Width > 0 && rect.Height > 0 {
+		if util.IsWindows() {
+			return rect.Y - margin
+		}
+		return rect.Y + rect.Height + margin
+	}
+
+	if util.IsWindows() {
+		return screenRect.Y + screenRect.Height - margin
+	}
+
+	return screenRect.Y + 10
+}
+
+func (m *Manager) getTrayQueryInitialWindowHeight(ctx context.Context, trayQuery setting.TrayQuery) int {
+	theme := m.GetCurrentTheme(ctx)
 	queryBoxHeight := 55 + theme.AppPaddingTop + theme.AppPaddingBottom
 	if queryBoxHeight <= 0 {
 		queryBoxHeight = 80
 	}
 
-	margin := 8
-	x := screenSize.X + (screenSize.Width-windowWidth)/2
-	y := screenSize.Y + 10
-
-	if rect.Width > 0 && rect.Height > 0 {
-		x = rect.X + (rect.Width-windowWidth)/2
-		if util.IsWindows() {
-			y = rect.Y - queryBoxHeight - margin
-		} else {
-			y = rect.Y + rect.Height + margin
-		}
-	} else if util.IsWindows() {
-		y = screenSize.Y + screenSize.Height - queryBoxHeight - margin
+	if trayQuery.ShowQueryBox {
+		return queryBoxHeight
 	}
 
-	minX := screenSize.X + 10
-	maxX := screenSize.X + screenSize.Width - windowWidth - 10
-	x = clampInt(x, minX, maxX)
+	resultItemHeight := 50 + theme.ResultItemPaddingTop + theme.ResultItemPaddingBottom
+	if resultItemHeight <= 0 {
+		resultItemHeight = 50
+	}
 
-	minY := screenSize.Y + 10
-	maxY := screenSize.Y + screenSize.Height - queryBoxHeight - 10
-	y = clampInt(y, minY, maxY)
+	windowHeight := resultItemHeight + theme.AppPaddingBottom
+	if windowHeight <= 0 {
+		windowHeight = resultItemHeight
+	}
 
-	return common.WindowPosition{X: x, Y: y}
+	return windowHeight
+}
+
+func (m *Manager) getTrayQueryScreenRect(ctx context.Context, rect tray.ClickRect) common.WindowRect {
+	displays, err := screen.ListDisplays()
+	if err == nil {
+		pointX := rect.X
+		pointY := rect.Y
+		if rect.Width > 0 && rect.Height > 0 {
+			pointX = rect.X + rect.Width/2
+			pointY = rect.Y + rect.Height/2
+		}
+
+		for _, display := range displays {
+			workArea := display.WorkArea
+			if pointX >= workArea.X && pointX < workArea.Right() && pointY >= workArea.Y && pointY < workArea.Bottom() {
+				return common.WindowRect{
+					X:      workArea.X,
+					Y:      workArea.Y,
+					Width:  workArea.Width,
+					Height: workArea.Height,
+				}
+			}
+		}
+	}
+
+	if err != nil {
+		logger.Warn(ctx, fmt.Sprintf("failed to get tray query screen rect from display list, fallback to mouse screen: %s", err.Error()))
+	}
+
+	screenSize := screen.GetMouseScreen()
+	return common.WindowRect{
+		X:      screenSize.X,
+		Y:      screenSize.Y,
+		Width:  screenSize.Width,
+		Height: screenSize.Height,
+	}
 }
 
 func (m *Manager) toTrayIconBytes(ctx context.Context, icon common.WoxImage) []byte {

@@ -103,13 +103,27 @@ type ShowContext struct {
 	ShowSource   ShowSource
 
 	WindowPosition *WindowPosition
-	// WindowRect is only effective in LayoutModeExplorer.
-	// The Flutter side uses it as the explorer anchor rect and computes a sticky
-	// bottom-right overlay position from that rect.
-	WindowRect     *WindowRect
-	WindowWidth    int
-	MaxResultCount int
-	LayoutMode     LayoutMode
+	// LayoutModeExplorerParams carries explorer-specific runtime params.
+	LayoutModeExplorerParams *LayoutModeExplorerParams
+	// LayoutModeTrayQueryParams carries tray-query specific runtime params.
+	LayoutModeTrayQueryParams *LayoutModeTrayQueryParams
+	WindowWidth               int
+	MaxResultCount            int
+	LayoutMode                LayoutMode
+}
+
+type LayoutModeExplorerParams struct {
+	// WindowRect is the explorer anchor rect used by Flutter to compute a sticky
+	// bottom-right overlay position.
+	WindowRect *WindowRect
+}
+
+type LayoutModeTrayQueryParams struct {
+	// WindowAnchorBottom keeps the tray-query window bottom aligned to the tray
+	// anchor while Flutter uses the exact runtime window height.
+	WindowAnchorBottom int
+	// ScreenRect describes the logical work area used to clamp anchored layouts.
+	ScreenRect *WindowRect
 }
 
 type WindowPosition struct {

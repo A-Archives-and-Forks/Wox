@@ -116,10 +116,6 @@ class WoxLauncherController extends GetxController {
   int clearQueryResultDelay = 100; // adaptive based on flicker detection
   final windowFlickerDetector = WindowFlickerDetector();
 
-  /// Timer for debouncing resize height on Windows when height increases
-  Timer? resizeHeightDebounceTimer;
-  int resizeHeightDebounceDelay = 100; // ms
-
   /// This flag is used to control whether the user can arrow up to show history when the app is first shown.
   var canArrowUpHistory = true;
   final latestQueryHistories = <QueryHistory>[]; // the latest query histories
@@ -139,6 +135,7 @@ class WoxLauncherController extends GetxController {
   double forceWindowWidth = 0;
   int forceMaxResultCount = 0;
   var forceHideOnBlur = false;
+  LayoutModeTrayQueryParams? currentLayoutModeTrayQueryParams;
   // Used to store the current query before it is overwritten by a tray query, so that we can restore it when the app is hidden again.
   PlainQuery? queryBeforeTrayQuery;
 
@@ -220,7 +217,6 @@ class WoxLauncherController extends GetxController {
     clearQueryResultsTimer.cancel();
     quickSelectTimer?.cancel();
     isQuickSelectMode.value = false;
-    resizeHeightDebounceTimer?.cancel();
     loadingTimer?.cancel();
     isLoading.value = false;
   }
@@ -703,7 +699,7 @@ class WoxLauncherController extends GetxController {
     latestQueryHistories.assignAll(params.queryHistories);
     lastLaunchMode = params.launchMode;
     lastStartPage = params.startPage;
-
+    currentLayoutModeTrayQueryParams = params.layoutModeTrayQueryParams;
     if (currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code) {
       canArrowUpHistory = true;
       if (lastLaunchMode == WoxLaunchModeEnum.WOX_LAUNCH_MODE_CONTINUE.code) {
@@ -789,8 +785,8 @@ class WoxLauncherController extends GetxController {
     final targetWidth = forceWindowWidth != 0 ? forceWindowWidth : WoxSettingUtil.instance.currentSetting.appWidth.toDouble();
     var targetPosition = Offset(params.position.x.toDouble(), params.position.y.toDouble());
     // In explorer layout mode, we will ignore the configured position and try to open at the bottom right of the explorer window.
-    if (params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_EXPLORER.code && params.windowRect != null) {
-      final rect = params.windowRect!;
+    if (params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_EXPLORER.code && params.layoutModeExplorerParams?.windowRect != null) {
+      final rect = params.layoutModeExplorerParams!.windowRect!;
       const margin = 20.0;
 
       var targetX = rect.x + rect.width - targetWidth - margin;
@@ -804,6 +800,24 @@ class WoxLauncherController extends GetxController {
       }
       targetPosition = Offset(targetX, targetY);
     }
+    if (params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_TRAY_QUERY.code && Platform.isWindows && currentLayoutModeTrayQueryParams?.screenRect != null) {
+      final trayQueryParams = currentLayoutModeTrayQueryParams!;
+      final screenRect = trayQueryParams.screenRect!;
+      final minLeft = screenRect.x + 10.0;
+      final maxLeft = screenRect.x + screenRect.width - targetWidth - 10.0;
+      final clampedX = maxLeft < minLeft ? minLeft : targetPosition.dx.clamp(minLeft, maxLeft);
+
+      if (trayQueryParams.windowAnchorBottom > 0) {
+        final minTop = screenRect.y + 10.0;
+        final maxTop = screenRect.y + screenRect.height - targetHeight - 10.0;
+        final targetTop = trayQueryParams.windowAnchorBottom.toDouble() - targetHeight;
+        final clampedY = maxTop < minTop ? minTop : targetTop.clamp(minTop, maxTop);
+        targetPosition = Offset(clampedX, clampedY);
+      } else {
+        targetPosition = Offset(clampedX, targetPosition.dy);
+      }
+    }
+
     // Apply position+size together before showing to avoid opening with stale width.
     await windowManager.setBounds(targetPosition, Size(targetWidth, targetHeight));
 
@@ -825,7 +839,7 @@ class WoxLauncherController extends GetxController {
     if (Platform.isWindows) {
       Future.delayed(const Duration(milliseconds: 25), () {
         if (!isClosed) {
-          resizeHeight(forceDwmRecomposition: true);
+          unawaited(resizeHeight(forceDwmRecomposition: true));
         }
       });
     }
@@ -851,6 +865,7 @@ class WoxLauncherController extends GetxController {
     forceWindowWidth = 0;
     forceMaxResultCount = 0;
     forceHideOnBlur = false;
+    currentLayoutModeTrayQueryParams = null;
   }
 
   int getMaxResultCount() {
@@ -1932,7 +1947,12 @@ class WoxLauncherController extends GetxController {
         // Fallback if bounds are weird
       } else {
         double newTop = currentBottom - totalHeight;
-
+        final screenRect = currentLayoutModeTrayQueryParams?.screenRect;
+        if (screenRect != null) {
+          final minTop = screenRect.y + 10.0;
+          final maxTop = screenRect.y + screenRect.height - totalHeight - 10.0;
+          newTop = maxTop < minTop ? minTop : newTop.clamp(minTop, maxTop);
+        }
         // Apply position and size together to avoid intermediate-frame flicker.
         await windowManager.setBounds(Offset(pos.dx, newTop), Size(targetWidth, totalHeight));
 
@@ -1941,24 +1961,6 @@ class WoxLauncherController extends GetxController {
       }
     }
 
-    // Windows-specific debounce: if height is increasing, debounce and only apply the last resize.
-    // If height is decreasing or same, resize immediately.
-    // We explicitly bypass the debounce when forceDwmRecomposition is true because it only
-    // happens on ShowApp, and we need the +1 pixel height change to be applied instantly
-    // to force DWM recomposition and prevent the old UI buffer from getting stuck as a background.
-    if (Platform.isWindows && !isQueryBoxAtBottom.value && !forceDwmRecomposition) {
-      final currentSize = await windowManager.getSize();
-      if (totalHeight > currentSize.height) {
-        resizeHeightDebounceTimer?.cancel();
-        resizeHeightDebounceTimer = Timer(Duration(milliseconds: resizeHeightDebounceDelay), () async {
-          await windowManager.setSize(Size(targetWidth, totalHeight.toDouble()));
-          windowFlickerDetector.recordResize(totalHeight.toInt());
-        });
-        return;
-      }
-    }
-
-    resizeHeightDebounceTimer?.cancel();
     await windowManager.setSize(Size(targetWidth, totalHeight.toDouble()));
     windowFlickerDetector.recordResize(totalHeight.toInt());
   }
