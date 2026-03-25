@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
-import 'package:wox/utils/windows/windows_window_manager.dart';
 
 class HotkeyX {
   String raw;
@@ -215,35 +214,17 @@ class WoxHotkey {
 
     List<HotKeyModifier> modifiers = [];
 
-    // On Windows, use WindowsWindowManager's modifier key states (more reliable)
-    if (Platform.isWindows) {
-      final states = WindowsWindowManager.instance.currentModifierStates;
-      if (states.isAltPressed) {
-        modifiers.add(HotKeyModifier.alt);
-      }
-      if (states.isControlPressed) {
-        modifiers.add(HotKeyModifier.control);
-      }
-      if (states.isShiftPressed) {
-        modifiers.add(HotKeyModifier.shift);
-      }
-      if (states.isMetaPressed) {
-        modifiers.add(HotKeyModifier.meta);
-      }
-    } else {
-      // On other platforms, use HardwareKeyboard
-      if (HardwareKeyboard.instance.isAltPressed) {
-        modifiers.add(HotKeyModifier.alt);
-      }
-      if (HardwareKeyboard.instance.isControlPressed) {
-        modifiers.add(HotKeyModifier.control);
-      }
-      if (HardwareKeyboard.instance.isShiftPressed) {
-        modifiers.add(HotKeyModifier.shift);
-      }
-      if (HardwareKeyboard.instance.isMetaPressed) {
-        modifiers.add(HotKeyModifier.meta);
-      }
+    if (HardwareKeyboard.instance.isAltPressed) {
+      modifiers.add(HotKeyModifier.alt);
+    }
+    if (HardwareKeyboard.instance.isControlPressed) {
+      modifiers.add(HotKeyModifier.control);
+    }
+    if (HardwareKeyboard.instance.isShiftPressed) {
+      modifiers.add(HotKeyModifier.shift);
+    }
+    if (HardwareKeyboard.instance.isMetaPressed) {
+      modifiers.add(HotKeyModifier.meta);
     }
 
     if (modifiers.isEmpty) {
@@ -254,13 +235,6 @@ class WoxHotkey {
   }
 
   static bool isAnyModifierPressed() {
-    // On Windows, use WindowsWindowManager's modifier key states (more reliable)
-    if (Platform.isWindows) {
-      final states = WindowsWindowManager.instance.currentModifierStates;
-      return states.isShiftPressed || states.isControlPressed || states.isAltPressed || states.isMetaPressed;
-    }
-
-    // On other platforms, use HardwareKeyboard
     return HardwareKeyboard.instance.physicalKeysPressed.any((element) => HotKeyModifier.values.any((e) => e.physicalKeys.contains(element)));
   }
 
@@ -271,25 +245,6 @@ class WoxHotkey {
   static List<HotKeyModifier> getPressedModifiers() {
     final modifiers = <HotKeyModifier>[];
 
-    // On Windows, use WindowsWindowManager's modifier key states (more reliable)
-    if (Platform.isWindows) {
-      final states = WindowsWindowManager.instance.currentModifierStates;
-      if (states.isAltPressed) {
-        modifiers.add(HotKeyModifier.alt);
-      }
-      if (states.isControlPressed) {
-        modifiers.add(HotKeyModifier.control);
-      }
-      if (states.isShiftPressed) {
-        modifiers.add(HotKeyModifier.shift);
-      }
-      if (states.isMetaPressed) {
-        modifiers.add(HotKeyModifier.meta);
-      }
-      return modifiers;
-    }
-
-    // On other platforms, use HardwareKeyboard
     if (HardwareKeyboard.instance.isAltPressed) {
       modifiers.add(HotKeyModifier.alt);
     }

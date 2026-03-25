@@ -3,14 +3,15 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:get/get.dart';
+import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
+import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/entity/wox_preview_webview_data.dart';
-import 'package:wox/utils/wox_webview_util.dart';
-import 'package:webview_windows/webview_windows.dart';
+import 'package:wox/utils/webview/wox_webview_util.dart';
+import 'package:wox/utils/webview/wox_webview_session.dart';
 
 class WoxWebViewPreview extends StatefulWidget {
-  static const String viewType = "wox/webview_preview";
-
   final String previewData;
 
   const WoxWebViewPreview({super.key, required this.previewData});
@@ -20,9 +21,11 @@ class WoxWebViewPreview extends StatefulWidget {
 }
 
 class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
-  Future<WoxWindowsWebViewSession?>? _windowsSessionFuture;
-  WoxWindowsWebViewSession? _session;
+  Future<WoxWebViewSession?>? _windowsSessionFuture;
+  WoxWebViewSession? _session;
+  StreamSubscription<WoxWebViewSessionAction>? _sessionActionSubscription;
   String? _windowsErrorMessage;
+  final launcherController = Get.find<WoxLauncherController>();
 
   WoxPreviewWebviewData get webviewData {
     return WoxPreviewWebviewData.fromPreviewData(widget.previewData);
@@ -55,10 +58,11 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
     }
 
     _windowsErrorMessage = null;
-    _windowsSessionFuture = WoxWebViewUtil.acquireWindowsSession(webviewData)
+    _windowsSessionFuture = WoxWebViewUtil.acquireSession(webviewData)
         .then((session) {
           _session = session;
-          WoxWebViewUtil.setActiveWindowsController(session?.controller);
+          WoxWebViewUtil.setActiveSession(session);
+          _subscribeSessionActions(session);
           return session;
         })
         .catchError((error) {
@@ -68,14 +72,37 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
   }
 
   Future<void> _releaseCurrentSession() async {
+    await _sessionActionSubscription?.cancel();
+    _sessionActionSubscription = null;
+
     final session = _session;
     if (session == null) {
       return;
     }
 
-    WoxWebViewUtil.clearActiveWindowsController(session.controller);
+    WoxWebViewUtil.clearActiveSession(session);
     _session = null;
-    await WoxWebViewUtil.releaseWindowsSession(session);
+    await WoxWebViewUtil.releaseSession(session);
+  }
+
+  void _subscribeSessionActions(WoxWebViewSession? session) {
+    _sessionActionSubscription?.cancel();
+    _sessionActionSubscription = null;
+
+    if (session == null) {
+      return;
+    }
+
+    _sessionActionSubscription = session.actions.listen((action) {
+      switch (action) {
+        case WoxWebViewSessionAction.toggleActionPanel:
+          launcherController.toggleActionPanel(const UuidV4().generate());
+          break;
+        case WoxWebViewSessionAction.focusQueryBox:
+          launcherController.focusQueryBox();
+          break;
+      }
+    });
   }
 
   Widget _buildWindowsPreview(WoxPreviewWebviewData preview) {
@@ -84,7 +111,7 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
       return SelectableText("WebView preview is not initialized on Windows.\nURL: ${preview.url}");
     }
 
-    return FutureBuilder<WoxWindowsWebViewSession?>(
+    return FutureBuilder<WoxWebViewSession?>(
       future: future,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
@@ -97,7 +124,7 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
           return SelectableText("$message\nURL: ${preview.url}");
         }
 
-        return SizedBox.expand(child: Webview(session.controller));
+        return session.buildWidget();
       },
     );
   }
@@ -110,17 +137,12 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
       return _buildWindowsPreview(preview);
     }
 
-    if (!Platform.isMacOS) {
-      return SelectableText("WebView preview is currently only available on macOS and Windows.\nURL: ${preview.url}");
+    if (Platform.isMacOS) {
+      return SizedBox.expand(
+        child: AppKitView(key: ValueKey(widget.previewData), viewType: "wox/webview_preview", creationParams: preview.toJson(), creationParamsCodec: const StandardMessageCodec()),
+      );
     }
 
-    return SizedBox.expand(
-      child: AppKitView(
-        key: ValueKey(widget.previewData),
-        viewType: WoxWebViewPreview.viewType,
-        creationParams: preview.toJson(),
-        creationParamsCodec: const StandardMessageCodec(),
-      ),
-    );
+    return SelectableText("WebView preview is currently only available on macOS and Windows.\nURL: ${preview.url}");
   }
 }

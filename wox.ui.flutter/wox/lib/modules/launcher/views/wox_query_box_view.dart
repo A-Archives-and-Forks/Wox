@@ -277,26 +277,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                 height: queryBoxHeight,
                 child: Theme(
                   data: ThemeData(textSelectionTheme: TextSelectionThemeData(selectionColor: safeFromCssColor(currentTheme.queryBoxTextSelectionBackgroundColor))),
-                  // On Windows, use Shortcuts to prevent arrow keys from moving cursor
-                  // On macOS, Shortcuts interferes with Focus.onKeyEvent, so we skip it
-                  child:
-                      Platform.isWindows
-                          ? Shortcuts(
-                            shortcuts: <ShortcutActivator, Intent>{
-                              // Prevent arrow up/down from moving cursor in TextField
-                              SingleActivator(LogicalKeyboardKey.arrowUp): DoNothingIntent(),
-                              SingleActivator(LogicalKeyboardKey.arrowDown): DoNothingIntent(),
-                              // Keep Enter for action; use Shift+Enter for new line
-                              SingleActivator(LogicalKeyboardKey.enter): DoNothingIntent(),
-                              SingleActivator(LogicalKeyboardKey.numpadEnter): DoNothingIntent(),
-                              if (controller.isInGridMode()) ...{
-                                SingleActivator(LogicalKeyboardKey.arrowLeft): DoNothingIntent(),
-                                SingleActivator(LogicalKeyboardKey.arrowRight): DoNothingIntent(),
-                              },
-                            },
-                            child: _buildTextField(currentTheme),
-                          )
-                          : _buildTextField(currentTheme),
+                  child: _buildTextField(currentTheme),
                 ),
               ),
             ),

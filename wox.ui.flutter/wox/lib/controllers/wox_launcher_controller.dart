@@ -23,7 +23,6 @@ import 'package:wox/enums/wox_layout_mode_enum.dart';
 import 'package:wox/models/doctor_check_result.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/windows/window_manager.dart';
-import 'package:wox/utils/windows/windows_window_manager.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/entity/wox_hotkey.dart';
 import 'package:wox/entity/wox_image.dart';
@@ -50,7 +49,7 @@ import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/log.dart';
 import 'package:wox/utils/picker.dart';
 import 'package:wox/utils/wox_setting_util.dart';
-import 'package:wox/utils/wox_webview_util.dart';
+import 'package:wox/utils/webview/wox_webview_util.dart';
 
 import 'package:wox/utils/wox_websocket_msg_util.dart';
 import 'package:wox/enums/wox_preview_type_enum.dart';
@@ -2591,8 +2590,6 @@ class WoxLauncherController extends GetxController {
   bool isQuickSelectModifierPressed() {
     if (Platform.isMacOS) {
       return HardwareKeyboard.instance.isMetaPressed;
-    } else if (Platform.isWindows) {
-      return WindowsWindowManager.instance.currentModifierStates.isAltPressed;
     } else {
       return HardwareKeyboard.instance.isAltPressed;
     }

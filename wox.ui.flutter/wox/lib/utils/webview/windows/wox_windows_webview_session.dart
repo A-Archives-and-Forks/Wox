@@ -1,0 +1,96 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:wox/entity/wox_preview_webview_data.dart';
+import 'package:wox/utils/webview/windows/webview.dart';
+import 'package:wox/utils/webview/wox_webview_session.dart';
+import 'package:wox/utils/webview/wox_webview_support.dart';
+
+class WoxWindowsWebViewSession implements WoxWebViewSession {
+  @override
+  final bool isCached;
+
+  @override
+  final String? cacheKey;
+
+  final WebviewController controller = WebviewController();
+  final StreamController<WoxWebViewSessionAction> _actions = StreamController<WoxWebViewSessionAction>.broadcast();
+
+  Future<void>? _initialization;
+  StreamSubscription<AcceleratorKeyPressedEvent>? _acceleratorKeySubscription;
+  String _currentUrl = "";
+  String _currentCss = "";
+  String? _currentScriptId;
+  bool _disposed = false;
+
+  WoxWindowsWebViewSession.cached({required this.cacheKey}) : isCached = true;
+
+  WoxWindowsWebViewSession.transient() : isCached = false, cacheKey = null;
+
+  @override
+  Stream<WoxWebViewSessionAction> get actions => _actions.stream;
+
+  @override
+  Widget buildWidget() => SizedBox.expand(child: Webview(controller));
+
+  Future<void> ensureInitialized() {
+    _initialization ??= _initialize();
+    return _initialization!;
+  }
+
+  Future<void> apply(WoxPreviewWebviewData previewData) async {
+    if (_disposed) {
+      return;
+    }
+
+    await ensureInitialized();
+
+    final injectCssChanged = _currentCss != previewData.injectCss;
+    if (injectCssChanged && _currentScriptId != null) {
+      await controller.removeScriptToExecuteOnDocumentCreated(_currentScriptId!);
+      _currentScriptId = null;
+    }
+
+    if (injectCssChanged && previewData.injectCss.isNotEmpty) {
+      _currentScriptId = await controller.addScriptToExecuteOnDocumentCreated(WoxWebViewSupport.buildInjectCssScript(previewData.injectCss));
+    }
+
+    final shouldReload = _currentUrl != previewData.url || injectCssChanged;
+    _currentCss = previewData.injectCss;
+
+    if (shouldReload && previewData.url.isNotEmpty) {
+      await controller.loadUrl(previewData.url);
+      _currentUrl = previewData.url;
+    }
+  }
+
+  @override
+  Future<void> dispose() async {
+    if (_disposed) {
+      return;
+    }
+
+    _disposed = true;
+    await _acceleratorKeySubscription?.cancel();
+    await _actions.close();
+    await controller.dispose();
+  }
+
+  Future<void> _initialize() async {
+    await controller.initialize();
+    _acceleratorKeySubscription = controller.acceleratorKeyPressed.listen((event) {
+      final isAltJ = event.keyEventKind == 2 && event.virtualKey == 0x4A;
+      final isEscape = event.keyEventKind == 0 && event.virtualKey == 0x1B;
+
+      if (isAltJ) {
+        _actions.add(WoxWebViewSessionAction.toggleActionPanel);
+      } else if (isEscape) {
+        _actions.add(WoxWebViewSessionAction.focusQueryBox);
+      }
+    });
+    await controller.setBackgroundColor(Colors.transparent);
+    await controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.sameWindow);
+    await controller.setUserAgent(WoxWebViewSupport.mobileUserAgent);
+    await controller.setCacheDisabled(!isCached);
+  }
+}
