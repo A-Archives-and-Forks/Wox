@@ -144,6 +144,64 @@ void FlutterWindow::Log(const std::string &message)
   }
 }
 
+HWND FlutterWindow::NormalizeToRootWindow(HWND hwnd) const
+{
+  if (hwnd == nullptr)
+  {
+    return nullptr;
+  }
+
+  HWND root = GetAncestor(hwnd, GA_ROOTOWNER);
+  if (root == nullptr)
+  {
+    root = GetAncestor(hwnd, GA_ROOT);
+  }
+  if (root == nullptr)
+  {
+    root = hwnd;
+  }
+
+  return root;
+}
+
+bool FlutterWindow::ShouldSuppressBlurForActivatedWindow(HWND selfHwnd, HWND activatedHwnd)
+{
+  if (selfHwnd == nullptr || activatedHwnd == nullptr)
+  {
+    return false;
+  }
+
+  HWND selfRoot = NormalizeToRootWindow(selfHwnd);
+  if (selfRoot == nullptr)
+  {
+    selfRoot = selfHwnd;
+  }
+
+  HWND activatedRoot = NormalizeToRootWindow(activatedHwnd);
+  if (activatedRoot == nullptr)
+  {
+    activatedRoot = activatedHwnd;
+  }
+
+  if (activatedRoot == selfRoot || IsChild(selfRoot, activatedHwnd) || IsChild(selfRoot, activatedRoot))
+  {
+    Log("WM_ACTIVATE: WA_INACTIVE suppressed (same Wox window tree)");
+    return true;
+  }
+
+  DWORD selfPid = 0;
+  DWORD activatedPid = 0;
+  GetWindowThreadProcessId(selfRoot, &selfPid);
+  GetWindowThreadProcessId(activatedRoot, &activatedPid);
+  if (selfPid != 0 && selfPid == activatedPid)
+  {
+    Log("WM_ACTIVATE: WA_INACTIVE suppressed (same process native host)");
+    return true;
+  }
+
+  return false;
+}
+
 void FlutterWindow::SavePreviousActiveWindow(HWND selfHwnd)
 {
   if (selfHwnd == nullptr)
@@ -158,7 +216,7 @@ void FlutterWindow::SavePreviousActiveWindow(HWND selfHwnd)
   }
 
   // Normalize to root window (avoid saving child controls)
-  HWND root = GetAncestor(fg, GA_ROOT);
+  HWND root = NormalizeToRootWindow(fg);
   if (root == nullptr)
   {
     root = fg;
@@ -197,7 +255,7 @@ void FlutterWindow::RestorePreviousActiveWindow(HWND selfHwnd)
   }
 
   // Normalize again (in case we saved a non-root window in the past)
-  HWND root = GetAncestor(prev, GA_ROOT);
+  HWND root = NormalizeToRootWindow(prev);
   if (root != nullptr)
   {
     prev = root;
@@ -650,23 +708,27 @@ LRESULT CALLBACK FlutterWindow::WindowProc(HWND hwnd, UINT message, WPARAM wpara
     }
     else
     {
-      const bool in_post_show_grace = GetTickCount64() < g_window_instance->blur_guard_until_tick_;
-      if (g_window_instance->blur_guard_active_ || in_post_show_grace)
+      HWND activatedHwnd = reinterpret_cast<HWND>(lparam);
+      if (!g_window_instance->ShouldSuppressBlurForActivatedWindow(hwnd, activatedHwnd))
       {
-        if (g_window_instance->blur_guard_active_)
+        const bool in_post_show_grace = GetTickCount64() < g_window_instance->blur_guard_until_tick_;
+        if (g_window_instance->blur_guard_active_ || in_post_show_grace)
         {
-          g_window_instance->Log("WM_ACTIVATE: WA_INACTIVE suppressed (show-to-focus transition)");
+          if (g_window_instance->blur_guard_active_)
+          {
+            g_window_instance->Log("WM_ACTIVATE: WA_INACTIVE suppressed (show-to-focus transition)");
+          }
+          else
+          {
+            g_window_instance->Log("WM_ACTIVATE: WA_INACTIVE suppressed (post-show grace)");
+          }
         }
         else
         {
-          g_window_instance->Log("WM_ACTIVATE: WA_INACTIVE suppressed (post-show grace)");
+          g_window_instance->restore_previous_window_on_hide_ = false;
+          g_window_instance->previous_active_window_ = nullptr;
+          g_window_instance->SendWindowEvent("onWindowBlur");
         }
-      }
-      else
-      {
-        g_window_instance->restore_previous_window_on_hide_ = false;
-        g_window_instance->previous_active_window_ = nullptr;
-        g_window_instance->SendWindowEvent("onWindowBlur");
       }
     }
     break;
