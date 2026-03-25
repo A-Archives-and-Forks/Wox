@@ -927,6 +927,11 @@ class WoxLauncherController extends GetxController {
   }
 
   Future<void> hideApp(String traceId) async {
+    // hide first to avoid the potential delay caused by some heavy operations in onHide callback
+    // E.g. on tray query mode, hideActionPanel will call resize height, which may cause a noticeable
+    // resize animation if the window is still visible while resizing, so we hide the window first and then do the rest of the operations
+    await windowManager.hide();
+
     //clear query box text if query type is selection or launch mode is fresh
     if (currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code || lastLaunchMode == WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code) {
       currentQuery.value = PlainQuery.emptyInput();
@@ -948,7 +953,6 @@ class WoxLauncherController extends GetxController {
     await WoxApi.instance.onSetting(traceId, false);
     setDefaultLayoutMode(traceId);
 
-    await windowManager.hide();
     await WoxApi.instance.onHide(traceId);
     await restoreQueryAfterTrayQuery(traceId);
   }
