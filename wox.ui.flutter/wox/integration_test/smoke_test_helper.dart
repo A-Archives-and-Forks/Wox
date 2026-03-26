@@ -183,6 +183,13 @@ Future<void> updateSettingDirect(String key, String value) async {
   final traceId = const UuidV4().generate();
   await WoxApi.instance.updateSetting(traceId, key, value);
   await WoxSettingUtil.instance.loadSetting(traceId);
+
+  // Keep lastLaunchMode in sync so hideApp uses the correct mode immediately,
+  // matching the behavior of WoxSettingController.updateConfig.
+  if (key == 'LaunchMode') {
+    final controller = Get.find<WoxLauncherController>();
+    controller.lastLaunchMode = value;
+  }
 }
 
 Future<void> saveLastWindowPosition(int x, int y) async {

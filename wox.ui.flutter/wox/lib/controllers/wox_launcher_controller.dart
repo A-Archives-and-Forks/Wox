@@ -764,7 +764,7 @@ class WoxLauncherController extends GetxController {
     if (Platform.isLinux) {
       await windowManager.show();
     }
-    final targetHeight = calculateInitialShowWindowHeight();
+    final targetHeight = calculateInitialShowWindowHeight(shouldPreserveIncomingQuery);
     final targetWidth = forceWindowWidth != 0 ? forceWindowWidth : WoxSettingUtil.instance.currentSetting.appWidth.toDouble();
     final targetPosition = Offset(params.position.x.toDouble(), params.position.y.toDouble());
 
@@ -1810,10 +1810,17 @@ class WoxLauncherController extends GetxController {
     await resizeHeight(traceId: traceId, reason: "clear query results");
   }
 
-  double calculateWindowHeight() {
+  /// Calculate the window height based on the current result count.
+  ///
+  /// [overrideItemCount] allows callers to specify a virtual item count instead
+  /// of reading the actual items in the active result view controller. This is
+  /// used by the initial-show path to compute height with 0 results when a new
+  /// query is about to be issued and old results should be ignored.
+  double calculateWindowHeight({int? overrideItemCount}) {
     final maxResultCount = getMaxResultCount();
     final maxHeight = WoxThemeUtil.instance.getResultListViewHeightByCount(maxResultCount);
-    final itemCount = activeResultViewController.items.length;
+    final itemCount = overrideItemCount ?? activeResultViewController.items.length;
+    final hasItems = itemCount > 0;
     double resultHeight;
 
     if (isInGridMode()) {
@@ -1829,11 +1836,14 @@ class WoxLauncherController extends GetxController {
       resultHeight = WoxThemeUtil.instance.getResultListViewHeightByCount(maxResultCount);
     }
 
-    if (itemCount > 0) {
+    if (hasItems) {
       resultHeight += WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingTop + WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingBottom;
     }
     // Only add toolbar height when toolbar is actually shown in UI.
-    if (isShowToolbar && !isToolbarHiddenForce.value) {
+    // Use local hasItems instead of the isShowToolbar getter so that
+    // overrideItemCount is respected.
+    final showToolbar = (hasItems || isShowDoctorCheckInfo) && !isToolbarHiddenForce.value;
+    if (showToolbar) {
       resultHeight += WoxThemeUtil.instance.getToolbarHeight();
     }
 
@@ -1856,41 +1866,25 @@ class WoxLauncherController extends GetxController {
     }
 
     // If toolbar is shown without results, remove bottom padding to blend with query box.
-    if (isToolbarShowedWithoutResults && isQueryBoxVisible.value) {
+    final toolbarShowedWithoutResults = showToolbar && !hasItems;
+    if (toolbarShowedWithoutResults && isQueryBoxVisible.value) {
       totalHeight -= WoxThemeUtil.instance.currentTheme.value.appPaddingBottom;
     }
 
     return totalHeight;
   }
 
-  double calculateInitialShowWindowHeight() {
-    double resultHeight = 0;
-
-    if (isShowDoctorCheckInfo && !isToolbarHiddenForce.value) {
-      resultHeight += WoxThemeUtil.instance.getToolbarHeight();
+  /// Calculate the initial window height when showing the app.
+  ///
+  /// In continue mode (no incoming query injected), results from the previous
+  /// session are preserved, so we use the real item count. Otherwise, a new
+  /// query is about to be issued and old results should be ignored, so we
+  /// compute the height as if there are 0 results.
+  double calculateInitialShowWindowHeight(bool isIncomingQueryInjected) {
+    if (!isIncomingQueryInjected && activeResultViewController.items.isNotEmpty) {
+      return calculateWindowHeight();
     }
-
-    if (!isQueryBoxVisible.value) {
-      resultHeight = math.max(resultHeight, WoxThemeUtil.instance.getResultListViewHeightByCount(1));
-      if (!isFullscreenPreviewOnly()) {
-        resultHeight += WoxThemeUtil.instance.currentTheme.value.appPaddingBottom.toDouble();
-      }
-    }
-
-    final queryBoxHeight = isQueryBoxVisible.value ? getQueryBoxTotalHeight() : 0.0;
-    var totalHeight = queryBoxHeight + resultHeight;
-
-    if (Platform.isWindows) {
-      if (PlatformDispatcher.instance.views.first.devicePixelRatio > 1) {
-        totalHeight = totalHeight + 1;
-      }
-    }
-
-    if (isShowDoctorCheckInfo && isQueryBoxVisible.value && !isToolbarHiddenForce.value) {
-      totalHeight -= WoxThemeUtil.instance.currentTheme.value.appPaddingBottom;
-    }
-
-    return totalHeight;
+    return calculateWindowHeight(overrideItemCount: 0);
   }
 
   // select all text in query box

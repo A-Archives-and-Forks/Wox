@@ -230,5 +230,78 @@ void registerLauncherCoreSmokeTests() {
 
       await closeSettings(tester, settingController, launcherController);
     });
+
+    testWidgets('P0-SMK-15: LaunchMode switch via settings syncs hide and show behavior immediately', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+
+      // Open settings general page.
+      final settingController = await openSettings(tester, controller, 'general');
+
+      // --- Phase 1: Switch fresh → continue via the UI dropdown ---
+      final freshLabel = settingController.tr('ui_launch_mode_fresh');
+      final continueLabel = settingController.tr('ui_launch_mode_continue');
+
+      // Tap the dropdown (currently showing "fresh") to open its menu.
+      await tester.tap(find.text(freshLabel));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Tap the "continue" option in the opened dropdown menu.
+      // DropdownButton renders two text widgets for the selected item (one in
+      // the button, one in the menu), so use .last to tap the menu item.
+      await tester.tap(find.text(continueLabel).last);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      await closeSettings(tester, settingController, controller);
+
+      // Verify lastLaunchMode was synced immediately.
+      expect(controller.lastLaunchMode, equals(WoxLaunchModeEnum.WOX_LAUNCH_MODE_CONTINUE.code));
+
+      // Query and get results.
+      await queryAndWaitForResults(tester, controller, 'wox launcher test xyz123');
+      expect(controller.activeResultViewController.items, isNotEmpty);
+      final sizeWithResults = await windowManager.getSize();
+
+      // Hide and re-show — continue mode should preserve results and height.
+      await hideLauncherByEscape(tester, controller);
+      await triggerBackendShowApp(tester);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(controller.activeResultViewController.items, isNotEmpty, reason: 'Continue mode should preserve results');
+      expect(controller.queryBoxTextFieldController.text, equals('wox launcher test xyz123'));
+      final sizeAfterContinueReshow = await windowManager.getSize();
+      expect(
+        (sizeAfterContinueReshow.height - sizeWithResults.height).abs(),
+        lessThanOrEqualTo(2),
+        reason: 'Continue mode: window height should match (was ${sizeWithResults.height}, got ${sizeAfterContinueReshow.height})',
+      );
+
+      // --- Phase 2: Switch continue → fresh via the UI dropdown ---
+      final settingController2 = await openSettings(tester, controller, 'general');
+
+      // Dropdown now shows "continue". Tap it to open the menu.
+      await tester.tap(find.text(continueLabel));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Tap the "fresh" option.
+      await tester.tap(find.text(freshLabel).last);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      await closeSettings(tester, settingController2, controller);
+
+      // Verify lastLaunchMode was synced back to fresh.
+      expect(controller.lastLaunchMode, equals(WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code));
+
+      // Query and get results again.
+      await queryAndWaitForResults(tester, controller, 'wox launcher test xyz123');
+      expect(controller.activeResultViewController.items, isNotEmpty);
+
+      // Hide and re-show — fresh mode should clear results.
+      await hideLauncherByEscape(tester, controller);
+      await triggerBackendShowApp(tester);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(controller.activeResultViewController.items, isEmpty, reason: 'Fresh mode should clear results on hide');
+      expect(controller.queryBoxTextFieldController.text, isEmpty, reason: 'Fresh mode should clear query text on hide');
+    });
   });
 }

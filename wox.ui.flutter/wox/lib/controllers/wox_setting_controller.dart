@@ -246,6 +246,18 @@ class WoxSettingController extends GetxController {
         Logger.instance.error(traceId, 'Failed to save window position when switching to last_location: $e');
       }
     }
+
+    // Sync lastLaunchMode immediately so hideApp uses the correct mode
+    // without waiting for the next show cycle from the backend.
+    if (key == "LaunchMode") {
+      try {
+        final launcherController = Get.find<WoxLauncherController>();
+        launcherController.lastLaunchMode = value;
+        Logger.instance.info(traceId, 'Synced lastLaunchMode to $value');
+      } catch (e) {
+        Logger.instance.error(traceId, 'Failed to sync lastLaunchMode: $e');
+      }
+    }
   }
 
   Future<void> updateLang(String langCode) async {
