@@ -98,6 +98,7 @@ private:
   void ClearTrackedChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam);
   bool HasTrackedChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam) const;
   bool RerouteIgnoredRootKeyUp(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+  void FlushPendingChildKeyUps();
   static uint64_t MakeKeyboardMessageSignature(UINT message, WPARAM wparam, LPARAM lparam);
 
   std::unordered_set<uint64_t> pending_child_keydowns_;

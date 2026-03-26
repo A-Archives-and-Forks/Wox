@@ -45,6 +45,39 @@ uint64_t FlutterWindow::MakeKeyboardMessageSignature(UINT message, WPARAM wparam
   return virtual_key | (scancode << 16) | (is_extended << 24) | (is_system_key << 25);
 }
 
+static UINT KeyboardKeyUpMessageFromSignature(uint64_t signature)
+{
+  const bool is_system_key = ((signature >> 25) & 0x1) != 0;
+  return is_system_key ? WM_SYSKEYUP : WM_KEYUP;
+}
+
+static WPARAM KeyboardVirtualKeyFromSignature(uint64_t signature)
+{
+  return static_cast<WPARAM>(signature & 0xFFFF);
+}
+
+static LPARAM MakeKeyboardKeyUpLParamFromSignature(uint64_t signature)
+{
+  // Rebuild the keyup LPARAM from the tracked child keydown signature so the
+  // synthetic release matches the original key as closely as possible.
+  // Flutter's Windows keyboard path uses both WPARAM and LPARAM fields
+  // (scancode / extended bit / system-key bit / transition bits) when mapping
+  // the event, so sending only VK_ESCAPE/VK_RETURN without the original shape
+  // risks clearing the wrong key or being ignored by the engine.
+  LPARAM lparam = 1;
+  lparam |= static_cast<LPARAM>((signature >> 16) & 0xFF) << 16;
+  lparam |= static_cast<LPARAM>((signature >> 24) & 0x1) << 24;
+
+  if (((signature >> 25) & 0x1) != 0)
+  {
+    lparam |= static_cast<LPARAM>(1) << 29;
+  }
+
+  lparam |= static_cast<LPARAM>(1) << 30;
+  lparam |= static_cast<LPARAM>(1) << 31;
+  return lparam;
+}
+
 static std::optional<WORD> ParseWindowsVirtualKey(const std::string &key)
 {
   if (key.size() == 1)
@@ -238,6 +271,49 @@ bool FlutterWindow::RerouteIgnoredRootKeyUp(HWND hwnd, UINT message, WPARAM wpar
 
   SendMessage(child_window_, message, wparam, lparam);
   return true;
+}
+
+void FlutterWindow::FlushPendingChildKeyUps()
+{
+  if (pending_child_keydowns_.empty())
+  {
+    return;
+  }
+
+  const std::unordered_set<uint64_t> pending_keydowns = pending_child_keydowns_;
+  pending_child_keydowns_.clear();
+
+  if (child_window_ == nullptr || !IsWindow(child_window_))
+  {
+    return;
+  }
+
+  // This is the missing half of the root-keyup reroute fix above.
+  //
+  // The previous fix handles:
+  //   child receives keydown -> root receives keyup
+  //
+  // But hide-on-keydown actions such as Escape take a different path:
+  //   child receives keydown -> Dart handles Escape immediately ->
+  //   native hide() runs -> window disappears before the real keyup is
+  //   delivered back through Flutter
+  //
+  // In that sequence Flutter's HardwareKeyboard keeps Escape marked as
+  // pressed. The next time Wox is shown, the first Escape keydown is filtered
+  // as an already-pressed key, so the user has to press Escape twice.
+  //
+  // To keep Flutter's keyboard state consistent across hide/show cycles, flush
+  // every still-pending child keydown as a synthetic keyup before SW_HIDE.
+  // We clear the set first so if the synthetic SendMessage re-enters keyboard
+  // handling we do not generate duplicate releases.
+  for (const uint64_t signature : pending_keydowns)
+  {
+    SendMessage(
+        child_window_,
+        KeyboardKeyUpMessageFromSignature(signature),
+        KeyboardVirtualKeyFromSignature(signature),
+        MakeKeyboardKeyUpLParamFromSignature(signature));
+  }
 }
 
 HWND FlutterWindow::NormalizeToRootWindow(HWND hwnd) const
@@ -1160,6 +1236,11 @@ void FlutterWindow::HandleWindowManagerMethodCall(
     {
       blur_guard_active_ = false;
       blur_guard_until_tick_ = 0;
+
+      // Flush before SW_HIDE. After the window is hidden, Windows may deliver
+      // the physical keyup somewhere else (or not through Flutter at all),
+      // which is exactly how Escape ended up stuck in HardwareKeyboard.
+      FlushPendingChildKeyUps();
 
       HWND fg = GetForegroundWindow();
       bool isForeground = (fg == hwnd || fg == GetAncestor(hwnd, GA_ROOT));
