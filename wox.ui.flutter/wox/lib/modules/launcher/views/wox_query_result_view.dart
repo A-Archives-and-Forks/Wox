@@ -132,7 +132,7 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
             onItemSecondaryTapped: (traceId, item) {
               controller.openActionPanelForActiveResult(traceId);
             },
-            onRowHeightChanged: () => controller.resizeHeight(),
+            onRowHeightChanged: () => controller.resizeHeight(traceId: const UuidV4().generate(), reason: "grid row height changed"),
           );
         }
 

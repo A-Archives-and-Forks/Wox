@@ -647,8 +647,12 @@ func (c *ExplorerPlugin) normalizePathKey(path string) string {
 	return path
 }
 
+func (c *ExplorerPlugin) typeToSearchDebugLog(ctx context.Context, format string, args ...any) {
+	// c.api.Log(ctx, plugin.LogLevelDebug, "typeToSearch: "+fmt.Sprintf(format, args...))
+}
+
 func (c *ExplorerPlugin) stopOverlayListener() {
-	c.api.Log(context.Background(), plugin.LogLevelInfo, "typeToSearch: stop monitor")
+	c.typeToSearchDebugLog(context.Background(), "stop monitor")
 	StopExplorerMonitor()
 	StopExplorerOpenSaveMonitor()
 	setExplorerMonitorLogger(nil)
@@ -662,9 +666,9 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 	c.stopOverlayListener()
 
 	setExplorerMonitorLogger(func(msg string) {
-		c.api.Log(ctx, plugin.LogLevelDebug, "typeToSearch: "+msg)
+		c.typeToSearchDebugLog(ctx, "%s", msg)
 	})
-	c.api.Log(ctx, plugin.LogLevelInfo, "typeToSearch: start monitor")
+	c.typeToSearchDebugLog(ctx, "start monitor")
 
 	runtime := &overlayRuntime{stopCh: make(chan struct{})}
 	c.overlayRuntime.Store(runtime)
@@ -691,11 +695,11 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 	}
 
 	onActivated := func(pid int) {
-		c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: activated pid=%d", pid))
+		c.typeToSearchDebugLog(ctx, "activated pid=%d", pid)
 		pushEvent(overlayEvent{eventType: overlayEventActivate})
 	}
 	onDeactivated := func() {
-		c.api.Log(ctx, plugin.LogLevelDebug, "typeToSearch: deactivated")
+		c.typeToSearchDebugLog(ctx, "deactivated")
 		pushEvent(overlayEvent{eventType: overlayEventDeactivate})
 	}
 	onKey := func(key string) {
@@ -725,15 +729,15 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 			if !ok {
 				x, y, w, h, ok = GetActiveDialogRect()
 				if !ok {
-					c.api.Log(localCtx, plugin.LogLevelInfo, "typeToSearch: showOverlay skipped (no active explorer/dialog rect)")
+					c.typeToSearchDebugLog(localCtx, "showOverlay skipped (no active explorer/dialog rect)")
 					return false
 				}
 			}
 			if w <= 0 || h <= 0 {
-				c.api.Log(localCtx, plugin.LogLevelInfo, fmt.Sprintf("typeToSearch: showOverlay skipped (invalid rect w=%d h=%d)", w, h))
+				c.typeToSearchDebugLog(localCtx, "showOverlay skipped (invalid rect w=%d h=%d)", w, h)
 				return false
 			}
-			c.api.Log(localCtx, plugin.LogLevelInfo, fmt.Sprintf("typeToSearch: showOverlay explorerRect=(%d,%d,%d,%d)", x, y, w, h))
+			c.typeToSearchDebugLog(localCtx, "showOverlay explorerRect=(%d,%d,%d,%d)", x, y, w, h)
 			woxSetting := setting.GetSettingManager().GetWoxSetting(localCtx)
 			initialWindowHeight := getExplorerInitialWindowHeight(localCtx)
 			position := getExplorerWindowPosition(common.WindowRect{X: x, Y: y, Width: w, Height: h}, woxSetting.AppWidth.Get()/2, initialWindowHeight)
@@ -757,7 +761,7 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 			case ev := <-events:
 				switch ev.eventType {
 				case overlayEventActivate:
-					c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: event activate active=%v waitingVisible=%v pending=%q", active, waitingVisible, pending))
+					c.typeToSearchDebugLog(ctx, "event activate active=%v waitingVisible=%v pending=%q", active, waitingVisible, pending)
 					active = true
 					// Don't reset state when we're waiting for the overlay to become visible.
 					// ShowApp steals focus from Explorer, which triggers deactivated → activated cycling.
@@ -766,7 +770,7 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 						resetState()
 					}
 				case overlayEventDeactivate:
-					c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: event deactivate active=%v waitingVisible=%v pending=%q", active, waitingVisible, pending))
+					c.typeToSearchDebugLog(ctx, "event deactivate active=%v waitingVisible=%v pending=%q", active, waitingVisible, pending)
 					active = false
 					if !waitingVisible {
 						resetState()
@@ -777,24 +781,24 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 						localCtx = ctx
 					}
 					visible := c.api.IsVisible(localCtx)
-					c.api.Log(localCtx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: event key=%q active=%v visible=%v waitingVisible=%v pending=%q", ev.key, active, visible, waitingVisible, pending))
+					c.typeToSearchDebugLog(localCtx, "event key=%q active=%v visible=%v waitingVisible=%v pending=%q", ev.key, active, visible, waitingVisible, pending)
 					if !active || ev.key == "" {
-						c.api.Log(localCtx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: ignore key=%q active=%v", ev.key, active))
+						c.typeToSearchDebugLog(localCtx, "ignore key=%q active=%v", ev.key, active)
 						continue
 					}
 					if visible {
-						c.api.Log(localCtx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: ignore key=%q (wox visible)", ev.key))
+						c.typeToSearchDebugLog(localCtx, "ignore key=%q (wox visible)", ev.key)
 						continue
 					}
 					if pendingCtx == nil {
 						pendingCtx = localCtx
-						c.api.Log(pendingCtx, plugin.LogLevelInfo, fmt.Sprintf("typeToSearch: begin key=%q", ev.key))
+						c.typeToSearchDebugLog(pendingCtx, "begin key=%q", ev.key)
 					}
 					pending += strings.ToLower(ev.key)
-					c.api.Log(pendingCtx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: pending=%q", pending))
+					c.typeToSearchDebugLog(pendingCtx, "pending=%q", pending)
 					if !waitingVisible {
 						if !showOverlay(pendingCtx) {
-							c.api.Log(pendingCtx, plugin.LogLevelInfo, "typeToSearch: showOverlay failed")
+							c.typeToSearchDebugLog(pendingCtx, "showOverlay failed")
 							resetState()
 							continue
 						}
@@ -811,11 +815,11 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 					tickCtx = ctx
 				}
 				visible := c.api.IsVisible(tickCtx)
-				c.api.Log(tickCtx, plugin.LogLevelDebug, fmt.Sprintf("typeToSearch: ticker waitingVisible=%v visible=%v pending=%q active=%v", waitingVisible, visible, pending, active))
+				c.typeToSearchDebugLog(tickCtx, "ticker waitingVisible=%v visible=%v pending=%q active=%v", waitingVisible, visible, pending, active)
 				if visible {
 					if pending != "" {
 						queryText := "explorer " + pending
-						c.api.Log(tickCtx, plugin.LogLevelInfo, fmt.Sprintf("typeToSearch: changeQuery %q", queryText))
+						c.typeToSearchDebugLog(tickCtx, "changeQuery %q", queryText)
 						c.api.ChangeQuery(tickCtx, common.PlainQuery{
 							QueryType: plugin.QueryTypeInput,
 							QueryText: queryText,
@@ -825,7 +829,7 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 					continue
 				}
 				if !waitingSince.IsZero() && time.Since(waitingSince) > 2*time.Second {
-					c.api.Log(tickCtx, plugin.LogLevelDebug, "typeToSearch: timeout waiting for wox visible")
+					c.typeToSearchDebugLog(tickCtx, "timeout waiting for wox visible")
 					resetState()
 				}
 			}

@@ -153,7 +153,7 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
     WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
       // Adjust the window height to match the query box height.
       // This is necessary due to dynamic height calculations on Windows caused by DPI scaling issues.
-      launcherController.resizeHeight();
+      launcherController.resizeHeight(traceId: startupTraceId, reason: "initial resize after first frame");
 
       // Notify the backend that the UI is ready. The server-side will determine whether to display the UI window.
       await WoxApi.instance.onUIReady(startupTraceId);

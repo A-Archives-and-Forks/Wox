@@ -113,6 +113,8 @@ class WoxLauncherController extends GetxController {
   Timer clearQueryResultsTimer = Timer(const Duration(), () => {});
   int clearQueryResultDelay = 100; // adaptive based on flicker detection
   final windowFlickerDetector = WindowFlickerDetector();
+  Size? ongoingResizeTargetSize;
+  int resizeRequestToken = 0;
 
   /// This flag is used to control whether the user can arrow up to show history when the app is first shown.
   var canArrowUpHistory = true;
@@ -373,7 +375,7 @@ class WoxLauncherController extends GetxController {
 
     updateActiveResultIndex(traceId);
     updateDoctorToolbarIfNeeded(traceId);
-    resizeHeight();
+    resizeHeight(traceId: traceId, reason: "query results updated");
   }
 
   void updateActiveResultIndex(String traceId) {
@@ -781,7 +783,7 @@ class WoxLauncherController extends GetxController {
     if (Platform.isWindows) {
       Future.delayed(const Duration(milliseconds: 25), () {
         if (!isClosed) {
-          unawaited(resizeHeight(forceDwmRecomposition: true));
+          unawaited(resizeHeight(traceId: traceId, reason: "force DWM recomposition after showing window", forceDwmRecomposition: true));
         }
       });
     }
@@ -938,10 +940,13 @@ class WoxLauncherController extends GetxController {
   }
 
   void hideActionPanel(String traceId) {
+    final wasShowActionPanel = isShowActionPanel.value;
     isShowActionPanel.value = false;
     actionListViewController.clearFilter(traceId);
     focusQueryBox();
-    resizeHeight();
+    if (wasShowActionPanel) {
+      resizeHeight(traceId: traceId, reason: "hide action panel");
+    }
   }
 
   void showFormActionPanel(String traceId, WoxResultAction action, String resultId) {
@@ -958,10 +963,11 @@ class WoxLauncherController extends GetxController {
     }
     isShowFormActionPanel.value = true;
     isShowActionPanel.value = false;
-    resizeHeight();
+    resizeHeight(traceId: traceId, reason: "show form action panel");
   }
 
   void hideFormActionPanel(String traceId, {String reason = "unspecified"}) {
+    final wasShowFormActionPanel = isShowFormActionPanel.value;
     Logger.instance.debug(
       traceId,
       "hide form action panel: reason=$reason, isShow=${isShowFormActionPanel.value}, activeAction=${activeFormAction.value?.name ?? "null"}, resultId=${activeFormResultId.value}",
@@ -971,7 +977,9 @@ class WoxLauncherController extends GetxController {
     formActionValues.clear();
     isShowFormActionPanel.value = false;
     focusQueryBox();
-    resizeHeight();
+    if (wasShowFormActionPanel) {
+      resizeHeight(traceId: traceId, reason: "hide form action panel: $reason");
+    }
   }
 
   Future<void> focusQueryBox({bool selectAll = false}) async {
@@ -1007,7 +1015,7 @@ class WoxLauncherController extends GetxController {
     SchedulerBinding.instance.addPostFrameCallback((_) {
       actionListViewController.requestFocus();
     });
-    resizeHeight();
+    resizeHeight(traceId: traceId, reason: "show action panel");
   }
 
   void openActionPanelForActiveResult(String traceId) {
@@ -1188,22 +1196,22 @@ class WoxLauncherController extends GetxController {
   }
 
   void onQueryBoxTextChanged(String value) {
+    final traceId = const UuidV4().generate();
     canArrowUpHistory = false;
     resultListViewController.isMouseMoved = false;
     resultGridViewController.isMouseMoved = false;
 
     if (currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code) {
-      updateQueryBoxLineCount(value);
+      updateQueryBoxLineCount(traceId, value);
       // do local filter if query type is selection
-      final traceId = const UuidV4().generate();
       resultListViewController.filterItems(traceId, value);
       resultGridViewController.filterItems(traceId, value);
       // there maybe no results after filtering, we need to resize height to hide the action panel
       // or show the preview panel
-      resizeHeight();
+      resizeHeight(traceId: traceId, reason: "selection query text changed");
     } else {
       onQueryChanged(
-        const UuidV4().generate(),
+        traceId,
         PlainQuery(queryId: const UuidV4().generate(), queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code, queryText: value, querySelection: Selection.empty()),
         "user input changed",
       );
@@ -1281,8 +1289,8 @@ class WoxLauncherController extends GetxController {
     if (moveCursorToEnd) {
       moveQueryBoxCursorToEnd();
     }
-    updateQueryBoxLineCount(query.queryText);
-    updateQueryBoxLineCount(query.queryText);
+    updateQueryBoxLineCount(traceId, query.queryText);
+    updateQueryBoxLineCount(traceId, query.queryText);
 
     // Cancel previous loading timer and reset loading state
     loadingTimer?.cancel();
@@ -1439,7 +1447,7 @@ class WoxLauncherController extends GetxController {
     } else if (msg.method == "ChangeTheme") {
       final theme = WoxTheme.fromJson(msg.data);
       WoxThemeUtil.instance.changeTheme(theme);
-      resizeHeight(); // Theme height maybe changed, so we need to resize height
+      resizeHeight(traceId: msg.traceId, reason: "theme changed"); // Theme height maybe changed, so we need to resize height
       // Theme change triggers widget rebuild which may lose focus, so we need to restore focus after rebuild
       SchedulerBinding.instance.addPostFrameCallback((_) {
         focusQueryBox();
@@ -1793,7 +1801,7 @@ class WoxLauncherController extends GetxController {
     }
 
     updateDoctorToolbarIfNeeded(traceId);
-    await resizeHeight();
+    await resizeHeight(traceId: traceId, reason: "clear query results");
   }
 
   double calculateWindowHeight() {
@@ -1897,11 +1905,27 @@ class WoxLauncherController extends GetxController {
     }
   }
 
-  Future<void> resizeHeight({bool forceDwmRecomposition = false}) async {
+  String formatWindowSize(Size size) {
+    return "${size.width}x${size.height}";
+  }
+
+  int logicalToPhysicalPixels(double logicalPixels) {
+    return (logicalPixels * PlatformDispatcher.instance.views.first.devicePixelRatio).round();
+  }
+
+  bool isWindowSizeEffectivelyEqual(Size left, Size right) {
+    return (logicalToPhysicalPixels(left.width) - logicalToPhysicalPixels(right.width)).abs() <= 1 &&
+        (logicalToPhysicalPixels(left.height) - logicalToPhysicalPixels(right.height)).abs() <= 1;
+  }
+
+  Future<void> resizeHeight({required String traceId, String reason = "unspecified", bool forceDwmRecomposition = false}) async {
     // Don't resize when in setting view, setting view has its own fixed size (1200x800)
     if (isInSettingView.value) {
+      Logger.instance.debug(traceId, "resize skipped: reason=$reason, setting view is active");
       return;
     }
+
+    final currentSize = await windowManager.getSize();
     var totalHeight = calculateWindowHeight();
 
     // Force DWM to recompose Acrylic by adding a single pixel to bypass caching identical sizes
@@ -1910,30 +1934,68 @@ class WoxLauncherController extends GetxController {
     }
 
     double targetWidth = forceWindowWidth != 0 ? forceWindowWidth : WoxSettingUtil.instance.currentSetting.appWidth.toDouble();
-    if (isQueryBoxAtBottom.value) {
-      // When the query box is anchored to the bottom, grow the window upward.
-      // Use getPosition + getSize to compute the current bottom edge, then adjust top to grow upward.
-      final pos = await windowManager.getPosition();
-      final currentSize = await windowManager.getSize();
-      double currentBottom = pos.dy + currentSize.height;
+    final targetSize = Size(targetWidth, totalHeight.toDouble());
+    final isSameSize = isWindowSizeEffectivelyEqual(currentSize, targetSize);
+    Logger.instance.debug(
+      traceId,
+      "resize requested: reason=$reason, before=${formatWindowSize(currentSize)}, target=${formatWindowSize(targetSize)}, sameSize=$isSameSize, forceDwmRecomposition=$forceDwmRecomposition",
+    );
 
-      if (currentBottom <= 0) {
-        // Fallback if bounds are weird
-      } else {
-        double newTop = currentBottom - totalHeight;
-        // Apply position and size together to avoid intermediate-frame flicker.
-        await windowManager.setBounds(Offset(pos.dx, newTop), Size(targetWidth, totalHeight));
-
-        windowFlickerDetector.recordResize(totalHeight.toInt());
-        return;
-      }
+    if (isSameSize && !forceDwmRecomposition) {
+      Logger.instance.debug(traceId, "resize skipped: reason=$reason, before=${formatWindowSize(currentSize)}, target=${formatWindowSize(targetSize)}, sameSize=true");
+      return;
     }
 
-    await windowManager.setSize(Size(targetWidth, totalHeight.toDouble()));
-    windowFlickerDetector.recordResize(totalHeight.toInt());
+    if (!forceDwmRecomposition && ongoingResizeTargetSize != null && isWindowSizeEffectivelyEqual(ongoingResizeTargetSize!, targetSize)) {
+      Logger.instance.debug(
+        traceId,
+        "resize skipped: reason=$reason, before=${formatWindowSize(currentSize)}, target=${formatWindowSize(targetSize)}, duplicateTargetInFlight=true",
+      );
+      return;
+    }
+
+    final currentResizeToken = ++resizeRequestToken;
+    ongoingResizeTargetSize = targetSize;
+
+    try {
+      if (isQueryBoxAtBottom.value) {
+        // When the query box is anchored to the bottom, grow the window upward.
+        // Use getPosition + getSize to compute the current bottom edge, then adjust top to grow upward.
+        final pos = await windowManager.getPosition();
+        double currentBottom = pos.dy + currentSize.height;
+
+        if (currentBottom <= 0) {
+          // Fallback if bounds are weird
+        } else {
+          double newTop = currentBottom - totalHeight;
+          // Apply position and size together to avoid intermediate-frame flicker.
+          await windowManager.setBounds(Offset(pos.dx, newTop), targetSize);
+          final resizedSize = await windowManager.getSize();
+          Logger.instance.debug(
+            traceId,
+            "resize applied: reason=$reason, before=${formatWindowSize(currentSize)}, target=${formatWindowSize(targetSize)}, after=${formatWindowSize(resizedSize)}, mode=setBounds, growUpward=true",
+          );
+
+          windowFlickerDetector.recordResize(totalHeight.toInt());
+          return;
+        }
+      }
+
+      await windowManager.setSize(targetSize);
+      final resizedSize = await windowManager.getSize();
+      Logger.instance.debug(
+        traceId,
+        "resize applied: reason=$reason, before=${formatWindowSize(currentSize)}, target=${formatWindowSize(targetSize)}, after=${formatWindowSize(resizedSize)}, mode=setSize, growUpward=false",
+      );
+      windowFlickerDetector.recordResize(totalHeight.toInt());
+    } finally {
+      if (resizeRequestToken == currentResizeToken) {
+        ongoingResizeTargetSize = null;
+      }
+    }
   }
 
-  void updateQueryBoxLineCount(String text) {
+  void updateQueryBoxLineCount(String traceId, String text) {
     final normalizedText = text.replaceAll('\r\n', '\n');
     final rawLineCount = normalizedText.isEmpty ? 1 : normalizedText.split('\n').length;
     final clampedLineCount = rawLineCount.clamp(1, QUERY_BOX_MAX_LINES);
@@ -1941,7 +2003,7 @@ class WoxLauncherController extends GetxController {
       return;
     }
     queryBoxLineCount.value = clampedLineCount;
-    resizeHeight();
+    resizeHeight(traceId: traceId, reason: "query box line count changed");
   }
 
   double getQueryBoxInputHeight() {
@@ -2019,7 +2081,7 @@ class WoxLauncherController extends GetxController {
 
             // If preview panel visibility changed, resize window height
             if (oldShowPreview != isShowPreviewPanel.value) {
-              resizeHeight();
+              resizeHeight(traceId: traceId, reason: "active result preview visibility changed");
             }
           }
 
@@ -2109,7 +2171,7 @@ class WoxLauncherController extends GetxController {
     updateDoctorToolbarIfNeeded(traceId);
     final isToolbarVisible = isShowToolbar && !isToolbarHiddenForce.value;
     if (wasToolbarVisible != isToolbarVisible) {
-      await resizeHeight();
+      await resizeHeight(traceId: traceId, reason: "doctor check toolbar visibility changed");
     }
     Logger.instance.debug(traceId, "doctor check result: ${checkInfo.allPassed}, details: ${checkInfo.results.length} items");
   }
@@ -2216,7 +2278,7 @@ class WoxLauncherController extends GetxController {
     isInSettingView.value = false;
     await WoxApi.instance.onSetting(traceId, false);
     await windowManager.setAlwaysOnTop(true);
-    await resizeHeight();
+    await resizeHeight(traceId: traceId, reason: "exit setting view");
     await windowManager.setPosition(positionBeforeOpenSetting);
     await windowManager.focus();
     focusQueryBox(selectAll: true);
@@ -2515,7 +2577,7 @@ class WoxLauncherController extends GetxController {
       isGridLayout.value = false;
       gridLayoutParams.value = GridLayoutParams.empty();
       if (wasGridLayout) {
-        resizeHeight();
+        resizeHeight(traceId: traceId, reason: "exit grid layout for empty query");
       }
       return;
     }
@@ -2524,7 +2586,7 @@ class WoxLauncherController extends GetxController {
       isGridLayout.value = false;
       gridLayoutParams.value = GridLayoutParams.empty();
       if (wasGridLayout) {
-        resizeHeight();
+        resizeHeight(traceId: traceId, reason: "exit grid layout for global query");
       }
       return;
     }
@@ -2542,9 +2604,9 @@ class WoxLauncherController extends GetxController {
 
     if (wasGridLayout != isGridLayout.value) {
       if (!isGridLayout.value) {
-        resizeHeight();
+        resizeHeight(traceId: traceId, reason: "switch from grid layout to list layout");
       } else if (resultGridViewController.rowHeight > 0) {
-        resizeHeight();
+        resizeHeight(traceId: traceId, reason: "switch from list layout to grid layout");
       }
     }
   }
