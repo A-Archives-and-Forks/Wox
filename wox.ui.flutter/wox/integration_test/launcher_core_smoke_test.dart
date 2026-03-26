@@ -180,11 +180,11 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.queryBoxTextFieldController.text, isEmpty);
     });
 
-    testWidgets('P0-SMK-11: Fresh launch preserves a tray-query source payload', (tester) async {
+    testWidgets('P0-SMK-11: Fresh launch preserves tray-query query and layout payloads', (tester) async {
       final controller = await launchLauncherApp(tester);
       await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
 
-      await triggerTestTrayQuery(tester, query: 'tray smoke query', showQueryBox: true);
+      await triggerTestTrayQuery(tester, query: 'tray smoke query', hideQueryBox: false, hideToolbar: true);
       await waitForQueryBoxText(tester, controller, 'tray smoke query');
 
       expect(await windowManager.isVisible(), isTrue);

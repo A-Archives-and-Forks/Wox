@@ -225,7 +225,8 @@ Future<void> triggerTestSelectionHotkey(WidgetTester tester, {required String ty
 Future<void> triggerTestTrayQuery(
   WidgetTester tester, {
   required String query,
-  bool showQueryBox = true,
+  bool hideQueryBox = false,
+  bool hideToolbar = false,
   int width = 0,
   int x = 200,
   int y = 40,
@@ -235,7 +236,8 @@ Future<void> triggerTestTrayQuery(
   await WoxHttpUtil.instance.postData<String>(const UuidV4().generate(), '/test/trigger/tray_query', {
     'Query': query,
     'Width': width,
-    'ShowQueryBox': showQueryBox,
+    'HideQueryBox': hideQueryBox,
+    'HideToolbar': hideToolbar,
     'Rect': {'X': x, 'Y': y, 'Width': rectWidth, 'Height': rectHeight},
   });
   await waitForWindowVisibility(tester, true);
