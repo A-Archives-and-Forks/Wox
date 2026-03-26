@@ -389,9 +389,10 @@ Future<void> sendWindowsKeyboardEvent({required String type, required bool isAlt
 
 Future<void> holdQuickSelectModifier(WidgetTester tester, {Duration holdDuration = const Duration(milliseconds: 350)}) async {
   if (Platform.isWindows) {
+    // Keep the Windows bridge in sync while still driving Flutter's keyboard
+    // pipeline, because quick select listens through onKeyEvent and
+    // HardwareKeyboard.
     await sendWindowsKeyboardEvent(type: 'keydown', isAltPressed: true);
-    await tester.pump(holdDuration);
-    return;
   }
 
   await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
@@ -399,13 +400,12 @@ Future<void> holdQuickSelectModifier(WidgetTester tester, {Duration holdDuration
 }
 
 Future<void> releaseQuickSelectModifier(WidgetTester tester) async {
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+
   if (Platform.isWindows) {
     await sendWindowsKeyboardEvent(type: 'keyup', isAltPressed: false);
-    await tester.pump(const Duration(milliseconds: 200));
-    return;
   }
 
-  await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
   await tester.pump(const Duration(milliseconds: 200));
 }
 
