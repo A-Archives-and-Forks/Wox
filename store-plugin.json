@@ -633,5 +633,25 @@
         "plugin_description": "保持电脑唤醒，阻止休眠"
       }
     }
+  },
+  {
+    "Id": "c14b9877-d896-462a-9eac-cc9dc7f0d48b",
+    "Name": "WinFocus",
+    "Author": "bonemind",
+    "Version": "0.0.1",
+    "MinWoxVersion": "2.0.0",
+    "Runtime": "nodejs",
+    "Description": "A plugin that allow you to focus a window",
+    "IconUrl": "https://raw.githubusercontent.com/Bonemind/Wox.Plugin.WinFocus/main/images/app.svg",
+    "Website": "https://github.com/Bonemind/Wox.Plugin.WinFocus",
+    "DownloadUrl": "https://github.com/Bonemind/Wox.Plugin.WinFocus/releases/latest/download/Wox.Plugin.WinFocus.wox",
+    "ScreenshotUrls": [
+      "https://raw.githubusercontent.com/Bonemind/Wox.Plugin.WinFocus/main/images/screenshot.png"
+    ],
+    "SupportedOS": [
+      "Windows"
+    ],
+    "DateCreated": "2026-03-26 00:00:00",
+    "DateUpdated": "2026-03-26 00:00:00"
   }
 ]
