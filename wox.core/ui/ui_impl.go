@@ -272,17 +272,12 @@ func (u *uiImpl) invokeWebsocketMethod(ctx context.Context, method string, data 
 func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[string]any {
 	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
 	var position Position
-	var layoutModeExplorerParams map[string]any
-	var layoutModeTrayQueryParams map[string]any
-	showQueryBox := showContext.ShowQueryBox
+	showQueryBox := !showContext.HideQueryBox
 	hideToolbar := showContext.HideToolbar
 	showSource := showContext.ShowSource
 	windowWidth := showContext.WindowWidth
 	maxResultCount := showContext.MaxResultCount
 
-	if showContext.LayoutMode == "" {
-		showContext.LayoutMode = common.LayoutModeDefault
-	}
 	if showSource == "" {
 		showSource = common.ShowSourceDefault
 	}
@@ -316,54 +311,20 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 		}
 	}
 
-	if showContext.LayoutModeExplorerParams != nil {
-		var windowRect map[string]int
-		if showContext.LayoutModeExplorerParams.WindowRect != nil {
-			windowRect = map[string]int{
-				"X":      showContext.LayoutModeExplorerParams.WindowRect.X,
-				"Y":      showContext.LayoutModeExplorerParams.WindowRect.Y,
-				"Width":  showContext.LayoutModeExplorerParams.WindowRect.Width,
-				"Height": showContext.LayoutModeExplorerParams.WindowRect.Height,
-			}
-		}
-
-		layoutModeExplorerParams = map[string]any{
-			"WindowRect": windowRect,
-		}
-	}
-
-	if showContext.LayoutModeTrayQueryParams != nil {
-		var screenRect map[string]int
-		if showContext.LayoutModeTrayQueryParams.ScreenRect != nil {
-			screenRect = map[string]int{
-				"X":      showContext.LayoutModeTrayQueryParams.ScreenRect.X,
-				"Y":      showContext.LayoutModeTrayQueryParams.ScreenRect.Y,
-				"Width":  showContext.LayoutModeTrayQueryParams.ScreenRect.Width,
-				"Height": showContext.LayoutModeTrayQueryParams.ScreenRect.Height,
-			}
-		}
-
-		layoutModeTrayQueryParams = map[string]any{
-			"WindowAnchorBottom": showContext.LayoutModeTrayQueryParams.WindowAnchorBottom,
-			"ScreenRect":         screenRect,
-		}
-	}
-
 	params := map[string]any{
-		"SelectAll":                 showContext.SelectAll,
-		"IsQueryFocus":              showContext.IsQueryFocus,
-		"ShowQueryBox":              showQueryBox,
-		"HideToolbar":               hideToolbar,
-		"Position":                  position,
-		"LayoutModeExplorerParams":  layoutModeExplorerParams,
-		"LayoutModeTrayQueryParams": layoutModeTrayQueryParams,
-		"WindowWidth":               windowWidth,
-		"MaxResultCount":            maxResultCount,
-		"QueryHistories":            setting.GetSettingManager().GetLatestQueryHistory(ctx, 10),
-		"LaunchMode":                woxSetting.LaunchMode.Get(),
-		"StartPage":                 woxSetting.StartPage.Get(),
-		"LayoutMode":                showContext.LayoutMode,
-		"ShowSource":                showSource,
+		"SelectAll":        showContext.SelectAll,
+		"IsQueryFocus":     showContext.IsQueryFocus,
+		"HideQueryBox":     showContext.HideQueryBox,
+		"HideToolbar":      hideToolbar,
+		"QueryBoxAtBottom": showContext.QueryBoxAtBottom,
+		"HideOnBlur":       showContext.HideOnBlur,
+		"Position":         position,
+		"WindowWidth":      windowWidth,
+		"MaxResultCount":   maxResultCount,
+		"QueryHistories":   setting.GetSettingManager().GetLatestQueryHistory(ctx, 10),
+		"LaunchMode":       woxSetting.LaunchMode.Get(),
+		"StartPage":        woxSetting.StartPage.Get(),
+		"ShowSource":       showSource,
 	}
 
 	return params

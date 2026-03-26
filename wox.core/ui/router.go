@@ -1078,7 +1078,9 @@ func handleHotkeyAvailable(w http.ResponseWriter, r *http.Request) {
 
 func handleShow(w http.ResponseWriter, r *http.Request) {
 	ctx := getTraceContext(r)
-	GetUIManager().GetUI(ctx).ShowApp(ctx, common.ShowContext{SelectAll: true})
+	GetUIManager().GetUI(ctx).ShowApp(ctx, common.ShowContext{
+		SelectAll: true,
+	})
 	writeSuccessResponse(w, "")
 }
 
@@ -1233,7 +1235,9 @@ func handleTestTriggerSelectionHotkey(w http.ResponseWriter, r *http.Request) {
 		QuerySelection: selected,
 	})
 	time.Sleep(150 * time.Millisecond)
-	uiManager.GetUI(ctx).ShowApp(ctx, common.ShowContext{SelectAll: false, ShowSource: common.ShowSourceSelection})
+	uiManager.GetUI(ctx).ShowApp(ctx, common.ShowContext{
+		ShowSource: common.ShowSourceSelection,
+	})
 
 	writeSuccessResponse(w, "")
 }

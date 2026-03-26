@@ -5,14 +5,7 @@ import (
 	"wox/util/selection"
 )
 
-type LayoutMode string
 type ShowSource string
-
-const (
-	LayoutModeDefault   LayoutMode = "default"
-	LayoutModeExplorer  LayoutMode = "explorer"
-	LayoutModeTrayQuery LayoutMode = "tray_query"
-)
 
 const (
 	ShowSourceDefault     ShowSource = "default"
@@ -97,33 +90,17 @@ type ActiveWindowSnapshot struct {
 }
 
 type ShowContext struct {
-	SelectAll    bool
-	IsQueryFocus bool // auto focus chat input on next ui update
-	ShowQueryBox bool
-	HideToolbar  bool
-	ShowSource   ShowSource
+	SelectAll        bool
+	IsQueryFocus     bool // auto focus chat input on next ui update
+	HideQueryBox     bool
+	HideToolbar      bool
+	QueryBoxAtBottom bool
+	HideOnBlur       bool
+	ShowSource       ShowSource
 
 	WindowPosition *WindowPosition
 	WindowWidth    int
 	MaxResultCount int
-	LayoutMode     LayoutMode
-
-	LayoutModeExplorerParams  *LayoutModeExplorerParams
-	LayoutModeTrayQueryParams *LayoutModeTrayQueryParams
-}
-
-type LayoutModeExplorerParams struct {
-	// WindowRect is the explorer anchor rect used by Flutter to compute a sticky
-	// bottom-right overlay position.
-	WindowRect *WindowRect
-}
-
-type LayoutModeTrayQueryParams struct {
-	// WindowAnchorBottom keeps the tray-query window bottom aligned to the tray
-	// anchor while Flutter uses the exact runtime window height.
-	WindowAnchorBottom int
-	// ScreenRect describes the logical work area used to clamp anchored layouts.
-	ScreenRect *WindowRect
 }
 
 type WindowPosition struct {

@@ -12,8 +12,10 @@ import (
 	"wox/common"
 	"wox/i18n"
 	"wox/plugin"
+	"wox/setting"
 	"wox/setting/definition"
 	"wox/setting/validator"
+	"wox/ui"
 	"wox/util"
 	"wox/util/overlay"
 	"wox/util/shell"
@@ -732,13 +734,15 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 				return false
 			}
 			c.api.Log(localCtx, plugin.LogLevelInfo, fmt.Sprintf("typeToSearch: showOverlay explorerRect=(%d,%d,%d,%d)", x, y, w, h))
+			woxSetting := setting.GetSettingManager().GetWoxSetting(localCtx)
+			initialWindowHeight := getExplorerInitialWindowHeight(localCtx)
+			position := getExplorerWindowPosition(common.WindowRect{X: x, Y: y, Width: w, Height: h}, woxSetting.AppWidth.Get()/2, initialWindowHeight)
 			plugin.GetPluginManager().GetUI().ShowApp(localCtx, common.ShowContext{
-				SelectAll: false,
-				// LayoutModeExplorer: Flutter computes sticky bottom-right position from this rect.
-				LayoutModeExplorerParams: &common.LayoutModeExplorerParams{
-					WindowRect: &common.WindowRect{X: x, Y: y, Width: w, Height: h},
-				},
-				LayoutMode: common.LayoutModeExplorer,
+				HideToolbar:      true,
+				QueryBoxAtBottom: true,
+				HideOnBlur:       true,
+				WindowPosition:   &position,
+				WindowWidth:      woxSetting.AppWidth.Get() / 2,
 			})
 			return true
 		}
@@ -833,4 +837,29 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 
 	// Start monitoring open/save dialogs
 	StartExplorerOpenSaveMonitor(onActivated, onDeactivated, onKey)
+}
+
+func getExplorerInitialWindowHeight(ctx context.Context) int {
+	theme := ui.GetUIManager().GetCurrentTheme(ctx)
+	queryBoxHeight := 55 + theme.AppPaddingTop + theme.AppPaddingBottom
+	if queryBoxHeight <= 0 {
+		queryBoxHeight = 80
+	}
+	return queryBoxHeight
+}
+
+func getExplorerWindowPosition(anchorRect common.WindowRect, windowWidth int, windowHeight int) common.WindowPosition {
+	const margin = 20
+
+	x := anchorRect.X + anchorRect.Width - windowWidth - margin
+	if x < anchorRect.X+10 {
+		x = anchorRect.X + 10
+	}
+
+	y := anchorRect.Y + anchorRect.Height - windowHeight - margin
+	if y < anchorRect.Y+10 {
+		y = anchorRect.Y + 10
+	}
+
+	return common.WindowPosition{X: x, Y: y}
 }

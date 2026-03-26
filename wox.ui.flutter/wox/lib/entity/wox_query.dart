@@ -404,75 +404,41 @@ class WindowRect {
   }
 }
 
-class LayoutModeTrayQueryParams {
-  late int windowAnchorBottom;
-  WindowRect? screenRect;
-
-  LayoutModeTrayQueryParams({this.windowAnchorBottom = 0, this.screenRect});
-
-  LayoutModeTrayQueryParams.fromJson(Map<String, dynamic> json) {
-    windowAnchorBottom = json['WindowAnchorBottom'] ?? 0;
-    if (json['ScreenRect'] != null) {
-      screenRect = WindowRect.fromJson(json['ScreenRect']);
-    }
-  }
-}
-
-class LayoutModeExplorerParams {
-  WindowRect? windowRect;
-
-  LayoutModeExplorerParams({this.windowRect});
-
-  LayoutModeExplorerParams.fromJson(Map<String, dynamic> json) {
-    if (json['WindowRect'] != null) {
-      windowRect = WindowRect.fromJson(json['WindowRect']);
-    }
-  }
-}
-
 class ShowAppParams {
   late bool selectAll;
   late Position position;
-  LayoutModeExplorerParams? layoutModeExplorerParams;
-  LayoutModeTrayQueryParams? layoutModeTrayQueryParams;
   late int windowWidth;
   late int maxResultCount;
   late List<QueryHistory> queryHistories;
   late String launchMode;
   late String startPage;
   late bool isQueryFocus;
-  late bool showQueryBox;
+  late bool hideQueryBox;
   late bool hideToolbar;
+  late bool queryBoxAtBottom;
+  late bool hideOnBlur;
   late String showSource;
-  late String? layoutMode;
 
   ShowAppParams({
     required this.selectAll,
     required this.position,
-    this.layoutModeExplorerParams,
-    this.layoutModeTrayQueryParams,
     this.windowWidth = 0,
     this.maxResultCount = 0,
     required this.queryHistories,
     required this.launchMode,
     required this.startPage,
     this.isQueryFocus = false,
-    this.showQueryBox = true,
+    this.hideQueryBox = false,
     this.hideToolbar = false,
+    this.queryBoxAtBottom = false,
+    this.hideOnBlur = false,
     this.showSource = 'default',
-    this.layoutMode,
   });
 
   ShowAppParams.fromJson(Map<String, dynamic> json) {
     selectAll = json['SelectAll'];
     if (json['Position'] != null) {
       position = Position.fromJson(json['Position']);
-    }
-    if (json['LayoutModeExplorerParams'] != null) {
-      layoutModeExplorerParams = LayoutModeExplorerParams.fromJson(json['LayoutModeExplorerParams']);
-    }
-    if (json['LayoutModeTrayQueryParams'] != null) {
-      layoutModeTrayQueryParams = LayoutModeTrayQueryParams.fromJson(json['LayoutModeTrayQueryParams']);
     }
     windowWidth = json['WindowWidth'] ?? 0;
     maxResultCount = json['MaxResultCount'] ?? 0;
@@ -484,10 +450,11 @@ class ShowAppParams {
     launchMode = json['LaunchMode'] ?? 'continue';
     startPage = json['StartPage'] ?? 'mru';
     isQueryFocus = json['IsQueryFocus'] ?? false;
-    showQueryBox = json['ShowQueryBox'] ?? true;
+    hideQueryBox = json['HideQueryBox'] ?? false;
     hideToolbar = json['HideToolbar'] ?? false;
+    queryBoxAtBottom = json['QueryBoxAtBottom'] ?? false;
+    hideOnBlur = json['HideOnBlur'] ?? false;
     showSource = json['ShowSource'] ?? 'default';
-    layoutMode = json['LayoutMode'];
   }
 }
 

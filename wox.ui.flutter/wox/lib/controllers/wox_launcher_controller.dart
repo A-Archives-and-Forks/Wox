@@ -19,7 +19,6 @@ import 'package:wox/controllers/wox_grid_controller.dart';
 import 'package:wox/controllers/wox_list_controller.dart';
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_list_item.dart';
-import 'package:wox/enums/wox_layout_mode_enum.dart';
 import 'package:wox/models/doctor_check_result.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/windows/window_manager.dart';
@@ -134,7 +133,6 @@ class WoxLauncherController extends GetxController {
   double forceWindowWidth = 0;
   int forceMaxResultCount = 0;
   var forceHideOnBlur = false;
-  LayoutModeTrayQueryParams? currentLayoutModeTrayQueryParams;
   // Used to store the current query before it is overwritten by a tray query, so that we can restore it when the app is hidden again.
   PlainQuery? queryBeforeTrayQuery;
 
@@ -694,7 +692,6 @@ class WoxLauncherController extends GetxController {
     latestQueryHistories.assignAll(params.queryHistories);
     lastLaunchMode = params.launchMode;
     lastStartPage = params.startPage;
-    currentLayoutModeTrayQueryParams = params.layoutModeTrayQueryParams;
     if (currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code) {
       canArrowUpHistory = true;
       if (lastLaunchMode == WoxLaunchModeEnum.WOX_LAUNCH_MODE_CONTINUE.code) {
@@ -746,78 +743,22 @@ class WoxLauncherController extends GetxController {
       }
     }
 
-    // Handle explorer layout mode
-    if (params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_EXPLORER.code) {
-      isQueryBoxAtBottom.value = true;
-      isQueryBoxVisible.value = true;
-      isToolbarHiddenForce.value = true;
-      forceWindowWidth = WoxSettingUtil.instance.currentSetting.appWidth.toDouble() / 2;
-      forceMaxResultCount = 0;
-      forceHideOnBlur = true;
-    }
-
-    if (params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_TRAY_QUERY.code) {
-      isQueryBoxAtBottom.value = Platform.isWindows;
-      isQueryBoxVisible.value = params.showQueryBox;
-      isToolbarHiddenForce.value = params.hideToolbar;
-      final configuredTrayWidth = params.windowWidth;
-      forceWindowWidth = configuredTrayWidth > 0 ? configuredTrayWidth.toDouble() : WoxSettingUtil.instance.currentSetting.appWidth.toDouble() / 2;
-      forceMaxResultCount = params.maxResultCount;
-      forceHideOnBlur = true;
-    }
-
-    // Reset to default layout if no layout mode specified
-    if (params.layoutMode == null || params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_DEFAULT.code) {
-      resetLayoutState(traceId);
-
-      // apply other overrides for default layout
-      isQueryBoxVisible.value = params.showQueryBox;
-      isToolbarHiddenForce.value = params.hideToolbar;
-      forceWindowWidth = params.windowWidth > 0 ? params.windowWidth.toDouble() : 0;
-      forceMaxResultCount = params.maxResultCount;
-    }
+    resetLayoutState(traceId);
+    isQueryBoxVisible.value = !params.hideQueryBox;
+    isToolbarHiddenForce.value = params.hideToolbar;
+    isQueryBoxAtBottom.value = params.queryBoxAtBottom;
+    forceWindowWidth = params.windowWidth > 0 ? params.windowWidth.toDouble() : 0;
+    forceMaxResultCount = params.maxResultCount;
+    forceHideOnBlur = params.hideOnBlur;
 
     // Handle different position types
     // on linux, we need to show first and then set position or center it
     if (Platform.isLinux) {
       await windowManager.show();
     }
-    final targetHeight = calculateWindowHeight();
+    final targetHeight = calculateInitialShowWindowHeight();
     final targetWidth = forceWindowWidth != 0 ? forceWindowWidth : WoxSettingUtil.instance.currentSetting.appWidth.toDouble();
-    var targetPosition = Offset(params.position.x.toDouble(), params.position.y.toDouble());
-    // In explorer layout mode, we will ignore the configured position and try to open at the bottom right of the explorer window.
-    if (params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_EXPLORER.code && params.layoutModeExplorerParams?.windowRect != null) {
-      final rect = params.layoutModeExplorerParams!.windowRect!;
-      const margin = 20.0;
-
-      var targetX = rect.x + rect.width - targetWidth - margin;
-      if (targetX < rect.x + 10) {
-        targetX = rect.x + 10.0;
-      }
-
-      var targetY = rect.y + rect.height - targetHeight - margin;
-      if (targetY < rect.y + 10) {
-        targetY = rect.y + 10.0;
-      }
-      targetPosition = Offset(targetX, targetY);
-    }
-    if (params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_TRAY_QUERY.code && Platform.isWindows && currentLayoutModeTrayQueryParams?.screenRect != null) {
-      final trayQueryParams = currentLayoutModeTrayQueryParams!;
-      final screenRect = trayQueryParams.screenRect!;
-      final minLeft = screenRect.x + 10.0;
-      final maxLeft = screenRect.x + screenRect.width - targetWidth - 10.0;
-      final clampedX = maxLeft < minLeft ? minLeft : targetPosition.dx.clamp(minLeft, maxLeft);
-
-      if (trayQueryParams.windowAnchorBottom > 0) {
-        final minTop = screenRect.y + 10.0;
-        final maxTop = screenRect.y + screenRect.height - targetHeight - 10.0;
-        final targetTop = trayQueryParams.windowAnchorBottom.toDouble() - targetHeight;
-        final clampedY = maxTop < minTop ? minTop : targetTop.clamp(minTop, maxTop);
-        targetPosition = Offset(clampedX, clampedY);
-      } else {
-        targetPosition = Offset(clampedX, targetPosition.dy);
-      }
-    }
+    final targetPosition = Offset(params.position.x.toDouble(), params.position.y.toDouble());
 
     // Apply position+size together before showing to avoid opening with stale width.
     await windowManager.setBounds(targetPosition, Size(targetWidth, targetHeight));
@@ -866,7 +807,6 @@ class WoxLauncherController extends GetxController {
     forceWindowWidth = 0;
     forceMaxResultCount = 0;
     forceHideOnBlur = false;
-    currentLayoutModeTrayQueryParams = null;
   }
 
   int getMaxResultCount() {
@@ -1909,6 +1849,36 @@ class WoxLauncherController extends GetxController {
     return totalHeight;
   }
 
+  double calculateInitialShowWindowHeight() {
+    double resultHeight = 0;
+
+    if (isShowDoctorCheckInfo && !isToolbarHiddenForce.value) {
+      resultHeight += WoxThemeUtil.instance.getToolbarHeight();
+    }
+
+    if (!isQueryBoxVisible.value) {
+      resultHeight = math.max(resultHeight, WoxThemeUtil.instance.getResultListViewHeightByCount(1));
+      if (!isFullscreenPreviewOnly()) {
+        resultHeight += WoxThemeUtil.instance.currentTheme.value.appPaddingBottom.toDouble();
+      }
+    }
+
+    final queryBoxHeight = isQueryBoxVisible.value ? getQueryBoxTotalHeight() : 0.0;
+    var totalHeight = queryBoxHeight + resultHeight;
+
+    if (Platform.isWindows) {
+      if (PlatformDispatcher.instance.views.first.devicePixelRatio > 1) {
+        totalHeight = totalHeight + 1;
+      }
+    }
+
+    if (isShowDoctorCheckInfo && isQueryBoxVisible.value && !isToolbarHiddenForce.value) {
+      totalHeight -= WoxThemeUtil.instance.currentTheme.value.appPaddingBottom;
+    }
+
+    return totalHeight;
+  }
+
   // select all text in query box
   void selectQueryBoxAllText(String traceId) {
     Logger.instance.info(traceId, "select query box all text");
@@ -1941,7 +1911,7 @@ class WoxLauncherController extends GetxController {
 
     double targetWidth = forceWindowWidth != 0 ? forceWindowWidth : WoxSettingUtil.instance.currentSetting.appWidth.toDouble();
     if (isQueryBoxAtBottom.value) {
-      // In explorer/tray-query mode, we anchor to the bottom.
+      // When the query box is anchored to the bottom, grow the window upward.
       // Use getPosition + getSize to compute the current bottom edge, then adjust top to grow upward.
       final pos = await windowManager.getPosition();
       final currentSize = await windowManager.getSize();
@@ -1951,12 +1921,6 @@ class WoxLauncherController extends GetxController {
         // Fallback if bounds are weird
       } else {
         double newTop = currentBottom - totalHeight;
-        final screenRect = currentLayoutModeTrayQueryParams?.screenRect;
-        if (screenRect != null) {
-          final minTop = screenRect.y + 10.0;
-          final maxTop = screenRect.y + screenRect.height - totalHeight - 10.0;
-          newTop = maxTop < minTop ? minTop : newTop.clamp(minTop, maxTop);
-        }
         // Apply position and size together to avoid intermediate-frame flicker.
         await windowManager.setBounds(Offset(pos.dx, newTop), Size(targetWidth, totalHeight));
 

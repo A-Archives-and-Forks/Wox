@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -234,10 +235,8 @@ func (m *Manager) RegisterMainHotkey(ctx context.Context, combineKey string) err
 			return
 		}
 		m.ui.ToggleApp(triggerCtx, common.ShowContext{
-			SelectAll:    true,
-			ShowQueryBox: true,
-			HideToolbar:  false,
-			ShowSource:   common.ShowSourceDefault,
+			SelectAll:  true,
+			ShowSource: common.ShowSourceDefault,
 		})
 	})
 }
@@ -297,7 +296,9 @@ func (m *Manager) triggerSelectionQuery(ctx context.Context, selected selection.
 		QueryType:      plugin.QueryTypeSelection,
 		QuerySelection: selected,
 	})
-	m.ui.ShowApp(ctx, common.ShowContext{SelectAll: false, ShowSource: common.ShowSourceSelection})
+	m.ui.ShowApp(ctx, common.ShowContext{
+		ShowSource: common.ShowSourceSelection,
+	})
 	return nil
 }
 
@@ -333,16 +334,16 @@ func (m *Manager) triggerQueryHotkey(ctx context.Context, queryHotkey setting.Qu
 	}
 
 	m.ui.ChangeQuery(queryCtx, plainQuery)
+
 	showContext := common.ShowContext{
 		SelectAll:      false,
 		IsQueryFocus:   isQueryFocus,
-		ShowQueryBox:   !queryHotkey.HideQueryBox,
+		HideQueryBox:   queryHotkey.HideQueryBox,
 		HideToolbar:    queryHotkey.HideToolbar,
 		WindowWidth:    normalizedWindowWidth(queryHotkey.Width),
 		MaxResultCount: normalizedMaxResultCount(queryHotkey.MaxResultCount),
 		ShowSource:     common.ShowSourceQueryHotkey,
 	}
-
 	if position, ok := m.getQueryHotkeyWindowPosition(queryCtx, queryHotkey); ok {
 		showContext.WindowPosition = &position
 	}
@@ -560,7 +561,7 @@ func (m *Manager) PostUIReady(ctx context.Context) {
 
 	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
 	if !woxSetting.HideOnStart.Get() {
-		m.ui.ShowApp(ctx, common.ShowContext{SelectAll: false})
+		m.ui.ShowApp(ctx, common.ShowContext{})
 	}
 }
 
@@ -633,18 +634,14 @@ func (m *Manager) ShowTray() {
 
 	tray.CreateTray(resource.GetAppIcon(), func() {
 		m.GetUI(ctx).ToggleApp(ctx, common.ShowContext{
-			SelectAll:    true,
-			ShowQueryBox: true,
-			HideToolbar:  false,
+			SelectAll: true,
 		})
 	},
 		tray.MenuItem{
 			Title: i18n.GetI18nManager().TranslateWox(ctx, "ui_tray_toggle_app"),
 			Callback: func() {
 				m.GetUI(ctx).ToggleApp(ctx, common.ShowContext{
-					SelectAll:    true,
-					ShowQueryBox: true,
-					HideToolbar:  false,
+					SelectAll: true,
 				})
 			},
 		}, tray.MenuItem{
@@ -795,19 +792,16 @@ func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQu
 	position := m.getTrayQueryWindowPosition(queryCtx, rect, screenRect, windowWidth, windowHeight, windowAnchorBottom)
 	m.ui.ChangeQuery(queryCtx, plainQuery)
 	m.ui.ShowApp(queryCtx, common.ShowContext{
-		SelectAll:      false,
-		IsQueryFocus:   isQueryFocus,
-		ShowQueryBox:   !trayQuery.HideQueryBox,
-		HideToolbar:    trayQuery.HideToolbar,
-		ShowSource:     common.ShowSourceTrayQuery,
-		WindowPosition: &position,
-		LayoutModeTrayQueryParams: &common.LayoutModeTrayQueryParams{
-			WindowAnchorBottom: windowAnchorBottom,
-			ScreenRect:         &screenRect,
-		},
-		WindowWidth:    windowWidth,
-		MaxResultCount: trayQuery.MaxResultCount,
-		LayoutMode:     common.LayoutModeTrayQuery,
+		SelectAll:        false,
+		IsQueryFocus:     isQueryFocus,
+		HideQueryBox:     trayQuery.HideQueryBox,
+		HideToolbar:      trayQuery.HideToolbar,
+		QueryBoxAtBottom: runtime.GOOS == "windows",
+		HideOnBlur:       true,
+		ShowSource:       common.ShowSourceTrayQuery,
+		WindowPosition:   &position,
+		WindowWidth:      windowWidth,
+		MaxResultCount:   trayQuery.MaxResultCount,
 	})
 }
 
@@ -1242,7 +1236,7 @@ func (m *Manager) ProcessDeeplink(ctx context.Context, deeplink string) {
 				QueryType: plugin.QueryTypeInput,
 				QueryText: query,
 			})
-			m.ui.ShowApp(ctx, common.ShowContext{SelectAll: false})
+			m.ui.ShowApp(ctx, common.ShowContext{})
 		}
 	}
 
@@ -1252,9 +1246,7 @@ func (m *Manager) ProcessDeeplink(ctx context.Context, deeplink string) {
 
 	if command == "toggle" {
 		m.ui.ToggleApp(ctx, common.ShowContext{
-			SelectAll:    true,
-			ShowQueryBox: true,
-			HideToolbar:  false,
+			SelectAll: true,
 		})
 	}
 
