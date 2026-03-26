@@ -197,6 +197,28 @@ func (a *ApplicationPlugin) GetMetadata() plugin.Metadata {
 					},
 				},
 			},
+			{
+				Type: definition.PluginSettingDefinitionTypeTable,
+				Value: &definition.PluginSettingValueTable{
+					Key:     "IgnoreRules",
+					Title:   "i18n:plugin_app_ignore_rules",
+					Tooltip: "i18n:plugin_app_ignore_rules_tooltip",
+					Columns: []definition.PluginSettingValueTableColumn{
+						{
+							Key:     "Pattern",
+							Label:   "i18n:plugin_app_ignore_rule_pattern",
+							Tooltip: "i18n:plugin_app_ignore_rule_pattern_tooltip",
+							Type:    definition.PluginSettingValueTableColumnTypeText,
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 }
@@ -334,10 +356,16 @@ func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plu
 	}
 
 	var results []plugin.QueryResult
+	ignoreMatchers := a.getIgnoreRuleMatchers(ctx)
 	for _, info := range a.apps {
 		displayName := info.Name
 		if strings.HasPrefix(displayName, "i18n:") {
 			displayName = a.api.GetTranslation(ctx, displayName)
+		}
+
+		if matchedPattern, ignored := a.matchIgnoreRule(ctx, info, ignoreMatchers); ignored {
+			a.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("skip query result %s due to ignore rule %q", info.Path, matchedPattern))
+			continue
 		}
 
 		isMatch := false
@@ -711,7 +739,6 @@ func (a *ApplicationPlugin) indexAppsByDirectory(ctx context.Context) []appInfo 
 		parsedCount,
 		cacheRatio,
 	))
-
 	return appInfos
 }
 
