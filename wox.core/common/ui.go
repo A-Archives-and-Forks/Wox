@@ -54,7 +54,7 @@ type UI interface {
 	RefreshQuery(ctx context.Context, preserveSelectedIndex bool)
 	HideApp(ctx context.Context)
 	ShowApp(ctx context.Context, showContext ShowContext)
-	ToggleApp(ctx context.Context)
+	ToggleApp(ctx context.Context, showContext ShowContext)
 	OpenSettingWindow(ctx context.Context, windowContext SettingWindowContext)
 	PickFiles(ctx context.Context, params PickFilesParams) []string
 	GetActiveWindowSnapshot(ctx context.Context) ActiveWindowSnapshot
@@ -100,16 +100,16 @@ type ShowContext struct {
 	SelectAll    bool
 	IsQueryFocus bool // auto focus chat input on next ui update
 	ShowQueryBox bool
+	HideToolbar  bool
 	ShowSource   ShowSource
 
 	WindowPosition *WindowPosition
-	// LayoutModeExplorerParams carries explorer-specific runtime params.
-	LayoutModeExplorerParams *LayoutModeExplorerParams
-	// LayoutModeTrayQueryParams carries tray-query specific runtime params.
+	WindowWidth    int
+	MaxResultCount int
+	LayoutMode     LayoutMode
+
+	LayoutModeExplorerParams  *LayoutModeExplorerParams
 	LayoutModeTrayQueryParams *LayoutModeTrayQueryParams
-	WindowWidth               int
-	MaxResultCount            int
-	LayoutMode                LayoutMode
 }
 
 type LayoutModeExplorerParams struct {

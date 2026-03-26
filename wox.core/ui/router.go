@@ -641,11 +641,49 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 	case "LangCode":
 		woxSetting.LangCode.Set(i18n.LangCode(vs))
 	case "QueryHotkeys":
-		var queryHotkeys []setting.QueryHotkey
-		if err := json.Unmarshal([]byte(vs), &queryHotkeys); err != nil {
+		var rawQueryHotkeys []map[string]any
+		if err := json.Unmarshal([]byte(vs), &rawQueryHotkeys); err != nil {
 			writeErrorResponse(w, err.Error())
 			return
 		}
+
+		var queryHotkeys []setting.QueryHotkey
+		for _, rawQueryHotkey := range rawQueryHotkeys {
+			queryHotkey := setting.QueryHotkey{
+				Position: setting.QueryHotkeyPositionSystemDefault,
+			}
+
+			if rawHotkey, ok := rawQueryHotkey["Hotkey"]; ok {
+				queryHotkey.Hotkey = strings.TrimSpace(parseString(rawHotkey))
+			}
+			if rawQuery, ok := rawQueryHotkey["Query"]; ok {
+				queryHotkey.Query = parseString(rawQuery)
+			}
+			if rawSilentExecution, ok := rawQueryHotkey["IsSilentExecution"]; ok {
+				queryHotkey.IsSilentExecution = parseBool(rawSilentExecution)
+			}
+			if rawHideQueryBox, ok := rawQueryHotkey["HideQueryBox"]; ok {
+				queryHotkey.HideQueryBox = parseBool(rawHideQueryBox)
+			}
+			if rawHideToolbar, ok := rawQueryHotkey["HideToolbar"]; ok {
+				queryHotkey.HideToolbar = parseBool(rawHideToolbar)
+			}
+			if rawDisabled, ok := rawQueryHotkey["Disabled"]; ok {
+				queryHotkey.Disabled = parseBool(rawDisabled)
+			}
+			if rawWidth, ok := rawQueryHotkey["Width"]; ok {
+				queryHotkey.Width = maxInt(parseInt(rawWidth), 0)
+			}
+			if rawMaxResultCount, ok := rawQueryHotkey["MaxResultCount"]; ok {
+				queryHotkey.MaxResultCount = normalizeOptionalMaxResultCount(parseInt(rawMaxResultCount))
+			}
+			if rawPosition, ok := rawQueryHotkey["Position"]; ok {
+				queryHotkey.Position = normalizeQueryHotkeyPosition(parseString(rawPosition))
+			}
+
+			queryHotkeys = append(queryHotkeys, queryHotkey)
+		}
+
 		woxSetting.QueryHotkeys.Set(queryHotkeys)
 	case "QueryShortcuts":
 		var queryShortcuts []setting.QueryShortcut
@@ -668,73 +706,24 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 				Query: query,
 			}
 
-			if rawHotkey, ok := rawTrayQuery["Hotkey"]; ok {
-				if hotkey, ok := rawHotkey.(string); ok {
-					trayQuery.Hotkey = strings.TrimSpace(hotkey)
-				}
+			if rawHideQueryBox, ok := rawTrayQuery["HideQueryBox"]; ok {
+				trayQuery.HideQueryBox = parseBool(rawHideQueryBox)
 			}
 
-			if rawShowQueryBox, ok := rawTrayQuery["ShowQueryBox"]; ok {
-				switch showQueryBox := rawShowQueryBox.(type) {
-				case bool:
-					trayQuery.ShowQueryBox = showQueryBox
-				case string:
-					if parsed, parseErr := strconv.ParseBool(showQueryBox); parseErr == nil {
-						trayQuery.ShowQueryBox = parsed
-					}
-				}
+			if rawHideToolbar, ok := rawTrayQuery["HideToolbar"]; ok {
+				trayQuery.HideToolbar = parseBool(rawHideToolbar)
 			}
 
 			if rawDisabled, ok := rawTrayQuery["Disabled"]; ok {
-				switch disabled := rawDisabled.(type) {
-				case bool:
-					trayQuery.Disabled = disabled
-				case string:
-					if parsed, parseErr := strconv.ParseBool(disabled); parseErr == nil {
-						trayQuery.Disabled = parsed
-					}
-				}
+				trayQuery.Disabled = parseBool(rawDisabled)
 			}
 
 			if rawWidth, ok := rawTrayQuery["Width"]; ok {
-				switch width := rawWidth.(type) {
-				case float64:
-					trayQuery.Width = int(width)
-				case int:
-					trayQuery.Width = width
-				case string:
-					width = strings.TrimSpace(width)
-					if width != "" {
-						if parsed, parseErr := strconv.Atoi(width); parseErr == nil {
-							trayQuery.Width = parsed
-						}
-					}
-				}
-				if trayQuery.Width < 0 {
-					trayQuery.Width = 0
-				}
+				trayQuery.Width = maxInt(parseInt(rawWidth), 0)
 			}
 
 			if rawMaxResultCount, ok := rawTrayQuery["MaxResultCount"]; ok {
-				switch maxResultCount := rawMaxResultCount.(type) {
-				case float64:
-					trayQuery.MaxResultCount = int(maxResultCount)
-				case int:
-					trayQuery.MaxResultCount = maxResultCount
-				case string:
-					maxResultCount = strings.TrimSpace(maxResultCount)
-					if maxResultCount != "" {
-						if parsed, parseErr := strconv.Atoi(maxResultCount); parseErr == nil {
-							trayQuery.MaxResultCount = parsed
-						}
-					}
-				}
-				if trayQuery.MaxResultCount < 0 {
-					trayQuery.MaxResultCount = 0
-				}
-				if trayQuery.MaxResultCount > 0 {
-					trayQuery.MaxResultCount = clampInt(trayQuery.MaxResultCount, 5, 15)
-				}
+				trayQuery.MaxResultCount = normalizeOptionalMaxResultCount(parseInt(rawMaxResultCount))
 			}
 
 			if rawIcon, ok := rawTrayQuery["Icon"]; ok {
@@ -1110,6 +1099,11 @@ func handleTestTriggerQueryHotkey(w http.ResponseWriter, r *http.Request) {
 	type request struct {
 		Query             string
 		IsSilentExecution bool
+		HideQueryBox      bool
+		HideToolbar       bool
+		Width             int
+		MaxResultCount    int
+		Position          string
 	}
 
 	var req request
@@ -1126,6 +1120,11 @@ func handleTestTriggerQueryHotkey(w http.ResponseWriter, r *http.Request) {
 	err := GetUIManager().triggerQueryHotkey(ctx, setting.QueryHotkey{
 		Query:             req.Query,
 		IsSilentExecution: req.IsSilentExecution,
+		HideQueryBox:      req.HideQueryBox,
+		HideToolbar:       req.HideToolbar,
+		Width:             req.Width,
+		MaxResultCount:    normalizeOptionalMaxResultCount(req.MaxResultCount),
+		Position:          normalizeQueryHotkeyPosition(req.Position),
 	})
 	if err != nil {
 		writeErrorResponse(w, err.Error())
@@ -1260,11 +1259,13 @@ func handleTestTriggerTrayQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type request struct {
-		Query        string
-		Width        int
-		ShowQueryBox bool
-		Disabled     bool
-		Rect         rectRequest
+		Query          string
+		Width          int
+		HideQueryBox   bool
+		HideToolbar    bool
+		Disabled       bool
+		MaxResultCount int
+		Rect           rectRequest
 	}
 
 	var req request
@@ -1292,10 +1293,12 @@ func handleTestTriggerTrayQuery(w http.ResponseWriter, r *http.Request) {
 
 	ctx := getTraceContext(r)
 	GetUIManager().executeTrayQuery(ctx, setting.TrayQuery{
-		Query:        req.Query,
-		Width:        req.Width,
-		ShowQueryBox: req.ShowQueryBox,
-		Disabled:     req.Disabled,
+		Query:          req.Query,
+		Width:          req.Width,
+		HideQueryBox:   req.HideQueryBox,
+		HideToolbar:    req.HideToolbar,
+		MaxResultCount: normalizeOptionalMaxResultCount(req.MaxResultCount),
+		Disabled:       req.Disabled,
 	}, clickRect)
 
 	writeSuccessResponse(w, "")
@@ -1711,6 +1714,76 @@ func handleUserDataLocationUpdate(w http.ResponseWriter, r *http.Request) {
 
 	logger.Info(ctx, fmt.Sprintf("User data directory successfully changed to: %s", newLocation))
 	writeSuccessResponse(w, "User data directory updated successfully")
+}
+
+func parseString(value any) string {
+	if s, ok := value.(string); ok {
+		return s
+	}
+	return fmt.Sprint(value)
+}
+
+func parseBool(value any) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
+		return err == nil && parsed
+	default:
+		return false
+	}
+}
+
+func parseInt(value any) int {
+	switch v := value.(type) {
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		if err == nil {
+			return parsed
+		}
+	}
+
+	return 0
+}
+
+func normalizeOptionalMaxResultCount(value int) int {
+	if value <= 0 {
+		return 0
+	}
+	return clampInt(value, 5, 15)
+}
+
+func normalizeQueryHotkeyPosition(value string) setting.QueryHotkeyPosition {
+	switch setting.QueryHotkeyPosition(strings.TrimSpace(value)) {
+	case setting.QueryHotkeyPositionTopLeft,
+		setting.QueryHotkeyPositionTopCenter,
+		setting.QueryHotkeyPositionTopRight,
+		setting.QueryHotkeyPositionCenter,
+		setting.QueryHotkeyPositionBottomLeft,
+		setting.QueryHotkeyPositionBottomCenter,
+		setting.QueryHotkeyPositionBottomRight:
+		return setting.QueryHotkeyPosition(strings.TrimSpace(value))
+	default:
+		return setting.QueryHotkeyPositionSystemDefault
+	}
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func handlePluginDetail(w http.ResponseWriter, r *http.Request) {

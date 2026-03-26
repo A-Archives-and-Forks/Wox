@@ -49,7 +49,6 @@ type Manager struct {
 	mainHotkey       *hotkey.Hotkey
 	selectionHotkey  *hotkey.Hotkey
 	queryHotkeys     []*hotkey.Hotkey
-	trayQueryHotkeys []*hotkey.Hotkey
 	ui               common.UI
 	serverPort       int
 	uiProcess        *os.Process
@@ -234,7 +233,12 @@ func (m *Manager) RegisterMainHotkey(ctx context.Context, combineKey string) err
 		if m.shouldIgnoreHotkeyTrigger(triggerCtx) {
 			return
 		}
-		m.ui.ToggleApp(triggerCtx)
+		m.ui.ToggleApp(triggerCtx, common.ShowContext{
+			SelectAll:    true,
+			ShowQueryBox: true,
+			HideToolbar:  false,
+			ShowSource:   common.ShowSourceDefault,
+		})
 	})
 }
 
@@ -329,19 +333,34 @@ func (m *Manager) triggerQueryHotkey(ctx context.Context, queryHotkey setting.Qu
 	}
 
 	m.ui.ChangeQuery(queryCtx, plainQuery)
-	m.ui.ShowApp(queryCtx, common.ShowContext{SelectAll: false, IsQueryFocus: isQueryFocus, ShowSource: common.ShowSourceQueryHotkey})
+	showContext := common.ShowContext{
+		SelectAll:      false,
+		IsQueryFocus:   isQueryFocus,
+		ShowQueryBox:   !queryHotkey.HideQueryBox,
+		HideToolbar:    queryHotkey.HideToolbar,
+		WindowWidth:    normalizedWindowWidth(queryHotkey.Width),
+		MaxResultCount: normalizedMaxResultCount(queryHotkey.MaxResultCount),
+		ShowSource:     common.ShowSourceQueryHotkey,
+	}
+
+	if position, ok := m.getQueryHotkeyWindowPosition(queryCtx, queryHotkey); ok {
+		showContext.WindowPosition = &position
+	}
+
+	m.ui.ShowApp(queryCtx, showContext)
 	return nil
 }
 
 func (m *Manager) RegisterQueryHotkey(ctx context.Context, queryHotkey setting.QueryHotkey) error {
-	if queryHotkey.Disabled {
-		logger.Info(ctx, fmt.Sprintf("skip register disabled query hotkey: %s", queryHotkey.Hotkey))
+	combineKey := strings.TrimSpace(queryHotkey.Hotkey)
+	if queryHotkey.Disabled || combineKey == "" {
+		logger.Info(ctx, fmt.Sprintf("skip register query hotkey: disabled=%t hotkey=%s", queryHotkey.Disabled, queryHotkey.Hotkey))
 		return nil
 	}
 
 	hk := &hotkey.Hotkey{}
 
-	err := hk.Register(ctx, queryHotkey.Hotkey, func() {
+	err := hk.Register(ctx, combineKey, func() {
 		queryCtx := util.WithCoreSessionContext(util.NewTraceContext())
 		if m.shouldIgnoreHotkeyTrigger(queryCtx) {
 			return
@@ -358,40 +377,11 @@ func (m *Manager) RegisterQueryHotkey(ctx context.Context, queryHotkey setting.Q
 	return nil
 }
 
-func (m *Manager) RegisterTrayQueryHotkey(ctx context.Context, trayQuery setting.TrayQuery) error {
-	combineKey := strings.TrimSpace(trayQuery.Hotkey)
-	if trayQuery.Disabled || combineKey == "" {
-		return nil
-	}
-
-	hk := &hotkey.Hotkey{}
-	if err := hk.Register(ctx, combineKey, func() {
-		queryCtx := util.WithCoreSessionContext(util.NewTraceContext())
-		if m.shouldIgnoreHotkeyTrigger(queryCtx) {
-			return
-		}
-
-		m.executeTrayQuery(queryCtx, trayQuery, tray.ClickRect{})
-	}); err != nil {
-		return err
-	}
-
-	m.trayQueryHotkeys = append(m.trayQueryHotkeys, hk)
-	return nil
-}
-
 func (m *Manager) unregisterQueryHotkeys(ctx context.Context) {
 	for _, hk := range m.queryHotkeys {
 		hk.Unregister(ctx)
 	}
 	m.queryHotkeys = nil
-}
-
-func (m *Manager) unregisterTrayQueryHotkeys(ctx context.Context) {
-	for _, hk := range m.trayQueryHotkeys {
-		hk.Unregister(ctx)
-	}
-	m.trayQueryHotkeys = nil
 }
 
 func (m *Manager) StartWebsocketAndWait(ctx context.Context) {
@@ -642,12 +632,20 @@ func (m *Manager) ShowTray() {
 	ctx := util.NewTraceContext()
 
 	tray.CreateTray(resource.GetAppIcon(), func() {
-		m.GetUI(ctx).ToggleApp(ctx)
+		m.GetUI(ctx).ToggleApp(ctx, common.ShowContext{
+			SelectAll:    true,
+			ShowQueryBox: true,
+			HideToolbar:  false,
+		})
 	},
 		tray.MenuItem{
 			Title: i18n.GetI18nManager().TranslateWox(ctx, "ui_tray_toggle_app"),
 			Callback: func() {
-				m.GetUI(ctx).ToggleApp(ctx)
+				m.GetUI(ctx).ToggleApp(ctx, common.ShowContext{
+					SelectAll:    true,
+					ShowQueryBox: true,
+					HideToolbar:  false,
+				})
 			},
 		}, tray.MenuItem{
 			Title: i18n.GetI18nManager().TranslateWox(ctx, "ui_tray_open_setting_window"),
@@ -698,15 +696,6 @@ func (m *Manager) PostSettingUpdate(ctx context.Context, key string, value strin
 			m.RegisterQueryHotkey(ctx, queryHotkey)
 		}
 	case "TrayQueries":
-		logger.Info(ctx, "post update tray query hotkeys, unregister previous tray query hotkeys")
-		m.unregisterTrayQueryHotkeys(ctx)
-
-		for _, trayQuery := range setting.GetSettingManager().GetWoxSetting(ctx).TrayQueries.Get() {
-			if err := m.RegisterTrayQueryHotkey(ctx, trayQuery); err != nil {
-				logger.Error(ctx, fmt.Sprintf("failed to register tray query hotkey: %s", err.Error()))
-			}
-		}
-
 		woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
 		if woxSetting.ShowTray.Get() {
 			m.refreshTrayQueryIcons(ctx)
@@ -808,7 +797,8 @@ func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQu
 	m.ui.ShowApp(queryCtx, common.ShowContext{
 		SelectAll:      false,
 		IsQueryFocus:   isQueryFocus,
-		ShowQueryBox:   trayQuery.ShowQueryBox,
+		ShowQueryBox:   !trayQuery.HideQueryBox,
+		HideToolbar:    trayQuery.HideToolbar,
 		ShowSource:     common.ShowSourceTrayQuery,
 		WindowPosition: &position,
 		LayoutModeTrayQueryParams: &common.LayoutModeTrayQueryParams{
@@ -886,7 +876,7 @@ func (m *Manager) getTrayQueryInitialWindowHeight(ctx context.Context, trayQuery
 		queryBoxHeight = 80
 	}
 
-	if trayQuery.ShowQueryBox {
+	if !trayQuery.HideQueryBox {
 		return queryBoxHeight
 	}
 
@@ -901,6 +891,106 @@ func (m *Manager) getTrayQueryInitialWindowHeight(ctx context.Context, trayQuery
 	}
 
 	return windowHeight
+}
+
+func (m *Manager) getQueryHotkeyWindowPosition(ctx context.Context, queryHotkey setting.QueryHotkey) (common.WindowPosition, bool) {
+	positionType := queryHotkey.Position
+	if positionType == "" || positionType == setting.QueryHotkeyPositionSystemDefault {
+		return common.WindowPosition{}, false
+	}
+
+	screenSize := screen.GetMouseScreen()
+	windowWidth := m.getResolvedQueryHotkeyWindowWidth(ctx, queryHotkey)
+	maxResultCount := m.getResolvedQueryHotkeyMaxResultCount(ctx, queryHotkey)
+	windowHeight := CalculateMaxWindowHeight(ctx, maxResultCount, !queryHotkey.HideQueryBox, !queryHotkey.HideToolbar)
+	const margin = 20
+
+	left := screenSize.X + margin
+	centerX := screenSize.X + (screenSize.Width-windowWidth)/2
+	right := screenSize.X + screenSize.Width - windowWidth - margin
+	if right < left {
+		right = left
+	}
+
+	top := screenSize.Y + margin
+	centerY := screenSize.Y + (screenSize.Height-windowHeight)/2
+	bottom := screenSize.Y + screenSize.Height - windowHeight - margin
+	if bottom < top {
+		bottom = top
+	}
+
+	x := centerX
+	y := centerY
+
+	switch positionType {
+	case setting.QueryHotkeyPositionTopLeft:
+		x = left
+		y = top
+	case setting.QueryHotkeyPositionTopCenter:
+		x = centerX
+		y = top
+	case setting.QueryHotkeyPositionTopRight:
+		x = right
+		y = top
+	case setting.QueryHotkeyPositionCenter:
+		x = centerX
+		y = centerY
+	case setting.QueryHotkeyPositionBottomLeft:
+		x = left
+		y = bottom
+	case setting.QueryHotkeyPositionBottomCenter:
+		x = centerX
+		y = bottom
+	case setting.QueryHotkeyPositionBottomRight:
+		x = right
+		y = bottom
+	default:
+		return common.WindowPosition{}, false
+	}
+
+	return common.WindowPosition{X: x, Y: y}, true
+}
+
+func (m *Manager) getResolvedQueryHotkeyWindowWidth(ctx context.Context, queryHotkey setting.QueryHotkey) int {
+	windowWidth := normalizedWindowWidth(queryHotkey.Width)
+	if windowWidth > 0 {
+		return windowWidth
+	}
+
+	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
+	if woxSetting.AppWidth.Get() > 0 {
+		return woxSetting.AppWidth.Get()
+	}
+
+	return 800
+}
+
+func (m *Manager) getResolvedQueryHotkeyMaxResultCount(ctx context.Context, queryHotkey setting.QueryHotkey) int {
+	maxResultCount := normalizedMaxResultCount(queryHotkey.MaxResultCount)
+	if maxResultCount > 0 {
+		return maxResultCount
+	}
+
+	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
+	if woxSetting.MaxResultCount.Get() > 0 {
+		return woxSetting.MaxResultCount.Get()
+	}
+
+	return 10
+}
+
+func normalizedWindowWidth(windowWidth int) int {
+	if windowWidth < 0 {
+		return 0
+	}
+	return windowWidth
+}
+
+func normalizedMaxResultCount(maxResultCount int) int {
+	if maxResultCount <= 0 {
+		return 0
+	}
+	return clampInt(maxResultCount, 5, 15)
 }
 
 func (m *Manager) getTrayQueryScreenRect(ctx context.Context, rect tray.ClickRect) common.WindowRect {
@@ -1161,7 +1251,11 @@ func (m *Manager) ProcessDeeplink(ctx context.Context, deeplink string) {
 	}
 
 	if command == "toggle" {
-		m.ui.ToggleApp(ctx)
+		m.ui.ToggleApp(ctx, common.ShowContext{
+			SelectAll:    true,
+			ShowQueryBox: true,
+			HideToolbar:  false,
+		})
 	}
 
 	// wox://plugin/{pluginID}?arg1=val1&arg2=val2

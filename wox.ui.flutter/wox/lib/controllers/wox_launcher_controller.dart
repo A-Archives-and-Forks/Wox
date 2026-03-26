@@ -759,7 +759,7 @@ class WoxLauncherController extends GetxController {
     if (params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_TRAY_QUERY.code) {
       isQueryBoxAtBottom.value = Platform.isWindows;
       isQueryBoxVisible.value = params.showQueryBox;
-      isToolbarHiddenForce.value = true;
+      isToolbarHiddenForce.value = params.hideToolbar;
       final configuredTrayWidth = params.windowWidth;
       forceWindowWidth = configuredTrayWidth > 0 ? configuredTrayWidth.toDouble() : WoxSettingUtil.instance.currentSetting.appWidth.toDouble() / 2;
       forceMaxResultCount = params.maxResultCount;
@@ -768,7 +768,13 @@ class WoxLauncherController extends GetxController {
 
     // Reset to default layout if no layout mode specified
     if (params.layoutMode == null || params.layoutMode == WoxLayoutModeEnum.WOX_LAYOUT_MODE_DEFAULT.code) {
-      setDefaultLayoutMode(traceId);
+      resetLayoutState(traceId);
+
+      // apply other overrides for default layout
+      isQueryBoxVisible.value = params.showQueryBox;
+      isToolbarHiddenForce.value = params.hideToolbar;
+      forceWindowWidth = params.windowWidth > 0 ? params.windowWidth.toDouble() : 0;
+      forceMaxResultCount = params.maxResultCount;
     }
 
     // Handle different position types
@@ -853,7 +859,7 @@ class WoxLauncherController extends GetxController {
     WoxApi.instance.onShow(traceId);
   }
 
-  void setDefaultLayoutMode(String traceId) {
+  void resetLayoutState(String traceId) {
     isQueryBoxAtBottom.value = false;
     isQueryBoxVisible.value = true;
     isToolbarHiddenForce.value = false;
@@ -864,9 +870,8 @@ class WoxLauncherController extends GetxController {
   }
 
   int getMaxResultCount() {
-    // we allow the show app params to override the max result count for special scenarios like tray query,
-    // because in that case, the user may want to show more results in a limited space,
-    // so they can configure a smaller window width and a larger max result count to show more results in the same space.
+    // Allow show-app callers such as tray query and query hotkey to override
+    // the global max result count for a specific launcher session.
     if (forceMaxResultCount > 0) {
       return forceMaxResultCount;
     }
@@ -946,7 +951,7 @@ class WoxLauncherController extends GetxController {
     isSettingOpenedFromHidden = false;
     isInSettingView.value = false;
     await WoxApi.instance.onSetting(traceId, false);
-    setDefaultLayoutMode(traceId);
+    resetLayoutState(traceId);
 
     await WoxApi.instance.onHide(traceId);
     await restoreQueryAfterTrayQuery(traceId);

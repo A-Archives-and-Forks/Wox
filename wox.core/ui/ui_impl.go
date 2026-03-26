@@ -62,9 +62,9 @@ func (u *uiImpl) ShowApp(ctx context.Context, showContext common.ShowContext) {
 	u.invokeWebsocketMethod(ctx, "ShowApp", getShowAppParams(ctx, showContext))
 }
 
-func (u *uiImpl) ToggleApp(ctx context.Context) {
+func (u *uiImpl) ToggleApp(ctx context.Context, showContext common.ShowContext) {
 	GetUIManager().RefreshActiveWindowSnapshot(ctx)
-	u.invokeWebsocketMethod(ctx, "ToggleApp", getShowAppParams(ctx, common.ShowContext{SelectAll: true}))
+	u.invokeWebsocketMethod(ctx, "ToggleApp", getShowAppParams(ctx, showContext))
 }
 
 func (u *uiImpl) GetServerPort(ctx context.Context) int {
@@ -275,7 +275,10 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 	var layoutModeExplorerParams map[string]any
 	var layoutModeTrayQueryParams map[string]any
 	showQueryBox := showContext.ShowQueryBox
+	hideToolbar := showContext.HideToolbar
 	showSource := showContext.ShowSource
+	windowWidth := showContext.WindowWidth
+	maxResultCount := showContext.MaxResultCount
 
 	if showContext.LayoutMode == "" {
 		showContext.LayoutMode = common.LayoutModeDefault
@@ -283,8 +286,8 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 	if showSource == "" {
 		showSource = common.ShowSourceDefault
 	}
-	if showContext.LayoutMode != common.LayoutModeTrayQuery {
-		showQueryBox = true
+	if windowWidth <= 0 {
+		windowWidth = woxSetting.AppWidth.Get()
 	}
 
 	// if specific position provided, use it
@@ -297,7 +300,7 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 	} else {
 		switch woxSetting.ShowPosition.Get() {
 		case setting.PositionTypeActiveScreen:
-			position = NewActiveScreenPosition(woxSetting.AppWidth.Get())
+			position = NewActiveScreenPositionWithOptions(ctx, windowWidth, maxResultCount, showQueryBox, !hideToolbar)
 		case setting.PositionTypeLastLocation:
 			// Use saved window position if available, otherwise use mouse screen position as fallback
 			if woxSetting.LastWindowX.Get() != -1 && woxSetting.LastWindowY.Get() != -1 {
@@ -306,10 +309,10 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 			} else {
 				logger.Info(ctx, "No saved window position, using mouse screen position as fallback")
 				// No saved position, fallback to mouse screen position
-				position = NewMouseScreenPosition(woxSetting.AppWidth.Get())
+				position = NewMouseScreenPositionWithOptions(ctx, windowWidth, maxResultCount, showQueryBox, !hideToolbar)
 			}
 		default: // Default to mouse screen
-			position = NewMouseScreenPosition(woxSetting.AppWidth.Get())
+			position = NewMouseScreenPositionWithOptions(ctx, windowWidth, maxResultCount, showQueryBox, !hideToolbar)
 		}
 	}
 
@@ -350,11 +353,12 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 		"SelectAll":                 showContext.SelectAll,
 		"IsQueryFocus":              showContext.IsQueryFocus,
 		"ShowQueryBox":              showQueryBox,
+		"HideToolbar":               hideToolbar,
 		"Position":                  position,
 		"LayoutModeExplorerParams":  layoutModeExplorerParams,
 		"LayoutModeTrayQueryParams": layoutModeTrayQueryParams,
-		"WindowWidth":               showContext.WindowWidth,
-		"MaxResultCount":            showContext.MaxResultCount,
+		"WindowWidth":               windowWidth,
+		"MaxResultCount":            maxResultCount,
 		"QueryHistories":            setting.GetSettingManager().GetLatestQueryHistory(ctx, 10),
 		"LaunchMode":                woxSetting.LaunchMode.Get(),
 		"StartPage":                 woxSetting.StartPage.Get(),

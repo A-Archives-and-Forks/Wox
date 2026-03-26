@@ -192,6 +192,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     // if there are multiple columns which have width set to 0, we will set the max width to 100 for each column
     // if there is only one column which has width set to 0, we will set the max width to tableWidth - (other columns width)
     // if all columns have width set to 0, we will set the max width to 100 for each column
+    const defaultFlexibleColumnWidth = 100.0;
     var zeroWidthColumnCount = 0;
     var totalWidth = 0.0;
     var totalColumnTooltipWidth = 0.0;
@@ -209,10 +210,17 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
       }
     }
     if (zeroWidthColumnCount == 1) {
-      return tableWidth - totalWidth - (operationWidth + columnSpacing) - totalColumnTooltipWidth;
+      final availableWidth = tableWidth - totalWidth - (operationWidth + columnSpacing) - totalColumnTooltipWidth;
+      if (availableWidth > 0) {
+        return availableWidth;
+      }
+
+      // When fixed-width columns already exceed the nominal table width,
+      // fall back to a sane default instead of producing a negative column width.
+      return defaultFlexibleColumnWidth;
     }
 
-    return 100.0;
+    return defaultFlexibleColumnWidth;
   }
 
   Widget columnWidth({required PluginSettingValueTableColumn column, required bool isHeader, required bool isOperation, required Widget child}) {

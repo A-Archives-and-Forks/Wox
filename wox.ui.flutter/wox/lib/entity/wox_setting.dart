@@ -176,15 +176,35 @@ class QueryHotkey {
   late String query; // Support plugin.QueryVariable
 
   late bool isSilentExecution;
+  late bool hideQueryBox;
+  late bool hideToolbar;
+  late String width;
+  late String maxResultCount;
+  late String position;
 
   late bool disabled;
 
-  QueryHotkey({required this.hotkey, required this.query, required this.isSilentExecution, required this.disabled});
+  QueryHotkey({
+    required this.hotkey,
+    required this.query,
+    required this.isSilentExecution,
+    required this.hideQueryBox,
+    required this.hideToolbar,
+    required this.width,
+    required this.maxResultCount,
+    required this.position,
+    required this.disabled,
+  });
 
   QueryHotkey.fromJson(Map<String, dynamic> json) {
     hotkey = json['Hotkey'];
     query = json['Query'];
     isSilentExecution = json['IsSilentExecution'] ?? false;
+    hideQueryBox = json['HideQueryBox'] ?? false;
+    hideToolbar = json['HideToolbar'] ?? false;
+    width = json['Width'] == null ? "" : json['Width'].toString();
+    maxResultCount = json['MaxResultCount'] == null ? "" : json['MaxResultCount'].toString();
+    position = json['Position'] ?? 'system_default';
     disabled = json['Disabled'] ?? false;
   }
 
@@ -193,6 +213,11 @@ class QueryHotkey {
     data['Hotkey'] = hotkey;
     data['Query'] = query;
     data['IsSilentExecution'] = isSilentExecution;
+    data['HideQueryBox'] = hideQueryBox;
+    data['HideToolbar'] = hideToolbar;
+    data['Width'] = width;
+    data['MaxResultCount'] = maxResultCount;
+    data['Position'] = position;
     data['Disabled'] = disabled;
     return data;
   }
@@ -254,15 +279,23 @@ class QueryShortcut {
 class TrayQuery {
   late WoxImage icon;
 
-  late String hotkey;
   late String query;
   late String width;
   late String maxResultCount;
-  late bool showQueryBox;
+  late bool hideQueryBox;
+  late bool hideToolbar;
 
   late bool disabled;
 
-  TrayQuery({required this.icon, required this.hotkey, required this.query, required this.width, required this.maxResultCount, required this.showQueryBox, required this.disabled});
+  TrayQuery({
+    required this.icon,
+    required this.query,
+    required this.width,
+    required this.maxResultCount,
+    required this.hideQueryBox,
+    required this.hideToolbar,
+    required this.disabled,
+  });
 
   TrayQuery.fromJson(Map<String, dynamic> json) {
     if (json['Icon'] is Map<String, dynamic>) {
@@ -272,7 +305,6 @@ class TrayQuery {
     } else {
       icon = WoxImage.empty();
     }
-    hotkey = json['Hotkey'] ?? '';
     query = json['Query'];
     if (json['Width'] == null) {
       width = "";
@@ -284,18 +316,19 @@ class TrayQuery {
     } else {
       maxResultCount = json['MaxResultCount'].toString();
     }
-    showQueryBox = json['ShowQueryBox'] ?? false;
+    hideQueryBox = json['HideQueryBox'] ?? false;
+    hideToolbar = json['HideToolbar'] ?? false;
     disabled = json['Disabled'] ?? false;
   }
 
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> data = <String, dynamic>{};
     data['Icon'] = icon;
-    data['Hotkey'] = hotkey;
     data['Query'] = query;
     data['Width'] = width;
     data['MaxResultCount'] = maxResultCount;
-    data['ShowQueryBox'] = showQueryBox;
+    data['HideQueryBox'] = hideQueryBox;
+    data['HideToolbar'] = hideToolbar;
     data['Disabled'] = disabled;
     return data;
   }

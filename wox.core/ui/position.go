@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"wox/setting"
 	"wox/util"
 	"wox/util/screen"
@@ -51,7 +52,7 @@ type Position struct {
 }
 
 func NewMouseScreenPosition(windowWidth int) Position {
-	x, y := getWindowMouseScreenLocation(windowWidth)
+	x, y := getWindowMouseScreenLocation(util.NewTraceContext(), windowWidth, 0, true, true)
 	return Position{
 		Type: setting.PositionTypeMouseScreen,
 		X:    x,
@@ -60,7 +61,25 @@ func NewMouseScreenPosition(windowWidth int) Position {
 }
 
 func NewActiveScreenPosition(windowWidth int) Position {
-	x, y := getWindowActiveScreenLocation(windowWidth)
+	x, y := getWindowActiveScreenLocation(util.NewTraceContext(), windowWidth, 0, true, true)
+	return Position{
+		Type: setting.PositionTypeActiveScreen,
+		X:    x,
+		Y:    y,
+	}
+}
+
+func NewMouseScreenPositionWithOptions(ctx context.Context, windowWidth int, maxResultCount int, showQueryBox bool, showToolbar bool) Position {
+	x, y := getWindowMouseScreenLocation(ctx, windowWidth, maxResultCount, showQueryBox, showToolbar)
+	return Position{
+		Type: setting.PositionTypeMouseScreen,
+		X:    x,
+		Y:    y,
+	}
+}
+
+func NewActiveScreenPositionWithOptions(ctx context.Context, windowWidth int, maxResultCount int, showQueryBox bool, showToolbar bool) Position {
+	x, y := getWindowActiveScreenLocation(ctx, windowWidth, maxResultCount, showQueryBox, showToolbar)
 	return Position{
 		Type: setting.PositionTypeActiveScreen,
 		X:    x,
@@ -76,51 +95,18 @@ func NewLastLocationPosition(x, y int) Position {
 	}
 }
 
-func getWindowMouseScreenLocation(windowWidth int) (int, int) {
+func getWindowMouseScreenLocation(ctx context.Context, windowWidth int, maxResultCount int, showQueryBox bool, showToolbar bool) (int, int) {
 	size := screen.GetMouseScreen()
-	return getCenterLocation(size, windowWidth)
+	return getCenterLocation(ctx, size, windowWidth, maxResultCount, showQueryBox, showToolbar)
 }
 
-func getWindowActiveScreenLocation(windowWidth int) (int, int) {
+func getWindowActiveScreenLocation(ctx context.Context, windowWidth int, maxResultCount int, showQueryBox bool, showToolbar bool) (int, int) {
 	size := screen.GetActiveScreen()
-	return getCenterLocation(size, windowWidth)
+	return getCenterLocation(ctx, size, windowWidth, maxResultCount, showQueryBox, showToolbar)
 }
 
-func getCenterLocation(size screen.Size, windowWidth int) (int, int) {
-	ctx := util.NewTraceContext()
-
-	// Get current theme and settings
-	theme := GetUIManager().GetCurrentTheme(ctx)
-	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
-
-	// Calculate maximum window height based on user configuration
-	maxResultCount := woxSetting.MaxResultCount.Get()
-	if maxResultCount == 0 {
-		maxResultCount = 10 // Default value
-	}
-
-	// Constants from Flutter UI (consts.dart)
-	const (
-		queryBoxBaseHeight   = 55
-		resultItemBaseHeight = 50
-		toolbarHeight        = 40
-	)
-
-	// Calculate query box height (includes app padding top and bottom)
-	queryBoxHeight := queryBoxBaseHeight + theme.AppPaddingTop + theme.AppPaddingBottom
-
-	// Calculate result item height
-	resultItemHeight := resultItemBaseHeight + theme.ResultItemPaddingTop + theme.ResultItemPaddingBottom
-
-	// Calculate result list view height
-	resultListViewHeight := resultItemHeight * maxResultCount
-
-	// Calculate result container height (includes padding)
-	resultContainerHeight := resultListViewHeight + theme.ResultContainerPaddingTop + theme.ResultContainerPaddingBottom
-
-	// Calculate total maximum window height (including toolbar)
-	// Note: Toolbar is shown when there are results, so we include it in max height calculation
-	maxWindowHeight := queryBoxHeight + resultContainerHeight + toolbarHeight
+func getCenterLocation(ctx context.Context, size screen.Size, windowWidth int, maxResultCount int, showQueryBox bool, showToolbar bool) (int, int) {
+	maxWindowHeight := CalculateMaxWindowHeight(ctx, maxResultCount, showQueryBox, showToolbar)
 
 	// Calculate X position (centered horizontally)
 	x := size.X + (size.Width-windowWidth)/2
@@ -134,4 +120,38 @@ func getCenterLocation(size screen.Size, windowWidth int) (int, int) {
 	y := size.Y + (size.Height-maxWindowHeight)/2
 
 	return x, y
+}
+
+func CalculateMaxWindowHeight(ctx context.Context, maxResultCount int, showQueryBox bool, showToolbar bool) int {
+	theme := GetUIManager().GetCurrentTheme(ctx)
+	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
+
+	if maxResultCount <= 0 {
+		maxResultCount = woxSetting.MaxResultCount.Get()
+	}
+	if maxResultCount <= 0 {
+		maxResultCount = 10
+	}
+
+	const (
+		queryBoxBaseHeight   = 55
+		resultItemBaseHeight = 50
+		toolbarHeight        = 40
+	)
+
+	queryBoxHeight := 0
+	if showQueryBox {
+		queryBoxHeight = queryBoxBaseHeight + theme.AppPaddingTop + theme.AppPaddingBottom
+	}
+
+	resultItemHeight := resultItemBaseHeight + theme.ResultItemPaddingTop + theme.ResultItemPaddingBottom
+	resultListViewHeight := resultItemHeight * maxResultCount
+	resultContainerHeight := resultListViewHeight + theme.ResultContainerPaddingTop + theme.ResultContainerPaddingBottom
+
+	extraToolbarHeight := 0
+	if showToolbar {
+		extraToolbarHeight = toolbarHeight
+	}
+
+	return queryBoxHeight + resultContainerHeight + extraToolbarHeight
 }

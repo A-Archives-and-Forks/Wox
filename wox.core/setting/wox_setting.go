@@ -118,16 +118,34 @@ type QueryHotkey struct {
 	Hotkey            string
 	Query             string // Support plugin.QueryVariable
 	IsSilentExecution bool   // If true, the query will be executed without showing the query in the input box
+	HideQueryBox      bool
+	HideToolbar       bool
+	Width             int
+	MaxResultCount    int
+	Position          QueryHotkeyPosition
 	Disabled          bool
 }
 
+type QueryHotkeyPosition string
+
+const (
+	QueryHotkeyPositionSystemDefault QueryHotkeyPosition = "system_default"
+	QueryHotkeyPositionTopLeft       QueryHotkeyPosition = "top_left"
+	QueryHotkeyPositionTopCenter     QueryHotkeyPosition = "top_center"
+	QueryHotkeyPositionTopRight      QueryHotkeyPosition = "top_right"
+	QueryHotkeyPositionCenter        QueryHotkeyPosition = "center"
+	QueryHotkeyPositionBottomLeft    QueryHotkeyPosition = "bottom_left"
+	QueryHotkeyPositionBottomCenter  QueryHotkeyPosition = "bottom_center"
+	QueryHotkeyPositionBottomRight   QueryHotkeyPosition = "bottom_right"
+)
+
 type TrayQuery struct {
 	Icon           common.WoxImage
-	Hotkey         string `json:",omitempty"`
 	Query          string
 	Width          int `json:",omitempty"`
 	MaxResultCount int `json:",omitempty"`
-	ShowQueryBox   bool
+	HideQueryBox   bool
+	HideToolbar    bool
 	Disabled       bool
 }
 
