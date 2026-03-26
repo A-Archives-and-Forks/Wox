@@ -1,6 +1,8 @@
 #include <flutter/dart_project.h>
 #include <windows.h>
 
+#include <string>
+
 #include "flutter_window.h"
 #include "utils.h"
 

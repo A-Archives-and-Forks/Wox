@@ -25,13 +25,24 @@ static constexpr ULONGLONG kPostShowBlurGraceMs = 300;
 // Store window instance for window procedure
 FlutterWindow *g_window_instance = nullptr;
 
-// Global log function
-void LogMessage(const std::string &message)
+static bool IsKeyDownMessage(UINT message)
 {
-  if (g_window_instance)
-  {
-    g_window_instance->Log(message);
-  }
+  return message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+}
+
+static bool IsKeyUpMessage(UINT message)
+{
+  return message == WM_KEYUP || message == WM_SYSKEYUP;
+}
+
+uint64_t FlutterWindow::MakeKeyboardMessageSignature(UINT message, WPARAM wparam, LPARAM lparam)
+{
+  const uint64_t virtual_key = static_cast<uint64_t>(wparam & 0xFFFF);
+  const uint64_t scancode = static_cast<uint64_t>((lparam >> 16) & 0xFF);
+  const uint64_t is_extended = static_cast<uint64_t>((lparam >> 24) & 0x1);
+  const uint64_t is_system_key = static_cast<uint64_t>(message == WM_SYSKEYDOWN || message == WM_SYSKEYUP);
+
+  return virtual_key | (scancode << 16) | (is_extended << 24) | (is_system_key << 25);
 }
 
 static std::optional<WORD> ParseWindowsVirtualKey(const std::string &key)
@@ -123,6 +134,8 @@ static bool SendWindowsMouseButtonInput(DWORD mouse_flag)
 FlutterWindow::FlutterWindow(const flutter::DartProject &project)
     : project_(project),
       original_window_proc_(nullptr),
+      original_child_window_proc_(nullptr),
+      child_window_(nullptr),
       previous_active_window_(nullptr)
 {
   g_window_instance = this;
@@ -143,6 +156,88 @@ void FlutterWindow::Log(const std::string &message)
   {
     window_manager_channel_->InvokeMethod("log", std::make_unique<flutter::EncodableValue>(message));
   }
+}
+
+void FlutterWindow::TrackChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam)
+{
+  if (!IsKeyDownMessage(message))
+  {
+    return;
+  }
+
+  // Repeat keydown messages should not create extra pending releases.
+  if ((lparam & (static_cast<LPARAM>(1) << 30)) != 0)
+  {
+    return;
+  }
+
+  const uint64_t signature = MakeKeyboardMessageSignature(message, wparam, lparam);
+  pending_child_keydowns_.insert(signature);
+}
+
+void FlutterWindow::ClearTrackedChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam)
+{
+  if (!IsKeyUpMessage(message))
+  {
+    return;
+  }
+
+  const uint64_t signature = MakeKeyboardMessageSignature(message, wparam, lparam);
+  pending_child_keydowns_.erase(signature);
+}
+
+bool FlutterWindow::HasTrackedChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam) const
+{
+  if (!IsKeyUpMessage(message))
+  {
+    return false;
+  }
+
+  const uint64_t signature = MakeKeyboardMessageSignature(message, wparam, lparam);
+  return pending_child_keydowns_.find(signature) != pending_child_keydowns_.end();
+}
+
+// Windows occasionally delivers the release for Enter/Escape-style actions
+// to the top-level runner window after the keydown has already triggered a
+// focus/view transition inside Flutter. In that case the engine sees the
+// keydown on the child hwnd but ignores the matching keyup on the root hwnd,
+// leaving HardwareKeyboard in a stale "pressed" state. The visible symptom is
+// an every-other-press failure: one Enter works, the next one is ignored,
+// then the following release clears the stale state again.
+
+// Alternatives considered:
+// 1. Reintroduce the old message-loop-to-Dart keyboard bridge.
+//    Rejected because it duplicates the engine's keyboard pipeline and turns
+//    a root/child routing bug into a broad Windows-only input hack.
+// 2. Move all action execution to keyup in higher layers.
+//    Rejected because it changes behavior outside Windows and spreads this
+//    engine-specific issue into Dart UI code.
+// 3. Fix the Flutter engine.
+//    This is the ideal long-term solution, but it is outside the Wox runner.
+
+// The chosen compromise is narrow and native: only when a non-repeat keydown
+// definitely reached the child hwnd, and the matching keyup later lands on
+// the root hwnd, send that release back to the child synchronously so the
+// engine can clear its pressed state.
+bool FlutterWindow::RerouteIgnoredRootKeyUp(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+{
+  if (!IsKeyUpMessage(message) || child_window_ == nullptr || hwnd == nullptr)
+  {
+    return false;
+  }
+
+  if (!IsWindow(child_window_) || GetAncestor(child_window_, GA_ROOT) != hwnd)
+  {
+    return false;
+  }
+
+  if (!HasTrackedChildKeyDown(message, wparam, lparam))
+  {
+    return false;
+  }
+
+  SendMessage(child_window_, message, wparam, lparam);
+  return true;
 }
 
 HWND FlutterWindow::NormalizeToRootWindow(HWND hwnd) const
@@ -473,7 +568,14 @@ bool FlutterWindow::OnCreate()
     SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(WindowProc));
   }
 
-  SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  child_window_ = flutter_controller_->view()->GetNativeWindow();
+  SetChildContent(child_window_);
+
+  if (child_window_ != nullptr)
+  {
+    original_child_window_proc_ = reinterpret_cast<WNDPROC>(GetWindowLongPtr(child_window_, GWLP_WNDPROC));
+    SetWindowLongPtr(child_window_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(ChildWindowProc));
+  }
 
   flutter_controller_->engine()->SetNextFrameCallback([&]()
                                                       {
@@ -491,6 +593,15 @@ bool FlutterWindow::OnCreate()
 
 void FlutterWindow::OnDestroy()
 {
+  pending_child_keydowns_.clear();
+
+  if (child_window_ != nullptr && original_child_window_proc_ != nullptr)
+  {
+    SetWindowLongPtr(child_window_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(original_child_window_proc_));
+    original_child_window_proc_ = nullptr;
+    child_window_ = nullptr;
+  }
+
   // Restore original window procedure
   HWND hwnd = GetHandle();
   if (hwnd != nullptr && original_window_proc_ != nullptr)
@@ -517,6 +628,11 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message, WPARAM const wparam
     if (result)
     {
       return *result;
+    }
+
+    if (RerouteIgnoredRootKeyUp(hwnd, message, wparam, lparam))
+    {
+      return 0;
     }
   }
 
@@ -596,6 +712,27 @@ LRESULT CALLBACK FlutterWindow::WindowProc(HWND hwnd, UINT message, WPARAM wpara
 
   // Call the original window procedure
   return CallWindowProc(g_window_instance->original_window_proc_, hwnd, message, wparam, lparam);
+}
+
+LRESULT CALLBACK FlutterWindow::ChildWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+{
+  if (g_window_instance == nullptr || g_window_instance->original_child_window_proc_ == nullptr)
+  {
+    return DefWindowProc(hwnd, message, wparam, lparam);
+  }
+
+  if (IsKeyDownMessage(message))
+  {
+    g_window_instance->TrackChildKeyDown(message, wparam, lparam);
+  }
+  else if (IsKeyUpMessage(message))
+  {
+    g_window_instance->ClearTrackedChildKeyDown(message, wparam, lparam);
+  }
+
+  const LRESULT result = CallWindowProc(g_window_instance->original_child_window_proc_, hwnd, message, wparam, lparam);
+
+  return result;
 }
 
 void FlutterWindow::HandleWindowManagerMethodCall(
@@ -1021,7 +1158,6 @@ void FlutterWindow::HandleWindowManagerMethodCall(
     }
     else if (method_name == "hide")
     {
-      Log("[KEYLOG][NATIVE] Hide called, using ShowWindow(SW_HIDE)");
       blur_guard_active_ = false;
       blur_guard_until_tick_ = 0;
 

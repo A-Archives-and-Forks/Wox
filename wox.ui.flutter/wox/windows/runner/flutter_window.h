@@ -7,6 +7,7 @@
 #include <flutter/standard_method_codec.h>
 
 #include <memory>
+#include <unordered_set>
 
 #include "win32_window.h"
 
@@ -40,6 +41,12 @@ private:
 
   // Original window procedure
   WNDPROC original_window_proc_;
+
+  // Original child window procedure for the Flutter view hwnd.
+  WNDPROC original_child_window_proc_ = nullptr;
+
+  // Flutter view child window handle.
+  HWND child_window_ = nullptr;
 
   // Previous active window handle
   HWND previous_active_window_;
@@ -79,6 +86,21 @@ private:
 
   // Static window procedure for handling window events
   static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+
+  // Static child window procedure for observing the Flutter view hwnd.
+  static LRESULT CALLBACK ChildWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+
+  // Track non-repeat keydowns that reached the Flutter child window. If the
+  // matching keyup later lands on the root window and Flutter ignores it, we
+  // use this set to decide whether the release should be sent back to the
+  // child window.
+  void TrackChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam);
+  void ClearTrackedChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam);
+  bool HasTrackedChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam) const;
+  bool RerouteIgnoredRootKeyUp(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+  static uint64_t MakeKeyboardMessageSignature(UINT message, WPARAM wparam, LPARAM lparam);
+
+  std::unordered_set<uint64_t> pending_child_keydowns_;
 };
 
 #endif // RUNNER_FLUTTER_WINDOW_H_

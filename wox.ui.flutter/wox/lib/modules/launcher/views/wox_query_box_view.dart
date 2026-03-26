@@ -146,16 +146,6 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
               onKeyEvent: (FocusNode node, KeyEvent event) {
                 var traceId = const UuidV4().generate();
 
-                String eventType =
-                    event is KeyDownEvent
-                        ? "DOWN"
-                        : event is KeyUpEvent
-                        ? "UP"
-                        : event is KeyRepeatEvent
-                        ? "REPEAT"
-                        : "UNKNOWN";
-                Logger.instance.debug(traceId, "[KEYLOG][FLUTTER] KeyEvent: ${event.logicalKey.keyLabel} ($eventType) - keyId: ${event.logicalKey.keyId}");
-
                 // Handle number keys in quick select mode first (higher priority)
                 if (controller.isQuickSelectMode.value && event is KeyDownEvent) {
                   var numberKey = getNumberFromKey(event.logicalKey);
@@ -178,17 +168,14 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                   if (event is KeyDownEvent) {
                     switch (event.logicalKey) {
                       case LogicalKeyboardKey.escape:
-                        Logger.instance.debug(traceId, "[KEYLOG][FLUTTER] ESC KeyDown -> hiding app");
                         controller.hideApp(const UuidV4().generate());
                         return KeyEventResult.handled;
                       case LogicalKeyboardKey.enter:
                         var composing = controller.queryBoxTextFieldController.value.composing;
                         var isComposing = composing.start >= 0 && composing.end >= 0;
                         if (isComposing) {
-                          Logger.instance.debug(traceId, "[KEYLOG][FLUTTER] Enter KeyDown ignored due to IME composing");
                           return KeyEventResult.ignored;
                         }
-                        Logger.instance.debug(traceId, "[KEYLOG][FLUTTER] Enter KeyDown -> executing action");
                         controller.executeDefaultAction(const UuidV4().generate());
                         return KeyEventResult.handled;
                       case LogicalKeyboardKey.arrowDown:
@@ -246,7 +233,6 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                 }
 
                 var pressedHotkey = WoxHotkey.parseNormalHotkeyFromEvent(event);
-                Logger.instance.debug(traceId, "[KEYLOG][FLUTTER] parseNormalHotkeyFromEvent returned: $pressedHotkey");
                 if (pressedHotkey == null) {
                   return KeyEventResult.ignored;
                 }
@@ -256,9 +242,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                 }
 
                 // list all actions
-                Logger.instance.debug(traceId, "[KEYLOG][FLUTTER] Checking if action hotkey: $pressedHotkey");
                 if (controller.isActionHotkey(pressedHotkey)) {
-                  Logger.instance.debug(traceId, "[KEYLOG][FLUTTER] ${controller.moreActionsHotkeyLabel} detected -> toggling action panel");
                   controller.toggleActionPanel(const UuidV4().generate());
                   return KeyEventResult.handled;
                 }
