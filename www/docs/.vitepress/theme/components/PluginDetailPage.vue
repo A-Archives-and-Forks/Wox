@@ -117,11 +117,27 @@ const pluginStoreHref = computed(() => {
   return withBase(prefix);
 });
 
-const shareHref = computed(() => {
+const shareText = computed(() => {
   if (!plugin.value || typeof window === "undefined") return "";
 
+  const pluginUrl = window.location.href;
+  const description = plugin.value.LocalizedDescription?.trim();
+  const normalizedLang = (lang.value || "").toLowerCase();
+
+  if (normalizedLang.startsWith("zh")) {
+    const summary = description ? `\n${description}` : "";
+    return `我发现了一个很好用的 Wox 插件：${plugin.value.LocalizedName}${summary}\n\n#Wox #WoxLauncher #WoxLauncherPlugin\n${pluginUrl}`;
+  }
+
+  const summary = description ? `\n${description}` : "";
+  return `I found a great Wox plugin: ${plugin.value.LocalizedName}${summary}\n\n#Wox #WoxLauncher #WoxLauncherPlugin\n${pluginUrl}`;
+});
+
+const shareHref = computed(() => {
+  if (!shareText.value) return "";
+
   const shareIntentUrl = new URL("https://x.com/intent/post");
-  shareIntentUrl.searchParams.set("text", `${plugin.value.LocalizedName} - ${plugin.value.LocalizedDescription}\n${window.location.href}`);
+  shareIntentUrl.searchParams.set("text", shareText.value);
   return shareIntentUrl.toString();
 });
 
