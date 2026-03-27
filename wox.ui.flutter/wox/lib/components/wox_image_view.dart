@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
@@ -92,16 +91,15 @@ class WoxImageView extends StatelessWidget {
     } else if (woxImage.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_SVG.code) {
       content = SizedBox(width: width, height: height, child: SvgPicture.string(woxImage.imageData));
     } else if (woxImage.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_EMOJI.code) {
-      // on windows, the emoji has default padding, so we need to offset it a bit
-      var offset = const Offset(0, 0);
-      if (Platform.isWindows) {
-        offset = const Offset(-6, -2);
-      }
-
+      // Use FittedBox to uniformly scale the emoji to fit the container,
+      // which works correctly across all platforms and display sizes.
       content = SizedBox(
         width: width,
         height: height,
-        child: Transform.translate(offset: offset, child: Transform.scale(scale: 1.03, child: Text(woxImage.imageData, style: TextStyle(fontSize: width, height: 1.0)))),
+        child: FittedBox(
+          fit: BoxFit.contain,
+          child: Text(woxImage.imageData, style: const TextStyle(fontSize: 100, height: 1.0)),
+        ),
       );
     } else if (woxImage.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_LOTTIE.code) {
       final bytes = utf8.encode(woxImage.imageData);
