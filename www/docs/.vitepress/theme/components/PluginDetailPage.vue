@@ -117,6 +117,14 @@ const pluginStoreHref = computed(() => {
   return withBase(prefix);
 });
 
+const shareHref = computed(() => {
+  if (!plugin.value || typeof window === "undefined") return "";
+
+  const shareIntentUrl = new URL("https://x.com/intent/post");
+  shareIntentUrl.searchParams.set("text", `${plugin.value.LocalizedName} - ${plugin.value.LocalizedDescription}\n${window.location.href}`);
+  return shareIntentUrl.toString();
+});
+
 function pluginDetailHref(pluginId: string) {
   const prefix = (lang.value || "").toLowerCase().startsWith("zh") ? "/zh/store/plugin.html" : "/store/plugin.html";
   return withBase(`${prefix}?id=${encodeURIComponent(pluginId)}`);
@@ -189,18 +197,6 @@ async function loadPlugins() {
   }
 }
 
-function sharePlugin() {
-  if (typeof window === "undefined" || !plugin.value) return;
-
-  const shareIntentUrl = new URL("https://x.com/intent/post");
-  shareIntentUrl.searchParams.set("text", `${plugin.value.LocalizedName} - ${plugin.value.LocalizedDescription}\n${window.location.href}`);
-
-  const openedWindow = window.open(shareIntentUrl.toString(), "_blank", "noopener,noreferrer");
-  if (!openedWindow) {
-    window.location.href = shareIntentUrl.toString();
-  }
-}
-
 function handlePopState() {
   syncCurrentPluginIdFromUrl();
   activeScreenshot.value = 0;
@@ -257,17 +253,30 @@ onUnmounted(() => {
         </div>
 
         <div class="hero-actions">
-          <a :href="installHref(plugin.LocalizedName)" class="primary-action">{{ uiText.install }}</a>
-          <a v-if="plugin.Website" :href="plugin.Website" target="_blank" rel="noreferrer" class="secondary-action">{{ uiText.source }}</a>
-          <button type="button" class="secondary-action share-action" @click="sharePlugin">
-            <svg viewBox="0 0 24 24" aria-hidden="true" class="share-icon">
+          <a :href="installHref(plugin.LocalizedName)" class="primary-action">
+            <svg viewBox="0 0 24 24" aria-hidden="true" class="action-icon">
               <path
-                d="M18.9 2H22l-6.8 7.8L23.2 22h-6.3l-4.9-7.4L5.6 22H2.5l7.3-8.3L1.8 2h6.4l4.4 6.8L18.9 2Zm-1.1 18h1.8L7.2 3.9H5.3Z"
+                d="M12 2.5a1 1 0 0 1 1 1v8.1l2.6-2.6a1 1 0 1 1 1.4 1.4l-4.3 4.3a1 1 0 0 1-1.4 0L7 10.4a1 1 0 0 1 1.4-1.4l2.6 2.6V3.5a1 1 0 0 1 1-1ZM5 15.5a1 1 0 0 1 1 1v2h12v-2a1 1 0 1 1 2 0v2.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19v-2.5a1 1 0 0 1 1-1Z"
                 fill="currentColor"
               />
             </svg>
+            <span>{{ uiText.install }}</span>
+          </a>
+          <a v-if="plugin.Website" :href="plugin.Website" target="_blank" rel="noreferrer" class="secondary-action">
+            <svg viewBox="0 0 24 24" aria-hidden="true" class="action-icon">
+              <path
+                d="M14 3h6a1 1 0 0 1 1 1v6a1 1 0 1 1-2 0V6.4l-8.8 8.8a1 1 0 0 1-1.4-1.4L17.6 5H14a1 1 0 1 1 0-2ZM6 5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4a1 1 0 1 0-2 0v4H6V7h4a1 1 0 1 0 0-2H6Z"
+                fill="currentColor"
+              />
+            </svg>
+            <span>{{ uiText.source }}</span>
+          </a>
+          <a v-if="shareHref" :href="shareHref" target="_blank" rel="noopener noreferrer" class="secondary-action share-action">
+            <svg viewBox="0 0 24 24" aria-hidden="true" class="action-icon">
+              <path d="M18.9 2H22l-6.8 7.8L23.2 22h-6.3l-4.9-7.4L5.6 22H2.5l7.3-8.3L1.8 2h6.4l4.4 6.8L18.9 2Zm-1.1 18h1.8L7.2 3.9H5.3Z" fill="currentColor" />
+            </svg>
             <span>{{ uiText.share }}</span>
-          </button>
+          </a>
         </div>
       </div>
 
@@ -529,7 +538,7 @@ onUnmounted(() => {
   color: var(--vp-c-text-1);
 }
 
-.share-icon {
+.action-icon {
   width: 15px;
   height: 15px;
   flex-shrink: 0;
