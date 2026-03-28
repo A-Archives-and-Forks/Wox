@@ -139,6 +139,14 @@ class WoxLauncherController extends GetxController {
   // overwrites it, so that we can restore the main query after hiding.
   PlainQuery? queryBeforeTemporaryQuery;
   String? queryBeforeTemporaryQuerySource;
+  double? windowHeightBeforeTemporaryQuery;
+  // After restoring the preserved main query we create a new queryId, so the
+  // original temporary-query snapshot above is no longer enough to identify
+  // which follow-up ShowApp should reuse the old expanded height. These fields
+  // keep that one-shot "restored query is still waiting for results" context
+  // until the matching query results arrive.
+  String? pendingRestoredQueryId;
+  double? pendingRestoredQueryWindowHeight;
 
   var positionBeforeOpenSetting = const Offset(0, 0);
   // Whether settings was opened when window was hidden (e.g., from tray)
@@ -216,6 +224,9 @@ class WoxLauncherController extends GetxController {
     onQueryBoxTextChanged('');
     queryBeforeTemporaryQuery = null;
     queryBeforeTemporaryQuerySource = null;
+    windowHeightBeforeTemporaryQuery = null;
+    pendingRestoredQueryId = null;
+    pendingRestoredQueryWindowHeight = null;
     isGridLayout.value = false;
     clearQueryResultsTimer.cancel();
     quickSelectTimer?.cancel();
@@ -747,6 +758,8 @@ class WoxLauncherController extends GetxController {
 
     // Handle start page when the current show action does not carry a query into the launcher.
     if (!shouldPreserveQueryOnShow) {
+      pendingRestoredQueryId = null;
+      pendingRestoredQueryWindowHeight = null;
       if (lastStartPage == WoxStartPageEnum.WOX_START_PAGE_MRU.code) {
         queryMRU(traceId);
       } else {
@@ -869,6 +882,7 @@ class WoxLauncherController extends GetxController {
       queryBeforeTemporaryQuery = cloneQuery(query);
     }
     queryBeforeTemporaryQuerySource = showSource;
+    windowHeightBeforeTemporaryQuery = calculateWindowHeight();
 
     Logger.instance.debug(traceId, "preserve current query before temporary query($showSource): ${queryBeforeTemporaryQuery!.queryText}");
   }
@@ -876,14 +890,21 @@ class WoxLauncherController extends GetxController {
   Future<void> restoreQueryAfterTemporaryQuery(String traceId) async {
     final preservedQuery = queryBeforeTemporaryQuery;
     final preservedSource = queryBeforeTemporaryQuerySource;
+    final preservedWindowHeight = windowHeightBeforeTemporaryQuery;
     queryBeforeTemporaryQuery = null;
     queryBeforeTemporaryQuerySource = null;
+    windowHeightBeforeTemporaryQuery = null;
     if (preservedQuery == null) {
       return;
     }
 
     final restoredQuery = cloneQuery(preservedQuery, queryId: const UuidV4().generate());
-    Logger.instance.debug(traceId, "restore preserved query after temporary query(${preservedSource ?? "unknown"}): ${restoredQuery.queryText}");
+    pendingRestoredQueryId = restoredQuery.queryId;
+    pendingRestoredQueryWindowHeight = preservedWindowHeight;
+    Logger.instance.debug(
+      traceId,
+      "restore preserved query after temporary query(${preservedSource ?? "unknown"}): ${restoredQuery.queryText}, preservedWindowHeight=$preservedWindowHeight",
+    );
     await onQueryChanged(traceId, restoredQuery, "restore query after temporary query");
   }
 
@@ -1895,6 +1916,11 @@ class WoxLauncherController extends GetxController {
     if (!isIncomingQueryInjected && activeResultViewController.items.isNotEmpty) {
       return calculateWindowHeight();
     }
+
+    if (!isIncomingQueryInjected && pendingRestoredQueryId == currentQuery.value.queryId && pendingRestoredQueryWindowHeight != null) {
+      return math.max(calculateWindowHeight(overrideItemCount: 0), pendingRestoredQueryWindowHeight!);
+    }
+
     return calculateWindowHeight(overrideItemCount: 0);
   }
 
@@ -2129,6 +2155,11 @@ class WoxLauncherController extends GetxController {
 
     if (results.isEmpty) {
       return true;
+    }
+
+    if (pendingRestoredQueryId == queryId) {
+      pendingRestoredQueryId = null;
+      pendingRestoredQueryWindowHeight = null;
     }
 
     for (var result in results) {

@@ -1,6 +1,6 @@
+import ApplicationServices
 import Cocoa
 import FlutterMacOS
-import ApplicationServices
 
 @main
 class AppDelegate: FlutterAppDelegate {
@@ -143,7 +143,9 @@ class AppDelegate: FlutterAppDelegate {
 
     let eventTypes = mouseEventTypes(for: mouseButton)
     let eventType = isDown ? eventTypes.down : eventTypes.up
-    guard let event = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: eventType, mouseCursorPosition: currentMouseLocation(), mouseButton: mouseButton) else {
+    guard
+      let event = CGEvent(mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: eventType, mouseCursorPosition: currentMouseLocation(), mouseButton: mouseButton)
+    else {
       return FlutterError(code: "INPUT_ERROR", message: "Failed to create macOS mouse event", details: button)
     }
 
@@ -375,8 +377,13 @@ class AppDelegate: FlutterAppDelegate {
           result(["x": x, "y": y])
 
         case "getSize":
-          let frame = window.frame
-          result(["width": frame.width, "height": frame.height])
+          // Keep getSize consistent with setSize/setBounds, which both accept
+          // content rect dimensions from Dart. Returning frame size here makes
+          // the controller think the window is taller than the actual Flutter
+          // content area on macOS, which can skip needed resizes and cause
+          // transient RenderFlex overflows in smoke tests.
+          let contentRect = window.contentRect(forFrameRect: window.frame)
+          result(["width": contentRect.width, "height": contentRect.height])
 
         case "setPosition":
           if let args = call.arguments as? [String: Any],

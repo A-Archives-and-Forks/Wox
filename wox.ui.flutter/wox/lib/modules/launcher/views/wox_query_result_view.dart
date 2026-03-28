@@ -198,18 +198,26 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
 
   @override
   Widget build(BuildContext context) {
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxHeight: controller.getMaxResultContainerHeight()),
-      child: Obx(
-        () => Stack(
-          fit: controller.isShowActionPanel.value || controller.isShowPreviewPanel.value ? StackFit.expand : StackFit.loose,
-          children: [
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [getResultView(), getPreviewView()]),
-            getActionPanelView(),
-            getActionFormView(),
-          ],
-        ),
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final boundedHeight = constraints.hasBoundedHeight ? constraints.maxHeight : null;
+        return SizedBox(
+          height: boundedHeight,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: controller.getMaxResultContainerHeight()),
+            child: Obx(
+              () => Stack(
+                fit: controller.isShowActionPanel.value || controller.isShowPreviewPanel.value ? StackFit.expand : StackFit.loose,
+                children: [
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [getResultView(), getPreviewView()]),
+                  getActionPanelView(),
+                  getActionFormView(),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

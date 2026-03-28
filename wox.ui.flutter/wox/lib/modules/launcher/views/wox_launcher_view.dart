@@ -35,11 +35,21 @@ class WoxLauncherView extends GetView<WoxLauncherController> {
 
       Widget content = resultView;
       if (isQueryBoxVisible) {
-        content = Column(
+        final queryBoxHeight = controller.getQueryBoxInputHeight();
+        content = Stack(
           children: [
-            if (controller.isQueryBoxAtBottom.value) const Expanded(child: WoxQueryResultView()),
-            queryBoxView,
-            if (!controller.isQueryBoxAtBottom.value) const Expanded(child: WoxQueryResultView()),
+            if (controller.isQueryBoxAtBottom.value)
+              Positioned.fill(bottom: queryBoxHeight, child: const WoxQueryResultView())
+            else
+              Positioned.fill(top: queryBoxHeight, child: const WoxQueryResultView()),
+            Positioned(
+              top: controller.isQueryBoxAtBottom.value ? null : 0,
+              bottom: controller.isQueryBoxAtBottom.value ? 0 : null,
+              left: 0,
+              right: 0,
+              height: queryBoxHeight,
+              child: queryBoxView,
+            ),
           ],
         );
       }
@@ -66,7 +76,17 @@ class WoxLauncherView extends GetView<WoxLauncherController> {
             child: Column(
               children: [
                 if (!isQueryBoxVisible) const Offstage(offstage: true, child: WoxQueryBoxView()),
-                Flexible(fit: isQueryBoxVisible ? FlexFit.tight : FlexFit.loose, child: Padding(padding: contentPadding, child: content)),
+                Flexible(
+                  fit: isQueryBoxVisible ? FlexFit.tight : FlexFit.loose,
+                  child: Padding(
+                    padding: contentPadding,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        return SizedBox(width: constraints.maxWidth, height: constraints.maxHeight, child: content);
+                      },
+                    ),
+                  ),
+                ),
                 if (controller.isShowToolbar && !controller.isToolbarHiddenForce.value) const SizedBox(height: 40, child: WoxQueryToolbarView()),
               ],
             ),
