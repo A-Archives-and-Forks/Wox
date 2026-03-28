@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -8,6 +10,7 @@ import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/entity/wox_preview_webview_data.dart';
+import 'package:wox/utils/windows/window_manager.dart';
 import 'package:wox/utils/webview/wox_webview_util.dart';
 import 'package:wox/utils/webview/wox_webview_session.dart';
 
@@ -21,11 +24,21 @@ class WoxWebViewPreview extends StatefulWidget {
 }
 
 class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
+  static const double _toolbarBottomSpacing = 30;
+  static const double _toolbarHeight = 36;
+  static const double _toolbarWidth = 176;
+  static const double _toolbarTriggerWidth = 224;
+  static const double _toolbarTriggerHeight = 72;
+  static const Duration _toolbarAnimationDuration = Duration(milliseconds: 180);
+  static const Duration _toolbarAutoHideDelay = Duration(milliseconds: 1200);
+
   Future<WoxWebViewSession?>? _windowsSessionFuture;
   WoxWebViewSession? _session;
   StreamSubscription<WoxWebViewSessionAction>? _sessionActionSubscription;
   String? _windowsErrorMessage;
   final launcherController = Get.find<WoxLauncherController>();
+  Timer? _toolbarHideTimer;
+  bool _isToolbarVisible = true;
 
   WoxPreviewWebviewData get webviewData {
     return WoxPreviewWebviewData.fromPreviewData(widget.previewData);
@@ -35,6 +48,7 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
   void initState() {
     super.initState();
     _refreshWindowsSession();
+    _showToolbarTemporarily();
   }
 
   @override
@@ -43,11 +57,13 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
     if (oldWidget.previewData != widget.previewData) {
       unawaited(_releaseCurrentSession());
       _refreshWindowsSession();
+      _showToolbarTemporarily();
     }
   }
 
   @override
   void dispose() {
+    _toolbarHideTimer?.cancel();
     unawaited(_releaseCurrentSession());
     super.dispose();
   }
@@ -124,9 +140,191 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
           return SelectableText("$message\nURL: ${preview.url}");
         }
 
-        return session.buildWidget();
+        return _buildPreviewWithToolbar(child: session.buildWidget(), navigationState: session.navigationState);
       },
     );
+  }
+
+  Widget _buildPreviewWithToolbar({required Widget child, ValueListenable<WoxWebViewNavigationState>? navigationState}) {
+    return Stack(
+      children: [
+        Positioned.fill(child: child),
+        _buildToolbarTrigger(),
+        if (navigationState == null)
+          _buildToolbar()
+        else
+          ValueListenableBuilder<WoxWebViewNavigationState>(
+            valueListenable: navigationState,
+            builder: (context, state, _) {
+              return _buildToolbar(navigationState: state);
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _buildToolbarTrigger() {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: _toolbarBottomSpacing - 18,
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: MouseRegion(
+          onEnter: (_) => _showToolbarTemporarily(),
+          onExit: (_) => _scheduleToolbarHide(),
+          child: const SizedBox(width: _toolbarTriggerWidth, height: _toolbarTriggerHeight),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToolbar({WoxWebViewNavigationState? navigationState}) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final iconColor = isDark ? Colors.black.withValues(alpha: 0.82) : Colors.black.withValues(alpha: 0.72);
+    final backgroundColor = Colors.white.withValues(alpha: isDark ? 0.58 : 0.72);
+    final borderColor = Colors.white.withValues(alpha: isDark ? 0.28 : 0.46);
+    final shadowColor = Colors.black.withValues(alpha: isDark ? 0.22 : 0.12);
+
+    return Positioned(
+      bottom: _toolbarBottomSpacing,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        ignoring: !_isToolbarVisible,
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: MouseRegion(
+            onEnter: (_) => _showToolbar(keepVisible: true),
+            onExit: (_) => _scheduleToolbarHide(),
+            child: AnimatedOpacity(
+              duration: _toolbarAnimationDuration,
+              curve: Curves.easeOutCubic,
+              opacity: _isToolbarVisible ? 1 : 0,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(_toolbarHeight / 2),
+                child: BackdropFilter(
+                  filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: backgroundColor,
+                      borderRadius: BorderRadius.circular(_toolbarHeight / 2),
+                      border: Border.all(color: borderColor),
+                      boxShadow: [BoxShadow(color: shadowColor, blurRadius: 20, offset: const Offset(0, 8))],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      child: SizedBox(
+                        width: _toolbarWidth,
+                        child: Row(
+                          children: [
+                            Expanded(child: _buildToolbarDragHandle()),
+                            _buildToolbarButton(
+                              icon: Icons.arrow_back_rounded,
+                              tooltip: launcherController.tr("ui_action_webview_go_back"),
+                              iconColor: iconColor,
+                              enabled: navigationState?.canGoBack,
+                              onPressed: _goBack,
+                            ),
+                            _buildToolbarButton(
+                              icon: Icons.refresh_rounded,
+                              tooltip: launcherController.tr("ui_action_webview_refresh"),
+                              iconColor: iconColor,
+                              onPressed: _refresh,
+                            ),
+                            _buildToolbarButton(
+                              icon: Icons.arrow_forward_rounded,
+                              tooltip: launcherController.tr("ui_action_webview_go_forward"),
+                              iconColor: iconColor,
+                              enabled: navigationState?.canGoForward,
+                              onPressed: _goForward,
+                            ),
+                            Expanded(child: _buildToolbarDragHandle()),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToolbarButton({required IconData icon, required String tooltip, required Color iconColor, required VoidCallback onPressed, bool? enabled}) {
+    final isEnabled = enabled ?? true;
+
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: isEnabled ? onPressed : null,
+      icon: Icon(icon),
+      iconSize: 20,
+      color: iconColor,
+      disabledColor: iconColor.withValues(alpha: 0.28),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+      splashRadius: 16,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _buildToolbarDragHandle() {
+    return MouseRegion(
+      cursor: SystemMouseCursors.move,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onPanStart: (_) {
+          windowManager.startDragging();
+        },
+        child: const SizedBox(height: 32),
+      ),
+    );
+  }
+
+  void _showToolbarTemporarily() {
+    _showToolbar();
+  }
+
+  void _showToolbar({bool keepVisible = false}) {
+    _toolbarHideTimer?.cancel();
+
+    if (!_isToolbarVisible && mounted) {
+      setState(() {
+        _isToolbarVisible = true;
+      });
+    }
+
+    if (!keepVisible) {
+      _scheduleToolbarHide();
+    }
+  }
+
+  void _scheduleToolbarHide({Duration delay = _toolbarAutoHideDelay}) {
+    _toolbarHideTimer?.cancel();
+    _toolbarHideTimer = Timer(delay, () {
+      if (!mounted || !_isToolbarVisible) {
+        return;
+      }
+
+      setState(() {
+        _isToolbarVisible = false;
+      });
+    });
+  }
+
+  void _refresh() {
+    unawaited(WoxWebViewUtil.refresh());
+  }
+
+  void _goBack() {
+    unawaited(WoxWebViewUtil.goBack());
+  }
+
+  void _goForward() {
+    unawaited(WoxWebViewUtil.goForward());
   }
 
   @override
@@ -138,7 +336,7 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
     }
 
     if (Platform.isMacOS) {
-      return SizedBox.expand(
+      return _buildPreviewWithToolbar(
         child: AppKitView(key: ValueKey(widget.previewData), viewType: "wox/webview_preview", creationParams: preview.toJson(), creationParamsCodec: const StandardMessageCodec()),
       );
     }

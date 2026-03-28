@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:wox/entity/wox_preview_webview_data.dart';
 import 'package:wox/utils/webview/windows/webview.dart';
@@ -15,9 +16,11 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
 
   final WebviewController controller = WebviewController();
   final StreamController<WoxWebViewSessionAction> _actions = StreamController<WoxWebViewSessionAction>.broadcast();
+  final ValueNotifier<WoxWebViewNavigationState> _navigationState = ValueNotifier(const WoxWebViewNavigationState());
 
   Future<void>? _initialization;
   StreamSubscription<AcceleratorKeyPressedEvent>? _acceleratorKeySubscription;
+  StreamSubscription<HistoryChanged>? _historyChangedSubscription;
   String _currentUrl = "";
   String _currentCss = "";
   String? _currentScriptId;
@@ -29,6 +32,9 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
 
   @override
   Stream<WoxWebViewSessionAction> get actions => _actions.stream;
+
+  @override
+  ValueListenable<WoxWebViewNavigationState> get navigationState => _navigationState;
 
   @override
   Widget buildWidget() => SizedBox.expand(child: Webview(controller));
@@ -72,7 +78,9 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
 
     _disposed = true;
     await _acceleratorKeySubscription?.cancel();
+    await _historyChangedSubscription?.cancel();
     await _actions.close();
+    _navigationState.dispose();
     await controller.dispose();
   }
 
@@ -87,6 +95,9 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
       } else if (isEscape) {
         _actions.add(WoxWebViewSessionAction.focusQueryBox);
       }
+    });
+    _historyChangedSubscription = controller.historyChanged.listen((event) {
+      _navigationState.value = WoxWebViewNavigationState(canGoBack: event.canGoBack, canGoForward: event.canGoForward);
     });
     await controller.setBackgroundColor(Colors.transparent);
     await controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.sameWindow);
