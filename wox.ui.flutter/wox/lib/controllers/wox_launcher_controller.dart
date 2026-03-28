@@ -135,8 +135,10 @@ class WoxLauncherController extends GetxController {
   double forceWindowWidth = 0;
   int forceMaxResultCount = 0;
   var forceHideOnBlur = false;
-  // Used to store the current query before it is overwritten by a tray query, so that we can restore it when the app is hidden again.
-  PlainQuery? queryBeforeTrayQuery;
+  // Used to store the current main query before a temporary query source (tray query / selection query / query hotkey query)
+  // overwrites it, so that we can restore the main query after hiding.
+  PlainQuery? queryBeforeTemporaryQuery;
+  String? queryBeforeTemporaryQuerySource;
 
   var positionBeforeOpenSetting = const Offset(0, 0);
   // Whether settings was opened when window was hidden (e.g., from tray)
@@ -212,6 +214,8 @@ class WoxLauncherController extends GetxController {
 
     queryBoxTextFieldController.clear();
     onQueryBoxTextChanged('');
+    queryBeforeTemporaryQuery = null;
+    queryBeforeTemporaryQuerySource = null;
     isGridLayout.value = false;
     clearQueryResultsTimer.cancel();
     quickSelectTimer?.cancel();
@@ -847,31 +851,40 @@ class WoxLauncherController extends GetxController {
     );
   }
 
-  void preserveQueryBeforeTrayQuery(String traceId) {
-    if (queryBeforeTrayQuery != null) {
+  bool shouldRestoreQueryAfterHide(String showSource) {
+    return showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_TRAY_QUERY.code ||
+        showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_QUERY_HOTKEY.code ||
+        showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_SELECTION.code;
+  }
+
+  void preserveQueryBeforeTemporaryQuery(String traceId, String showSource) {
+    if (queryBeforeTemporaryQuery != null) {
       return;
     }
 
     final query = currentQuery.value;
     if (query.isEmpty) {
-      queryBeforeTrayQuery = PlainQuery.emptyInput();
+      queryBeforeTemporaryQuery = PlainQuery.emptyInput();
     } else {
-      queryBeforeTrayQuery = cloneQuery(query);
+      queryBeforeTemporaryQuery = cloneQuery(query);
     }
+    queryBeforeTemporaryQuerySource = showSource;
 
-    Logger.instance.debug(traceId, "preserve current query before tray query: ${queryBeforeTrayQuery!.queryText}");
+    Logger.instance.debug(traceId, "preserve current query before temporary query($showSource): ${queryBeforeTemporaryQuery!.queryText}");
   }
 
-  Future<void> restoreQueryAfterTrayQuery(String traceId) async {
-    final preservedQuery = queryBeforeTrayQuery;
-    queryBeforeTrayQuery = null;
+  Future<void> restoreQueryAfterTemporaryQuery(String traceId) async {
+    final preservedQuery = queryBeforeTemporaryQuery;
+    final preservedSource = queryBeforeTemporaryQuerySource;
+    queryBeforeTemporaryQuery = null;
+    queryBeforeTemporaryQuerySource = null;
     if (preservedQuery == null) {
       return;
     }
 
     final restoredQuery = cloneQuery(preservedQuery, queryId: const UuidV4().generate());
-    Logger.instance.debug(traceId, "restore preserved query after tray query: ${restoredQuery.queryText}");
-    await onQueryChanged(traceId, restoredQuery, "restore query after tray query");
+    Logger.instance.debug(traceId, "restore preserved query after temporary query(${preservedSource ?? "unknown"}): ${restoredQuery.queryText}");
+    await onQueryChanged(traceId, restoredQuery, "restore query after temporary query");
   }
 
   Future<void> hideApp(String traceId) async {
@@ -902,7 +915,7 @@ class WoxLauncherController extends GetxController {
     resetLayoutState(traceId);
 
     await WoxApi.instance.onHide(traceId);
-    await restoreQueryAfterTrayQuery(traceId);
+    await restoreQueryAfterTemporaryQuery(traceId);
   }
 
   void saveWindowPositionIfNeeded() {
@@ -1436,12 +1449,10 @@ class WoxLauncherController extends GetxController {
       showApp(msg.traceId, ShowAppParams.fromJson(msg.data));
       responseWoxWebsocketRequest(msg, true, null);
     } else if (msg.method == "ChangeQuery") {
-      // If the show source is tray query, it means the query change is triggered by the tray icon right click menu,
-      // in that case we need to preserve the current query before changing to the new query, and restore it when the app is hidden again.
-      // This is because the tray query is usually a temporary query that only used for quick actions, and user usually want to keep their original query after using the tray query.
       final showSource = msg.data['ShowSource'] as String? ?? WoxShowSourceEnum.WOX_SHOW_SOURCE_DEFAULT.code;
-      if (showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_TRAY_QUERY.code) {
-        preserveQueryBeforeTrayQuery(msg.traceId);
+      if (shouldRestoreQueryAfterHide(showSource)) {
+        // Temporary query sources such as tray query, query hotkey, or selection query should not replace the main query session permanently.
+        preserveQueryBeforeTemporaryQuery(msg.traceId, showSource);
       }
       await onQueryChanged(msg.traceId, PlainQuery.fromJson(msg.data), "receive change query from wox", moveCursorToEnd: true);
       focusQueryBox();

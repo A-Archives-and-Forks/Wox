@@ -193,6 +193,27 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.isToolbarHiddenForce.value, isTrue);
     });
 
+    testWidgets('P0-SMK-11A: Continue launch restores the main query after a query hotkey session', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_CONTINUE.code);
+
+      await queryAndWaitForResults(tester, controller, 'main query xyz123');
+      expect(controller.queryBoxTextFieldController.text, equals('main query xyz123'));
+
+      await hideLauncherByEscape(tester, controller);
+
+      await triggerTestQueryHotkey(tester, 'hotkey query abc456');
+      await waitForQueryBoxText(tester, controller, 'hotkey query abc456');
+      expect(controller.queryBoxTextFieldController.text, equals('hotkey query abc456'));
+
+      await hideLauncherByEscape(tester, controller);
+
+      await triggerBackendShowApp(tester);
+      await waitForQueryBoxText(tester, controller, 'main query xyz123');
+
+      expect(controller.queryBoxTextFieldController.text, equals('main query xyz123'));
+    });
+
     testWidgets('P0-SMK-12: Action panel opens with Alt+J', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
 

@@ -304,6 +304,7 @@ func (m *Manager) triggerSelectionQuery(ctx context.Context, selected selection.
 
 func (m *Manager) triggerQueryHotkey(ctx context.Context, queryHotkey setting.QueryHotkey) error {
 	queryCtx := util.WithCoreSessionContext(ctx)
+	queryCtx = util.WithShowSourceContext(queryCtx, string(common.ShowSourceQueryHotkey))
 	query := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, queryHotkey.Query)
 	plainQuery := common.PlainQuery{
 		QueryId:   uuid.NewString(),
