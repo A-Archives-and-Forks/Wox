@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"runtime/pprof"
 	"slices"
@@ -36,6 +37,11 @@ type SysCommand struct {
 	PreventHideAfterAction bool
 	Action                 func(ctx context.Context, actionContext plugin.ActionContext)
 }
+
+const (
+	sysCommandIDContextKey        = "commandId"
+	sysCommandConfirmedContextKey = "confirmed"
+)
 
 func (r *SysPlugin) GetMetadata() plugin.Metadata {
 	return plugin.Metadata{
@@ -101,6 +107,24 @@ func (r *SysPlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 			Icon:  common.ExitIcon,
 			Action: func(ctx context.Context, actionContext plugin.ActionContext) {
 				ui.GetUIManager().ExitApp(ctx)
+			},
+		},
+		{
+			ID:                     "shutdown_computer",
+			Title:                  "i18n:plugin_sys_shutdown_computer",
+			Icon:                   common.ExitIcon,
+			PreventHideAfterAction: true,
+			Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+				r.handleSystemPowerCommand(ctx, actionContext, "shutdown_computer")
+			},
+		},
+		{
+			ID:                     "restart_computer",
+			Title:                  "i18n:plugin_sys_restart_computer",
+			Icon:                   common.UpdateIcon,
+			PreventHideAfterAction: true,
+			Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+				r.handleSystemPowerCommand(ctx, actionContext, "restart_computer")
 			},
 		},
 		{
@@ -246,15 +270,7 @@ func (r *SysPlugin) Query(ctx context.Context, query plugin.Query) (results []pl
 				SubTitle: command.SubTitle,
 				Score:    titleScore,
 				Icon:     command.Icon,
-				Actions: []plugin.QueryResultAction{
-					{
-						Name:                   "i18n:plugin_sys_execute",
-						Icon:                   common.ExecuteRunIcon,
-						Action:                 command.Action,
-						PreventHideAfterAction: command.PreventHideAfterAction,
-						ContextData:            common.ContextData{"commandId": command.ID},
-					},
-				},
+				Actions:  []plugin.QueryResultAction{r.buildCommandAction(command, common.ContextData{sysCommandIDContextKey: command.ID})},
 			})
 		}
 	}
@@ -319,15 +335,98 @@ func (r *SysPlugin) handleMRURestore(ctx context.Context, mruData plugin.MRUData
 		Title:    foundCommand.Title,
 		SubTitle: foundCommand.SubTitle,
 		Icon:     foundCommand.Icon,
-		Actions: []plugin.QueryResultAction{
-			{
-				Name:                   "i18n:plugin_sys_execute",
-				Action:                 foundCommand.Action,
-				PreventHideAfterAction: foundCommand.PreventHideAfterAction,
-				ContextData:            mruData.ContextData,
-			},
-		},
+		Actions:  []plugin.QueryResultAction{r.buildCommandAction(*foundCommand, mruData.ContextData)},
 	}
 
 	return result, nil
+}
+
+func (r *SysPlugin) buildCommandAction(command SysCommand, contextData common.ContextData) plugin.QueryResultAction {
+	return plugin.QueryResultAction{
+		Name:                   "i18n:plugin_sys_execute",
+		Icon:                   common.ExecuteRunIcon,
+		Action:                 command.Action,
+		PreventHideAfterAction: command.PreventHideAfterAction,
+		ContextData:            contextData,
+	}
+}
+
+func (r *SysPlugin) handleSystemPowerCommand(ctx context.Context, actionContext plugin.ActionContext, commandID string) {
+	if actionContext.ContextData[sysCommandConfirmedContextKey] == "true" {
+		r.executeSystemPowerCommand(ctx, commandID)
+		return
+	}
+
+	updatable := r.api.GetUpdatableResult(ctx, actionContext.ResultId)
+	if updatable == nil {
+		return
+	}
+
+	titleKey, subtitleKey := r.getSystemPowerConfirmationText(commandID)
+	updatedTitle := titleKey
+	updatedSubtitle := subtitleKey
+	updatable.Title = &updatedTitle
+	updatable.SubTitle = &updatedSubtitle
+
+	if updatable.Actions != nil {
+		actions := *updatable.Actions
+		for i := range actions {
+			if actions[i].Id != actionContext.ResultActionId {
+				continue
+			}
+			if actions[i].ContextData == nil {
+				actions[i].ContextData = common.ContextData{}
+			}
+			actions[i].ContextData[sysCommandIDContextKey] = commandID
+			actions[i].ContextData[sysCommandConfirmedContextKey] = "true"
+			actions[i].PreventHideAfterAction = true
+		}
+		updatable.Actions = &actions
+	}
+
+	r.api.UpdateResult(ctx, *updatable)
+}
+
+func (r *SysPlugin) getSystemPowerConfirmationText(commandID string) (string, string) {
+	if commandID == "restart_computer" {
+		return "i18n:plugin_sys_restart_confirm_title", "i18n:plugin_sys_restart_confirm_subtitle"
+	}
+	return "i18n:plugin_sys_shutdown_confirm_title", "i18n:plugin_sys_shutdown_confirm_subtitle"
+}
+
+func (r *SysPlugin) executeSystemPowerCommand(ctx context.Context, commandID string) {
+	var err error
+
+	switch commandID {
+	case "restart_computer":
+		_, err = runRestartCommand()
+	default:
+		_, err = runShutdownCommand()
+	}
+
+	if err != nil {
+		r.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to execute %s: %s", commandID, err.Error()))
+		r.api.Notify(ctx, err.Error())
+		return
+	}
+}
+
+func runShutdownCommand() (*exec.Cmd, error) {
+	if util.IsMacOS() {
+		return shell.Run("osascript", "-e", `tell application "System Events" to shut down`)
+	}
+	if util.IsWindows() {
+		return shell.Run("shutdown.exe", "/s", "/t", "0")
+	}
+	return shell.Run("systemctl", "poweroff")
+}
+
+func runRestartCommand() (*exec.Cmd, error) {
+	if util.IsMacOS() {
+		return shell.Run("osascript", "-e", `tell application "System Events" to restart`)
+	}
+	if util.IsWindows() {
+		return shell.Run("shutdown.exe", "/r", "/t", "0")
+	}
+	return shell.Run("systemctl", "reboot")
 }
