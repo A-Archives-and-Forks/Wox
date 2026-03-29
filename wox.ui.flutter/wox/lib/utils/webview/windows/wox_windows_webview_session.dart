@@ -21,6 +21,7 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
   Future<void>? _initialization;
   StreamSubscription<AcceleratorKeyPressedEvent>? _acceleratorKeySubscription;
   StreamSubscription<HistoryChanged>? _historyChangedSubscription;
+  StreamSubscription<dynamic>? _webMessageSubscription;
   String _currentUrl = "";
   String _currentCss = "";
   String? _currentScriptId;
@@ -79,6 +80,7 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
     _disposed = true;
     await _acceleratorKeySubscription?.cancel();
     await _historyChangedSubscription?.cancel();
+    await _webMessageSubscription?.cancel();
     await _actions.close();
     _navigationState.dispose();
     await controller.dispose();
@@ -86,18 +88,25 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
 
   Future<void> _initialize() async {
     await controller.initialize();
+    await controller.addScriptToExecuteOnDocumentCreated(WoxWebViewSupport.buildUnhandledEscapeScript(postMessageExpression: "window.chrome.webview.postMessage"));
     _acceleratorKeySubscription = controller.acceleratorKeyPressed.listen((event) {
       final isAltJ = event.keyEventKind == 2 && event.virtualKey == 0x4A;
-      final isEscape = event.keyEventKind == 0 && event.virtualKey == 0x1B;
 
       if (isAltJ) {
         _actions.add(WoxWebViewSessionAction.toggleActionPanel);
-      } else if (isEscape) {
-        _actions.add(WoxWebViewSessionAction.focusQueryBox);
       }
     });
     _historyChangedSubscription = controller.historyChanged.listen((event) {
       _navigationState.value = WoxWebViewNavigationState(canGoBack: event.canGoBack, canGoForward: event.canGoForward);
+    });
+    _webMessageSubscription = controller.webMessage.listen((message) {
+      if (message is! Map) {
+        return;
+      }
+
+      if (message["type"] == WoxWebViewSupport.unhandledEscapeMessageType) {
+        _actions.add(WoxWebViewSessionAction.fallbackEscape);
+      }
     });
     await controller.setBackgroundColor(Colors.transparent);
     await controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.sameWindow);

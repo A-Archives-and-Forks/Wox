@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
-enum WoxWebViewSessionAction { toggleActionPanel, focusQueryBox }
+enum WoxWebViewSessionAction { toggleActionPanel, fallbackEscape }
 
 class WoxWebViewNavigationState {
   final bool canGoBack;

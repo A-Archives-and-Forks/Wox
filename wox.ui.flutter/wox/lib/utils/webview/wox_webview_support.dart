@@ -1,5 +1,6 @@
 class WoxWebViewSupport {
   static const String mobileUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
+  static const String unhandledEscapeMessageType = "woxUnhandledEscape";
 
   static String buildInjectCssScript(String css) {
     final cssLiteral = _encodeJsString(css);
@@ -18,6 +19,33 @@ class WoxWebViewSupport {
     (document.head || document.documentElement).appendChild(style);
   }
   style.textContent = css;
+})();
+""";
+  }
+
+  static String buildUnhandledEscapeScript({required String postMessageExpression}) {
+    final messageTypeLiteral = _encodeJsString(unhandledEscapeMessageType);
+    return """
+(() => {
+  if (window.__woxUnhandledEscapeInstalled__) {
+    return;
+  }
+
+  window.__woxUnhandledEscapeInstalled__ = true;
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || event.repeat) {
+      return;
+    }
+
+    setTimeout(() => {
+      if (event.defaultPrevented || event.cancelBubble) {
+        return;
+      }
+
+      $postMessageExpression({ type: $messageTypeLiteral });
+    }, 0);
+  }, true);
 })();
 """;
   }

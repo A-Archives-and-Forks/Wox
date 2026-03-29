@@ -4,6 +4,8 @@ import WebKit
 
 private let mobileUserAgent =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
+private let webViewPreviewMessageHandlerName = "woxWebViewPreview"
+private let unhandledEscapeMessageType = "woxUnhandledEscape"
 
 private enum WoxWebViewSessionPolicy {
   case persistent
@@ -85,10 +87,15 @@ private enum WoxWebViewStore {
 
 class WoxWebViewPreviewPlugin: NSObject {
   private static weak var activeWebView: WKWebView?
+  private static var methodChannel: FlutterMethodChannel?
 
   static func register(with registrar: FlutterPluginRegistrar) {
     let factory = WoxWebViewPreviewFactory()
     registrar.register(factory, withId: "wox/webview_preview")
+  }
+
+  static func setMethodChannel(_ channel: FlutterMethodChannel) {
+    methodChannel = channel
   }
 
   static func setActiveWebView(_ webView: WKWebView) {
@@ -135,6 +142,30 @@ class WoxWebViewPreviewPlugin: NSObject {
     activeWebView.goForward()
     return true
   }
+
+  static func notifyUnhandledEscape() {
+    methodChannel?.invokeMethod("unhandledEscape", arguments: nil)
+  }
+}
+
+private final class WoxWebViewScriptMessageHandler: NSObject, WKScriptMessageHandler {
+  static let shared = WoxWebViewScriptMessageHandler()
+
+  func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+    guard message.name == webViewPreviewMessageHandlerName else {
+      return
+    }
+
+    guard
+      let body = message.body as? [String: Any],
+      let type = body["type"] as? String,
+      type == unhandledEscapeMessageType
+    else {
+      return
+    }
+
+    WoxWebViewPreviewPlugin.notifyUnhandledEscape()
+  }
 }
 
 class WoxWebViewPreviewFactory: NSObject, FlutterPlatformViewFactory {
@@ -179,6 +210,7 @@ final class WoxWebViewPreviewNativeView: NSView, WKNavigationDelegate, WKUIDeleg
 
   fileprivate static func makeConfiguration(sessionPolicy: WoxWebViewSessionPolicy, injectCss: String?) -> WKWebViewConfiguration {
     let configuration = WKWebViewConfiguration()
+    let userContentController = WKUserContentController()
 
     switch sessionPolicy {
     case .persistent:
@@ -186,8 +218,16 @@ final class WoxWebViewPreviewNativeView: NSView, WKNavigationDelegate, WKUIDeleg
       configuration.websiteDataStore = WKWebsiteDataStore.default()
     }
 
+    userContentController.add(WoxWebViewScriptMessageHandler.shared, name: webViewPreviewMessageHandlerName)
+    userContentController.addUserScript(
+      WKUserScript(
+        source: makeUnhandledEscapeScript(),
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: true
+      )
+    )
+
     if let injectCss, !injectCss.isEmpty {
-      let userContentController = WKUserContentController()
       userContentController.addUserScript(
         WKUserScript(
           source: makeInjectCssScript(css: injectCss),
@@ -195,10 +235,36 @@ final class WoxWebViewPreviewNativeView: NSView, WKNavigationDelegate, WKUIDeleg
           forMainFrameOnly: true
         )
       )
-      configuration.userContentController = userContentController
     }
 
+    configuration.userContentController = userContentController
     return configuration
+  }
+
+  private static func makeUnhandledEscapeScript() -> String {
+    return """
+      (() => {
+        if (window.__woxUnhandledEscapeInstalled__) {
+          return;
+        }
+
+        window.__woxUnhandledEscapeInstalled__ = true;
+
+        document.addEventListener('keydown', (event) => {
+          if (event.key !== 'Escape' || event.repeat) {
+            return;
+          }
+
+          setTimeout(() => {
+            if (event.defaultPrevented || event.cancelBubble) {
+              return;
+            }
+
+            window.webkit.messageHandlers.\(webViewPreviewMessageHandlerName).postMessage({ type: '\(unhandledEscapeMessageType)' });
+          }, 0);
+        }, true);
+      })();
+      """
   }
 
   private static func makeInjectCssScript(css: String) -> String {

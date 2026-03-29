@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:wox/entity/wox_preview_webview_data.dart';
@@ -7,8 +8,8 @@ import 'package:wox/utils/webview/wox_webview_platform.dart';
 import 'package:wox/utils/webview/wox_webview_session.dart';
 
 class WoxWebViewUtil {
-  static final WoxWebViewPlatform _windowsPlatform = WoxWindowsWebViewPlatform();
-  static final WoxWebViewPlatform _macosPlatform = WoxMacosWebViewPlatform();
+  static final WoxWindowsWebViewPlatform _windowsPlatform = WoxWindowsWebViewPlatform();
+  static final WoxMacosWebViewPlatform _macosPlatform = WoxMacosWebViewPlatform();
 
   static WoxWebViewPlatform? get _platform {
     if (Platform.isWindows) {
@@ -36,6 +37,14 @@ class WoxWebViewUtil {
 
   static Future<bool> goForward() async {
     return (await _platform?.goForward()) ?? false;
+  }
+
+  static Stream<void> get unhandledEscape {
+    if (Platform.isMacOS) {
+      return _macosPlatform.unhandledEscape;
+    }
+
+    return const Stream<void>.empty();
   }
 
   /// Acquires a webview session for the given preview data. The caller should call [releaseSession] when the session is no longer needed.

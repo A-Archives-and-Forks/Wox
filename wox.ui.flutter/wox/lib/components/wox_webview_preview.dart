@@ -35,6 +35,7 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
   Future<WoxWebViewSession?>? _windowsSessionFuture;
   WoxWebViewSession? _session;
   StreamSubscription<WoxWebViewSessionAction>? _sessionActionSubscription;
+  StreamSubscription<void>? _unhandledEscapeSubscription;
   String? _windowsErrorMessage;
   final launcherController = Get.find<WoxLauncherController>();
   Timer? _toolbarHideTimer;
@@ -48,6 +49,7 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
   void initState() {
     super.initState();
     _refreshWindowsSession();
+    _subscribeUnhandledEscape();
     _showToolbarTemporarily();
   }
 
@@ -64,8 +66,16 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
   @override
   void dispose() {
     _toolbarHideTimer?.cancel();
+    _unhandledEscapeSubscription?.cancel();
     unawaited(_releaseCurrentSession());
     super.dispose();
+  }
+
+  void _subscribeUnhandledEscape() {
+    _unhandledEscapeSubscription?.cancel();
+    _unhandledEscapeSubscription = WoxWebViewUtil.unhandledEscape.listen((_) {
+      _handleFallbackEscape();
+    });
   }
 
   void _refreshWindowsSession() {
@@ -114,11 +124,21 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
         case WoxWebViewSessionAction.toggleActionPanel:
           launcherController.toggleActionPanel(const UuidV4().generate());
           break;
-        case WoxWebViewSessionAction.focusQueryBox:
-          launcherController.focusQueryBox();
+        case WoxWebViewSessionAction.fallbackEscape:
+          _handleFallbackEscape();
           break;
       }
     });
+  }
+
+  void _handleFallbackEscape() {
+    final traceId = const UuidV4().generate();
+    if (launcherController.isQueryBoxVisible.value) {
+      launcherController.focusQueryBox();
+      return;
+    }
+
+    launcherController.hideApp(traceId);
   }
 
   Widget _buildWindowsPreview(WoxPreviewWebviewData preview) {

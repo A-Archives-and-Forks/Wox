@@ -18,6 +18,7 @@ class MainFlutterWindow: NSPanel {
       name: "com.wox.webview_preview",
       binaryMessenger: flutterViewController.engine.binaryMessenger
     )
+    WoxWebViewPreviewPlugin.setMethodChannel(webViewPreviewChannel)
     webViewPreviewChannel.setMethodCallHandler { call, result in
       switch call.method {
       case "openInspector":

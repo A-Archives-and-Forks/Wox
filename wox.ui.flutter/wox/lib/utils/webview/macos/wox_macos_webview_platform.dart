@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:wox/entity/wox_preview_webview_data.dart';
 import 'package:wox/utils/webview/wox_webview_platform.dart';
@@ -5,8 +7,20 @@ import 'package:wox/utils/webview/wox_webview_session.dart';
 
 class WoxMacosWebViewPlatform implements WoxWebViewPlatform {
   static const MethodChannel _channel = MethodChannel('com.wox.webview_preview');
+  final StreamController<void> _unhandledEscapeController = StreamController<void>.broadcast();
 
-  WoxMacosWebViewPlatform();
+  WoxMacosWebViewPlatform() {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'unhandledEscape') {
+        _unhandledEscapeController.add(null);
+        return;
+      }
+
+      throw MissingPluginException('Unknown method ${call.method}');
+    });
+  }
+
+  Stream<void> get unhandledEscape => _unhandledEscapeController.stream;
 
   @override
   Future<WoxWebViewSession?> acquireSession(WoxPreviewWebviewData previewData) async {
