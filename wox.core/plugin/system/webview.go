@@ -19,12 +19,12 @@ const (
 )
 
 type webviewSite struct {
-	Keyword      string
-	Url          string
-	InjectCss    string
-	CacheEnabled bool
-	Icon         common.WoxImage
-	Enabled      bool
+	Keyword       string
+	Url           string
+	InjectCss     string
+	CacheDisabled bool
+	Icon          common.WoxImage
+	Disabled      bool
 }
 
 type WebViewPlugin struct {
@@ -46,7 +46,7 @@ func (p *WebViewPlugin) GetMetadata() plugin.Metadata {
 		MinWoxVersion: "2.0.0",
 		Runtime:       "Go",
 		Description:   "i18n:plugin_webview_plugin_description",
-		Icon:          common.PluginBrowserIcon.String(),
+		Icon:          common.PluginWebviewIcon.String(),
 		TriggerKeywords: []string{
 			"webview",
 		},
@@ -113,15 +113,15 @@ func (p *WebViewPlugin) GetMetadata() plugin.Metadata {
 							Tooltip:      "i18n:plugin_webview_inject_css_tooltip",
 						},
 						{
-							Key:     "CacheEnabled",
-							Label:   "i18n:plugin_webview_cache",
+							Key:     "CacheDisabled",
+							Label:   "i18n:plugin_webview_cache_disabled",
 							Type:    definition.PluginSettingValueTableColumnTypeCheckbox,
 							Width:   60,
 							Tooltip: "i18n:plugin_webview_cache_tooltip",
 						},
 						{
-							Key:   "Enabled",
-							Label: "i18n:plugin_webview_enabled",
+							Key:   "Disabled",
+							Label: "i18n:plugin_webview_disabled",
 							Type:  definition.PluginSettingValueTableColumnTypeCheckbox,
 							Width: 70,
 						},
@@ -158,7 +158,7 @@ func (p *WebViewPlugin) Query(ctx context.Context, query plugin.Query) []plugin.
 
 	var results []plugin.QueryResult
 	for _, site := range p.sites {
-		if !site.Enabled {
+		if site.Disabled {
 			continue
 		}
 		if !strings.EqualFold(site.Keyword, query.Command) {
@@ -167,9 +167,9 @@ func (p *WebViewPlugin) Query(ctx context.Context, query plugin.Query) []plugin.
 
 		currentSite := site
 		previewPayload, marshalErr := json.Marshal(plugin.WoxPreviewWebviewData{
-			Url:          site.Url,
-			InjectCss:    currentSite.InjectCss,
-			CacheEnabled: currentSite.CacheEnabled,
+			Url:           site.Url,
+			InjectCss:     currentSite.InjectCss,
+			CacheDisabled: currentSite.CacheDisabled,
 		})
 		if marshalErr != nil {
 			p.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to marshal webview payload for %s: %s", site.Url, marshalErr.Error()))
@@ -205,7 +205,7 @@ func (p *WebViewPlugin) Query(ctx context.Context, query plugin.Query) []plugin.
 func (p *WebViewPlugin) registerSiteCommands(ctx context.Context) {
 	var commands []plugin.MetadataCommand
 	for _, site := range p.sites {
-		if !site.Enabled {
+		if site.Disabled {
 			continue
 		}
 
@@ -229,15 +229,12 @@ func (p *WebViewPlugin) loadSites(ctx context.Context) []webviewSite {
 					Keyword: "x",
 					Url:     "https://x.com",
 					Icon:    common.NewWoxImageUrl("https://abs.twimg.com/favicons/twitter.2.ico"),
-					Enabled: true,
 				},
 				{
-					Keyword:      "ig",
-					Url:          "https://www.instagram.com",
-					InjectCss:    "\nmain section > div:first-child:has(a[href^=\"/stories/\"]) {\n\tdisplay: none !important;\n}\n",
-					CacheEnabled: true,
-					Icon:         common.NewWoxImageUrl("https://static.cdninstagram.com/rsrc.php/v4/yI/r/VsNE-OHk_8a.png"),
-					Enabled:      true,
+					Keyword:   "ig",
+					Url:       "https://www.instagram.com",
+					InjectCss: "\ndiv[data-pagelet=\"story_tray\"] {\n    display: none !important;\n}",
+					Icon:      common.NewWoxImageUrl("https://static.cdninstagram.com/rsrc.php/v4/yI/r/VsNE-OHk_8a.png"),
 				},
 			}
 			if encoded, err := json.Marshal(sites); err == nil {

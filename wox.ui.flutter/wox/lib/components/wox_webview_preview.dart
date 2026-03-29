@@ -24,7 +24,7 @@ class WoxWebViewPreview extends StatefulWidget {
 }
 
 class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
-  static const double _toolbarBottomSpacing = 30;
+  static const double _toolbarBottomSpacing = 60;
   static const double _toolbarHeight = 36;
   static const double _toolbarWidth = 176;
   static const double _toolbarTriggerWidth = 224;

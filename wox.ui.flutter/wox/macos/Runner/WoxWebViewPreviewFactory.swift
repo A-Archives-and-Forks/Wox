@@ -12,18 +12,18 @@ private enum WoxWebViewSessionPolicy {
 private struct WoxWebViewPreviewRequest {
   let urlString: String
   let injectCss: String
-  let cacheEnabled: Bool
+  let cacheDisabled: Bool
   let cacheKey: String
 
   init(args: [String: Any]) {
     urlString = args["url"] as? String ?? ""
     injectCss = args["injectCss"] as? String ?? ""
-    cacheEnabled = args["cacheEnabled"] as? Bool ?? false
+    cacheDisabled = args["cacheDisabled"] as? Bool ?? false
     cacheKey = args["cacheKey"] as? String ?? ""
   }
 
   var hasCache: Bool {
-    cacheEnabled && !cacheKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    !cacheDisabled && !cacheKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   var cacheSignature: String {

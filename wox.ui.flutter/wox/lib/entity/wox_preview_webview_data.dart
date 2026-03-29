@@ -3,12 +3,12 @@ import 'dart:convert';
 class WoxPreviewWebviewData {
   late String url;
   late String injectCss;
-  late bool cacheEnabled;
+  late bool cacheDisabled;
 
-  WoxPreviewWebviewData({required this.url, this.injectCss = "", this.cacheEnabled = false});
+  WoxPreviewWebviewData({required this.url, this.injectCss = "", this.cacheDisabled = false});
 
   factory WoxPreviewWebviewData.fromJson(Map<String, dynamic> json) {
-    return WoxPreviewWebviewData(url: json["url"]?.toString() ?? "", injectCss: json["injectCss"]?.toString() ?? "", cacheEnabled: json["cacheEnabled"] == true);
+    return WoxPreviewWebviewData(url: json["url"]?.toString() ?? "", injectCss: json["injectCss"]?.toString() ?? "", cacheDisabled: json["cacheDisabled"] == true);
   }
 
   factory WoxPreviewWebviewData.fromPreviewData(String previewData) {
@@ -28,11 +28,11 @@ class WoxPreviewWebviewData {
   }
 
   Map<String, dynamic> toJson() {
-    return {"url": url, "injectCss": injectCss, "cacheEnabled": cacheEnabled, "cacheKey": resolvedCacheKey};
+    return {"url": url, "injectCss": injectCss, "cacheDisabled": cacheDisabled, "cacheKey": resolvedCacheKey};
   }
 
   String get resolvedCacheKey {
-    if (!cacheEnabled) {
+    if (cacheDisabled) {
       return "";
     }
 
