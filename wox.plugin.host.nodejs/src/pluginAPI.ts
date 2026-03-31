@@ -18,6 +18,8 @@ export class PluginAPI implements PublicAPI {
   getDynamicSettingCallbacks: Map<string, (ctx: Context, key: string) => PluginSettingDefinitionItem>
   deepLinkCallbacks: Map<string, (ctx: Context, params: MapString) => void>
   unloadCallbacks: Map<string, (ctx: Context) => Promise<void>>
+  enterPluginQueryCallbacks: Map<string, (ctx: Context) => Promise<void> | void>
+  leavePluginQueryCallbacks: Map<string, (ctx: Context) => Promise<void> | void>
   llmStreamCallbacks: Map<string, AI.ChatStreamFunc>
   mruRestoreCallbacks: Map<string, (ctx: Context, mruData: MRUData) => Promise<Result | null>>
 
@@ -29,6 +31,8 @@ export class PluginAPI implements PublicAPI {
     this.getDynamicSettingCallbacks = new Map<string, (ctx: Context, key: string) => PluginSettingDefinitionItem>()
     this.deepLinkCallbacks = new Map<string, (ctx: Context, params: MapString) => void>()
     this.unloadCallbacks = new Map<string, (ctx: Context) => Promise<void>>()
+    this.enterPluginQueryCallbacks = new Map<string, (ctx: Context) => Promise<void> | void>()
+    this.leavePluginQueryCallbacks = new Map<string, (ctx: Context) => Promise<void> | void>()
     this.llmStreamCallbacks = new Map<string, AI.ChatStreamFunc>()
     this.mruRestoreCallbacks = new Map<string, (ctx: Context, mruData: MRUData) => Promise<Result | null>>()
   }
@@ -86,6 +90,30 @@ export class PluginAPI implements PublicAPI {
     await this.invokeMethod(ctx, "Notify", { message })
   }
 
+  async ShowToolbarStatus(ctx: Context, status: unknown): Promise<void> {
+    const pluginInstance = pluginInstances.get(this.pluginId)
+    if (pluginInstance && status && typeof status === "object") {
+      const maybeStatus = status as { Actions?: Array<{ Id?: string, Action?: unknown }> }
+      for (const action of maybeStatus.Actions ?? []) {
+        if (!action.Id) {
+          action.Id = crypto.randomUUID()
+        }
+        if (typeof action.Action === "function") {
+          pluginInstance.ToolbarStatusActions.set(
+            action.Id,
+            action.Action as (ctx: Context, actionContext: { ToolbarStatusId: string, ToolbarStatusActionId: string, ContextData: MapString }) => Promise<void> | void
+          )
+        }
+      }
+    }
+
+    await this.invokeMethod(ctx, "ShowToolbarStatus", { status: JSON.stringify(status) })
+  }
+
+  async ClearToolbarStatus(ctx: Context, toolbarStatusId: string): Promise<void> {
+    await this.invokeMethod(ctx, "ClearToolbarStatus", { toolbarStatusId })
+  }
+
   async GetTranslation(ctx: Context, key: string): Promise<string> {
     return (await this.invokeMethod(ctx, "GetTranslation", { key })) as string
   }
@@ -120,6 +148,18 @@ export class PluginAPI implements PublicAPI {
     const callbackId = crypto.randomUUID()
     this.unloadCallbacks.set(callbackId, callback)
     await this.invokeMethod(ctx, "OnUnload", { callbackId })
+  }
+
+  async OnEnterPluginQuery(ctx: Context, callback: (ctx: Context) => Promise<void> | void): Promise<void> {
+    const callbackId = crypto.randomUUID()
+    this.enterPluginQueryCallbacks.set(callbackId, callback)
+    await this.invokeMethod(ctx, "OnEnterPluginQuery", { callbackId })
+  }
+
+  async OnLeavePluginQuery(ctx: Context, callback: (ctx: Context) => Promise<void> | void): Promise<void> {
+    const callbackId = crypto.randomUUID()
+    this.leavePluginQueryCallbacks.set(callbackId, callback)
+    await this.invokeMethod(ctx, "OnLeavePluginQuery", { callbackId })
   }
 
   async RegisterQueryCommands(ctx: Context, commands: MetadataCommand[]): Promise<void> {

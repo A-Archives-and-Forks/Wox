@@ -31,6 +31,7 @@ const (
 	CopyTypeImage     CopyType = "image"
 )
 
+// API exposes the runtime services that plugins can call back into.
 type API interface {
 	ChangeQuery(ctx context.Context, query common.PlainQuery)
 	HideApp(ctx context.Context)
@@ -45,6 +46,22 @@ type API interface {
 	OnDeepLink(ctx context.Context, callback func(ctx context.Context, arguments map[string]string))
 	OnUnload(ctx context.Context, callback func(ctx context.Context))
 	OnMRURestore(ctx context.Context, callback func(ctx context.Context, mruData MRUData) (*QueryResult, error))
+
+	// ShowToolbarStatus creates or updates a toolbar status owned by the current plugin.
+	// Plugin-scoped status is only accepted while the session is inside that plugin query.
+	// Global status competes with other global status entries by latest update time.
+	ShowToolbarStatus(ctx context.Context, status ToolbarStatus)
+
+	// ClearToolbarStatus removes a toolbar status owned by the current plugin by its Id.
+	ClearToolbarStatus(ctx context.Context, toolbarStatusId string)
+
+	// OnEnterPluginQuery registers a callback that fires once when the session enters
+	// this plugin's query context.
+	OnEnterPluginQuery(ctx context.Context, callback func(ctx context.Context))
+
+	// OnLeavePluginQuery registers a callback that fires once when the session leaves
+	// this plugin's query context.
+	OnLeavePluginQuery(ctx context.Context, callback func(ctx context.Context))
 	RegisterQueryCommands(ctx context.Context, commands []MetadataCommand)
 	AIChatStream(ctx context.Context, model common.Model, conversations []common.Conversation, options common.ChatOptions, callback common.ChatStreamFunc) error
 
@@ -173,6 +190,7 @@ type CopyParams struct {
 	WoxImage *common.WoxImage
 }
 
+// APIImpl is the concrete API implementation bound to one plugin instance.
 type APIImpl struct {
 	pluginInstance       *Instance
 	logger               *util.Log
@@ -296,6 +314,22 @@ func (a *APIImpl) OnDeepLink(ctx context.Context, callback func(ctx context.Cont
 
 func (a *APIImpl) OnUnload(ctx context.Context, callback func(ctx context.Context)) {
 	a.pluginInstance.UnloadCallbacks = append(a.pluginInstance.UnloadCallbacks, callback)
+}
+
+func (a *APIImpl) ShowToolbarStatus(ctx context.Context, status ToolbarStatus) {
+	GetPluginManager().ShowToolbarStatus(ctx, a.pluginInstance, status)
+}
+
+func (a *APIImpl) ClearToolbarStatus(ctx context.Context, toolbarStatusId string) {
+	GetPluginManager().ClearToolbarStatus(ctx, a.pluginInstance, toolbarStatusId)
+}
+
+func (a *APIImpl) OnEnterPluginQuery(ctx context.Context, callback func(ctx context.Context)) {
+	a.pluginInstance.EnterPluginQueryCallbacks = append(a.pluginInstance.EnterPluginQueryCallbacks, callback)
+}
+
+func (a *APIImpl) OnLeavePluginQuery(ctx context.Context, callback func(ctx context.Context)) {
+	a.pluginInstance.LeavePluginQueryCallbacks = append(a.pluginInstance.LeavePluginQueryCallbacks, callback)
 }
 
 func (a *APIImpl) RegisterQueryCommands(ctx context.Context, commands []MetadataCommand) {

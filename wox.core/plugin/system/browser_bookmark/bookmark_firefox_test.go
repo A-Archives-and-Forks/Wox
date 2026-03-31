@@ -94,6 +94,10 @@ func (m *mockAPI) OnGetDynamicSetting(
 func (m *mockAPI) OnDeepLink(ctx context.Context, callback func(context.Context, map[string]string)) {
 }
 func (m *mockAPI) OnUnload(ctx context.Context, callback func(context.Context))                 {}
+func (m *mockAPI) ShowToolbarStatus(ctx context.Context, status plugin.ToolbarStatus)           {}
+func (m *mockAPI) ClearToolbarStatus(ctx context.Context, toolbarStatusId string)               {}
+func (m *mockAPI) OnEnterPluginQuery(ctx context.Context, callback func(context.Context))       {}
+func (m *mockAPI) OnLeavePluginQuery(ctx context.Context, callback func(context.Context))       {}
 func (m *mockAPI) RegisterQueryCommands(ctx context.Context, commands []plugin.MetadataCommand) {}
 func (m *mockAPI) AIChatStream(ctx context.Context, model common.Model, conversations []common.Conversation, options common.ChatOptions, callback common.ChatStreamFunc) error {
 	return nil

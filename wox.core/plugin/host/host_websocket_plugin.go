@@ -59,6 +59,20 @@ func (w *WebsocketPlugin) CreateFormActionProxy(actionId string) func(context.Co
 	}
 }
 
+func (w *WebsocketPlugin) CreateToolbarStatusActionProxy(actionId string) func(context.Context, plugin.ToolbarStatusActionContext) {
+	return func(ctx context.Context, actionContext plugin.ToolbarStatusActionContext) {
+		_, actionErr := w.websocketHost.invokeMethod(ctx, w.metadata, "toolbarStatusAction", common.ContextData{
+			"ToolbarStatusId":       actionContext.ToolbarStatusId,
+			"ActionId":              actionId,
+			"ToolbarStatusActionId": actionContext.ToolbarStatusActionId,
+			"ContextData":           actionContext.ContextData.Marshal(),
+		})
+		if actionErr != nil {
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] toolbar status action failed: %s", w.metadata.GetName(ctx), actionErr.Error()))
+		}
+	}
+}
+
 func (w *WebsocketPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
 	selectionJson, marshalErr := json.Marshal(query.Selection)
 	if marshalErr != nil {

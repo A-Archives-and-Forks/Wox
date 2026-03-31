@@ -57,6 +57,18 @@ func (e emptyAPIImpl) OnDeepLink(ctx context.Context, callback func(context.Cont
 func (e emptyAPIImpl) OnUnload(ctx context.Context, callback func(context.Context)) {
 }
 
+func (e emptyAPIImpl) ShowToolbarStatus(ctx context.Context, status plugin.ToolbarStatus) {
+}
+
+func (e emptyAPIImpl) ClearToolbarStatus(ctx context.Context, toolbarStatusId string) {
+}
+
+func (e emptyAPIImpl) OnEnterPluginQuery(ctx context.Context, callback func(context.Context)) {
+}
+
+func (e emptyAPIImpl) OnLeavePluginQuery(ctx context.Context, callback func(context.Context)) {
+}
+
 func (e emptyAPIImpl) RegisterQueryCommands(ctx context.Context, commands []plugin.MetadataCommand) {
 }
 

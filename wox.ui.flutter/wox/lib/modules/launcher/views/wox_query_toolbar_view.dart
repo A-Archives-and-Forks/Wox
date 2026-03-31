@@ -20,18 +20,19 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
   bool get hasResultItems => controller.resultListViewController.items.isNotEmpty;
 
   bool get hasLeftMessage {
-    final toolbarInfo = controller.toolbar.value;
-    return toolbarInfo.text != null && toolbarInfo.text!.isNotEmpty;
+    final text = controller.resolvedToolbarText;
+    return text != null && text.isNotEmpty;
   }
 
   Widget leftPart(double maxLeftWidth) {
     if (LoggerSwitch.enablePaintLog) Logger.instance.debug(const UuidV4().generate(), "repaint: toolbar view - left part");
 
     return Obx(() {
-      final toolbarInfo = controller.toolbar.value;
+      final text = controller.resolvedToolbarText;
+      final hasToolbarProgress = controller.hasVisibleToolbarStatus && (controller.resolvedToolbarProgress != null || controller.resolvedToolbarIndeterminate);
 
       // If no message, return empty widget
-      if (toolbarInfo.text == null || toolbarInfo.text!.isEmpty) {
+      if (text == null || text.isEmpty) {
         return const SizedBox.shrink();
       }
 
@@ -41,31 +42,46 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (toolbarInfo.icon != null) Padding(padding: const EdgeInsets.only(right: 8), child: WoxImageView(woxImage: toolbarInfo.icon!, width: 24, height: 24)),
+            if (controller.resolvedToolbarIcon != null)
+              Padding(padding: const EdgeInsets.only(right: 8), child: WoxImageView(woxImage: controller.resolvedToolbarIcon!, width: 24, height: 24)),
             // Text area flexes inside the capped max width and will ellipsize when needed
             Flexible(
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final textStyle = TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarFontColor));
-                  final isTextOverflow = WoxTextMeasureUtil.isTextOverflow(context: context, text: toolbarInfo.text ?? '', style: textStyle, maxWidth: constraints.maxWidth);
+                  final isTextOverflow = WoxTextMeasureUtil.isTextOverflow(context: context, text: text, style: textStyle, maxWidth: constraints.maxWidth);
 
                   return Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Flexible(
                         child: Text(
-                          toolbarInfo.text ?? '',
+                          text,
                           style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarFontColor)),
                           overflow: TextOverflow.ellipsis,
                           maxLines: 1,
                         ),
                       ),
-                      if (isTextOverflow)
+                      if (hasToolbarProgress)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 8),
+                          child: SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              value: controller.resolvedToolbarIndeterminate ? null : (controller.resolvedToolbarProgress ?? 0).clamp(0, 100) / 100,
+                              valueColor: AlwaysStoppedAnimation<Color>(safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarFontColor)),
+                              backgroundColor: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarFontColor).withValues(alpha: 0.2),
+                            ),
+                          ),
+                        ),
+                      if (isTextOverflow && !controller.hasVisibleToolbarStatus)
                         MouseRegion(
                           cursor: SystemMouseCursors.click,
                           child: GestureDetector(
                             onTap: () {
-                              Clipboard.setData(ClipboardData(text: toolbarInfo.text ?? ''));
+                              Clipboard.setData(ClipboardData(text: text));
                               controller.toolbarCopyText.value = 'toolbar_copied';
                               Future.delayed(const Duration(seconds: 3), () {
                                 controller.toolbarCopyText.value = 'toolbar_copy';
@@ -87,7 +103,7 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
                             ),
                           ),
                         ),
-                      if (isTextOverflow) ...[
+                      if (isTextOverflow && !controller.hasVisibleToolbarStatus) ...[
                         const SizedBox(width: 8),
                         Theme(
                           data: Theme.of(context).copyWith(
@@ -100,7 +116,6 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
                             padding: EdgeInsets.zero,
                             tooltip: '',
                             onSelected: (value) async {
-                              final text = toolbarInfo.text ?? '';
                               await WoxApi.instance.toolbarSnooze(const UuidV4().generate(), text, value);
                               // Hide current toolbar message immediately
                               controller.toolbar.value = controller.toolbar.value.emptyLeftSide();

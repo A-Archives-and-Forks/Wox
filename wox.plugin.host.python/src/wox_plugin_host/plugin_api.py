@@ -13,6 +13,7 @@ from wox_plugin import (
     LogLevel,
     MetadataCommand,
     MRUData,
+    ToolbarStatus,
     PluginSettingDefinitionItem,
     PublicAPI,
     Query,
@@ -39,6 +40,8 @@ class PluginAPI(PublicAPI):
         ] = {}
         self.deep_link_callbacks: Dict[str, Callable[[Context, Dict[str, str]], Awaitable[None] | None]] = {}
         self.unload_callbacks: Dict[str, Callable[[Context], Awaitable[None] | None]] = {}
+        self.enter_plugin_query_callbacks: Dict[str, Callable[[Context], Awaitable[None] | None]] = {}
+        self.leave_plugin_query_callbacks: Dict[str, Callable[[Context], Awaitable[None] | None]] = {}
         self.llm_stream_callbacks: Dict[str, ChatStreamCallback] = {}
         self.mru_restore_callbacks: Dict[str, Callable[[Context, MRUData], Optional[Result] | Awaitable[Optional[Result]]]] = {}
 
@@ -111,6 +114,23 @@ class PluginAPI(PublicAPI):
         """Show a notification message"""
         await self.invoke_method(ctx, "Notify", {"message": message})
 
+    async def show_toolbar_status(self, ctx: Context, status: ToolbarStatus) -> None:
+        from .plugin_manager import plugin_instances
+
+        plugin_instance = plugin_instances.get(self.plugin_id)
+        if plugin_instance:
+            for action in status.actions:
+                action_id = action.id or str(uuid.uuid4())
+                action.id = action_id
+                callback = action.action
+                if callable(callback):
+                    plugin_instance.toolbar_status_actions[action_id] = callback
+
+        await self.invoke_method(ctx, "ShowToolbarStatus", {"status": json.loads(status.to_json())})
+
+    async def clear_toolbar_status(self, ctx: Context, toolbar_status_id: str) -> None:
+        await self.invoke_method(ctx, "ClearToolbarStatus", {"toolbarStatusId": toolbar_status_id})
+
     async def log(self, ctx: Context, level: LogLevel, msg: str) -> None:
         """Write log"""
         await self.invoke_method(ctx, "Log", {"level": level, "msg": msg})
@@ -168,6 +188,16 @@ class PluginAPI(PublicAPI):
         callback_id = str(uuid.uuid4())
         self.unload_callbacks[callback_id] = callback
         await self.invoke_method(ctx, "OnUnload", {"callbackId": callback_id})
+
+    async def on_enter_plugin_query(self, ctx: Context, callback: Callable[[Context], Awaitable[None] | None]) -> None:
+        callback_id = str(uuid.uuid4())
+        self.enter_plugin_query_callbacks[callback_id] = callback
+        await self.invoke_method(ctx, "OnEnterPluginQuery", {"callbackId": callback_id})
+
+    async def on_leave_plugin_query(self, ctx: Context, callback: Callable[[Context], Awaitable[None] | None]) -> None:
+        callback_id = str(uuid.uuid4())
+        self.leave_plugin_query_callbacks[callback_id] = callback
+        await self.invoke_method(ctx, "OnLeavePluginQuery", {"callbackId": callback_id})
 
     async def register_query_commands(self, ctx: Context, commands: list[MetadataCommand]) -> None:
         """Register query commands"""

@@ -94,7 +94,10 @@ type Manager struct {
 	scriptReloadTimers  *util.HashMap[string, *time.Timer]
 
 	// Plugin query latency tracking (EWMA per plugin)
-	pluginQueryLatency *util.HashMap[string, *util.EWMA]
+	pluginQueryLatency    *util.HashMap[string, *util.EWMA]
+	toolbarStatuses       *util.HashMap[string, *toolbarStatusStore]
+	sessionPluginQueries  *util.HashMap[string, *sessionPluginQueryState]
+	toolbarStatusSequence atomic.Uint64
 }
 
 const (
@@ -111,6 +114,8 @@ func GetPluginManager() *Manager {
 			aiProviders:             util.NewHashMap[string, ai.Provider](),
 			scriptReloadTimers:      util.NewHashMap[string, *time.Timer](),
 			pluginQueryLatency:      util.NewHashMap[string, *util.EWMA](),
+			toolbarStatuses:         util.NewHashMap[string, *toolbarStatusStore](),
+			sessionPluginQueries:    util.NewHashMap[string, *sessionPluginQueryState](),
 		}
 		logger = util.GetLogger()
 	})

@@ -19,11 +19,13 @@ type Instance struct {
 	Setting              *setting.PluginSetting // setting for this plugin
 	RuntimeQueryCommands []MetadataCommand      // query commands registered at runtime
 
-	DynamicSettingCallbacks []func(ctx context.Context, key string) definition.PluginSettingDefinitionItem // dynamic setting callbacks
-	SettingChangeCallbacks  []func(ctx context.Context, key string, value string)
-	DeepLinkCallbacks       []func(ctx context.Context, arguments map[string]string)
-	UnloadCallbacks         []func(ctx context.Context)
-	MRURestoreCallbacks     []func(ctx context.Context, mruData MRUData) (*QueryResult, error) // MRU restore callbacks
+	DynamicSettingCallbacks   []func(ctx context.Context, key string) definition.PluginSettingDefinitionItem // dynamic setting callbacks
+	SettingChangeCallbacks    []func(ctx context.Context, key string, value string)
+	DeepLinkCallbacks         []func(ctx context.Context, arguments map[string]string)
+	UnloadCallbacks           []func(ctx context.Context)
+	MRURestoreCallbacks       []func(ctx context.Context, mruData MRUData) (*QueryResult, error) // MRU restore callbacks
+	EnterPluginQueryCallbacks []func(ctx context.Context)
+	LeavePluginQueryCallbacks []func(ctx context.Context)
 
 	// for measure performance
 	LoadStartTimestamp    int64

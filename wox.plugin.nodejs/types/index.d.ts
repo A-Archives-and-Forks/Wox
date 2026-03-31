@@ -886,6 +886,106 @@ export interface FormActionContext extends ActionContext {
 }
 
 /**
+ * Visibility scope for a toolbar status.
+ *
+ * - `plugin`: visible only while the user stays in this plugin query context
+ * - `global`: can stay visible outside plugin query context
+ */
+export type ToolbarStatusScope = "plugin" | "global"
+
+/**
+ * Context passed back to a toolbar status action callback.
+ */
+export interface ToolbarStatusActionContext {
+  /**
+   * Id of the toolbar status that owns the action.
+   */
+  ToolbarStatusId: string
+  /**
+   * Id of the toolbar status action that was invoked.
+   */
+  ToolbarStatusActionId: string
+  /**
+   * Arbitrary string data attached to the action.
+   */
+  ContextData: MapString
+}
+
+/**
+ * Action rendered on the toolbar while a status is visible.
+ */
+export interface ToolbarStatusAction {
+  /**
+   * Unique action id. Wox will backfill one when omitted.
+   */
+  Id?: string
+  /**
+   * Action label shown in the toolbar.
+   */
+  Name: string
+  /**
+   * Optional action icon.
+   */
+  Icon?: WoxImage
+  /**
+   * Optional hotkey displayed in the toolbar.
+   */
+  Hotkey?: string
+  /**
+   * Whether this action should be treated as the default action.
+   */
+  IsDefault?: boolean
+  /**
+   * When true, Wox keeps the launcher visible after the action runs.
+   */
+  PreventHideAfterAction?: boolean
+  /**
+   * Arbitrary string data passed back through ToolbarStatusActionContext.
+   */
+  ContextData?: MapString
+  /**
+   * Action callback invoked when the user triggers the toolbar action.
+   */
+  Action: (ctx: Context, actionContext: ToolbarStatusActionContext) => Promise<void> | void
+}
+
+/**
+ * Status payload displayed in the launcher toolbar.
+ */
+export interface ToolbarStatus {
+  /**
+   * Unique status id within the current plugin.
+   *
+   * Reusing the same id updates the existing toolbar status in place.
+   */
+  Id: string
+  /**
+   * Controls when the status is visible.
+   */
+  Scope: ToolbarStatusScope
+  /**
+   * Primary text shown in the toolbar.
+   */
+  Title: string
+  /**
+   * Optional icon shown before the title.
+   */
+  Icon?: WoxImage
+  /**
+   * Optional 0-100 progress value for determinate progress.
+   */
+  Progress?: number
+  /**
+   * Shows an indeterminate spinner when the work is in progress but no percentage is available yet.
+   */
+  Indeterminate?: boolean
+  /**
+   * Optional toolbar actions rendered on the right side of the toolbar.
+   */
+  Actions?: ToolbarStatusAction[]
+}
+
+/**
  * Most Recently Used (MRU) item data.
  *
  * Wox keeps track of recently selected items and can restore them
@@ -1097,6 +1197,21 @@ export interface PublicAPI {
   Notify: (ctx: Context, message: string) => Promise<void>
 
   /**
+   * Show or update a toolbar status.
+   *
+   * Reusing the same Id updates the current status instead of creating a duplicate.
+   * Plugin-scoped status is only accepted while the user stays in this plugin query.
+   */
+  ShowToolbarStatus: (ctx: Context, status: ToolbarStatus) => Promise<void>
+
+  /**
+   * Clear a toolbar status by Id.
+   *
+   * The status must belong to the current plugin.
+   */
+  ClearToolbarStatus: (ctx: Context, toolbarStatusId: string) => Promise<void>
+
+  /**
    * Write log
    */
   Log: (ctx: Context, level: "Info" | "Error" | "Debug" | "Warning", msg: string) => Promise<void>
@@ -1139,6 +1254,16 @@ export interface PublicAPI {
    * Register on load event
    */
   OnUnload: (ctx: Context, callback: (ctx: Context) => Promise<void>) => Promise<void>
+
+  /**
+   * Register a callback for entering this plugin query context.
+   */
+  OnEnterPluginQuery: (ctx: Context, callback: (ctx: Context) => Promise<void> | void) => Promise<void>
+
+  /**
+   * Register a callback for leaving this plugin query context.
+   */
+  OnLeavePluginQuery: (ctx: Context, callback: (ctx: Context) => Promise<void> | void) => Promise<void>
 
   /**
    * Register query commands

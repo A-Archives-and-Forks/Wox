@@ -52,11 +52,16 @@ func RunDoctorChecks(ctx context.Context) []DoctorCheckResult {
 func checkWoxVersion(ctx context.Context) DoctorCheckResult {
 	updateInfo := updater.GetUpdateInfo()
 	if updateInfo.Status == updater.UpdateStatusError || updateInfo.UpdateError != nil {
+		description := i18n.GetI18nManager().TranslateWox(ctx, "plugin_doctor_version_update_error")
+		if updateInfo.UpdateError != nil {
+			description = updateInfo.UpdateError.Error()
+		}
+
 		return DoctorCheckResult{
 			Name:        i18n.GetI18nManager().TranslateWox(ctx, "plugin_doctor_version"),
 			Type:        DoctorCheckUpdate,
 			Passed:      false,
-			Description: updateInfo.UpdateError.Error(),
+			Description: description,
 			ActionName:  "",
 			Action: func(ctx context.Context, actionContext ActionContext) {
 			},

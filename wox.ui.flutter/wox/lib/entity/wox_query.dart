@@ -283,14 +283,23 @@ class WoxResultAction {
     );
   }
 
-  static WoxResultAction local({required String id, required String name, required String hotkey, required String emoji, required WoxLocalActionHandler handler}) {
+  static WoxResultAction local({
+    required String id,
+    required String name,
+    required String hotkey,
+    required WoxLocalActionHandler handler,
+    String? emoji,
+    WoxImage? icon,
+    bool preventHideAfterAction = true,
+    bool isDefault = false,
+  }) {
     return WoxResultAction(
       id: id,
       type: WoxResultActionTypeEnum.WOX_RESULT_ACTION_TYPE_LOCAL.code,
       name: name,
-      icon: WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_EMOJI.code, imageData: emoji),
-      isDefault: false,
-      preventHideAfterAction: true,
+      icon: icon ?? WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_EMOJI.code, imageData: emoji ?? ""),
+      isDefault: isDefault,
+      preventHideAfterAction: preventHideAfterAction,
       hotkey: hotkey,
       isSystemAction: true,
       resultId: "",

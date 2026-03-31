@@ -342,6 +342,29 @@ func (w *WebsocketHost) handleRequestFromPlugin(ctx context.Context, request Jso
 		}
 		pluginInstance.API.Notify(ctx, message)
 		w.sendResponseToHost(ctx, request, "")
+	case "ShowToolbarStatus":
+		rawStatus, exist := request.Params["status"]
+		if !exist {
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ShowToolbarStatus method must have a status parameter", request.PluginName))
+			return
+		}
+
+		var status plugin.ToolbarStatus
+		if err := json.Unmarshal([]byte(rawStatus), &status); err != nil {
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] failed to unmarshal status: %s", request.PluginName, err))
+			return
+		}
+
+		pluginInstance.API.ShowToolbarStatus(ctx, status)
+		w.sendResponseToHost(ctx, request, "")
+	case "ClearToolbarStatus":
+		toolbarStatusId, exist := request.Params["toolbarStatusId"]
+		if !exist {
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ClearToolbarStatus method must have a toolbarStatusId parameter", request.PluginName))
+			return
+		}
+		pluginInstance.API.ClearToolbarStatus(ctx, toolbarStatusId)
+		w.sendResponseToHost(ctx, request, "")
 	case "Log":
 		msg, exist := request.Params["msg"]
 		if !exist {
@@ -481,6 +504,34 @@ func (w *WebsocketHost) handleRequestFromPlugin(ctx context.Context, request Jso
 			})
 		})
 		w.sendResponseToHost(ctx, request, "")
+	case "OnEnterPluginQuery":
+		callbackId, exist := request.Params["callbackId"]
+		if !exist {
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] OnEnterPluginQuery method must have a callbackId parameter", request.PluginName))
+			return
+		}
+
+		metadata := pluginInstance.Metadata
+		pluginInstance.API.OnEnterPluginQuery(ctx, func(callbackCtx context.Context) {
+			w.invokeMethod(callbackCtx, metadata, "onEnterPluginQuery", map[string]string{
+				"CallbackId": callbackId,
+			})
+		})
+		w.sendResponseToHost(ctx, request, "")
+	case "OnLeavePluginQuery":
+		callbackId, exist := request.Params["callbackId"]
+		if !exist {
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] OnLeavePluginQuery method must have a callbackId parameter", request.PluginName))
+			return
+		}
+
+		metadata := pluginInstance.Metadata
+		pluginInstance.API.OnLeavePluginQuery(ctx, func(callbackCtx context.Context) {
+			w.invokeMethod(callbackCtx, metadata, "onLeavePluginQuery", map[string]string{
+				"CallbackId": callbackId,
+			})
+		})
+		w.sendResponseToHost(ctx, request, "")
 	case "OnMRURestore":
 		callbackId, exist := request.Params["callbackId"]
 		if !exist {
@@ -594,6 +645,28 @@ func (w *WebsocketHost) handleRequestFromPlugin(ctx context.Context, request Jso
 
 		success := pluginInstance.API.PushResults(ctx, query, results)
 		w.sendResponseToHost(ctx, request, success)
+	case "ExecuteToolbarStatusAction":
+		toolbarStatusId, exist := request.Params["toolbarStatusId"]
+		if !exist {
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ExecuteToolbarStatusAction method must have a toolbarStatusId parameter", request.PluginName))
+			return
+		}
+
+		actionId, exist := request.Params["actionId"]
+		if !exist {
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ExecuteToolbarStatusAction method must have an actionId parameter", request.PluginName))
+			return
+		}
+
+		sessionId := util.GetContextSessionId(ctx)
+		executeErr := plugin.GetPluginManager().ExecuteToolbarStatusAction(ctx, sessionId, toolbarStatusId, actionId)
+		if executeErr != nil {
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] execute toolbar status action failed: %s", request.PluginName, executeErr))
+			w.sendResponseErrToHost(ctx, request, executeErr)
+			return
+		}
+
+		w.sendResponseToHost(ctx, request, "")
 	case "AIChatStream":
 		callbackId, exist := request.Params["callbackId"]
 		if !exist {
@@ -680,6 +753,26 @@ func (w *WebsocketHost) sendResponseToHost(ctx context.Context, request JsonRpcR
 	sendErr := w.ws.Send(ctx, responseJson)
 	if sendErr != nil {
 		util.GetLogger().Error(ctx, fmt.Sprintf("[%s] failed to send response: %s", request.PluginName, sendErr))
+		return
+	}
+}
+
+func (w *WebsocketHost) sendResponseErrToHost(ctx context.Context, request JsonRpcRequest, responseErr error) {
+	response := JsonRpcResponse{
+		Id:     request.Id,
+		Method: request.Method,
+		Type:   JsonRpcTypeResponse,
+		Error:  responseErr.Error(),
+	}
+	responseJson, marshalErr := json.Marshal(response)
+	if marshalErr != nil {
+		util.GetLogger().Error(ctx, fmt.Sprintf("[%s] failed to marshal error response: %s", request.PluginName, marshalErr))
+		return
+	}
+
+	sendErr := w.ws.Send(ctx, responseJson)
+	if sendErr != nil {
+		util.GetLogger().Error(ctx, fmt.Sprintf("[%s] failed to send error response: %s", request.PluginName, sendErr))
 		return
 	}
 }

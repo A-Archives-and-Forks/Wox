@@ -5,7 +5,7 @@ import { ActionContext, Context, FormActionContext, MapString, Plugin, PluginIni
 import { WebSocket } from "ws"
 import * as crypto from "crypto"
 import { AI } from "@wox-launcher/wox-plugin/types/ai"
-import { PluginInstance, PluginJsonRpcRequest } from "./types"
+import { PluginInstance, PluginJsonRpcRequest, ToolbarStatusActionContext } from "./types"
 
 export const pluginInstances = new Map<PluginJsonRpcRequest["PluginId"], PluginInstance>()
 
@@ -70,6 +70,8 @@ export async function handleRequestFromWox(ctx: Context, request: PluginJsonRpcR
       return action(ctx, request)
     case "formAction":
       return formAction(ctx, request)
+    case "toolbarStatusAction":
+      return toolbarStatusAction(ctx, request)
     case "unloadPlugin":
       return unloadPlugin(ctx, request)
     case "onPluginSettingChange":
@@ -80,6 +82,10 @@ export async function handleRequestFromWox(ctx: Context, request: PluginJsonRpcR
       return onDeepLink(ctx, request)
     case "onUnload":
       return onUnload(ctx, request)
+    case "onEnterPluginQuery":
+      return onEnterPluginQuery(ctx, request)
+    case "onLeavePluginQuery":
+      return onLeavePluginQuery(ctx, request)
     case "onLLMStream":
       return onLLMStream(ctx, request)
     case "onMRURestore":
@@ -107,7 +113,8 @@ async function loadPlugin(ctx: Context, request: PluginJsonRpcRequest) {
     API: {} as PluginAPI,
     ModulePath: modulePath,
     Actions: new Map<Result["Id"], (ctx: Context, actionContext: ActionContext) => Promise<void>>(),
-    FormActions: new Map<Result["Id"], (ctx: Context, actionContext: FormActionContext) => Promise<void>>()
+    FormActions: new Map<Result["Id"], (ctx: Context, actionContext: FormActionContext) => Promise<void>>(),
+    ToolbarStatusActions: new Map<string, (ctx: Context, actionContext: ToolbarStatusActionContext) => Promise<void> | void>()
   })
 }
 
@@ -208,6 +215,28 @@ async function onUnload(ctx: Context, request: PluginJsonRpcRequest) {
   await plugin.API.unloadCallbacks.get(callbackId)?.(ctx)
 }
 
+async function onEnterPluginQuery(ctx: Context, request: PluginJsonRpcRequest) {
+  const plugin = pluginInstances.get(request.PluginId)
+  if (plugin === undefined || plugin === null) {
+    logger.error(ctx, `plugin not found: ${request.PluginName}, forget to load plugin?`)
+    throw new Error(`plugin not found: ${request.PluginName}, forget to load plugin?`)
+  }
+
+  const callbackId = request.Params.CallbackId
+  await plugin.API.enterPluginQueryCallbacks.get(callbackId)?.(ctx)
+}
+
+async function onLeavePluginQuery(ctx: Context, request: PluginJsonRpcRequest) {
+  const plugin = pluginInstances.get(request.PluginId)
+  if (plugin === undefined || plugin === null) {
+    logger.error(ctx, `plugin not found: ${request.PluginName}, forget to load plugin?`)
+    throw new Error(`plugin not found: ${request.PluginName}, forget to load plugin?`)
+  }
+
+  const callbackId = request.Params.CallbackId
+  await plugin.API.leavePluginQueryCallbacks.get(callbackId)?.(ctx)
+}
+
 async function onLLMStream(ctx: Context, request: PluginJsonRpcRequest) {
   const plugin = pluginInstances.get(request.PluginId)
   if (plugin === undefined || plugin === null) {
@@ -294,6 +323,30 @@ async function action(ctx: Context, request: PluginJsonRpcRequest) {
   })
 
   return
+}
+
+async function toolbarStatusAction(ctx: Context, request: PluginJsonRpcRequest) {
+  const plugin = pluginInstances.get(request.PluginId)
+  if (plugin === undefined || plugin === null) {
+    logger.error(ctx, `plugin not found: ${request.PluginName}, forget to load plugin?`)
+    throw new Error(`plugin not found: ${request.PluginName}, forget to load plugin?`)
+  }
+
+  const pluginAction = plugin.ToolbarStatusActions.get(request.Params.ActionId)
+  if (pluginAction === undefined || pluginAction === null) {
+    logger.error(ctx, `<${request.PluginName}> toolbar status action not found: ${request.Params.ActionId}`)
+    return
+  }
+
+  const actionContext: ToolbarStatusActionContext = {
+    ToolbarStatusId: request.Params.ToolbarStatusId,
+    ToolbarStatusActionId: request.Params.ToolbarStatusActionId ?? request.Params.ActionId,
+    ContextData: parseContextData(request.Params.ContextData)
+  }
+
+  Promise.resolve(pluginAction(ctx, actionContext)).catch(err => {
+    logger.error(ctx, `<${request.PluginName}> toolbar status action failed: ${String(err)}`)
+  })
 }
 
 async function formAction(ctx: Context, request: PluginJsonRpcRequest) {

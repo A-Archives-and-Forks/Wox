@@ -17,6 +17,7 @@ from wox_plugin import (
     FormActionContext,
     MRUData,
     PluginInitParams,
+    ToolbarStatusActionContext,
     Query,
     ResultActionType,
 )
@@ -59,6 +60,8 @@ async def handle_request_from_wox(ctx: Context, request: Dict[str, Any], ws: web
         return await action(ctx, request)
     elif method == "formAction":
         return await form_action(ctx, request)
+    elif method == "toolbarStatusAction":
+        return await toolbar_status_action(ctx, request)
     elif method == "unloadPlugin":
         return await unload_plugin(ctx, request)
     elif method == "onPluginSettingChange":
@@ -67,6 +70,10 @@ async def handle_request_from_wox(ctx: Context, request: Dict[str, Any], ws: web
         return await on_get_dynamic_setting(ctx, request)
     elif method == "onUnload":
         return await on_unload(ctx, request)
+    elif method == "onEnterPluginQuery":
+        return await on_enter_plugin_query(ctx, request)
+    elif method == "onLeavePluginQuery":
+        return await on_leave_plugin_query(ctx, request)
     elif method == "onDeepLink":
         return await on_deep_link(ctx, request)
     elif method == "onMRURestore":
@@ -124,6 +131,7 @@ async def load_plugin(ctx: Context, request: Dict[str, Any]) -> None:
                 module_name=module_name,
                 actions={},
                 form_actions={},
+                toolbar_status_actions={},
             )
 
             await logger.info(ctx.get_trace_id(), f"<{plugin_name}> load plugin successfully")
@@ -298,6 +306,47 @@ async def action(ctx: Context, request: Dict[str, Any]) -> None:
         await logger.error(
             ctx.get_trace_id(),
             f"<{plugin_name}> action failed: {str(e)}\nStack trace:\n{error_stack}",
+        )
+        raise e
+
+
+async def toolbar_status_action(ctx: Context, request: Dict[str, Any]) -> None:
+    plugin_id = request.get("PluginId", "")
+    plugin_name = request.get("PluginName", "")
+    plugin_instance = plugin_instances.get(plugin_id)
+    if not plugin_instance:
+        raise Exception(f"plugin not found: {plugin_name}, forget to load plugin?")
+
+    try:
+        params: Dict[str, str] = request.get("Params", {})
+        toolbar_status_id = params.get("ToolbarStatusId", "")
+        action_id = params.get("ActionId", "")
+        toolbar_status_action_id = params.get("ToolbarStatusActionId", "")
+        context_data = _parse_context_data(params.get("ContextData", ""))
+
+        action_func = plugin_instance.toolbar_status_actions.get(action_id)
+        if action_func:
+            result = action_func(
+                ctx,
+                ToolbarStatusActionContext(
+                    toolbar_status_id=toolbar_status_id,
+                    toolbar_status_action_id=toolbar_status_action_id or action_id,
+                    context_data=context_data,
+                ),
+            )
+            if asyncio.iscoroutine(result):
+                asyncio.create_task(result)
+        else:
+            await logger.error(
+                ctx.get_trace_id(),
+                f"<{plugin_name}> toolbar status action not found: {action_id}",
+            )
+
+    except Exception as e:
+        error_stack = traceback.format_exc()
+        await logger.error(
+            ctx.get_trace_id(),
+            f"<{plugin_name}> toolbar status action failed: {str(e)}\nStack trace:\n{error_stack}",
         )
         raise e
 
@@ -602,6 +651,62 @@ async def on_unload(ctx: Context, request: Dict[str, Any]) -> None:
     except Exception as e:
         await logger.error(ctx.get_trace_id(), f"unload callback error: {str(e)}")
         raise e
+
+
+async def on_enter_plugin_query(ctx: Context, request: Dict[str, Any]) -> None:
+    plugin_id = request.get("PluginId")
+    if not plugin_id:
+        raise Exception("PluginId is required")
+
+    callback_id = request.get("Params", {}).get("CallbackId")
+    if not callback_id:
+        raise Exception("CallbackId is required")
+
+    plugin_instance = plugin_instances.get(plugin_id)
+    if not plugin_instance or not plugin_instance.api:
+        raise Exception(f"plugin API not found: {plugin_id}")
+
+    from .plugin_api import PluginAPI
+
+    api = plugin_instance.api
+    if not isinstance(api, PluginAPI):
+        raise Exception(f"Invalid API type for plugin: {plugin_id}")
+
+    callback = api.enter_plugin_query_callbacks.get(callback_id)
+    if not callback:
+        raise Exception(f"enter plugin query callback not found: {callback_id}")
+
+    result = callback(ctx)
+    if inspect.isawaitable(result):
+        await result
+
+
+async def on_leave_plugin_query(ctx: Context, request: Dict[str, Any]) -> None:
+    plugin_id = request.get("PluginId")
+    if not plugin_id:
+        raise Exception("PluginId is required")
+
+    callback_id = request.get("Params", {}).get("CallbackId")
+    if not callback_id:
+        raise Exception("CallbackId is required")
+
+    plugin_instance = plugin_instances.get(plugin_id)
+    if not plugin_instance or not plugin_instance.api:
+        raise Exception(f"plugin API not found: {plugin_id}")
+
+    from .plugin_api import PluginAPI
+
+    api = plugin_instance.api
+    if not isinstance(api, PluginAPI):
+        raise Exception(f"Invalid API type for plugin: {plugin_id}")
+
+    callback = api.leave_plugin_query_callbacks.get(callback_id)
+    if not callback:
+        raise Exception(f"leave plugin query callback not found: {callback_id}")
+
+    result = callback(ctx)
+    if inspect.isawaitable(result):
+        await result
 
 
 async def on_llm_stream(ctx: Context, request: Dict[str, Any]) -> None:

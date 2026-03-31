@@ -217,6 +217,12 @@ from .models.result import (
     ResultTailType,
     UpdatableResult,
 )
+from .models.toolbar_status import (
+    ToolbarStatus,
+    ToolbarStatusAction,
+    ToolbarStatusActionContext,
+    ToolbarStatusScope,
+)
 from .models.setting import (
     PluginSettingDefinitionItem,
     PluginSettingDefinitionType,
@@ -253,6 +259,10 @@ __all__: List[str] = [
     "FormActionContext",
     "ResultActionType",
     "UpdatableResult",
+    "ToolbarStatus",
+    "ToolbarStatusAction",
+    "ToolbarStatusActionContext",
+    "ToolbarStatusScope",
     "MetadataCommand",
     "PluginSettingDefinitionItem",
     "PluginSettingValueStyle",

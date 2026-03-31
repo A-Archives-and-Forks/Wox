@@ -122,7 +122,7 @@ func (u *uiImpl) Notify(ctx context.Context, msg common.NotifyMsg) {
 		logger.Info(ctx, "toolbar/system message muted by backend")
 		return
 	}
-	if u.IsVisible(ctx) && !u.IsInSettingView() {
+	if u.IsVisible(ctx) && !u.IsInSettingView() && !plugin.GetPluginManager().HasVisibleToolbarStatus(ctx) {
 		u.invokeWebsocketMethod(ctx, "ShowToolbarMsg", msg)
 	} else {
 		var icon image.Image
@@ -137,6 +137,14 @@ func (u *uiImpl) Notify(ctx context.Context, msg common.NotifyMsg) {
 		}
 		notifier.Notify(icon, msg.Text)
 	}
+}
+
+func (u *uiImpl) ShowToolbarStatus(ctx context.Context, status interface{}) {
+	u.invokeWebsocketMethod(ctx, "ShowToolbarStatus", status)
+}
+
+func (u *uiImpl) ClearToolbarStatus(ctx context.Context) {
+	u.invokeWebsocketMethod(ctx, "ClearToolbarStatus", nil)
 }
 
 func (u *uiImpl) IsInSettingView() bool {
@@ -347,6 +355,8 @@ func onUIWebsocketRequest(ctx context.Context, request WebsocketMsg) {
 		handleWebsocketAction(ctx, request)
 	case "FormAction":
 		handleWebsocketFormAction(ctx, request)
+	case "ToolbarStatusAction":
+		handleWebsocketToolbarStatusAction(ctx, request)
 	case "TerminalSubscribe":
 		handleWebsocketTerminalSubscribe(ctx, request)
 	case "TerminalUnsubscribe":
@@ -469,10 +479,20 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	logger.Info(ctx, fmt.Sprintf("start to handle query changed: %s, queryId: %s", changedQuery.String(), queryId))
 
 	if changedQuery.QueryType == plugin.QueryTypeInput && changedQuery.QueryText == "" {
+		plugin.GetPluginManager().HandleQueryContext(ctx, plugin.Query{
+			Id:        queryId,
+			SessionId: sessionId,
+			Type:      plugin.QueryTypeInput,
+		}, nil)
 		responseUISuccessWithData(ctx, request, []string{})
 		return
 	}
 	if changedQuery.QueryType == plugin.QueryTypeSelection && changedQuery.QuerySelection.String() == "" {
+		plugin.GetPluginManager().HandleQueryContext(ctx, plugin.Query{
+			Id:        queryId,
+			SessionId: sessionId,
+			Type:      plugin.QueryTypeSelection,
+		}, nil)
 		responseUISuccessWithData(ctx, request, []string{})
 		return
 	}
@@ -483,6 +503,8 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 		responseUIError(ctx, request, queryErr.Error())
 		return
 	}
+
+	plugin.GetPluginManager().HandleQueryContext(ctx, query, queryPlugin)
 
 	var totalResultCount int
 	var startTimestamp = util.GetSystemTimestamp()
@@ -615,6 +637,30 @@ func handleWebsocketFormAction(ctx context.Context, request WebsocketMsg) {
 	}
 
 	executeErr := plugin.GetPluginManager().SubmitFormAction(ctx, request.SessionId, queryId, resultId, actionId, values)
+	if executeErr != nil {
+		responseUIError(ctx, request, executeErr.Error())
+		return
+	}
+
+	responseUISuccess(ctx, request)
+}
+
+func handleWebsocketToolbarStatusAction(ctx context.Context, request WebsocketMsg) {
+	toolbarStatusId, statusErr := getWebsocketMsgParameter(ctx, request, "toolbarStatusId")
+	if statusErr != nil {
+		logger.Error(ctx, statusErr.Error())
+		responseUIError(ctx, request, statusErr.Error())
+		return
+	}
+
+	actionId, actionErr := getWebsocketMsgParameter(ctx, request, "actionId")
+	if actionErr != nil {
+		logger.Error(ctx, actionErr.Error())
+		responseUIError(ctx, request, actionErr.Error())
+		return
+	}
+
+	executeErr := plugin.GetPluginManager().ExecuteToolbarStatusAction(ctx, request.SessionId, toolbarStatusId, actionId)
 	if executeErr != nil {
 		responseUIError(ctx, request, executeErr.Error())
 		return

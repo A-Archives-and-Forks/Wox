@@ -393,7 +393,7 @@ Future<void> sendWindowsKeyboardEvent({required String type, required bool isAlt
     }),
   );
 
-  await ServicesBinding.instance.defaultBinaryMessenger.handlePlatformMessage('com.wox.windows_window_manager', data, (_) {});
+  await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.handlePlatformMessage('com.wox.windows_window_manager', data, (_) {});
 }
 
 Future<void> holdQuickSelectModifier(WidgetTester tester, {Duration holdDuration = const Duration(milliseconds: 350)}) async {

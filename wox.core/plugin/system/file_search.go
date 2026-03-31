@@ -24,6 +24,7 @@ import (
 var fileIcon = common.PluginFileIcon
 
 const fileRootsSettingKey = "roots"
+const fileSearchToolbarStatusID = "file-search-status"
 
 type fileRootSetting struct {
 	Path string `json:"Path"`
@@ -106,6 +107,10 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 
 	c.syncUserRoots(ctx)
 
+	c.api.OnEnterPluginQuery(ctx, func(callbackCtx context.Context) {
+		c.syncToolbarStatus(callbackCtx, true)
+	})
+
 	c.api.OnSettingChanged(ctx, func(callbackCtx context.Context, key string, value string) {
 		if key != fileRootsSettingKey {
 			return
@@ -121,9 +126,11 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 }
 
 func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+	c.syncToolbarStatus(ctx, query.Search == "")
+
 	// if query is empty, return empty result
 	if query.Search == "" {
-		return c.queryStatusResults(ctx, true)
+		return []plugin.QueryResult{}
 	}
 
 	if c.engine == nil {
@@ -197,7 +204,7 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plug
 		}
 	})
 
-	return append(queryResults, c.queryStatusResults(ctx, false)...)
+	return queryResults
 }
 
 func (c *FileSearchPlugin) syncUserRoots(ctx context.Context) {
@@ -277,19 +284,29 @@ func (c *FileSearchPlugin) getConfiguredRootPaths(ctx context.Context) []string 
 	return paths
 }
 
-func (c *FileSearchPlugin) queryStatusResults(ctx context.Context, includeReady bool) []plugin.QueryResult {
+func (c *FileSearchPlugin) syncToolbarStatus(ctx context.Context, includeReady bool) {
+	status, found := c.buildToolbarStatus(ctx, includeReady)
+	if !found {
+		c.api.ClearToolbarStatus(ctx, fileSearchToolbarStatusID)
+		return
+	}
+
+	c.api.ShowToolbarStatus(ctx, status)
+}
+
+func (c *FileSearchPlugin) buildToolbarStatus(ctx context.Context, includeReady bool) (plugin.ToolbarStatus, bool) {
 	if c.engine == nil {
-		return nil
+		return plugin.ToolbarStatus{}, false
 	}
 
 	status, err := c.engine.GetStatus(ctx)
 	if err != nil {
 		c.api.Log(ctx, plugin.LogLevelWarning, "Failed to load file search status: "+err.Error())
-		return nil
+		return plugin.ToolbarStatus{}, false
 	}
 
 	if !includeReady && !status.IsIndexing && status.ErrorRootCount == 0 {
-		return nil
+		return plugin.ToolbarStatus{}, false
 	}
 
 	c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf(
@@ -304,10 +321,24 @@ func (c *FileSearchPlugin) queryStatusResults(ctx context.Context, includeReady 
 
 	title := c.api.GetTranslation(ctx, "plugin_file_status_error")
 	icon := common.PermissionIcon
+	progress := (*int)(nil)
+	indeterminate := false
 	hasPermissionError := util.IsMacOS() && isFileAccessPermissionError(status.LastError)
 	if status.IsIndexing {
 		title = c.api.GetTranslation(ctx, "plugin_file_status_indexing")
-		icon = common.AnimatedLoadingIcon
+		icon = fileIcon
+		if status.ProgressTotal > 0 {
+			progressValue := int((status.ProgressCurrent * 100) / status.ProgressTotal)
+			if progressValue < 0 {
+				progressValue = 0
+			}
+			if progressValue > 100 {
+				progressValue = 100
+			}
+			progress = &progressValue
+		} else {
+			indeterminate = true
+		}
 	} else if hasPermissionError {
 		title = c.api.GetTranslation(ctx, "plugin_file_status_permission")
 	} else if status.ErrorRootCount == 0 {
@@ -315,56 +346,30 @@ func (c *FileSearchPlugin) queryStatusResults(ctx context.Context, includeReady 
 		icon = fileIcon
 	}
 
-	subtitleParts := make([]string, 0, 2)
-	if status.IsIndexing {
-		subtitleParts = append(subtitleParts, fmt.Sprintf(
-			c.api.GetTranslation(ctx, "plugin_file_status_indexing_subtitle"),
-			status.RootCount,
-			status.ScanningRootCount,
-		))
-	}
-	if status.ErrorRootCount > 0 {
-		errorSubtitleKey := "plugin_file_status_error_subtitle"
-		if hasPermissionError {
-			errorSubtitleKey = "plugin_file_status_permission_subtitle"
-		}
-		errorSummary := fmt.Sprintf(c.api.GetTranslation(ctx, errorSubtitleKey), status.ErrorRootCount)
-		if status.LastError != "" {
-			errorSummary += " " + status.LastError
-		}
-		subtitleParts = append(subtitleParts, errorSummary)
-	}
-	if len(subtitleParts) == 0 {
-		subtitleParts = append(subtitleParts, fmt.Sprintf(
-			c.api.GetTranslation(ctx, "plugin_file_status_ready_subtitle"),
-			status.RootCount,
-			status.ProgressTotal,
-		))
-	}
-
-	return []plugin.QueryResult{
-		{
-			Title:    title,
-			SubTitle: strings.Join(subtitleParts, " "),
-			Icon:     icon,
-			Score:    1,
-			Actions:  c.statusActions(ctx, hasPermissionError),
-		},
-	}
+	return plugin.ToolbarStatus{
+		Id:            fileSearchToolbarStatusID,
+		Scope:         plugin.ToolbarStatusScopePlugin,
+		Title:         title,
+		Icon:          icon,
+		Progress:      progress,
+		Indeterminate: indeterminate,
+		Actions:       c.toolbarStatusActions(ctx, hasPermissionError),
+	}, true
 }
 
-func (c *FileSearchPlugin) statusActions(ctx context.Context, hasPermissionError bool) []plugin.QueryResultAction {
+func (c *FileSearchPlugin) toolbarStatusActions(ctx context.Context, hasPermissionError bool) []plugin.ToolbarStatusAction {
 	if !hasPermissionError || !util.IsMacOS() {
 		return nil
 	}
 
-	return []plugin.QueryResultAction{
+	return []plugin.ToolbarStatusAction{
 		{
 			Name: "i18n:plugin_file_status_open_privacy_settings",
 			Icon: common.PermissionIcon,
-			Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+			Action: func(ctx context.Context, actionContext plugin.ToolbarStatusActionContext) {
 				permission.OpenPrivacySecuritySettings(ctx)
 			},
+			PreventHideAfterAction: true,
 		},
 	}
 }

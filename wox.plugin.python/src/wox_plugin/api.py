@@ -14,6 +14,7 @@ from .models.log import LogLevel
 from .models.mru import MRUData
 from .models.query import ChangeQueryParam, MetadataCommand, Query, RefreshQueryParam, CopyParams
 from .models.result import Result, UpdatableResult  # noqa: F401
+from .models.toolbar_status import ToolbarStatus
 from .models.setting import PluginSettingDefinitionItem
 
 
@@ -161,6 +162,29 @@ class PublicAPI(Protocol):
         Example:
             await api.notify(ctx, "Download complete!")
             await api.notify(ctx, "i18n:plugin.download_complete")
+        """
+        ...
+
+    async def show_toolbar_status(self, ctx: Context, status: ToolbarStatus) -> None:
+        """
+        Show or update a toolbar status for the current plugin.
+
+        Reusing the same status id replaces the previous content.
+        Plugin-scoped status is only accepted while the user stays in this plugin query.
+
+        Args:
+            ctx: Context
+            status: Toolbar status payload to display in the launcher toolbar
+        """
+        ...
+
+    async def clear_toolbar_status(self, ctx: Context, toolbar_status_id: str) -> None:
+        """
+        Clear a toolbar status by id.
+
+        Args:
+            ctx: Context
+            toolbar_status_id: Id of the toolbar status owned by the current plugin
         """
         ...
 
@@ -355,6 +379,18 @@ class PublicAPI(Protocol):
                 await self.close_connections()
 
             await api.on_unload(ctx, self._on_unload)
+        """
+        ...
+
+    async def on_enter_plugin_query(self, ctx: Context, callback: Callable[[Context], Awaitable[None] | None]) -> None:
+        """
+        Register a callback for entering this plugin query context.
+        """
+        ...
+
+    async def on_leave_plugin_query(self, ctx: Context, callback: Callable[[Context], Awaitable[None] | None]) -> None:
+        """
+        Register a callback for leaving this plugin query context.
         """
         ...
 
