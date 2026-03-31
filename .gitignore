@@ -35,3 +35,5 @@ wox.ui.windows/bin/
 wox.ui.windows/obj/
 wox.test/artifacts
 .tmp
+docs/superpowers/
+.worktrees/
