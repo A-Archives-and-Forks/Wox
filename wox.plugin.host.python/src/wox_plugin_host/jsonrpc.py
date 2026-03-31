@@ -17,7 +17,7 @@ from wox_plugin import (
     FormActionContext,
     MRUData,
     PluginInitParams,
-    ToolbarStatusActionContext,
+    ToolbarMsgActionContext,
     Query,
     ResultActionType,
 )
@@ -60,8 +60,8 @@ async def handle_request_from_wox(ctx: Context, request: Dict[str, Any], ws: web
         return await action(ctx, request)
     elif method == "formAction":
         return await form_action(ctx, request)
-    elif method == "toolbarStatusAction":
-        return await toolbar_status_action(ctx, request)
+    elif method == "toolbarMsgAction":
+        return await toolbar_msg_action(ctx, request)
     elif method == "unloadPlugin":
         return await unload_plugin(ctx, request)
     elif method == "onPluginSettingChange":
@@ -131,7 +131,7 @@ async def load_plugin(ctx: Context, request: Dict[str, Any]) -> None:
                 module_name=module_name,
                 actions={},
                 form_actions={},
-                toolbar_status_actions={},
+                toolbar_msg_actions={},
             )
 
             await logger.info(ctx.get_trace_id(), f"<{plugin_name}> load plugin successfully")
@@ -310,7 +310,7 @@ async def action(ctx: Context, request: Dict[str, Any]) -> None:
         raise e
 
 
-async def toolbar_status_action(ctx: Context, request: Dict[str, Any]) -> None:
+async def toolbar_msg_action(ctx: Context, request: Dict[str, Any]) -> None:
     plugin_id = request.get("PluginId", "")
     plugin_name = request.get("PluginName", "")
     plugin_instance = plugin_instances.get(plugin_id)
@@ -319,18 +319,18 @@ async def toolbar_status_action(ctx: Context, request: Dict[str, Any]) -> None:
 
     try:
         params: Dict[str, str] = request.get("Params", {})
-        toolbar_status_id = params.get("ToolbarStatusId", "")
+        toolbar_msg_id = params.get("ToolbarMsgId", "")
         action_id = params.get("ActionId", "")
-        toolbar_status_action_id = params.get("ToolbarStatusActionId", "")
+        toolbar_msg_action_id = params.get("ToolbarMsgActionId", "")
         context_data = _parse_context_data(params.get("ContextData", ""))
 
-        action_func = plugin_instance.toolbar_status_actions.get(action_id)
+        action_func = plugin_instance.toolbar_msg_actions.get(action_id)
         if action_func:
             result = action_func(
                 ctx,
-                ToolbarStatusActionContext(
-                    toolbar_status_id=toolbar_status_id,
-                    toolbar_status_action_id=toolbar_status_action_id or action_id,
+                ToolbarMsgActionContext(
+                    toolbar_msg_id=toolbar_msg_id,
+                    toolbar_msg_action_id=toolbar_msg_action_id or action_id,
                     context_data=context_data,
                 ),
             )
@@ -339,14 +339,14 @@ async def toolbar_status_action(ctx: Context, request: Dict[str, Any]) -> None:
         else:
             await logger.error(
                 ctx.get_trace_id(),
-                f"<{plugin_name}> toolbar status action not found: {action_id}",
+                f"<{plugin_name}> toolbar msg action not found: {action_id}",
             )
 
     except Exception as e:
         error_stack = traceback.format_exc()
         await logger.error(
             ctx.get_trace_id(),
-            f"<{plugin_name}> toolbar status action failed: {str(e)}\nStack trace:\n{error_stack}",
+            f"<{plugin_name}> toolbar msg action failed: {str(e)}\nStack trace:\n{error_stack}",
         )
         raise e
 

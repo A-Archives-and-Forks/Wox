@@ -254,11 +254,11 @@ wheels = [
 
 [[package]]
 name = "wox-plugin"
-version = "0.0.72"
+version = "0.0.73"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e7/9f/636930c2a6232775d836e62c56055d830d022f2a3b7ba6fdf3f9fcd7d7db/wox_plugin-0.0.72.tar.gz", hash = "sha256:9483e6485a2cb0e855430b1cd7b3faa6bf0f4bfb2177dc81f675806f6906c745", size = 69583, upload-time = "2026-03-31T03:23:55.239Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/7a/a36d78b85d2312def23144201b4a815dabebc4261adc3dc8ce1c5a4ec25d/wox_plugin-0.0.73.tar.gz", hash = "sha256:06583839a8a83e725bc640743c6b880aae80965e5a72f61b5cdd4a7be601b411", size = 69600, upload-time = "2026-03-31T07:00:54.005Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/38/2e/94249d2e1150833e936fb0381d7a04d4de5d54ec00ba6a38de37e4dc0122/wox_plugin-0.0.72-py3-none-any.whl", hash = "sha256:972ede047b268af9c668df966a1fba7ea3dd1514ee295af1810406de447861f2", size = 48699, upload-time = "2026-03-31T03:23:53.97Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/5f/c2b2052529bdfaa791f990759b71b89241858981509e2989bed1aa70509f/wox_plugin-0.0.73-py3-none-any.whl", hash = "sha256:7cfef044c411e9bc5d87eb5eaed4e305121e1c8cf0207d4b802509f682421f4a", size = 48687, upload-time = "2026-03-31T07:00:52.391Z" },
 ]
 
 [[package]]
@@ -285,6 +285,6 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "shiv", marker = "extra == 'dev'" },
     { name = "websockets" },
-    { name = "wox-plugin", specifier = "==0.0.72" },
+    { name = "wox-plugin", specifier = "==0.0.73" },
 ]
 provides-extras = ["dev"]

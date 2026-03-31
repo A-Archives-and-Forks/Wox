@@ -886,25 +886,25 @@ export interface FormActionContext extends ActionContext {
 }
 
 /**
- * Visibility scope for a toolbar status.
+ * Visibility scope for a toolbar msg.
  *
  * - `plugin`: visible only while the user stays in this plugin query context
  * - `global`: can stay visible outside plugin query context
  */
-export type ToolbarStatusScope = "plugin" | "global"
+export type ToolbarMsgScope = "plugin" | "global"
 
 /**
- * Context passed back to a toolbar status action callback.
+ * Context passed back to a toolbar msg action callback.
  */
-export interface ToolbarStatusActionContext {
+export interface ToolbarMsgActionContext {
   /**
-   * Id of the toolbar status that owns the action.
+   * Id of the toolbar msg that owns the action.
    */
-  ToolbarStatusId: string
+  ToolbarMsgId: string
   /**
-   * Id of the toolbar status action that was invoked.
+   * Id of the toolbar msg action that was invoked.
    */
-  ToolbarStatusActionId: string
+  ToolbarMsgActionId: string
   /**
    * Arbitrary string data attached to the action.
    */
@@ -912,9 +912,9 @@ export interface ToolbarStatusActionContext {
 }
 
 /**
- * Action rendered on the toolbar while a status is visible.
+ * Action rendered on the toolbar while a toolbar msg is visible.
  */
-export interface ToolbarStatusAction {
+export interface ToolbarMsgAction {
   /**
    * Unique action id. Wox will backfill one when omitted.
    */
@@ -940,29 +940,29 @@ export interface ToolbarStatusAction {
    */
   PreventHideAfterAction?: boolean
   /**
-   * Arbitrary string data passed back through ToolbarStatusActionContext.
+   * Arbitrary string data passed back through ToolbarMsgActionContext.
    */
   ContextData?: MapString
   /**
    * Action callback invoked when the user triggers the toolbar action.
    */
-  Action: (ctx: Context, actionContext: ToolbarStatusActionContext) => Promise<void> | void
+  Action: (ctx: Context, actionContext: ToolbarMsgActionContext) => Promise<void> | void
 }
 
 /**
- * Status payload displayed in the launcher toolbar.
+ * Toolbar msg payload displayed in the launcher toolbar.
  */
-export interface ToolbarStatus {
+export interface ToolbarMsg {
   /**
-   * Unique status id within the current plugin.
+   * Unique toolbar msg id within the current plugin.
    *
-   * Reusing the same id updates the existing toolbar status in place.
+   * Reusing the same id updates the existing toolbar msg in place.
    */
   Id: string
   /**
-   * Controls when the status is visible.
+   * Controls when the toolbar msg is visible.
    */
-  Scope: ToolbarStatusScope
+  Scope: ToolbarMsgScope
   /**
    * Primary text shown in the toolbar.
    */
@@ -982,7 +982,7 @@ export interface ToolbarStatus {
   /**
    * Optional toolbar actions rendered on the right side of the toolbar.
    */
-  Actions?: ToolbarStatusAction[]
+  Actions?: ToolbarMsgAction[]
 }
 
 /**
@@ -1197,19 +1197,19 @@ export interface PublicAPI {
   Notify: (ctx: Context, message: string) => Promise<void>
 
   /**
-   * Show or update a toolbar status.
+   * Show or update a toolbar msg.
    *
    * Reusing the same Id updates the current status instead of creating a duplicate.
    * Plugin-scoped status is only accepted while the user stays in this plugin query.
    */
-  ShowToolbarStatus: (ctx: Context, status: ToolbarStatus) => Promise<void>
+  ShowToolbarMsg: (ctx: Context, status: ToolbarMsg) => Promise<void>
 
   /**
-   * Clear a toolbar status by Id.
+   * Clear a toolbar msg by Id.
    *
-   * The status must belong to the current plugin.
+   * The toolbar msg must belong to the current plugin.
    */
-  ClearToolbarStatus: (ctx: Context, toolbarStatusId: string) => Promise<void>
+  ClearToolbarMsg: (ctx: Context, toolbarMsgId: string) => Promise<void>
 
   /**
    * Write log

@@ -5,7 +5,7 @@ import { ActionContext, Context, FormActionContext, MapString, Plugin, PluginIni
 import { WebSocket } from "ws"
 import * as crypto from "crypto"
 import { AI } from "@wox-launcher/wox-plugin/types/ai"
-import { PluginInstance, PluginJsonRpcRequest, ToolbarStatusActionContext } from "./types"
+import { PluginInstance, PluginJsonRpcRequest, ToolbarMsgActionContext } from "./types"
 
 export const pluginInstances = new Map<PluginJsonRpcRequest["PluginId"], PluginInstance>()
 
@@ -70,8 +70,8 @@ export async function handleRequestFromWox(ctx: Context, request: PluginJsonRpcR
       return action(ctx, request)
     case "formAction":
       return formAction(ctx, request)
-    case "toolbarStatusAction":
-      return toolbarStatusAction(ctx, request)
+    case "toolbarMsgAction":
+      return toolbarMsgAction(ctx, request)
     case "unloadPlugin":
       return unloadPlugin(ctx, request)
     case "onPluginSettingChange":
@@ -114,7 +114,7 @@ async function loadPlugin(ctx: Context, request: PluginJsonRpcRequest) {
     ModulePath: modulePath,
     Actions: new Map<Result["Id"], (ctx: Context, actionContext: ActionContext) => Promise<void>>(),
     FormActions: new Map<Result["Id"], (ctx: Context, actionContext: FormActionContext) => Promise<void>>(),
-    ToolbarStatusActions: new Map<string, (ctx: Context, actionContext: ToolbarStatusActionContext) => Promise<void> | void>()
+    ToolbarMsgActions: new Map<string, (ctx: Context, actionContext: ToolbarMsgActionContext) => Promise<void> | void>()
   })
 }
 
@@ -325,27 +325,27 @@ async function action(ctx: Context, request: PluginJsonRpcRequest) {
   return
 }
 
-async function toolbarStatusAction(ctx: Context, request: PluginJsonRpcRequest) {
+async function toolbarMsgAction(ctx: Context, request: PluginJsonRpcRequest) {
   const plugin = pluginInstances.get(request.PluginId)
   if (plugin === undefined || plugin === null) {
     logger.error(ctx, `plugin not found: ${request.PluginName}, forget to load plugin?`)
     throw new Error(`plugin not found: ${request.PluginName}, forget to load plugin?`)
   }
 
-  const pluginAction = plugin.ToolbarStatusActions.get(request.Params.ActionId)
+  const pluginAction = plugin.ToolbarMsgActions.get(request.Params.ActionId)
   if (pluginAction === undefined || pluginAction === null) {
-    logger.error(ctx, `<${request.PluginName}> toolbar status action not found: ${request.Params.ActionId}`)
+    logger.error(ctx, `<${request.PluginName}> toolbar msg action not found: ${request.Params.ActionId}`)
     return
   }
 
-  const actionContext: ToolbarStatusActionContext = {
-    ToolbarStatusId: request.Params.ToolbarStatusId,
-    ToolbarStatusActionId: request.Params.ToolbarStatusActionId ?? request.Params.ActionId,
+  const actionContext: ToolbarMsgActionContext = {
+    ToolbarMsgId: request.Params.ToolbarMsgId,
+    ToolbarMsgActionId: request.Params.ToolbarMsgActionId ?? request.Params.ActionId,
     ContextData: parseContextData(request.Params.ContextData)
   }
 
   Promise.resolve(pluginAction(ctx, actionContext)).catch(err => {
-    logger.error(ctx, `<${request.PluginName}> toolbar status action failed: ${String(err)}`)
+    logger.error(ctx, `<${request.PluginName}> toolbar msg action failed: ${String(err)}`)
   })
 }
 

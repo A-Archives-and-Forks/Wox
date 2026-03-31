@@ -107,13 +107,13 @@ void registerSystemPluginSmokeTests() {
       expect(result.isGroup, isFalse);
     });
 
-    testWidgets('P2-SMK-29A: File search plugin shows toolbar status on empty query', (tester) async {
+    testWidgets('P2-SMK-29A: File search plugin shows toolbar msg on empty query', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
 
-      await triggerTestQueryHotkey(tester, 'f');
-      await waitForQueryBoxText(tester, controller, 'f');
+      await triggerTestQueryHotkey(tester, 'f ');
+      await waitForQueryBoxText(tester, controller, 'f ');
       await waitForNoActiveResults(tester, controller);
-      await pumpUntil(tester, () => controller.hasVisibleToolbarStatus && (controller.resolvedToolbarText?.isNotEmpty ?? false), timeout: const Duration(seconds: 30));
+      await pumpUntil(tester, () => controller.hasVisibleToolbarMsg && (controller.resolvedToolbarText?.isNotEmpty ?? false), timeout: const Duration(seconds: 30));
 
       expect(
         controller.resolvedToolbarText,

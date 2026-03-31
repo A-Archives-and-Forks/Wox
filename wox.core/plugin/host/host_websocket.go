@@ -342,28 +342,28 @@ func (w *WebsocketHost) handleRequestFromPlugin(ctx context.Context, request Jso
 		}
 		pluginInstance.API.Notify(ctx, message)
 		w.sendResponseToHost(ctx, request, "")
-	case "ShowToolbarStatus":
-		rawStatus, exist := request.Params["status"]
+	case "ShowToolbarMsg":
+		rawMsg, exist := request.Params["msg"]
 		if !exist {
-			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ShowToolbarStatus method must have a status parameter", request.PluginName))
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ShowToolbarMsg method must have a msg parameter", request.PluginName))
 			return
 		}
 
-		var status plugin.ToolbarStatus
-		if err := json.Unmarshal([]byte(rawStatus), &status); err != nil {
-			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] failed to unmarshal status: %s", request.PluginName, err))
+		var msg plugin.ToolbarMsg
+		if err := json.Unmarshal([]byte(rawMsg), &msg); err != nil {
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] failed to unmarshal toolbar msg: %s", request.PluginName, err))
 			return
 		}
 
-		pluginInstance.API.ShowToolbarStatus(ctx, status)
+		pluginInstance.API.ShowToolbarMsg(ctx, msg)
 		w.sendResponseToHost(ctx, request, "")
-	case "ClearToolbarStatus":
-		toolbarStatusId, exist := request.Params["toolbarStatusId"]
+	case "ClearToolbarMsg":
+		toolbarMsgId, exist := request.Params["toolbarMsgId"]
 		if !exist {
-			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ClearToolbarStatus method must have a toolbarStatusId parameter", request.PluginName))
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ClearToolbarMsg method must have a toolbarMsgId parameter", request.PluginName))
 			return
 		}
-		pluginInstance.API.ClearToolbarStatus(ctx, toolbarStatusId)
+		pluginInstance.API.ClearToolbarMsg(ctx, toolbarMsgId)
 		w.sendResponseToHost(ctx, request, "")
 	case "Log":
 		msg, exist := request.Params["msg"]
@@ -645,23 +645,23 @@ func (w *WebsocketHost) handleRequestFromPlugin(ctx context.Context, request Jso
 
 		success := pluginInstance.API.PushResults(ctx, query, results)
 		w.sendResponseToHost(ctx, request, success)
-	case "ExecuteToolbarStatusAction":
-		toolbarStatusId, exist := request.Params["toolbarStatusId"]
+	case "ExecuteToolbarMsgAction":
+		toolbarMsgId, exist := request.Params["toolbarMsgId"]
 		if !exist {
-			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ExecuteToolbarStatusAction method must have a toolbarStatusId parameter", request.PluginName))
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ExecuteToolbarMsgAction method must have a toolbarMsgId parameter", request.PluginName))
 			return
 		}
 
 		actionId, exist := request.Params["actionId"]
 		if !exist {
-			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ExecuteToolbarStatusAction method must have an actionId parameter", request.PluginName))
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] ExecuteToolbarMsgAction method must have an actionId parameter", request.PluginName))
 			return
 		}
 
 		sessionId := util.GetContextSessionId(ctx)
-		executeErr := plugin.GetPluginManager().ExecuteToolbarStatusAction(ctx, sessionId, toolbarStatusId, actionId)
+		executeErr := plugin.GetPluginManager().ExecuteToolbarMsgAction(ctx, sessionId, toolbarMsgId, actionId)
 		if executeErr != nil {
-			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] execute toolbar status action failed: %s", request.PluginName, executeErr))
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] execute toolbar msg action failed: %s", request.PluginName, executeErr))
 			w.sendResponseErrToHost(ctx, request, executeErr)
 			return
 		}

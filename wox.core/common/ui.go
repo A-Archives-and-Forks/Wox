@@ -58,8 +58,8 @@ type UI interface {
 	UninstallTheme(ctx context.Context, theme Theme)
 	RestoreTheme(ctx context.Context)
 	Notify(ctx context.Context, msg NotifyMsg)
-	ShowToolbarStatus(ctx context.Context, status interface{})
-	ClearToolbarStatus(ctx context.Context)
+	ShowToolbarMsg(ctx context.Context, msg interface{})
+	ClearToolbarMsg(ctx context.Context)
 	// UpdateResult updates a result that is currently displayed in the UI.
 	// Returns true if the result was successfully updated (still visible in UI).
 	// Returns false if the result is no longer visible (caller should stop updating).

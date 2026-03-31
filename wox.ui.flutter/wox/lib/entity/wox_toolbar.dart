@@ -1,5 +1,18 @@
 import 'package:wox/entity/wox_image.dart';
 
+WoxImage? _parseToolbarImage(dynamic value) {
+  if (value is Map<String, dynamic>) {
+    return WoxImage.fromJson(value);
+  }
+  if (value is Map) {
+    return WoxImage.fromJson(value.map((key, item) => MapEntry(key.toString(), item)));
+  }
+  if (value is String) {
+    return WoxImage.parse(value);
+  }
+  return null;
+}
+
 class ToolbarActionInfo {
   final String name;
   final String hotkey;
@@ -8,7 +21,7 @@ class ToolbarActionInfo {
   ToolbarActionInfo({required this.name, required this.hotkey, this.action});
 }
 
-class ToolbarStatusActionInfo {
+class ToolbarMsgActionInfo {
   final String id;
   final String name;
   final WoxImage? icon;
@@ -17,7 +30,7 @@ class ToolbarStatusActionInfo {
   final bool preventHideAfterAction;
   final Map<String, String> contextData;
 
-  ToolbarStatusActionInfo({
+  ToolbarMsgActionInfo({
     required this.id,
     required this.name,
     required this.icon,
@@ -27,50 +40,20 @@ class ToolbarStatusActionInfo {
     required this.contextData,
   });
 
-  factory ToolbarStatusActionInfo.fromJson(Map<String, dynamic> json) {
+  factory ToolbarMsgActionInfo.fromJson(Map<String, dynamic> json) {
     final rawContextData = json['ContextData'];
     final contextData = rawContextData is Map ? rawContextData.map((key, value) => MapEntry(key.toString(), value.toString())) : <String, String>{};
 
-    return ToolbarStatusActionInfo(
+    return ToolbarMsgActionInfo(
       id: json['Id'] ?? "",
       name: json['Name'] ?? "",
-      icon: json['Icon'] != null ? WoxImage.fromJson(json['Icon']) : null,
+      icon: _parseToolbarImage(json['Icon']),
       hotkey: json['Hotkey'] ?? "",
       isDefault: json['IsDefault'] == true,
       preventHideAfterAction: json['PreventHideAfterAction'] == true,
       contextData: contextData,
     );
   }
-}
-
-class ToolbarStatusInfo {
-  final String id;
-  final String title;
-  final WoxImage? icon;
-  final int? progress;
-  final bool indeterminate;
-  final List<ToolbarStatusActionInfo> actions;
-
-  ToolbarStatusInfo({required this.id, required this.title, required this.icon, required this.progress, required this.indeterminate, required this.actions});
-
-  factory ToolbarStatusInfo.empty() {
-    return ToolbarStatusInfo(id: "", title: "", icon: null, progress: null, indeterminate: false, actions: const []);
-  }
-
-  factory ToolbarStatusInfo.fromJson(Map<String, dynamic> json) {
-    return ToolbarStatusInfo(
-      id: json['Id'] ?? "",
-      title: json['Title'] ?? "",
-      icon: json['Icon'] != null ? WoxImage.fromJson(json['Icon']) : null,
-      progress: json['Progress'] is int ? json['Progress'] : null,
-      indeterminate: json['Indeterminate'] == true,
-      actions: (json['Actions'] as List<dynamic>? ?? []).map((item) => ToolbarStatusActionInfo.fromJson(item)).toList(),
-    );
-  }
-
-  String get text => title;
-
-  bool get isEmpty => id.isEmpty || title.isEmpty;
 }
 
 class ToolbarInfo {
@@ -110,13 +93,37 @@ class ToolbarInfo {
 }
 
 class ToolbarMsg {
+  final String id;
+  final String title;
   final WoxImage? icon;
   final String? text;
+  final int? progress;
+  final bool indeterminate;
+  final List<ToolbarMsgActionInfo> actions;
   final int displaySeconds; // how long to display the message, 0 for forever
 
-  ToolbarMsg({this.icon, this.text, this.displaySeconds = 10});
+  const ToolbarMsg({this.id = "", this.title = "", this.icon, this.text, this.progress, this.indeterminate = false, this.actions = const [], this.displaySeconds = 10});
+
+  factory ToolbarMsg.empty() {
+    return const ToolbarMsg();
+  }
 
   static ToolbarMsg fromJson(Map<String, dynamic> json) {
-    return ToolbarMsg(icon: WoxImage.parse(json['Icon']), text: json['Text'] ?? '', displaySeconds: json['DisplaySeconds'] ?? 10);
+    return ToolbarMsg(
+      id: json['Id'] ?? "",
+      title: json['Title'] ?? "",
+      icon: _parseToolbarImage(json['Icon']),
+      text: json['Text'] ?? '',
+      progress: json['Progress'] is int ? json['Progress'] : null,
+      indeterminate: json['Indeterminate'] == true,
+      actions: (json['Actions'] as List<dynamic>? ?? []).map((item) => ToolbarMsgActionInfo.fromJson(item)).toList(),
+      displaySeconds: json['DisplaySeconds'] ?? 10,
+    );
   }
+
+  bool get isPersistent => id.isNotEmpty || title.isNotEmpty || progress != null || indeterminate || actions.isNotEmpty;
+
+  bool get isEmpty => !isPersistent && (text == null || text!.isEmpty);
+
+  String get displayText => isPersistent ? title : (text ?? '');
 }

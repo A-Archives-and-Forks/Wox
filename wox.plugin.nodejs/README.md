@@ -106,7 +106,7 @@ Supported image types:
 Methods for interacting with Wox:
 
 - **UI Control**: `showApp()`, `hideApp()`, `isVisible()`, `notify()`
-- **Toolbar Status**: `showStatus()`, `clearStatus()`, `onEnterPluginQuery()`, `onLeavePluginQuery()`
+- **Toolbar Msg**: `ShowToolbarMsg()`, `ClearToolbarMsg()`, `OnEnterPluginQuery()`, `OnLeavePluginQuery()`
 - **Query**: `changeQuery()`, `refreshQuery()`, `pushResults()`
 - **Settings**: `getSetting()`, `saveSetting()`, `onSettingChanged()`
 - **Logging**: `log()`

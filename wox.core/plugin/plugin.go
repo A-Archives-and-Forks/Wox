@@ -31,10 +31,10 @@ type FormActionProxyCreator interface {
 	CreateFormActionProxy(actionId string) func(context.Context, FormActionContext)
 }
 
-// ToolbarStatusActionProxyCreator is implemented by external plugins that need
-// toolbar status action callbacks to round-trip through the host runtime.
-type ToolbarStatusActionProxyCreator interface {
-	CreateToolbarStatusActionProxy(actionId string) func(context.Context, ToolbarStatusActionContext)
+// ToolbarMsgActionProxyCreator is implemented by external plugins that need
+// toolbar msg action callbacks to round-trip through the host runtime.
+type ToolbarMsgActionProxyCreator interface {
+	CreateToolbarMsgActionProxy(actionId string) func(context.Context, ToolbarMsgActionContext)
 }
 
 type InitParams struct {

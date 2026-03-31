@@ -90,28 +90,28 @@ export class PluginAPI implements PublicAPI {
     await this.invokeMethod(ctx, "Notify", { message })
   }
 
-  async ShowToolbarStatus(ctx: Context, status: unknown): Promise<void> {
+  async ShowToolbarMsg(ctx: Context, msg: unknown): Promise<void> {
     const pluginInstance = pluginInstances.get(this.pluginId)
-    if (pluginInstance && status && typeof status === "object") {
-      const maybeStatus = status as { Actions?: Array<{ Id?: string, Action?: unknown }> }
-      for (const action of maybeStatus.Actions ?? []) {
+    if (pluginInstance && msg && typeof msg === "object") {
+      const maybeMsg = msg as { Actions?: Array<{ Id?: string, Action?: unknown }> }
+      for (const action of maybeMsg.Actions ?? []) {
         if (!action.Id) {
           action.Id = crypto.randomUUID()
         }
         if (typeof action.Action === "function") {
-          pluginInstance.ToolbarStatusActions.set(
+          pluginInstance.ToolbarMsgActions.set(
             action.Id,
-            action.Action as (ctx: Context, actionContext: { ToolbarStatusId: string, ToolbarStatusActionId: string, ContextData: MapString }) => Promise<void> | void
+            action.Action as (ctx: Context, actionContext: { ToolbarMsgId: string, ToolbarMsgActionId: string, ContextData: MapString }) => Promise<void> | void
           )
         }
       }
     }
 
-    await this.invokeMethod(ctx, "ShowToolbarStatus", { status: JSON.stringify(status) })
+    await this.invokeMethod(ctx, "ShowToolbarMsg", { msg: JSON.stringify(msg) })
   }
 
-  async ClearToolbarStatus(ctx: Context, toolbarStatusId: string): Promise<void> {
-    await this.invokeMethod(ctx, "ClearToolbarStatus", { toolbarStatusId })
+  async ClearToolbarMsg(ctx: Context, toolbarMsgId: string): Promise<void> {
+    await this.invokeMethod(ctx, "ClearToolbarMsg", { toolbarMsgId })
   }
 
   async GetTranslation(ctx: Context, key: string): Promise<string> {

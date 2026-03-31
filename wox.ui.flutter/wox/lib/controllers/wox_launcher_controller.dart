@@ -165,7 +165,7 @@ class WoxLauncherController extends GetxController {
 
   // toolbar related variables
   final toolbar = ToolbarInfo.empty().obs;
-  final toolbarStatus = ToolbarStatusInfo.empty().obs;
+  final toolbarMsg = ToolbarMsg.empty().obs;
   // store i18n key instead of literal text
   final toolbarCopyText = 'toolbar_copy'.obs;
 
@@ -337,19 +337,19 @@ class WoxLauncherController extends GetxController {
     return doctorCheckInfo.value.results.any((result) => result.isVersionIssue);
   }
 
-  bool get hasVisibleToolbarStatus => !toolbarStatus.value.isEmpty;
+  bool get hasVisibleToolbarMsg => toolbarMsg.value.isPersistent;
 
-  bool get isShowToolbar => activeResultViewController.items.isNotEmpty || isShowDoctorCheckInfo || hasVisibleToolbarStatus;
+  bool get isShowToolbar => activeResultViewController.items.isNotEmpty || isShowDoctorCheckInfo || hasVisibleToolbarMsg;
 
   bool get isToolbarShowedWithoutResults => isShowToolbar && activeResultViewController.items.isEmpty;
 
-  String? get resolvedToolbarText => hasVisibleToolbarStatus ? toolbarStatus.value.text : toolbar.value.text;
+  String? get resolvedToolbarText => hasVisibleToolbarMsg ? toolbarMsg.value.displayText : toolbar.value.text;
 
-  WoxImage? get resolvedToolbarIcon => hasVisibleToolbarStatus ? toolbarStatus.value.icon : toolbar.value.icon;
+  WoxImage? get resolvedToolbarIcon => hasVisibleToolbarMsg ? toolbarMsg.value.icon : toolbar.value.icon;
 
-  int? get resolvedToolbarProgress => hasVisibleToolbarStatus ? toolbarStatus.value.progress : null;
+  int? get resolvedToolbarProgress => hasVisibleToolbarMsg ? toolbarMsg.value.progress : null;
 
-  bool get resolvedToolbarIndeterminate => hasVisibleToolbarStatus && toolbarStatus.value.indeterminate;
+  bool get resolvedToolbarIndeterminate => hasVisibleToolbarMsg && toolbarMsg.value.indeterminate;
 
   bool isFullscreenPreviewOnly() {
     return !isQueryBoxVisible.value && isShowPreviewPanel.value && resultPreviewRatio.value == 0;
@@ -385,6 +385,18 @@ class WoxLauncherController extends GetxController {
     }
 
     if (receivedResults.isEmpty) {
+      // Empty responses must clear stale items from the previous query state,
+      // otherwise plugin-scoped toolbar messages cannot be shown without results.
+      resultListViewController.clearItems();
+      resultGridViewController.clearItems();
+      actionListViewController.clearItems();
+      isShowPreviewPanel.value = false;
+      isShowActionPanel.value = false;
+      syncPreviewFullscreenState();
+      refreshToolbarActionsForCurrentState(traceId);
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        resizeHeight(traceId: traceId, reason: "empty query results received");
+      });
       return;
     }
 
@@ -458,7 +470,7 @@ class WoxLauncherController extends GetxController {
   }
 
   void updateDoctorToolbarIfNeeded(String traceId) {
-    if (hasVisibleToolbarStatus) {
+    if (hasVisibleToolbarMsg) {
       clearDoctorToolbarIfApplied();
       return;
     }
@@ -537,7 +549,7 @@ class WoxLauncherController extends GetxController {
   List<WoxResultAction> buildLocalActions() {
     final actions = <WoxResultAction>[];
 
-    final updateAction = hasVisibleToolbarStatus ? null : buildUpdateToolbarAction();
+    final updateAction = hasVisibleToolbarMsg ? null : buildUpdateToolbarAction();
     if (updateAction != null) {
       actions.add(
         WoxResultAction.local(
@@ -635,15 +647,15 @@ class WoxLauncherController extends GetxController {
     return actions;
   }
 
-  List<WoxResultAction> buildToolbarStatusActions() {
-    if (!hasVisibleToolbarStatus) {
+  List<WoxResultAction> buildToolbarMsgActions() {
+    if (!hasVisibleToolbarMsg) {
       return [];
     }
 
-    return toolbarStatus.value.actions
+    return toolbarMsg.value.actions
         .map(
           (action) => WoxResultAction.local(
-            id: 'toolbar-status:${toolbarStatus.value.id}:${action.id}',
+            id: 'toolbar-msg:${toolbarMsg.value.id}:${action.id}',
             name: action.name,
             hotkey: action.hotkey,
             icon: action.icon,
@@ -656,8 +668,8 @@ class WoxLauncherController extends GetxController {
                   requestId: const UuidV4().generate(),
                   traceId: traceId,
                   type: WoxMsgTypeEnum.WOX_MSG_TYPE_REQUEST.code,
-                  method: WoxMsgMethodEnum.WOX_MSG_METHOD_TOOLBAR_STATUS_ACTION.code,
-                  data: {'toolbarStatusId': toolbarStatus.value.id, 'actionId': action.id},
+                  method: WoxMsgMethodEnum.WOX_MSG_METHOD_TOOLBAR_MSG_ACTION.code,
+                  data: {'toolbarMsgId': toolbarMsg.value.id, 'actionId': action.id},
                 ),
               );
               return true;
@@ -669,13 +681,13 @@ class WoxLauncherController extends GetxController {
 
   List<WoxResultAction> buildUnifiedActions(String traceId, WoxQueryResult? activeResult) {
     final localActions = buildLocalActions();
-    final toolbarStatusActions = buildToolbarStatusActions();
+    final toolbarMsgActions = buildToolbarMsgActions();
     if (activeResult == null || activeResult.isGroup) {
-      return [...localActions, ...toolbarStatusActions];
+      return [...localActions, ...toolbarMsgActions];
     }
 
     final reservedHotkeys = localActions.where((action) => action.hotkey.isNotEmpty).map((action) => action.hotkey.toLowerCase()).toSet();
-    reservedHotkeys.addAll(toolbarStatusActions.where((action) => action.hotkey.isNotEmpty).map((action) => action.hotkey.toLowerCase()));
+    reservedHotkeys.addAll(toolbarMsgActions.where((action) => action.hotkey.isNotEmpty).map((action) => action.hotkey.toLowerCase()));
 
     final pluginActions =
         activeResult.actions.map((action) {
@@ -686,7 +698,7 @@ class WoxLauncherController extends GetxController {
           return conflicted ? action.copyWith(hotkey: "") : action.copyWith();
         }).toList();
 
-    return [...localActions, ...toolbarStatusActions, ...pluginActions];
+    return [...localActions, ...toolbarMsgActions, ...pluginActions];
   }
 
   WoxResultAction? getLocalActionByHotkey(HotKey hotkey, {Set<String>? allowedActionIds}) {
@@ -1026,7 +1038,7 @@ class WoxLauncherController extends GetxController {
   }
 
   Future<void> toggleActionPanel(String traceId) async {
-    if (activeResultViewController.items.isEmpty && buildToolbarStatusActions().isEmpty) {
+    if (activeResultViewController.items.isEmpty && buildToolbarMsgActions().isEmpty) {
       return;
     }
 
@@ -1130,7 +1142,7 @@ class WoxLauncherController extends GetxController {
 
   void openActionPanelForActiveResult(String traceId) {
     final activeResult = getActiveResult();
-    if ((activeResult == null || activeResult.isGroup) && buildToolbarStatusActions().isEmpty) {
+    if ((activeResult == null || activeResult.isGroup) && buildToolbarMsgActions().isEmpty) {
       return;
     }
 
@@ -1162,7 +1174,7 @@ class WoxLauncherController extends GetxController {
 
   /// given a hotkey, find the action in the result
   WoxResultAction? getActionByHotkey(WoxQueryResult? result, HotKey hotkey) {
-    if (result == null && buildToolbarStatusActions().isEmpty) {
+    if (result == null && buildToolbarMsgActions().isEmpty) {
       return null;
     }
 
@@ -1184,7 +1196,7 @@ class WoxLauncherController extends GetxController {
   }
 
   WoxResultAction? getActionByToolbarHotkey(WoxQueryResult? result, String hotkey) {
-    if (result == null && buildToolbarStatusActions().isEmpty) {
+    if (result == null && buildToolbarMsgActions().isEmpty) {
       return null;
     }
 
@@ -1574,13 +1586,10 @@ class WoxLauncherController extends GetxController {
       openSetting(msg.traceId, SettingWindowContext.fromJson(msg.data));
       responseWoxWebsocketRequest(msg, true, null);
     } else if (msg.method == "ShowToolbarMsg") {
-      showToolbarMsg(msg.traceId, ToolbarMsg.fromJson(msg.data));
+      await showToolbarMsg(msg.traceId, ToolbarMsg.fromJson(msg.data));
       responseWoxWebsocketRequest(msg, true, null);
-    } else if (msg.method == "ShowToolbarStatus") {
-      await showToolbarStatus(msg.traceId, ToolbarStatusInfo.fromJson(msg.data));
-      responseWoxWebsocketRequest(msg, true, null);
-    } else if (msg.method == "ClearToolbarStatus") {
-      await clearToolbarStatus(msg.traceId);
+    } else if (msg.method == "ClearToolbarMsg") {
+      await clearToolbarMsg(msg.traceId);
       responseWoxWebsocketRequest(msg, true, null);
     } else if (msg.method == "GetCurrentQuery") {
       responseWoxWebsocketRequest(msg, true, currentQuery.value.toJson());
@@ -1955,7 +1964,7 @@ class WoxLauncherController extends GetxController {
     // Only add toolbar height when toolbar is actually shown in UI.
     // Use local hasItems instead of the isShowToolbar getter so that
     // overrideItemCount is respected.
-    final showToolbar = (hasItems || isShowDoctorCheckInfo || hasVisibleToolbarStatus) && !isToolbarHiddenForce.value;
+    final showToolbar = (hasItems || isShowDoctorCheckInfo || hasVisibleToolbarMsg) && !isToolbarHiddenForce.value;
     if (showToolbar) {
       resultHeight += WoxThemeUtil.instance.getToolbarHeight();
     }
@@ -2416,9 +2425,19 @@ class WoxLauncherController extends GetxController {
     navigator.popUntil((route) => route.isFirst);
   }
 
-  void showToolbarMsg(String traceId, ToolbarMsg msg) {
+  Future<void> showToolbarMsg(String traceId, ToolbarMsg msg) async {
+    if (msg.isPersistent) {
+      final wasVisible = hasVisibleToolbarMsg;
+      toolbarMsg.value = msg;
+      refreshToolbarActionsForCurrentState(traceId);
+      if (!wasVisible) {
+        await resizeHeight(traceId: traceId, reason: "show toolbar msg");
+      }
+      return;
+    }
+
     // Snooze/mute enforcement is handled by backend before pushing to UI.
-    if (hasVisibleToolbarStatus) {
+    if (hasVisibleToolbarMsg) {
       return;
     }
 
@@ -2588,8 +2607,8 @@ class WoxLauncherController extends GetxController {
       return;
     }
 
-    final toolbarStatusActions = buildToolbarStatusActions();
-    if (toolbarStatusActions.isNotEmpty) {
+    final toolbarMsgActions = buildToolbarMsgActions();
+    if (toolbarMsgActions.isNotEmpty) {
       updateToolbarWithActions(traceId, buildUnifiedActions(traceId, null));
       return;
     }
@@ -2598,21 +2617,12 @@ class WoxLauncherController extends GetxController {
     updateDoctorToolbarIfNeeded(traceId);
   }
 
-  Future<void> showToolbarStatus(String traceId, ToolbarStatusInfo status) async {
-    final wasVisible = hasVisibleToolbarStatus;
-    toolbarStatus.value = status;
-    refreshToolbarActionsForCurrentState(traceId);
-    if (!wasVisible) {
-      await resizeHeight(traceId: traceId, reason: "show toolbar status");
-    }
-  }
-
-  Future<void> clearToolbarStatus(String traceId) async {
-    final wasVisible = hasVisibleToolbarStatus;
-    toolbarStatus.value = ToolbarStatusInfo.empty();
+  Future<void> clearToolbarMsg(String traceId) async {
+    final wasVisible = hasVisibleToolbarMsg;
+    toolbarMsg.value = ToolbarMsg.empty();
     refreshToolbarActionsForCurrentState(traceId);
     if (wasVisible) {
-      await resizeHeight(traceId: traceId, reason: "clear toolbar status");
+      await resizeHeight(traceId: traceId, reason: "clear toolbar msg");
     }
   }
 

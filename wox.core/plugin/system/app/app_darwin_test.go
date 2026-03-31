@@ -57,10 +57,10 @@ func (e emptyAPIImpl) OnDeepLink(ctx context.Context, callback func(context.Cont
 func (e emptyAPIImpl) OnUnload(ctx context.Context, callback func(context.Context)) {
 }
 
-func (e emptyAPIImpl) ShowToolbarStatus(ctx context.Context, status plugin.ToolbarStatus) {
+func (e emptyAPIImpl) ShowToolbarMsg(ctx context.Context, msg plugin.ToolbarMsg) {
 }
 
-func (e emptyAPIImpl) ClearToolbarStatus(ctx context.Context, toolbarStatusId string) {
+func (e emptyAPIImpl) ClearToolbarMsg(ctx context.Context, toolbarMsgId string) {
 }
 
 func (e emptyAPIImpl) OnEnterPluginQuery(ctx context.Context, callback func(context.Context)) {

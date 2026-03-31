@@ -14,7 +14,7 @@ from .models.log import LogLevel
 from .models.mru import MRUData
 from .models.query import ChangeQueryParam, MetadataCommand, Query, RefreshQueryParam, CopyParams
 from .models.result import Result, UpdatableResult  # noqa: F401
-from .models.toolbar_status import ToolbarStatus
+from .models.toolbar_msg import ToolbarMsg
 from .models.setting import PluginSettingDefinitionItem
 
 
@@ -165,26 +165,26 @@ class PublicAPI(Protocol):
         """
         ...
 
-    async def show_toolbar_status(self, ctx: Context, status: ToolbarStatus) -> None:
+    async def show_toolbar_msg(self, ctx: Context, msg: ToolbarMsg) -> None:
         """
-        Show or update a toolbar status for the current plugin.
+        Show or update a toolbar msg for the current plugin.
 
-        Reusing the same status id replaces the previous content.
-        Plugin-scoped status is only accepted while the user stays in this plugin query.
+        Reusing the same msg id replaces the previous content.
+        Plugin-scoped messages are only accepted while the user stays in this plugin query.
 
         Args:
             ctx: Context
-            status: Toolbar status payload to display in the launcher toolbar
+            msg: Toolbar msg payload to display in the launcher toolbar
         """
         ...
 
-    async def clear_toolbar_status(self, ctx: Context, toolbar_status_id: str) -> None:
+    async def clear_toolbar_msg(self, ctx: Context, toolbar_msg_id: str) -> None:
         """
-        Clear a toolbar status by id.
+        Clear a toolbar msg by id.
 
         Args:
             ctx: Context
-            toolbar_status_id: Id of the toolbar status owned by the current plugin
+            toolbar_msg_id: Id of the toolbar msg owned by the current plugin
         """
         ...
 

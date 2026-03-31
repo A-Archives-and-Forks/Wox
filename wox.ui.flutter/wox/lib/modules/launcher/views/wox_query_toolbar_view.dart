@@ -29,7 +29,7 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
 
     return Obx(() {
       final text = controller.resolvedToolbarText;
-      final hasToolbarProgress = controller.hasVisibleToolbarStatus && (controller.resolvedToolbarProgress != null || controller.resolvedToolbarIndeterminate);
+      final hasToolbarProgress = controller.hasVisibleToolbarMsg && (controller.resolvedToolbarProgress != null || controller.resolvedToolbarIndeterminate);
 
       // If no message, return empty widget
       if (text == null || text.isEmpty) {
@@ -43,7 +43,10 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (controller.resolvedToolbarIcon != null)
-              Padding(padding: const EdgeInsets.only(right: 8), child: WoxImageView(woxImage: controller.resolvedToolbarIcon!, width: 24, height: 24)),
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: WoxImageView(woxImage: controller.resolvedToolbarIcon!, width: 24, height: 24),
+              ),
             // Text area flexes inside the capped max width and will ellipsize when needed
             Flexible(
               child: LayoutBuilder(
@@ -76,7 +79,7 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
                             ),
                           ),
                         ),
-                      if (isTextOverflow && !controller.hasVisibleToolbarStatus)
+                      if (isTextOverflow && !controller.hasVisibleToolbarMsg)
                         MouseRegion(
                           cursor: SystemMouseCursors.click,
                           child: GestureDetector(
@@ -103,7 +106,7 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
                             ),
                           ),
                         ),
-                      if (isTextOverflow && !controller.hasVisibleToolbarStatus) ...[
+                      if (isTextOverflow && !controller.hasVisibleToolbarMsg) ...[
                         const SizedBox(width: 8),
                         Theme(
                           data: Theme.of(context).copyWith(
@@ -249,7 +252,10 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
             actionWidgets.add(_buildClickableToolbarAction(actionInfo, hotkey));
           }
 
-          return Align(alignment: Alignment.centerRight, child: Row(mainAxisSize: MainAxisSize.min, children: actionWidgets));
+          return Align(
+            alignment: Alignment.centerRight,
+            child: Row(mainAxisSize: MainAxisSize.min, children: actionWidgets),
+          );
         },
       );
     });
@@ -275,10 +281,9 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
             const SizedBox(width: 8),
             WoxHotkeyView(
               hotkey: hotkey,
-              backgroundColor:
-                  hasResultItems
-                      ? safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarBackgroundColor)
-                      : safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.appBackgroundColor).withValues(alpha: 0.1),
+              backgroundColor: hasResultItems
+                  ? safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarBackgroundColor)
+                  : safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.appBackgroundColor).withValues(alpha: 0.1),
               borderColor: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarFontColor),
               textColor: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarFontColor),
             ),

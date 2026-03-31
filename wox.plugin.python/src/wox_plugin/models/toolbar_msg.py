@@ -1,7 +1,7 @@
 """
-Wox toolbar status models.
+Wox toolbar msg models.
 
-Toolbar status is a first-class channel for long-running plugin work such as
+Toolbar messages are a first-class channel for long-running plugin work such as
 indexing, syncing, and background downloads.
 """
 
@@ -14,8 +14,8 @@ from .context import Context
 from .image import WoxImage
 
 
-class ToolbarStatusScope(str, Enum):
-    """Visibility scope for a toolbar status."""
+class ToolbarMsgScope(str, Enum):
+    """Visibility scope for a toolbar msg."""
 
     #: Visible only while the user stays in the owning plugin query context.
     PLUGIN = "plugin"
@@ -24,38 +24,38 @@ class ToolbarStatusScope(str, Enum):
 
 
 @dataclass
-class ToolbarStatusActionContext:
-    """Context passed to a toolbar status action callback."""
+class ToolbarMsgActionContext:
+    """Context passed to a toolbar msg action callback."""
 
-    #: Id of the toolbar status that owns the action.
-    toolbar_status_id: str = field(default="")
-    #: Id of the toolbar status action that was invoked.
-    toolbar_status_action_id: str = field(default="")
+    #: Id of the toolbar msg that owns the action.
+    toolbar_msg_id: str = field(default="")
+    #: Id of the toolbar msg action that was invoked.
+    toolbar_msg_action_id: str = field(default="")
     #: Arbitrary string data attached to the action.
     context_data: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_json(cls, json_str: str) -> "ToolbarStatusActionContext":
+    def from_json(cls, json_str: str) -> "ToolbarMsgActionContext":
         """Deserialize action context from the host callback payload."""
         data = json.loads(json_str)
         context_data = data.get("ContextData", {}) or {}
         if not isinstance(context_data, dict):
             context_data = {}
         return cls(
-            toolbar_status_id=data.get("ToolbarStatusId", ""),
-            toolbar_status_action_id=data.get("ToolbarStatusActionId", ""),
+            toolbar_msg_id=data.get("ToolbarMsgId", ""),
+            toolbar_msg_action_id=data.get("ToolbarMsgActionId", ""),
             context_data={str(key): str(value) for key, value in context_data.items()},
         )
 
 
 @dataclass
-class ToolbarStatusAction:
-    """Execute action shown on the toolbar while a status is visible."""
+class ToolbarMsgAction:
+    """Execute action shown on the toolbar while a toolbar msg is visible."""
 
     #: Action label shown in the toolbar.
     name: str
     #: Callback invoked when the user triggers the action.
-    action: Optional[Callable[[Context, ToolbarStatusActionContext], Awaitable[None] | None]] = None
+    action: Optional[Callable[[Context, ToolbarMsgActionContext], Awaitable[None] | None]] = None
     #: Unique action id. Wox will backfill one when omitted.
     id: str = field(default="")
     #: Optional action icon.
@@ -66,7 +66,7 @@ class ToolbarStatusAction:
     is_default: bool = field(default=False)
     #: Whether Wox should stay visible after the action runs.
     prevent_hide_after_action: bool = field(default=False)
-    #: Arbitrary string data passed back in ToolbarStatusActionContext.
+    #: Arbitrary string data passed back in ToolbarMsgActionContext.
     context_data: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
@@ -83,15 +83,15 @@ class ToolbarStatusAction:
 
 
 @dataclass
-class ToolbarStatus:
-    """Toolbar status payload sent through PublicAPI.show_toolbar_status()."""
+class ToolbarMsg:
+    """Toolbar msg payload sent through PublicAPI.show_toolbar_msg()."""
 
-    #: Unique status id within the current plugin. Reusing it updates the status in place.
+    #: Unique toolbar msg id within the current plugin. Reusing it updates the msg in place.
     id: str
     #: Primary text shown in the toolbar.
     title: str
-    #: Controls when the status is visible.
-    scope: ToolbarStatusScope = field(default=ToolbarStatusScope.PLUGIN)
+    #: Controls when the toolbar msg is visible.
+    scope: ToolbarMsgScope = field(default=ToolbarMsgScope.PLUGIN)
     #: Optional icon shown before the title.
     icon: WoxImage = field(default_factory=WoxImage)
     #: Optional 0-100 progress value for determinate progress.
@@ -99,10 +99,10 @@ class ToolbarStatus:
     #: Show an indeterminate spinner when progress is ongoing but no percentage is available.
     indeterminate: bool = field(default=False)
     #: Optional actions rendered on the right side of the toolbar.
-    actions: List[ToolbarStatusAction] = field(default_factory=list)
+    actions: List[ToolbarMsgAction] = field(default_factory=list)
 
     def to_json(self) -> str:
-        """Serialize the toolbar status to the host payload format."""
+        """Serialize the toolbar msg to the host payload format."""
         return json.dumps(
             {
                 "Id": self.id,

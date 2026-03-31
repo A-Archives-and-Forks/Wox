@@ -122,7 +122,7 @@ func (u *uiImpl) Notify(ctx context.Context, msg common.NotifyMsg) {
 		logger.Info(ctx, "toolbar/system message muted by backend")
 		return
 	}
-	if u.IsVisible(ctx) && !u.IsInSettingView() && !plugin.GetPluginManager().HasVisibleToolbarStatus(ctx) {
+	if u.IsVisible(ctx) && !u.IsInSettingView() && !plugin.GetPluginManager().HasVisibleToolbarMsg(ctx) {
 		u.invokeWebsocketMethod(ctx, "ShowToolbarMsg", msg)
 	} else {
 		var icon image.Image
@@ -139,12 +139,12 @@ func (u *uiImpl) Notify(ctx context.Context, msg common.NotifyMsg) {
 	}
 }
 
-func (u *uiImpl) ShowToolbarStatus(ctx context.Context, status interface{}) {
-	u.invokeWebsocketMethod(ctx, "ShowToolbarStatus", status)
+func (u *uiImpl) ShowToolbarMsg(ctx context.Context, msg interface{}) {
+	u.invokeWebsocketMethod(ctx, "ShowToolbarMsg", msg)
 }
 
-func (u *uiImpl) ClearToolbarStatus(ctx context.Context) {
-	u.invokeWebsocketMethod(ctx, "ClearToolbarStatus", nil)
+func (u *uiImpl) ClearToolbarMsg(ctx context.Context) {
+	u.invokeWebsocketMethod(ctx, "ClearToolbarMsg", nil)
 }
 
 func (u *uiImpl) IsInSettingView() bool {
@@ -355,8 +355,8 @@ func onUIWebsocketRequest(ctx context.Context, request WebsocketMsg) {
 		handleWebsocketAction(ctx, request)
 	case "FormAction":
 		handleWebsocketFormAction(ctx, request)
-	case "ToolbarStatusAction":
-		handleWebsocketToolbarStatusAction(ctx, request)
+	case "ToolbarMsgAction":
+		handleWebsocketToolbarMsgAction(ctx, request)
 	case "TerminalSubscribe":
 		handleWebsocketTerminalSubscribe(ctx, request)
 	case "TerminalUnsubscribe":
@@ -645,8 +645,8 @@ func handleWebsocketFormAction(ctx context.Context, request WebsocketMsg) {
 	responseUISuccess(ctx, request)
 }
 
-func handleWebsocketToolbarStatusAction(ctx context.Context, request WebsocketMsg) {
-	toolbarStatusId, statusErr := getWebsocketMsgParameter(ctx, request, "toolbarStatusId")
+func handleWebsocketToolbarMsgAction(ctx context.Context, request WebsocketMsg) {
+	toolbarMsgId, statusErr := getWebsocketMsgParameter(ctx, request, "toolbarMsgId")
 	if statusErr != nil {
 		logger.Error(ctx, statusErr.Error())
 		responseUIError(ctx, request, statusErr.Error())
@@ -660,7 +660,7 @@ func handleWebsocketToolbarStatusAction(ctx context.Context, request WebsocketMs
 		return
 	}
 
-	executeErr := plugin.GetPluginManager().ExecuteToolbarStatusAction(ctx, request.SessionId, toolbarStatusId, actionId)
+	executeErr := plugin.GetPluginManager().ExecuteToolbarMsgAction(ctx, request.SessionId, toolbarMsgId, actionId)
 	if executeErr != nil {
 		responseUIError(ctx, request, executeErr.Error())
 		return

@@ -13,7 +13,7 @@ from wox_plugin import (
     LogLevel,
     MetadataCommand,
     MRUData,
-    ToolbarStatus,
+    ToolbarMsg,
     PluginSettingDefinitionItem,
     PublicAPI,
     Query,
@@ -114,22 +114,22 @@ class PluginAPI(PublicAPI):
         """Show a notification message"""
         await self.invoke_method(ctx, "Notify", {"message": message})
 
-    async def show_toolbar_status(self, ctx: Context, status: ToolbarStatus) -> None:
+    async def show_toolbar_msg(self, ctx: Context, msg: ToolbarMsg) -> None:
         from .plugin_manager import plugin_instances
 
         plugin_instance = plugin_instances.get(self.plugin_id)
         if plugin_instance:
-            for action in status.actions:
+            for action in msg.actions:
                 action_id = action.id or str(uuid.uuid4())
                 action.id = action_id
                 callback = action.action
                 if callable(callback):
-                    plugin_instance.toolbar_status_actions[action_id] = callback
+                    plugin_instance.toolbar_msg_actions[action_id] = callback
 
-        await self.invoke_method(ctx, "ShowToolbarStatus", {"status": json.loads(status.to_json())})
+        await self.invoke_method(ctx, "ShowToolbarMsg", {"msg": json.loads(msg.to_json())})
 
-    async def clear_toolbar_status(self, ctx: Context, toolbar_status_id: str) -> None:
-        await self.invoke_method(ctx, "ClearToolbarStatus", {"toolbarStatusId": toolbar_status_id})
+    async def clear_toolbar_msg(self, ctx: Context, toolbar_msg_id: str) -> None:
+        await self.invoke_method(ctx, "ClearToolbarMsg", {"toolbarMsgId": toolbar_msg_id})
 
     async def log(self, ctx: Context, level: LogLevel, msg: str) -> None:
         """Write log"""

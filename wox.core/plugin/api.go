@@ -47,13 +47,13 @@ type API interface {
 	OnUnload(ctx context.Context, callback func(ctx context.Context))
 	OnMRURestore(ctx context.Context, callback func(ctx context.Context, mruData MRUData) (*QueryResult, error))
 
-	// ShowToolbarStatus creates or updates a toolbar status owned by the current plugin.
-	// Plugin-scoped status is only accepted while the session is inside that plugin query.
-	// Global status competes with other global status entries by latest update time.
-	ShowToolbarStatus(ctx context.Context, status ToolbarStatus)
+	// ShowToolbarMsg creates or updates a toolbar msg owned by the current plugin.
+	// Plugin-scoped messages are only accepted while the session is inside that plugin query.
+	// Global messages compete with other global messages by latest update time.
+	ShowToolbarMsg(ctx context.Context, msg ToolbarMsg)
 
-	// ClearToolbarStatus removes a toolbar status owned by the current plugin by its Id.
-	ClearToolbarStatus(ctx context.Context, toolbarStatusId string)
+	// ClearToolbarMsg removes a toolbar msg owned by the current plugin by its Id.
+	ClearToolbarMsg(ctx context.Context, toolbarMsgId string)
 
 	// OnEnterPluginQuery registers a callback that fires once when the session enters
 	// this plugin's query context.
@@ -316,12 +316,12 @@ func (a *APIImpl) OnUnload(ctx context.Context, callback func(ctx context.Contex
 	a.pluginInstance.UnloadCallbacks = append(a.pluginInstance.UnloadCallbacks, callback)
 }
 
-func (a *APIImpl) ShowToolbarStatus(ctx context.Context, status ToolbarStatus) {
-	GetPluginManager().ShowToolbarStatus(ctx, a.pluginInstance, status)
+func (a *APIImpl) ShowToolbarMsg(ctx context.Context, msg ToolbarMsg) {
+	GetPluginManager().ShowToolbarMsg(ctx, a.pluginInstance, msg)
 }
 
-func (a *APIImpl) ClearToolbarStatus(ctx context.Context, toolbarStatusId string) {
-	GetPluginManager().ClearToolbarStatus(ctx, a.pluginInstance, toolbarStatusId)
+func (a *APIImpl) ClearToolbarMsg(ctx context.Context, toolbarMsgId string) {
+	GetPluginManager().ClearToolbarMsg(ctx, a.pluginInstance, toolbarMsgId)
 }
 
 func (a *APIImpl) OnEnterPluginQuery(ctx context.Context, callback func(ctx context.Context)) {

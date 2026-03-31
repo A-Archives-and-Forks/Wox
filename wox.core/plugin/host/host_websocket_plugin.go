@@ -59,16 +59,16 @@ func (w *WebsocketPlugin) CreateFormActionProxy(actionId string) func(context.Co
 	}
 }
 
-func (w *WebsocketPlugin) CreateToolbarStatusActionProxy(actionId string) func(context.Context, plugin.ToolbarStatusActionContext) {
-	return func(ctx context.Context, actionContext plugin.ToolbarStatusActionContext) {
-		_, actionErr := w.websocketHost.invokeMethod(ctx, w.metadata, "toolbarStatusAction", common.ContextData{
-			"ToolbarStatusId":       actionContext.ToolbarStatusId,
-			"ActionId":              actionId,
-			"ToolbarStatusActionId": actionContext.ToolbarStatusActionId,
-			"ContextData":           actionContext.ContextData.Marshal(),
+func (w *WebsocketPlugin) CreateToolbarMsgActionProxy(actionId string) func(context.Context, plugin.ToolbarMsgActionContext) {
+	return func(ctx context.Context, actionContext plugin.ToolbarMsgActionContext) {
+		_, actionErr := w.websocketHost.invokeMethod(ctx, w.metadata, "toolbarMsgAction", common.ContextData{
+			"ToolbarMsgId":       actionContext.ToolbarMsgId,
+			"ActionId":           actionId,
+			"ToolbarMsgActionId": actionContext.ToolbarMsgActionId,
+			"ContextData":        actionContext.ContextData.Marshal(),
 		})
 		if actionErr != nil {
-			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] toolbar status action failed: %s", w.metadata.GetName(ctx), actionErr.Error()))
+			util.GetLogger().Error(ctx, fmt.Sprintf("[%s] toolbar msg action failed: %s", w.metadata.GetName(ctx), actionErr.Error()))
 		}
 	}
 }

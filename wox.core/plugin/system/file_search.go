@@ -24,7 +24,7 @@ import (
 var fileIcon = common.PluginFileIcon
 
 const fileRootsSettingKey = "roots"
-const fileSearchToolbarStatusID = "file-search-status"
+const fileSearchToolbarMsgID = "file-search-status"
 
 type fileRootSetting struct {
 	Path string `json:"Path"`
@@ -108,7 +108,7 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 	c.syncUserRoots(ctx)
 
 	c.api.OnEnterPluginQuery(ctx, func(callbackCtx context.Context) {
-		c.syncToolbarStatus(callbackCtx, true)
+		c.syncToolbarMsg(callbackCtx, true)
 	})
 
 	c.api.OnSettingChanged(ctx, func(callbackCtx context.Context, key string, value string) {
@@ -126,7 +126,7 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 }
 
 func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
-	c.syncToolbarStatus(ctx, query.Search == "")
+	c.syncToolbarMsg(ctx, query.Search == "")
 
 	// if query is empty, return empty result
 	if query.Search == "" {
@@ -284,29 +284,29 @@ func (c *FileSearchPlugin) getConfiguredRootPaths(ctx context.Context) []string 
 	return paths
 }
 
-func (c *FileSearchPlugin) syncToolbarStatus(ctx context.Context, includeReady bool) {
-	status, found := c.buildToolbarStatus(ctx, includeReady)
+func (c *FileSearchPlugin) syncToolbarMsg(ctx context.Context, includeReady bool) {
+	status, found := c.buildToolbarMsg(ctx, includeReady)
 	if !found {
-		c.api.ClearToolbarStatus(ctx, fileSearchToolbarStatusID)
+		c.api.ClearToolbarMsg(ctx, fileSearchToolbarMsgID)
 		return
 	}
 
-	c.api.ShowToolbarStatus(ctx, status)
+	c.api.ShowToolbarMsg(ctx, status)
 }
 
-func (c *FileSearchPlugin) buildToolbarStatus(ctx context.Context, includeReady bool) (plugin.ToolbarStatus, bool) {
+func (c *FileSearchPlugin) buildToolbarMsg(ctx context.Context, includeReady bool) (plugin.ToolbarMsg, bool) {
 	if c.engine == nil {
-		return plugin.ToolbarStatus{}, false
+		return plugin.ToolbarMsg{}, false
 	}
 
 	status, err := c.engine.GetStatus(ctx)
 	if err != nil {
 		c.api.Log(ctx, plugin.LogLevelWarning, "Failed to load file search status: "+err.Error())
-		return plugin.ToolbarStatus{}, false
+		return plugin.ToolbarMsg{}, false
 	}
 
 	if !includeReady && !status.IsIndexing && status.ErrorRootCount == 0 {
-		return plugin.ToolbarStatus{}, false
+		return plugin.ToolbarMsg{}, false
 	}
 
 	c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf(
@@ -346,27 +346,27 @@ func (c *FileSearchPlugin) buildToolbarStatus(ctx context.Context, includeReady 
 		icon = fileIcon
 	}
 
-	return plugin.ToolbarStatus{
-		Id:            fileSearchToolbarStatusID,
-		Scope:         plugin.ToolbarStatusScopePlugin,
+	return plugin.ToolbarMsg{
+		Id:            fileSearchToolbarMsgID,
+		Scope:         plugin.ToolbarMsgScopePlugin,
 		Title:         title,
 		Icon:          icon,
 		Progress:      progress,
 		Indeterminate: indeterminate,
-		Actions:       c.toolbarStatusActions(ctx, hasPermissionError),
+		Actions:       c.toolbarMsgActions(ctx, hasPermissionError),
 	}, true
 }
 
-func (c *FileSearchPlugin) toolbarStatusActions(ctx context.Context, hasPermissionError bool) []plugin.ToolbarStatusAction {
+func (c *FileSearchPlugin) toolbarMsgActions(ctx context.Context, hasPermissionError bool) []plugin.ToolbarMsgAction {
 	if !hasPermissionError || !util.IsMacOS() {
 		return nil
 	}
 
-	return []plugin.ToolbarStatusAction{
+	return []plugin.ToolbarMsgAction{
 		{
 			Name: "i18n:plugin_file_status_open_privacy_settings",
 			Icon: common.PermissionIcon,
-			Action: func(ctx context.Context, actionContext plugin.ToolbarStatusActionContext) {
+			Action: func(ctx context.Context, actionContext plugin.ToolbarMsgActionContext) {
 				permission.OpenPrivacySecuritySettings(ctx)
 			},
 			PreventHideAfterAction: true,

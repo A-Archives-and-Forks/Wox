@@ -18,8 +18,8 @@ func (p *testUIPlugin) Query(ctx context.Context, query plugin.Query) []plugin.Q
 }
 
 type testToolbarStateUI struct {
-	clearToolbarStatusCalls int
-	showToolbarStatusCalls  int
+	clearToolbarMsgCalls int
+	showToolbarMsgCalls  int
 }
 
 func (u *testToolbarStateUI) ChangeQuery(ctx context.Context, query common.PlainQuery)      {}
@@ -42,10 +42,10 @@ func (u *testToolbarStateUI) InstallTheme(ctx context.Context, theme common.Them
 func (u *testToolbarStateUI) UninstallTheme(ctx context.Context, theme common.Theme) {}
 func (u *testToolbarStateUI) RestoreTheme(ctx context.Context)                       {}
 func (u *testToolbarStateUI) Notify(ctx context.Context, msg common.NotifyMsg)       {}
-func (u *testToolbarStateUI) ShowToolbarStatus(ctx context.Context, status interface{}) {
-	u.showToolbarStatusCalls++
+func (u *testToolbarStateUI) ShowToolbarMsg(ctx context.Context, msg interface{}) {
+	u.showToolbarMsgCalls++
 }
-func (u *testToolbarStateUI) ClearToolbarStatus(ctx context.Context)                    { u.clearToolbarStatusCalls++ }
+func (u *testToolbarStateUI) ClearToolbarMsg(ctx context.Context)                       { u.clearToolbarMsgCalls++ }
 func (u *testToolbarStateUI) UpdateResult(ctx context.Context, result interface{}) bool { return true }
 func (u *testToolbarStateUI) PushResults(ctx context.Context, payload interface{}) bool { return true }
 func (u *testToolbarStateUI) IsVisible(ctx context.Context) bool                        { return true }
@@ -86,7 +86,7 @@ func storeSessionPluginQueryState(manager any, sessionId string, pluginId string
 	storeMethod.Call([]reflect.Value{reflect.ValueOf(sessionId), stateValue})
 }
 
-func TestHandleWebsocketQueryClearsPluginToolbarStatusWhenQueryBecomesEmpty(t *testing.T) {
+func TestHandleWebsocketQueryClearsPluginToolbarMsgWhenQueryBecomesEmpty(t *testing.T) {
 	GetUIManager()
 	manager := plugin.GetPluginManager()
 	fakeUI := &testToolbarStateUI{}
@@ -101,12 +101,12 @@ func TestHandleWebsocketQueryClearsPluginToolbarStatusWhenQueryBecomesEmpty(t *t
 
 	originalUI := setUnexportedField(manager, "ui", common.UI(fakeUI))
 	originalInstances := setUnexportedField(manager, "instances", []*plugin.Instance{fakePluginInstance})
-	clearUnexportedHashMap(manager, "toolbarStatuses")
+	clearUnexportedHashMap(manager, "toolbarMsgs")
 	clearUnexportedHashMap(manager, "sessionPluginQueries")
 	defer func() {
 		setUnexportedField(manager, "ui", originalUI)
 		setUnexportedField(manager, "instances", originalInstances)
-		clearUnexportedHashMap(manager, "toolbarStatuses")
+		clearUnexportedHashMap(manager, "toolbarMsgs")
 		clearUnexportedHashMap(manager, "sessionPluginQueries")
 	}()
 
@@ -126,8 +126,8 @@ func TestHandleWebsocketQueryClearsPluginToolbarStatusWhenQueryBecomesEmpty(t *t
 		},
 	})
 
-	if fakeUI.clearToolbarStatusCalls == 0 {
-		t.Fatalf("expected empty query to clear plugin-scoped toolbar status")
+	if fakeUI.clearToolbarMsgCalls == 0 {
+		t.Fatalf("expected empty query to clear plugin-scoped toolbar msg")
 	}
 }
 
