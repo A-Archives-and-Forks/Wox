@@ -69,13 +69,13 @@ toolbar 内容优先级如下：
 
 ### Global Status 竞争
 
-- 当多个插件同时发布 `global` scope status 时，最后一次成功 `ShowStatus(global)` 的状态获胜。
+- 当多个插件同时发布 `global` scope status 时，最后一次成功 `ShowToolbarMsg(global)` 的状态获胜。
 
 ### Plugin Status 生命周期
 
 - `plugin` scope status 在离开插件 query 上下文时由 Wox 自动隐藏。
 - 重新进入插件 query 上下文时，UI 不会自动从缓存恢复旧 status。
-- 是否重新 `ShowStatus` 由插件自己决定。
+- 是否重新 `ShowToolbarMsg` 由插件自己决定。
 
 ### Status Actions
 
@@ -92,32 +92,34 @@ toolbar 内容优先级如下：
 
 新增以下插件 API：
 
-- `ShowStatus`
-- `ClearStatus`
+- `ShowToolbarMsg`
+- `ClearToolbarMsg`
 - `OnEnterPluginQuery`
 - `OnLeavePluginQuery`
 
-`ShowStatus` 是 upsert 语义：
+`ShowToolbarMsg` 是 upsert 语义：
 
 - 如果该插件该 scope 下不存在同 id status，则创建并显示
 - 如果已存在同 id status，则替换当前内容并重新渲染
 
-`ClearStatus` 按 id 清理当前插件名下的 status。
+`ClearToolbarMsg` 按 id 清理当前插件名下的 status。
 
-### Status 数据结构
+### ToolbarMsg 数据结构
 
-第一版先保持 payload 简洁明确：
+Flutter UI 模型统一为 `ToolbarMsg`。第一版先保持 payload 简洁明确：
 
 ```ts
 type PluginStatusScope = "plugin" | "global";
 
-interface PluginStatus {
+interface ToolbarMsg {
   id: string;
+  source: "notify" | "status" | "doctor";
   scope: PluginStatusScope;
   title: string;
   progress?: number; // 0-100, 如果用户设置了progress, 那么wox会默认在status message旁边展示一个圆形的进度条，表示当前的进度百分比。如果用户没有设置progress, 进度条不会显示。
   indeterminate?: boolean;
   actions?: PluginStatusAction[];
+  displaySeconds?: number;
 }
 ```
 
@@ -170,7 +172,7 @@ interface PluginStatusActionContext {
 
 1. 用户输入 `files ...`
 2. Wox 触发 `OnEnterPluginQuery`
-3. 插件调用 `ShowStatus(scope = plugin)`
+3. 插件调用 `ShowToolbarMsg(scope = plugin)`
 4. 即使没有 result，toolbar 也显示 indexing status
 5. 用户离开 `files ...`
 6. Wox 触发 `OnLeavePluginQuery`
@@ -179,9 +181,9 @@ interface PluginStatusActionContext {
 ### 示例 2：全局下载状态
 
 1. 某插件启动后台下载任务
-2. 插件调用 `ShowStatus(scope = global)`
+2. 插件调用 `ShowToolbarMsg(scope = global)`
 3. 如果用户当前不在其他插件的可见 `plugin scope` status 中，则 toolbar 显示该 global status
-4. 另一个插件之后再次调用 `ShowStatus(global)`
+4. 另一个插件之后再次调用 `ShowToolbarMsg(global)`
 5. 更新的 global status 覆盖前一个 global status
 
 ### 示例 3：Status 可见时收到 Notify
@@ -196,7 +198,7 @@ interface PluginStatusActionContext {
 ### wox.core
 
 - 在 plugin/core 边界新增 status 领域模型。
-- 扩展插件 API，支持 `ShowStatus`、`ClearStatus`、`OnEnterPluginQuery`、`OnLeavePluginQuery`。
+- 扩展插件 API，支持 `ShowToolbarMsg`、`ClearToolbarMsg`、`OnEnterPluginQuery`、`OnLeavePluginQuery`。
 - 维护按插件和 scope 存储的 status 状态。
 - 维护当前最新的 active global status。
 - 当 query 上下文跨插件边界切换时，发出 enter/leave 生命周期回调。
@@ -205,21 +207,21 @@ interface PluginStatusActionContext {
 
 ### 插件 Host
 
-- 为新增 status API 和生命周期回调补 websocket/json-rpc 方法。
+- 为新增 toolbar msg API 和生命周期回调补 websocket/json-rpc 方法。
 - status action 的 execute callback 走与 result action 类似的回调链路。
 - 保持 context data 和 hotkey 语义一致。
 
 ### 插件 SDK
 
 - 为 Node.js 和 Python SDK 增加新的 public API 与类型定义。
-- 文档中明确 `ShowStatus` 是 upsert 语义。
+- 文档中明确 `ShowToolbarMsg` 是 upsert 语义。
 - 文档中明确 `plugin scope` 只有在插件 query 上下文中可见。
 - 文档中明确第一版 status action 只支持 execute。
 
 ### Flutter UI
 
 - 当存在 status 时，即使没有 result，也允许 toolbar 显示。
-- 左侧 status 内容先独立接入 dedicated status state，不要求第一版先统一 toolbar source model。
+- Flutter 侧统一使用 `ToolbarMsg` 作为渲染模型，notify 与 status 最终都落到这一种对象上。
 - 右侧 toolbar action 区需要合并 status actions 与 result actions，并以 status actions 为高优先级。
 - 被挤压的低优先级 actions 自动进入 `More Actions`。
 - 当没有 status 获胜时，保持 doctor 与 result action 的现有行为。
@@ -237,9 +239,9 @@ smoke test 至少覆盖：
 - status 占用 toolbar 时，notify 回退为 toast
 - 没有 status 时，notify 继续保持现有 visible/hidden 路由
 - 在插件上下文中，`plugin scope` status 覆盖可见的 `global scope` status
-- 多个 global status 竞争时，最后一次 `ShowStatus(global)` 获胜
-- 对同一个 `status.id` 重复 `ShowStatus` 会更新而不是重复创建
-- `ClearStatus` 后 toolbar 能恢复到下一层可见来源
+- 多个 global status 竞争时，最后一次 `ShowToolbarMsg(global)` 获胜
+- 对同一个 `status.id` 重复 `ShowToolbarMsg` 会更新而不是重复创建
+- `ClearToolbarMsg` 后 toolbar 能恢复到下一层可见来源
 - status actions 优先显示在 result actions 之前
 - 被挤压的 result actions 会进入 `More Actions`
 - status 默认动作优先于 result 默认动作
@@ -251,16 +253,17 @@ smoke test 至少覆盖：
 
 ## 实现说明
 
-- 第一版保持增量实现，不要一开始就做统一 toolbar content abstraction。
+- 第一版保持增量实现，不要一开始就做超出需要范围的 toolbar 大重构。
 - 写代码时补充必要的英文注释，重点放在生命周期边界、status 竞争、toolbar fallback 等不够直观的逻辑上。
 - 不要把 status 存储与 result 存储强耦合。
 - 可以复用现有 toolbar action 展示链路，但不要为了复用而强行让 result-only 类型直接拥有 status 语义。
+- Flutter 渲染层统一只保留一个 `ToolbarMsg` 模型。
 
 ## 已确认决策
 
 - toolbar 是主状态展示面
 - query icon 不是主展示面
-- API 名字使用 `ShowStatus` 和 `ClearStatus`
+- API 名字使用 `ShowToolbarMsg` 和 `ClearToolbarMsg`
 - status action 第一版只支持 execute
 - 第一版默认允许所有插件显示 global status
 - 多个 global status 使用 latest-write-wins
