@@ -1,7 +1,7 @@
 // Search Everything : http://voidtools.com/
 // https://www.voidtools.com/forum/viewtopic.php?t=15853
 // https://github.com/voidtools/everything_sdk3
-package file
+package filesearch
 
 import (
 	"fmt"
@@ -19,15 +19,12 @@ const (
 	EVERYTHING3_PROPERTY_ID_PATH_AND_NAME = 240
 )
 
-// general
 var Everything3_GetLastError *syscall.LazyProc
 var Everything3_ConnectW *syscall.LazyProc
 var Everything3_DestroyClient *syscall.LazyProc
 var Everything3_GetMajorVersion *syscall.LazyProc
 var Everything3_GetMinorVersion *syscall.LazyProc
 var Everything3_GetRevision *syscall.LazyProc
-
-// search state
 var Everything3_CreateSearchState *syscall.LazyProc
 var Everything3_DestroySearchState *syscall.LazyProc
 var Everything3_SetSearchMatchCase *syscall.LazyProc
@@ -37,11 +34,7 @@ var Everything3_SetSearchRegex *syscall.LazyProc
 var Everything3_SetSearchTextW *syscall.LazyProc
 var Everything3_SetSearchViewportCount *syscall.LazyProc
 var Everything3_AddSearchPropertyRequest *syscall.LazyProc
-
-// execute search
 var Everything3_Search *syscall.LazyProc
-
-// result list
 var Everything3_DestroyResultList *syscall.LazyProc
 var Everything3_GetResultListViewportCount *syscall.LazyProc
 var Everything3_IsFolderResult *syscall.LazyProc
@@ -124,7 +117,6 @@ func resetCachedClient() {
 	}
 }
 
-// FileInfo resemble os.FileInfo
 type FileInfo struct {
 	name    string
 	size    int64
@@ -137,19 +129,17 @@ func (fi *FileInfo) Size() int64        { return fi.size }
 func (fi *FileInfo) ModTime() time.Time { return fi.modTime }
 func (fi *FileInfo) IsDir() bool        { return fi.isDir }
 
-// WalkFunc is the type of the function called for each file or directory visited by Walk.
 type WalkFunc func(path string, info FileInfo, err error) error
 
-// Walk calling walkFn for each file or directory in queried result
-func Walk(root string, maxCount int, walkFn WalkFunc) error {
+func WalkEverything(root string, maxCount int, walkFn WalkFunc) error {
 	client := getCachedClient()
 	if client == 0 {
-		return EverythingNotRunningError
+		return ErrEverythingNotRunning
 	}
 
 	searchState := createSearchState()
 	if searchState == 0 {
-		return EverythingNotRunningError
+		return ErrEverythingNotRunning
 	}
 	defer destroySearchState(searchState)
 
@@ -167,12 +157,12 @@ func Walk(root string, maxCount int, walkFn WalkFunc) error {
 		resetCachedClient()
 		client = getCachedClient()
 		if client == 0 {
-			return EverythingNotRunningError
+			return ErrEverythingNotRunning
 		}
 		resultList = search(client, searchState)
 	}
 	if resultList == 0 {
-		return EverythingNotRunningError
+		return walkEverything2(root, maxCount, walkFn)
 	}
 	defer destroyResultList(resultList)
 
@@ -194,8 +184,7 @@ func Walk(root string, maxCount int, walkFn WalkFunc) error {
 	return nil
 }
 
-// GetVersionString print ver
-func GetVersionString() (ver string) {
+func GetEverythingVersionString() (ver string) {
 	client := connectEverythingClient()
 	if client == 0 {
 		return ""

@@ -341,12 +341,13 @@ func newQueryInputWithPlugins(query string, pluginInstances []*Instance) (Query,
 	var rawQuery = query
 	var triggerKeyword, command, search string
 	var possibleTriggerKeyword = terms[0]
+	var isExactTriggerKeyword = query == possibleTriggerKeyword
 	var mustContainSpace = strings.Contains(query, " ")
 
 	pluginInstance, found := lo.Find(pluginInstances, func(instance *Instance) bool {
 		return lo.Contains(instance.GetTriggerKeywords(), possibleTriggerKeyword)
 	})
-	if found && mustContainSpace {
+	if found && (mustContainSpace || isExactTriggerKeyword) {
 		// non global trigger keyword
 		triggerKeyword = possibleTriggerKeyword
 

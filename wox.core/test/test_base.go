@@ -22,7 +22,6 @@ import (
 	_ "wox/plugin/system/app"
 	_ "wox/plugin/system/calculator"
 	_ "wox/plugin/system/converter"
-	_ "wox/plugin/system/file"
 )
 
 var (

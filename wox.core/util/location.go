@@ -126,6 +126,9 @@ func (l *Location) Init() error {
 	if directoryErr := l.EnsureDirectoryExist(l.GetBackupDirectory()); directoryErr != nil {
 		return directoryErr
 	}
+	if directoryErr := l.EnsureDirectoryExist(l.GetFileSearchDirectory()); directoryErr != nil {
+		return directoryErr
+	}
 
 	return nil
 }
@@ -215,6 +218,10 @@ func (l *Location) GetImageCacheDirectory() string {
 
 func (l *Location) GetBackupDirectory() string {
 	return path.Join(l.woxDataDirectory, "backup")
+}
+
+func (l *Location) GetFileSearchDirectory() string {
+	return path.Join(l.woxDataDirectory, "filesearch")
 }
 
 func (l *Location) GetUIAppPath() string {

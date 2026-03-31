@@ -144,7 +144,7 @@ bool wox_mdquery_search_paths(const char *query, int maxResults, char **outPaths
         return true;
     }
 
-    buffer[length-1] = '\0';
+    buffer[length - 1] = '\0';
     *outPaths = buffer;
     return true;
 }

@@ -1,5 +1,5 @@
 // Search Everything 1.4 SDK : https://www.voidtools.com/support/everything/sdk/
-package file
+package filesearch
 
 import (
 	"syscall"
@@ -32,7 +32,6 @@ var (
 	everything2GetResultSize    *syscall.LazyProc
 	everything2GetResultModTime *syscall.LazyProc
 	everything2IsFolderResult   *syscall.LazyProc
-	everything2Reset            *syscall.LazyProc
 )
 
 func initEverything2DLL(dllPath string) {
@@ -53,12 +52,11 @@ func initEverything2DLL(dllPath string) {
 	everything2GetResultSize = dll.NewProc("Everything_GetResultSize")
 	everything2GetResultModTime = dll.NewProc("Everything_GetResultDateModified")
 	everything2IsFolderResult = dll.NewProc("Everything_IsFolderResult")
-	everything2Reset = dll.NewProc("Everything_Reset")
 }
 
 func walkEverything2(root string, maxCount int, walkFn WalkFunc) error {
 	if everything2SetSearch == nil || everything2Query == nil {
-		return EverythingNotRunningError
+		return ErrEverythingNotRunning
 	}
 
 	setSearchBool2(everything2SetMatchPath, false)
@@ -72,9 +70,9 @@ func walkEverything2(root string, maxCount int, walkFn WalkFunc) error {
 	ok, _, _ := everything2Query.Call(1)
 	if ok == 0 {
 		if getEverything2LastError() == everything2ErrorIPC {
-			return EverythingNotRunningError
+			return ErrEverythingNotRunning
 		}
-		return EverythingNotRunningError
+		return ErrEverythingNotRunning
 	}
 
 	num := getEverything2NumResults()
