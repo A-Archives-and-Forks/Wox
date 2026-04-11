@@ -84,14 +84,6 @@ func (c *FileSearchPlugin) GetMetadata() plugin.Metadata {
 				},
 			},
 		},
-		Features: []plugin.MetadataFeature{
-			{
-				Name: plugin.MetadataFeatureDebounce,
-				Params: map[string]any{
-					"IntervalMs": 200,
-				},
-			},
-		},
 	}
 }
 
@@ -383,7 +375,6 @@ func (c *FileSearchPlugin) toolbarMsgActions(ctx context.Context, hasPermissionE
 			Action: func(ctx context.Context, actionContext plugin.ToolbarMsgActionContext) {
 				permission.OpenPrivacySecuritySettings(ctx)
 			},
-			PreventHideAfterAction: true,
 		},
 	}
 }

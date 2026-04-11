@@ -211,9 +211,13 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
         Expanded(
           child: Scrollbar(
             thumbVisibility: false,
+            controller: controller.pluginListScrollController,
             child: Obx(() {
               if (controller.filteredPluginList.isEmpty) {
-                return Center(child: Text(controller.tr('ui_setting_plugin_empty_data'), style: TextStyle(color: getThemeSubTextColor())));
+                return SingleChildScrollView(
+                  controller: controller.pluginListScrollController,
+                  child: Center(child: Text(controller.tr('ui_setting_plugin_empty_data'), style: TextStyle(color: getThemeSubTextColor()))),
+                );
               }
 
               return ListView.builder(

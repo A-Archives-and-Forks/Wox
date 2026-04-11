@@ -65,6 +65,7 @@ class WoxSettingController extends GetxController {
   final filteredThemeList = <WoxTheme>[].obs;
   final activeTheme = WoxTheme.empty().obs;
   final isStoreThemeList = true.obs;
+  final themeListScrollController = ScrollController();
 
   //lang
   var langMap = <String, String>{}.obs;
@@ -1134,6 +1135,7 @@ class WoxSettingController extends GetxController {
   @override
   void onClose() {
     pluginListScrollController.dispose();
+    themeListScrollController.dispose();
     settingFocusNode.dispose();
     super.onClose();
   }

@@ -62,12 +62,15 @@ class WoxListView<T> extends StatelessWidget {
             child: Obx(
               () =>
                   controller.items.isEmpty && controller.filterBoxController.text.isNotEmpty
-                      ? SizedBox(
-                        height: itemHeight,
-                        child: Center(
-                          child: Text(
-                            Get.find<WoxSettingController>().tr('ui_no_matches'),
-                            style: TextStyle(fontSize: 14.0, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxFontColor).withValues(alpha: 0.5)),
+                      ? SingleChildScrollView(
+                        controller: controller.scrollController,
+                        child: SizedBox(
+                          height: itemHeight,
+                          child: Center(
+                            child: Text(
+                              Get.find<WoxSettingController>().tr('ui_no_matches'),
+                              style: TextStyle(fontSize: 14.0, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxFontColor).withValues(alpha: 0.5)),
+                            ),
                           ),
                         ),
                       )
@@ -168,12 +171,15 @@ class WoxListView<T> extends StatelessWidget {
               child: Obx(
                 () =>
                     controller.items.isEmpty && controller.filterBoxController.text.isNotEmpty
-                        ? SizedBox(
-                          height: itemHeight,
-                          child: Center(
-                            child: Text(
-                              Get.find<WoxSettingController>().tr('ui_no_matches'),
-                              style: TextStyle(fontSize: 14.0, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxFontColor).withValues(alpha: 0.5)),
+                        ? SingleChildScrollView(
+                          controller: controller.scrollController,
+                          child: SizedBox(
+                            height: itemHeight,
+                            child: Center(
+                              child: Text(
+                                Get.find<WoxSettingController>().tr('ui_no_matches'),
+                                style: TextStyle(fontSize: 14.0, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxFontColor).withValues(alpha: 0.5)),
+                              ),
                             ),
                           ),
                         )

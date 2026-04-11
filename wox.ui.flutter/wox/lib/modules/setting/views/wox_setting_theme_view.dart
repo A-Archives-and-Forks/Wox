@@ -29,12 +29,17 @@ class WoxSettingThemeView extends GetView<WoxSettingController> {
         ),
         Expanded(
           child: Scrollbar(
+            controller: controller.themeListScrollController,
             child: Obx(() {
               if (controller.filteredThemeList.isEmpty) {
-                return Center(child: Text(controller.tr('ui_setting_theme_empty_data'), style: TextStyle(color: getThemeSubTextColor())));
+                return SingleChildScrollView(
+                  controller: controller.themeListScrollController,
+                  child: Center(child: Text(controller.tr('ui_setting_theme_empty_data'), style: TextStyle(color: getThemeSubTextColor()))),
+                );
               }
 
               return ListView.builder(
+                controller: controller.themeListScrollController,
                 itemCount: controller.filteredThemeList.length,
                 itemBuilder: (context, index) {
                   final theme = controller.filteredThemeList[index];
@@ -62,18 +67,22 @@ class WoxSettingThemeView extends GetView<WoxSettingController> {
                               mainAxisAlignment: MainAxisAlignment.start,
                               crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
-                                Text(
-                                  theme.version,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(color: isActive ? getThemeActionItemActiveColor() : getThemeSubTextColor(), fontSize: 12),
+                                Flexible(
+                                  child: Text(
+                                    theme.version,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(color: isActive ? getThemeActionItemActiveColor() : getThemeSubTextColor(), fontSize: 12),
+                                  ),
                                 ),
                                 const SizedBox(width: 10),
-                                Text(
-                                  theme.themeAuthor,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(color: isActive ? getThemeActionItemActiveColor() : getThemeSubTextColor(), fontSize: 12),
+                                Flexible(
+                                  child: Text(
+                                    theme.themeAuthor,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(color: isActive ? getThemeActionItemActiveColor() : getThemeSubTextColor(), fontSize: 12),
+                                  ),
                                 ),
                               ],
                             ),

@@ -69,7 +69,8 @@ class WoxGridView extends StatelessWidget {
 
   Widget _buildGridWithGroups(double cellSize, double iconSize, int columns, bool showTitle, double itemPadding, double itemMargin) {
     final items = controller.items;
-    if (items.isEmpty) return const SizedBox.shrink();
+    // Always keep scrollController attached so Scrollbar never loses its ScrollPosition.
+    if (items.isEmpty) return SingleChildScrollView(controller: controller.scrollController, child: const SizedBox.shrink());
 
     List<Widget> rows = [];
     int i = 0;
