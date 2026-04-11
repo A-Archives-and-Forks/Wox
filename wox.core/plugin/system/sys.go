@@ -16,6 +16,8 @@ import (
 	"wox/util"
 	"wox/util/notifier"
 	"wox/util/shell"
+
+	"github.com/google/uuid"
 )
 
 var sysIcon = common.PluginSysIcon
@@ -171,6 +173,52 @@ func (r *SysPlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 			Action: func(ctx context.Context, actionContext plugin.ActionContext) {
 				img, _ := common.WoxIcon.ToImage()
 				notifier.Notify(img, `This is a very short notification.`+time.Now().String())
+			},
+		})
+
+		r.commands = append(r.commands, SysCommand{
+			Title:                  "test toolbar msg",
+			Icon:                   common.CPUProfileIcon,
+			PreventHideAfterAction: true,
+			Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+				var progress int = 0
+
+				util.Go(ctx, "test toolbar msg", func() {
+					toolbarMsgId := uuid.New().String()
+					for progress <= 100 {
+						time.Sleep(500 * time.Millisecond)
+						r.api.ShowToolbarMsg(ctx, plugin.ToolbarMsg{
+							Id:       toolbarMsgId,
+							Title:    fmt.Sprintf("Progress: %d%%", progress),
+							Icon:     sysIcon,
+							Progress: &progress,
+							Actions: []plugin.ToolbarMsgAction{
+								{
+									Name:                   "Action1",
+									Icon:                   common.ExecuteRunIcon,
+									Hotkey:                 "Ctrl+1",
+									PreventHideAfterAction: true,
+									Action: func(ctx context.Context, actionContext plugin.ToolbarMsgActionContext) {
+										r.api.Notify(ctx, "Action 1 executed")
+									},
+								},
+								{
+									Name:                   "Stop and Clear",
+									Icon:                   common.ExecuteRunIcon,
+									Hotkey:                 "Ctrl+Enter",
+									PreventHideAfterAction: true,
+									Action: func(ctx context.Context, actionContext plugin.ToolbarMsgActionContext) {
+										progress = 200
+										r.api.ClearToolbarMsg(ctx, toolbarMsgId)
+									},
+								},
+							},
+						})
+						progress += 10
+					}
+
+					r.api.ClearToolbarMsg(ctx, toolbarMsgId)
+				})
 			},
 		})
 

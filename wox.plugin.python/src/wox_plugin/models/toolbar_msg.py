@@ -7,20 +7,10 @@ indexing, syncing, and background downloads.
 
 import json
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from .context import Context
 from .image import WoxImage
-
-
-class ToolbarMsgScope(str, Enum):
-    """Visibility scope for a toolbar msg."""
-
-    #: Visible only while the user stays in the owning plugin query context.
-    PLUGIN = "plugin"
-    #: Can stay visible outside the owning plugin query context.
-    GLOBAL = "global"
 
 
 @dataclass
@@ -90,8 +80,6 @@ class ToolbarMsg:
     id: str
     #: Primary text shown in the toolbar.
     title: str
-    #: Controls when the toolbar msg is visible.
-    scope: ToolbarMsgScope = field(default=ToolbarMsgScope.PLUGIN)
     #: Optional icon shown before the title.
     icon: WoxImage = field(default_factory=WoxImage)
     #: Optional 0-100 progress value for determinate progress.
@@ -106,7 +94,6 @@ class ToolbarMsg:
         return json.dumps(
             {
                 "Id": self.id,
-                "Scope": self.scope.value if hasattr(self.scope, "value") else str(self.scope),
                 "Title": self.title,
                 "Icon": json.loads(self.icon.to_json()),
                 "Progress": self.progress,

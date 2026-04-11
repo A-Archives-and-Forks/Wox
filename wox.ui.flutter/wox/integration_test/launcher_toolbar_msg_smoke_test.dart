@@ -5,8 +5,8 @@ import 'package:wox/entity/wox_toolbar.dart';
 import 'smoke_test_helper.dart';
 
 void registerLauncherToolbarMsgSmokeTests() {
-  group('P1-SMK: Toolbar Msg Smoke Tests', () {
-    testWidgets('P1-SMK-20: Toolbar msg stays visible without results and notify cannot override it', (tester) async {
+  group('T5: Toolbar Msg Smoke Tests', () {
+    testWidgets('T5-01: Toolbar msg stays visible without results and notify cannot override it', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final traceId = const UuidV4().generate();
       final msg = ToolbarMsg(id: 'indexing', title: 'Indexing files', icon: null, progress: 40, indeterminate: false, actions: const []);
@@ -27,7 +27,7 @@ void registerLauncherToolbarMsgSmokeTests() {
       expect(controller.toolbar.value.text == 'notify should not win', isFalse);
     });
 
-    testWidgets('P1-SMK-21: Toolbar msg actions override conflicting result hotkeys and restore after clear', (tester) async {
+    testWidgets('T5-02: Toolbar msg actions override conflicting result hotkeys and restore after clear', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, '1+1');
       final copyAction = expectResultActionByName(result, 'copy');
@@ -55,7 +55,7 @@ void registerLauncherToolbarMsgSmokeTests() {
       final restoredCopyWhileMsgVisible = unifiedActionsWithMsg.firstWhere((action) => action.name == copyAction.name);
       expect(restoredCopyWhileMsgVisible.hotkey, isEmpty);
 
-      await controller.clearToolbarMsg(traceId);
+      await controller.clearToolbarMsg(traceId, 'calculator-status');
       await tester.pump();
 
       final restoredWinner = controller.getActionByToolbarHotkey(result, copyAction.hotkey);
@@ -64,7 +64,7 @@ void registerLauncherToolbarMsgSmokeTests() {
       expect(controller.buildUnifiedActions(traceId, result).any((action) => action.name == 'Retry'), isFalse);
     });
 
-    testWidgets('P1-SMK-22: Later toolbar msg updates replace the visible one', (tester) async {
+    testWidgets('T5-03: Later toolbar msg updates replace the visible one', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final traceId = const UuidV4().generate();
 
@@ -78,7 +78,7 @@ void registerLauncherToolbarMsgSmokeTests() {
       expect(controller.resolvedToolbarText, equals('Downloading B'));
       expect(controller.resolvedToolbarProgress, equals(80));
 
-      await controller.clearToolbarMsg(traceId);
+      await controller.clearToolbarMsg(traceId, 'download-b');
       await tester.pump();
       expect(controller.hasVisibleToolbarMsg, isFalse);
     });

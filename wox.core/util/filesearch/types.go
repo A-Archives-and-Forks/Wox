@@ -65,6 +65,8 @@ type RootRecord struct {
 	UpdatedAt       int64
 }
 
+const RootProgressScale int64 = 1000
+
 type EntryRecord struct {
 	Path           string
 	RootID         string

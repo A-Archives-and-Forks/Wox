@@ -3,8 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'smoke_test_helper.dart';
 
 void registerSystemPluginSmokeTests() {
-  group('P2-SMK: System Plugin Smoke Tests - Tier 1 (Deterministic)', () {
-    testWidgets('P2-SMK-20: Calculator plugin basic arithmetic', (tester) async {
+  group('T6: System Plugin Smoke Tests - Tier 1 (Deterministic)', () {
+    testWidgets('T6-01: Calculator plugin basic arithmetic', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, '1+1');
 
@@ -13,7 +13,7 @@ void registerSystemPluginSmokeTests() {
       expectResultActionByName(result, 'copy');
     });
 
-    testWidgets('P2-SMK-21: Calculator plugin sqrt function', (tester) async {
+    testWidgets('T6-02: Calculator plugin sqrt function', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, 'sqrt(16)');
 
@@ -22,7 +22,7 @@ void registerSystemPluginSmokeTests() {
       expectResultActionByName(result, 'copy');
     });
 
-    testWidgets('P2-SMK-21A: Calculator plugin respects operator precedence', (tester) async {
+    testWidgets('T6-03: Calculator plugin respects operator precedence', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, '2+3*4');
 
@@ -31,7 +31,7 @@ void registerSystemPluginSmokeTests() {
       expectResultActionByName(result, 'copy');
     });
 
-    testWidgets('P2-SMK-22: URL plugin opens URLs', (tester) async {
+    testWidgets('T6-04: URL plugin opens URLs', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, 'https://githubgithugithub.com');
 
@@ -40,7 +40,7 @@ void registerSystemPluginSmokeTests() {
       expectResultActionByName(result, 'open');
     });
 
-    testWidgets('P2-SMK-23: System plugin lock command', (tester) async {
+    testWidgets('T6-05: System plugin lock command', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, 'lock');
       final executeAction = expectResultActionByName(result, 'execute');
@@ -50,7 +50,7 @@ void registerSystemPluginSmokeTests() {
       expect(executeAction.preventHideAfterAction, isFalse);
     });
 
-    testWidgets('P2-SMK-24: System plugin settings command', (tester) async {
+    testWidgets('T6-06: System plugin settings command', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, 'wox settings');
       final executeAction = expectResultActionByName(result, 'execute');
@@ -60,7 +60,7 @@ void registerSystemPluginSmokeTests() {
       expect(executeAction.preventHideAfterAction, isTrue);
     });
 
-    testWidgets('P2-SMK-25: Doctor plugin returns diagnostic info', (tester) async {
+    testWidgets('T6-07: Doctor plugin returns diagnostic info', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, 'doctor');
 
@@ -70,7 +70,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.actions, isNotEmpty);
     });
 
-    testWidgets('P2-SMK-26: Emoji plugin returns emoji results', (tester) async {
+    testWidgets('T6-08: Emoji plugin returns emoji results', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, 'emoji smile');
 
@@ -79,7 +79,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.isGroup, isFalse);
     });
 
-    testWidgets('P2-SMK-27: Indicator plugin shows plugin hints', (tester) async {
+    testWidgets('T6-09: Indicator plugin shows plugin hints', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, '*');
 
@@ -88,7 +88,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.isGroup, isFalse);
     });
 
-    testWidgets('P2-SMK-28: Converter plugin time conversion', (tester) async {
+    testWidgets('T6-10: Converter plugin time conversion', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, '1h to minutes');
 
@@ -97,7 +97,7 @@ void registerSystemPluginSmokeTests() {
       expectResultActionByName(result, 'copy');
     });
 
-    testWidgets('P2-SMK-29: Theme plugin returns theme options', (tester) async {
+    testWidgets('T6-11: Theme plugin returns theme options', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, 'theme');
 
@@ -107,7 +107,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.isGroup, isFalse);
     });
 
-    testWidgets('P2-SMK-29A: File search plugin shows toolbar msg on empty query', (tester) async {
+    testWidgets('T6-12: File search plugin shows toolbar msg on empty query', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
 
       await triggerTestQueryHotkey(tester, 'f ');
@@ -123,9 +123,9 @@ void registerSystemPluginSmokeTests() {
     });
   });
 
-  group('P2-SMK: System Plugin Smoke Tests - Tier 2 (Conditional - requires environment)', () {
+  group('T6: System Plugin Smoke Tests - Tier 2 (Conditional - requires environment)', () {
     // Requires deterministic default Google configuration and network access.
-    testWidgets('P2-SMK-30: WebSearch plugin searches Google - requires default Google config', (tester) async {
+    testWidgets('T6-13: WebSearch plugin searches Google - requires default Google config', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'g wox launcher');
 
@@ -136,7 +136,7 @@ void registerSystemPluginSmokeTests() {
     }, skip: true);
 
     // Requires a stable shell environment and command execution support.
-    testWidgets('P2-SMK-31: Shell plugin executes shell commands - requires shell', (tester) async {
+    testWidgets('T6-14: Shell plugin executes shell commands - requires shell', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, '> echo hello');
 
@@ -147,7 +147,7 @@ void registerSystemPluginSmokeTests() {
     }, skip: true);
 
     // Requires seeded typing history to make the plugin deterministic.
-    testWidgets('P2-SMK-32: WPM plugin returns word count - requires typing session', (tester) async {
+    testWidgets('T6-15: WPM plugin returns word count - requires typing session', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'wpm');
 
@@ -155,7 +155,7 @@ void registerSystemPluginSmokeTests() {
     }, skip: true);
 
     // Requires filesystem fixtures and predictable backup state.
-    testWidgets('P2-SMK-33: Backup plugin returns backup options - requires filesystem', (tester) async {
+    testWidgets('T6-16: Backup plugin returns backup options - requires filesystem', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'backup');
 
@@ -163,7 +163,7 @@ void registerSystemPluginSmokeTests() {
     }, skip: true);
 
     // Requires network access and a stable update endpoint response.
-    testWidgets('P2-SMK-34: Update plugin checks for updates - requires network', (tester) async {
+    testWidgets('T6-17: Update plugin checks for updates - requires network', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'update');
 
@@ -171,7 +171,7 @@ void registerSystemPluginSmokeTests() {
     }, skip: true);
 
     // Requires control over query history persistence for a fresh-install baseline.
-    testWidgets('P2-SMK-35: Query History plugin does not crash on empty history - fresh install', (tester) async {
+    testWidgets('T6-18: Query History plugin does not crash on empty history - fresh install', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'h');
 
@@ -181,7 +181,7 @@ void registerSystemPluginSmokeTests() {
     }, skip: true);
 
     // Requires platform application discovery fixtures and macOS-specific availability.
-    testWidgets('P2-SMK-36: Application plugin finds platform applications - macOS only', (tester) async {
+    testWidgets('T6-19: Application plugin finds platform applications - macOS only', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       // Use a common application name based on platform
       await queryAndWaitForResults(tester, controller, 'Finder');
@@ -190,7 +190,7 @@ void registerSystemPluginSmokeTests() {
     }, skip: true);
 
     // Requires deterministic clipboard history state.
-    testWidgets('P2-SMK-37: Clipboard plugin handles clipboard history - no clipboard data', (tester) async {
+    testWidgets('T6-20: Clipboard plugin handles clipboard history - no clipboard data', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await queryAndWaitForResults(tester, controller, 'cb');
 

@@ -4,8 +4,8 @@ import 'package:wox/modules/setting/views/wox_setting_view.dart';
 import 'smoke_test_helper.dart';
 
 void registerLauncherKeyFunctionalitySmokeTests() {
-  group('P1-SMK: Key Functionality Smoke Tests', () {
-    testWidgets('P1-SMK-15: Theme settings accessible', (tester) async {
+  group('T3: Key Functionality Smoke Tests', () {
+    testWidgets('T3-01: Theme settings accessible', (tester) async {
       final launcherController = await launchAndShowLauncher(tester);
       final settingController = await openSettings(tester, launcherController, 'general');
 
@@ -16,7 +16,7 @@ void registerLauncherKeyFunctionalitySmokeTests() {
       await closeSettings(tester, settingController, launcherController);
     });
 
-    testWidgets('P1-SMK-16: Data backup entry accessible', (tester) async {
+    testWidgets('T3-02: Data backup entry accessible', (tester) async {
       final launcherController = await launchAndShowLauncher(tester);
       final settingController = await openSettings(tester, launcherController, 'general');
 
@@ -27,7 +27,7 @@ void registerLauncherKeyFunctionalitySmokeTests() {
       await closeSettings(tester, settingController, launcherController);
     });
 
-    testWidgets('P1-SMK-17: Usage and About pages load', (tester) async {
+    testWidgets('T3-03: Usage and About pages load', (tester) async {
       final launcherController = await launchAndShowLauncher(tester);
       final settingController = await openSettings(tester, launcherController, 'general');
 

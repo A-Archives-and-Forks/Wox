@@ -35,8 +35,8 @@ class _SmokeTemplatePluginConfig {
 }
 
 void registerLauncherPluginSmokeTests() {
-  group('P1-SMK: Template Plugin Smoke Tests', () {
-    testWidgets('P1-SMK-18: Packaged Nodejs template plugin loads and basic behaviors work', (tester) async {
+  group('T4: Template Plugin Smoke Tests', () {
+    testWidgets('T4-01: Packaged Nodejs template plugin loads and basic behaviors work', (tester) async {
       final config = _SmokeTemplatePluginConfig.fromEnvironment(
         runtime: 'nodejs',
         idEnvKey: _testNodeTemplatePluginIdEnv,
@@ -79,7 +79,7 @@ void registerLauncherPluginSmokeTests() {
       await waitForWindowVisibility(tester, false);
     });
 
-    testWidgets('P1-SMK-19: Packaged Python template plugin loads and basic behaviors work', (tester) async {
+    testWidgets('T4-02: Packaged Python template plugin loads and basic behaviors work', (tester) async {
       final config = _SmokeTemplatePluginConfig.fromEnvironment(
         runtime: 'python',
         idEnvKey: _testPythonTemplatePluginIdEnv,

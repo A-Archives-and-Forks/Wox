@@ -886,14 +886,6 @@ export interface FormActionContext extends ActionContext {
 }
 
 /**
- * Visibility scope for a toolbar msg.
- *
- * - `plugin`: visible only while the user stays in this plugin query context
- * - `global`: can stay visible outside plugin query context
- */
-export type ToolbarMsgScope = "plugin" | "global"
-
-/**
  * Context passed back to a toolbar msg action callback.
  */
 export interface ToolbarMsgActionContext {
@@ -959,10 +951,6 @@ export interface ToolbarMsg {
    * Reusing the same id updates the existing toolbar msg in place.
    */
   Id: string
-  /**
-   * Controls when the toolbar msg is visible.
-   */
-  Scope: ToolbarMsgScope
   /**
    * Primary text shown in the toolbar.
    */

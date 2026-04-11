@@ -35,8 +35,9 @@ func init() {
 }
 
 type FileSearchPlugin struct {
-	api    plugin.API
-	engine *filesearch.Engine
+	api                     plugin.API
+	engine                  *filesearch.Engine
+	unsubscribeStatusChange func()
 }
 
 func (c *FileSearchPlugin) GetMetadata() plugin.Metadata {
@@ -104,12 +105,11 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 	}
 	c.engine = engine
 	c.api.Log(ctx, plugin.LogLevelInfo, "File search engine initialized")
+	c.unsubscribeStatusChange = c.engine.OnStatusChanged(func(status filesearch.StatusSnapshot) {
+		c.handleStatusChanged(status)
+	})
 
 	c.syncUserRoots(ctx)
-
-	c.api.OnEnterPluginQuery(ctx, func(callbackCtx context.Context) {
-		c.syncToolbarMsg(callbackCtx, true)
-	})
 
 	c.api.OnSettingChanged(ctx, func(callbackCtx context.Context, key string, value string) {
 		if key != fileRootsSettingKey {
@@ -119,6 +119,10 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 	})
 
 	c.api.OnUnload(ctx, func(ctx context.Context) {
+		if c.unsubscribeStatusChange != nil {
+			c.unsubscribeStatusChange()
+			c.unsubscribeStatusChange = nil
+		}
 		if c.engine != nil {
 			_ = c.engine.Close()
 		}
@@ -285,26 +289,31 @@ func (c *FileSearchPlugin) getConfiguredRootPaths(ctx context.Context) []string 
 }
 
 func (c *FileSearchPlugin) syncToolbarMsg(ctx context.Context, includeReady bool) {
-	status, found := c.buildToolbarMsg(ctx, includeReady)
-	if !found {
+	if c.engine == nil {
 		c.api.ClearToolbarMsg(ctx, fileSearchToolbarMsgID)
 		return
-	}
-
-	c.api.ShowToolbarMsg(ctx, status)
-}
-
-func (c *FileSearchPlugin) buildToolbarMsg(ctx context.Context, includeReady bool) (plugin.ToolbarMsg, bool) {
-	if c.engine == nil {
-		return plugin.ToolbarMsg{}, false
 	}
 
 	status, err := c.engine.GetStatus(ctx)
 	if err != nil {
 		c.api.Log(ctx, plugin.LogLevelWarning, "Failed to load file search status: "+err.Error())
-		return plugin.ToolbarMsg{}, false
+		return
 	}
 
+	c.syncToolbarMsgWithStatus(ctx, status, includeReady)
+}
+
+func (c *FileSearchPlugin) syncToolbarMsgWithStatus(ctx context.Context, status filesearch.StatusSnapshot, includeReady bool) {
+	toolbarMsg, found := c.buildToolbarMsgFromStatus(ctx, status, includeReady)
+	if !found {
+		c.api.ClearToolbarMsg(ctx, fileSearchToolbarMsgID)
+		return
+	}
+
+	c.api.ShowToolbarMsg(ctx, toolbarMsg)
+}
+
+func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status filesearch.StatusSnapshot, includeReady bool) (plugin.ToolbarMsg, bool) {
 	if !includeReady && !status.IsIndexing && status.ErrorRootCount == 0 {
 		return plugin.ToolbarMsg{}, false
 	}
@@ -336,6 +345,7 @@ func (c *FileSearchPlugin) buildToolbarMsg(ctx context.Context, includeReady boo
 				progressValue = 100
 			}
 			progress = &progressValue
+			title = fmt.Sprintf("%s %d%%", title, progressValue)
 		} else {
 			indeterminate = true
 		}
@@ -348,13 +358,16 @@ func (c *FileSearchPlugin) buildToolbarMsg(ctx context.Context, includeReady boo
 
 	return plugin.ToolbarMsg{
 		Id:            fileSearchToolbarMsgID,
-		Scope:         plugin.ToolbarMsgScopePlugin,
 		Title:         title,
 		Icon:          icon,
 		Progress:      progress,
 		Indeterminate: indeterminate,
 		Actions:       c.toolbarMsgActions(ctx, hasPermissionError),
 	}, true
+}
+
+func (c *FileSearchPlugin) handleStatusChanged(status filesearch.StatusSnapshot) {
+	c.syncToolbarMsgWithStatus(util.NewTraceContext(), status, false)
 }
 
 func (c *FileSearchPlugin) toolbarMsgActions(ctx context.Context, hasPermissionError bool) []plugin.ToolbarMsgAction {
@@ -364,8 +377,9 @@ func (c *FileSearchPlugin) toolbarMsgActions(ctx context.Context, hasPermissionE
 
 	return []plugin.ToolbarMsgAction{
 		{
-			Name: "i18n:plugin_file_status_open_privacy_settings",
-			Icon: common.PermissionIcon,
+			Name:   "i18n:plugin_file_status_open_privacy_settings",
+			Icon:   common.PermissionIcon,
+			Hotkey: "ctrl+enter",
 			Action: func(ctx context.Context, actionContext plugin.ToolbarMsgActionContext) {
 				permission.OpenPrivacySecuritySettings(ctx)
 			},

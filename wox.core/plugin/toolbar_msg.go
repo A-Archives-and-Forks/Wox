@@ -5,22 +5,9 @@ import (
 	"wox/common"
 )
 
-type ToolbarMsgScope string
-
-const (
-	// ToolbarMsgScopePlugin keeps the toolbar msg visible only while the user stays
-	// inside the owning plugin query context.
-	ToolbarMsgScopePlugin ToolbarMsgScope = "plugin"
-
-	// ToolbarMsgScopeGlobal allows the toolbar msg to be shown outside plugin query
-	// context and compete with other global toolbar messages.
-	ToolbarMsgScopeGlobal ToolbarMsgScope = "global"
-)
-
 // ToolbarMsg is the payload pushed to the launcher toolbar.
 type ToolbarMsg struct {
 	Id            string
-	Scope         ToolbarMsgScope
 	Title         string
 	Icon          common.WoxImage
 	Progress      *int // Progress is a 0-100 value when the work has a measurable percentage.

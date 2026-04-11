@@ -686,19 +686,25 @@ class WoxLauncherController extends GetxController {
       return [...localActions, ...toolbarMsgActions];
     }
 
+    final pluginActions = buildResultActionsForCurrentState(activeResult, localActions: localActions, toolbarMsgActions: toolbarMsgActions);
+    return [...localActions, ...toolbarMsgActions, ...pluginActions];
+  }
+
+  List<WoxResultAction> buildResultActionsForCurrentState(
+    WoxQueryResult activeResult, {
+    required List<WoxResultAction> localActions,
+    required List<WoxResultAction> toolbarMsgActions,
+  }) {
     final reservedHotkeys = localActions.where((action) => action.hotkey.isNotEmpty).map((action) => action.hotkey.toLowerCase()).toSet();
     reservedHotkeys.addAll(toolbarMsgActions.where((action) => action.hotkey.isNotEmpty).map((action) => action.hotkey.toLowerCase()));
 
-    final pluginActions =
-        activeResult.actions.map((action) {
-          if (action.hotkey.isEmpty) {
-            return action.copyWith();
-          }
-          final conflicted = reservedHotkeys.contains(action.hotkey.toLowerCase());
-          return conflicted ? action.copyWith(hotkey: "") : action.copyWith();
-        }).toList();
-
-    return [...localActions, ...toolbarMsgActions, ...pluginActions];
+    return activeResult.actions.map((action) {
+      if (action.hotkey.isEmpty) {
+        return action.copyWith();
+      }
+      final conflicted = reservedHotkeys.contains(action.hotkey.toLowerCase());
+      return conflicted ? action.copyWith(hotkey: "") : action.copyWith();
+    }).toList();
   }
 
   WoxResultAction? getLocalActionByHotkey(HotKey hotkey, {Set<String>? allowedActionIds}) {
@@ -730,10 +736,21 @@ class WoxLauncherController extends GetxController {
     return action.runLocalAction(traceId);
   }
 
-  List<ToolbarActionInfo> buildToolbarActionsFromUnifiedActions(List<WoxResultAction> actions) {
-    final toolbarActions = actions.where((action) => action.hotkey.isNotEmpty).map((action) => ToolbarActionInfo(name: tr(action.name), hotkey: action.hotkey)).toList();
+  List<ToolbarActionInfo> buildToolbarActionsForCurrentState(WoxQueryResult? activeResult) {
+    final localActions = buildLocalActions();
+    final toolbarMsgActions = buildToolbarMsgActions();
 
-    if (actions.isNotEmpty) {
+    List<WoxResultAction> orderedActions;
+    if (activeResult == null || activeResult.isGroup) {
+      orderedActions = [...localActions, ...toolbarMsgActions];
+    } else {
+      final resultActions = buildResultActionsForCurrentState(activeResult, localActions: localActions, toolbarMsgActions: toolbarMsgActions);
+      orderedActions = hasVisibleToolbarMsg ? [...resultActions, ...localActions, ...toolbarMsgActions] : [...localActions, ...resultActions];
+    }
+
+    final toolbarActions = orderedActions.where((action) => action.hotkey.isNotEmpty).map((action) => ToolbarActionInfo(name: tr(action.name), hotkey: action.hotkey)).toList();
+
+    if (orderedActions.isNotEmpty) {
       toolbarActions.add(ToolbarActionInfo(name: tr("toolbar_more_actions"), hotkey: moreActionsHotkey));
     }
 
@@ -760,7 +777,7 @@ class WoxLauncherController extends GetxController {
         }
       }
 
-      updateToolbarWithActions(traceId, actions);
+      updateToolbarWithActions(traceId);
       return;
     }
 
@@ -776,7 +793,7 @@ class WoxLauncherController extends GetxController {
       }
     }
 
-    updateToolbarWithActions(traceId, actions);
+    updateToolbarWithActions(traceId);
   }
 
   Future<void> toggleApp(String traceId, ShowAppParams params) async {
@@ -1045,7 +1062,7 @@ class WoxLauncherController extends GetxController {
     if (isShowActionPanel.value) {
       hideActionPanel(traceId);
     } else {
-      showActionPanel(traceId);
+      openActionPanelForActiveResult(traceId);
     }
   }
 
@@ -1142,7 +1159,8 @@ class WoxLauncherController extends GetxController {
 
   void openActionPanelForActiveResult(String traceId) {
     final activeResult = getActiveResult();
-    if ((activeResult == null || activeResult.isGroup) && buildToolbarMsgActions().isEmpty) {
+    final toolbarMsgActions = buildToolbarMsgActions();
+    if ((activeResult == null || activeResult.isGroup) && toolbarMsgActions.isEmpty) {
       return;
     }
 
@@ -1450,6 +1468,20 @@ class WoxLauncherController extends GetxController {
     });
 
     if (query.isEmpty) {
+      try {
+        await WoxWebsocketMsgUtil.instance.sendMessage(
+          WoxWebsocketMsg(
+            requestId: const UuidV4().generate(),
+            traceId: traceId,
+            type: WoxMsgTypeEnum.WOX_MSG_TYPE_REQUEST.code,
+            method: WoxMsgMethodEnum.WOX_MSG_METHOD_QUERY.code,
+            data: {"queryId": query.queryId, "queryType": query.queryType, "queryText": query.queryText, "querySelection": query.querySelection.toJson()},
+          ),
+        );
+      } catch (e) {
+        Logger.instance.error(traceId, "Failed to notify empty query: $e");
+      }
+
       // Check if we should show MRU results when query is empty (based on start page setting)
       if (lastStartPage == WoxStartPageEnum.WOX_START_PAGE_MRU.code) {
         queryMRU(traceId);
@@ -1589,7 +1621,9 @@ class WoxLauncherController extends GetxController {
       await showToolbarMsg(msg.traceId, ToolbarMsg.fromJson(msg.data));
       responseWoxWebsocketRequest(msg, true, null);
     } else if (msg.method == "ClearToolbarMsg") {
-      await clearToolbarMsg(msg.traceId);
+      final data = msg.data as Map<String, dynamic>? ?? {};
+      final toolbarMsgId = data['toolbarMsgId'] as String? ?? "";
+      await clearToolbarMsg(msg.traceId, toolbarMsgId);
       responseWoxWebsocketRequest(msg, true, null);
     } else if (msg.method == "GetCurrentQuery") {
       responseWoxWebsocketRequest(msg, true, currentQuery.value.toJson());
@@ -2430,6 +2464,7 @@ class WoxLauncherController extends GetxController {
       final wasVisible = hasVisibleToolbarMsg;
       toolbarMsg.value = msg;
       refreshToolbarActionsForCurrentState(traceId);
+      refreshVisibleActionPanel(traceId, preserveSelection: true);
       if (!wasVisible) {
         await resizeHeight(traceId: traceId, reason: "show toolbar msg");
       }
@@ -2590,8 +2625,9 @@ class WoxLauncherController extends GetxController {
     refreshToolbarActionsForCurrentState(traceId);
   }
 
-  void updateToolbarWithActions(String traceId, List<WoxResultAction> actions) {
-    final toolbarActions = buildToolbarActionsFromUnifiedActions(actions);
+  void updateToolbarWithActions(String traceId) {
+    final activeResult = getActiveResult();
+    final toolbarActions = buildToolbarActionsForCurrentState(activeResult);
     if (toolbarActions.isEmpty) {
       toolbar.value = toolbar.value.emptyRightSide();
       return;
@@ -2603,13 +2639,13 @@ class WoxLauncherController extends GetxController {
   void refreshToolbarActionsForCurrentState(String traceId) {
     final activeResult = getActiveResult();
     if (activeResult != null && !activeResult.isGroup) {
-      updateToolbarWithActions(traceId, buildUnifiedActions(traceId, activeResult));
+      updateToolbarWithActions(traceId);
       return;
     }
 
     final toolbarMsgActions = buildToolbarMsgActions();
     if (toolbarMsgActions.isNotEmpty) {
-      updateToolbarWithActions(traceId, buildUnifiedActions(traceId, null));
+      updateToolbarWithActions(traceId);
       return;
     }
 
@@ -2617,10 +2653,23 @@ class WoxLauncherController extends GetxController {
     updateDoctorToolbarIfNeeded(traceId);
   }
 
-  Future<void> clearToolbarMsg(String traceId) async {
+  void refreshVisibleActionPanel(String traceId, {required bool preserveSelection}) {
+    if (!isShowActionPanel.value) {
+      return;
+    }
+
+    refreshActionsForActiveResult(traceId, preserveSelection: preserveSelection);
+  }
+
+  Future<void> clearToolbarMsg(String traceId, String toolbarMsgId) async {
+    if (toolbarMsgId.isEmpty || toolbarMsg.value.id != toolbarMsgId) {
+      return;
+    }
+
     final wasVisible = hasVisibleToolbarMsg;
     toolbarMsg.value = ToolbarMsg.empty();
     refreshToolbarActionsForCurrentState(traceId);
+    refreshVisibleActionPanel(traceId, preserveSelection: true);
     if (wasVisible) {
       await resizeHeight(traceId: traceId, reason: "clear toolbar msg");
     }

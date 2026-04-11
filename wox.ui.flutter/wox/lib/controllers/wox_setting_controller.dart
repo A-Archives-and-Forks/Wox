@@ -175,8 +175,13 @@ class WoxSettingController extends GetxController {
 
   Future<void> loadWoxVersion() async {
     final traceId = const UuidV4().generate();
-    final version = await WoxApi.instance.getWoxVersion(traceId);
-    woxVersion.value = version;
+    try {
+      final version = await WoxApi.instance.getWoxVersion(traceId);
+      woxVersion.value = version;
+    } catch (e) {
+      woxVersion.value = '';
+      Logger.instance.error(traceId, 'Failed to load Wox version: $e');
+    }
   }
 
   Future<void> refreshRuntimeStatuses() async {
@@ -306,7 +311,10 @@ class WoxSettingController extends GetxController {
       storePlugins.clear();
       storePlugins.addAll(storePluginsFromAPI);
       Logger.instance.info(traceId, 'Store plugins loaded, cost ${DateTime.now().difference(start).inMilliseconds} ms');
-    } finally {}
+    } catch (e) {
+      storePlugins.clear();
+      Logger.instance.error(traceId, 'Failed to load store plugins: $e');
+    }
   }
 
   Future<void> loadInstalledPlugins(String traceId) async {
@@ -317,7 +325,10 @@ class WoxSettingController extends GetxController {
       installedPlugins.clear();
       installedPlugins.addAll(installedPluginsFromAPI);
       Logger.instance.info(traceId, 'Installed plugins loaded, cost ${DateTime.now().difference(start).inMilliseconds} ms');
-    } finally {}
+    } catch (e) {
+      installedPlugins.clear();
+      Logger.instance.error(traceId, 'Failed to load installed plugins: $e');
+    }
   }
 
   /// Preload both plugin lists at startup without awaiting to avoid blocking UI.
@@ -1025,7 +1036,12 @@ class WoxSettingController extends GetxController {
 
   Future<void> loadUserDataLocation() async {
     final traceId = const UuidV4().generate();
-    userDataLocation.value = await WoxApi.instance.getUserDataLocation(traceId);
+    try {
+      userDataLocation.value = await WoxApi.instance.getUserDataLocation(traceId);
+    } catch (e) {
+      userDataLocation.value = '';
+      Logger.instance.error(traceId, 'Failed to load user data location: $e');
+    }
   }
 
   Future<void> updateUserDataLocation(String newLocation) async {
@@ -1040,8 +1056,14 @@ class WoxSettingController extends GetxController {
   }
 
   Future<void> refreshBackups() async {
-    final result = await WoxApi.instance.getAllBackups(const UuidV4().generate());
-    backups.assignAll(result);
+    final traceId = const UuidV4().generate();
+    try {
+      final result = await WoxApi.instance.getAllBackups(traceId);
+      backups.assignAll(result);
+    } catch (e) {
+      backups.clear();
+      Logger.instance.error(traceId, 'Failed to load backups: $e');
+    }
   }
 
   Future<void> clearLogs() async {

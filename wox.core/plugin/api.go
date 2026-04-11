@@ -47,12 +47,12 @@ type API interface {
 	OnUnload(ctx context.Context, callback func(ctx context.Context))
 	OnMRURestore(ctx context.Context, callback func(ctx context.Context, mruData MRUData) (*QueryResult, error))
 
-	// ShowToolbarMsg creates or updates a toolbar msg owned by the current plugin.
-	// Plugin-scoped messages are only accepted while the session is inside that plugin query.
-	// Global messages compete with other global messages by latest update time.
+	// ShowToolbarMsg creates or updates the toolbar msg for the current plugin query context.
+	// It is only accepted while the caller is the active plugin in the current session.
+	// Leaving that plugin query context clears the toolbar msg automatically.
 	ShowToolbarMsg(ctx context.Context, msg ToolbarMsg)
 
-	// ClearToolbarMsg removes a toolbar msg owned by the current plugin by its Id.
+	// ClearToolbarMsg removes a toolbar msg previously shown by this plugin by its id.
 	ClearToolbarMsg(ctx context.Context, toolbarMsgId string)
 
 	// OnEnterPluginQuery registers a callback that fires once when the session enters

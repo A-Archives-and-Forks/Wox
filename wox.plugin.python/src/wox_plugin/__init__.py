@@ -221,7 +221,6 @@ from .models.toolbar_msg import (
     ToolbarMsg,
     ToolbarMsgAction,
     ToolbarMsgActionContext,
-    ToolbarMsgScope,
 )
 from .models.setting import (
     PluginSettingDefinitionItem,
@@ -262,7 +261,6 @@ __all__: List[str] = [
     "ToolbarMsg",
     "ToolbarMsgAction",
     "ToolbarMsgActionContext",
-    "ToolbarMsgScope",
     "MetadataCommand",
     "PluginSettingDefinitionItem",
     "PluginSettingValueStyle",

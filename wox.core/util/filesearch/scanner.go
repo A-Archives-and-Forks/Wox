@@ -14,19 +14,22 @@ import (
 )
 
 const (
-	defaultScanInterval = 10 * time.Second
+	defaultScanInterval = 5 * time.Minute
 	progressBatchSize   = 256
+	progressUpdateGap   = 250 * time.Millisecond
 )
 
 type Scanner struct {
 	db            *FileSearchDB
 	localProvider *LocalIndexProvider
+	onStateChange func(ctx context.Context)
 	stopOnce      sync.Once
 	stopCh        chan struct{}
 	requestCh     chan struct{}
 	runningMu     sync.Mutex
 	scanRunning   bool
 	watcher       *fsnotify.Watcher
+	watchMode     string
 	watcherMu     sync.Mutex
 }
 
@@ -36,7 +39,12 @@ func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
 		localProvider: localProvider,
 		stopCh:        make(chan struct{}),
 		requestCh:     make(chan struct{}, 1),
+		watchMode:     "recursive",
 	}
+}
+
+func (s *Scanner) SetStateChangeHandler(handler func(ctx context.Context)) {
+	s.onStateChange = handler
 }
 
 func (s *Scanner) Start(ctx context.Context) {
@@ -45,17 +53,25 @@ func (s *Scanner) Start(ctx context.Context) {
 		s.scanAllRoots(ctx)
 		s.refreshWatcher(ctx)
 
-		ticker := time.NewTicker(defaultScanInterval)
-		defer ticker.Stop()
+		timer := time.NewTimer(defaultScanInterval)
+		defer timer.Stop()
 
 		for {
 			select {
-			case <-ticker.C:
+			case <-timer.C:
 				s.scanAllRoots(util.NewTraceContext())
 				s.refreshWatcher(util.NewTraceContext())
+				timer.Reset(defaultScanInterval)
 			case <-s.requestCh:
 				s.scanAllRoots(util.NewTraceContext())
 				s.refreshWatcher(util.NewTraceContext())
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(defaultScanInterval)
 			case <-s.stopCh:
 				s.closeWatcher()
 				return
@@ -126,14 +142,17 @@ func (s *Scanner) refreshWatcher(ctx context.Context) {
 		return
 	}
 
-	for _, root := range roots {
-		_ = addWatchRecursive(watcher, root.Path)
+	if err := addRootOnlyWatches(watcher, roots); err != nil {
+		_ = watcher.Close()
+		util.GetLogger().Warn(ctx, "filesearch failed to create root-only watcher: "+err.Error())
+		return
 	}
-	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch watcher refreshed: roots=%d", len(roots)))
+	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch watcher refreshed: roots=%d mode=%s", len(roots), "root-only"))
 
 	s.watcherMu.Lock()
 	oldWatcher := s.watcher
 	s.watcher = watcher
+	s.watchMode = "root-only"
 	s.watcherMu.Unlock()
 
 	if oldWatcher != nil {
@@ -154,7 +173,7 @@ func (s *Scanner) watchLoop(ctx context.Context, watcher *fsnotify.Watcher) {
 			}
 			if event.Has(fsnotify.Create) {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					_ = addWatchRecursive(watcher, event.Name)
+					_ = s.addWatchForNewDirectory(watcher, event.Name)
 				}
 			}
 			s.RequestRescan()
@@ -176,6 +195,7 @@ func (s *Scanner) closeWatcher() {
 		_ = s.watcher.Close()
 		s.watcher = nil
 	}
+	s.watchMode = "recursive"
 }
 
 func (s *Scanner) scanRoot(ctx context.Context, root RootRecord) {
@@ -183,10 +203,11 @@ func (s *Scanner) scanRoot(ctx context.Context, root RootRecord) {
 	util.GetLogger().Info(ctx, "filesearch scanning root: "+root.Path)
 	root.Status = RootStatusScanning
 	root.ProgressCurrent = 0
-	root.ProgressTotal = 0
+	root.ProgressTotal = RootProgressScale
 	root.LastError = nil
 	root.UpdatedAt = util.GetSystemTimestamp()
 	_ = s.db.UpdateRootState(ctx, root)
+	s.emitStateChange(ctx)
 
 	entries, err := s.collectEntries(ctx, root)
 	if err != nil {
@@ -195,6 +216,7 @@ func (s *Scanner) scanRoot(ctx context.Context, root RootRecord) {
 		root.LastError = &errMessage
 		root.UpdatedAt = util.GetSystemTimestamp()
 		_ = s.db.UpdateRootState(ctx, root)
+		s.emitStateChange(ctx)
 		util.GetLogger().Warn(ctx, "filesearch failed to scan root "+root.Path+": "+err.Error())
 		return
 	}
@@ -205,16 +227,18 @@ func (s *Scanner) scanRoot(ctx context.Context, root RootRecord) {
 		root.LastError = &errMessage
 		root.UpdatedAt = util.GetSystemTimestamp()
 		_ = s.db.UpdateRootState(ctx, root)
+		s.emitStateChange(ctx)
 		util.GetLogger().Warn(ctx, "filesearch failed to replace entries for root "+root.Path+": "+err.Error())
 		return
 	}
 
 	root.Status = RootStatusIdle
-	root.ProgressCurrent = int64(len(entries))
-	root.ProgressTotal = int64(len(entries))
+	root.ProgressCurrent = RootProgressScale
+	root.ProgressTotal = RootProgressScale
 	root.LastError = nil
 	root.UpdatedAt = util.GetSystemTimestamp()
 	_ = s.db.UpdateRootState(ctx, root)
+	s.emitStateChange(ctx)
 	util.GetLogger().Info(ctx, fmt.Sprintf(
 		"filesearch scanned root: path=%s entries=%d cost=%dms",
 		root.Path,
@@ -236,7 +260,11 @@ func (s *Scanner) collectEntries(ctx context.Context, root RootRecord) ([]EntryR
 		patterns: nil,
 	}}
 
-	count := 0
+	knownWork := int64(1)
+	completedWork := int64(0)
+	lastReportedProgress := int64(0)
+	lastProgressUpdateAt := time.Now()
+
 	for len(queue) > 0 {
 		select {
 		case <-ctx.Done():
@@ -252,6 +280,8 @@ func (s *Scanner) collectEntries(ctx context.Context, root RootRecord) ([]EntryR
 
 		dirEntries, readErr := os.ReadDir(state.path)
 		if readErr != nil {
+			completedWork++
+			s.updateRootProgress(ctx, &root, completedWork, knownWork, &lastReportedProgress, true)
 			if state.path == rootPath {
 				return nil, fmt.Errorf("failed to read root directory %s: %w", state.path, readErr)
 			}
@@ -259,18 +289,44 @@ func (s *Scanner) collectEntries(ctx context.Context, root RootRecord) ([]EntryR
 			continue
 		}
 
+		knownWork += int64(len(dirEntries))
+		completedWork++
+		if time.Since(lastProgressUpdateAt) >= progressUpdateGap {
+			s.updateRootProgress(ctx, &root, completedWork, knownWork, &lastReportedProgress, false)
+			lastProgressUpdateAt = time.Now()
+		}
+
+		count := 0
 		for _, dirEntry := range dirEntries {
 			fullPath := filepath.Join(state.path, dirEntry.Name())
 			info, infoErr := dirEntry.Info()
 			if infoErr != nil {
+				completedWork++
+				count++
+				if count%progressBatchSize == 0 || time.Since(lastProgressUpdateAt) >= progressUpdateGap {
+					s.updateRootProgress(ctx, &root, completedWork, knownWork, &lastReportedProgress, false)
+					lastProgressUpdateAt = time.Now()
+				}
 				continue
 			}
 
 			isDir := info.IsDir()
 			if shouldSkipSystemPath(fullPath, isDir) {
+				completedWork++
+				count++
+				if count%progressBatchSize == 0 || time.Since(lastProgressUpdateAt) >= progressUpdateGap {
+					s.updateRootProgress(ctx, &root, completedWork, knownWork, &lastReportedProgress, false)
+					lastProgressUpdateAt = time.Now()
+				}
 				continue
 			}
 			if shouldIgnorePath(localPatterns, fullPath, isDir) {
+				completedWork++
+				count++
+				if count%progressBatchSize == 0 || time.Since(lastProgressUpdateAt) >= progressUpdateGap {
+					s.updateRootProgress(ctx, &root, completedWork, knownWork, &lastReportedProgress, false)
+					lastProgressUpdateAt = time.Now()
+				}
 				continue
 			}
 
@@ -285,16 +341,56 @@ func (s *Scanner) collectEntries(ctx context.Context, root RootRecord) ([]EntryR
 			}
 
 			count++
-			if count%progressBatchSize == 0 {
-				root.ProgressCurrent = int64(len(entries))
-				root.UpdatedAt = util.GetSystemTimestamp()
-				_ = s.db.UpdateRootState(ctx, root)
+			completedWork++
+			if count%progressBatchSize == 0 || time.Since(lastProgressUpdateAt) >= progressUpdateGap {
+				s.updateRootProgress(ctx, &root, completedWork, knownWork, &lastReportedProgress, false)
+				lastProgressUpdateAt = time.Now()
 				time.Sleep(2 * time.Millisecond)
 			}
 		}
 	}
 
 	return entries, nil
+}
+
+func (s *Scanner) updateRootProgress(ctx context.Context, root *RootRecord, completedWork int64, knownWork int64, lastReportedProgress *int64, force bool) {
+	progress := estimateRootProgress(completedWork, knownWork)
+	if !force && progress <= *lastReportedProgress {
+		return
+	}
+
+	*lastReportedProgress = progress
+	root.ProgressCurrent = progress
+	root.ProgressTotal = RootProgressScale
+	root.UpdatedAt = util.GetSystemTimestamp()
+	_ = s.db.UpdateRootState(ctx, *root)
+	s.emitStateChange(ctx)
+}
+
+func (s *Scanner) emitStateChange(ctx context.Context) {
+	if s.onStateChange != nil {
+		s.onStateChange(ctx)
+	}
+}
+
+func estimateRootProgress(completedWork int64, knownWork int64) int64 {
+	if completedWork <= 0 || knownWork <= 0 {
+		return 0
+	}
+
+	if completedWork > knownWork {
+		knownWork = completedWork
+	}
+
+	progress := (completedWork * RootProgressScale) / knownWork
+	if progress <= 0 {
+		return 0
+	}
+	if progress >= RootProgressScale {
+		return RootProgressScale - 1
+	}
+
+	return progress
 }
 
 type scanState struct {
@@ -423,12 +519,45 @@ func addWatchRecursive(watcher *fsnotify.Watcher, root string) error {
 	})
 }
 
+func addRootOnlyWatches(watcher *fsnotify.Watcher, roots []RootRecord) error {
+	var watchErrs []string
+
+	for _, root := range roots {
+		if err := watcher.Add(root.Path); err != nil {
+			watchErrs = append(watchErrs, fmt.Sprintf("%s: %s", root.Path, err.Error()))
+		}
+	}
+
+	if len(watchErrs) == len(roots) && len(watchErrs) > 0 {
+		return fmt.Errorf("%s", strings.Join(watchErrs, "; "))
+	}
+
+	for _, watchErr := range watchErrs {
+		util.GetLogger().Warn(context.Background(), "filesearch skipped root watcher: "+watchErr)
+	}
+
+	return nil
+}
+
+func (s *Scanner) addWatchForNewDirectory(watcher *fsnotify.Watcher, directory string) error {
+	return watcher.Add(directory)
+}
+
 func shouldSkipSystemPath(fullPath string, isDir bool) bool {
-	if !isDir || !util.IsMacOS() {
+	if !isDir {
 		return false
 	}
 
 	base := strings.ToLower(filepath.Base(fullPath))
+
+	if base == ".git" || base == ".hg" || base == ".svn" {
+		return true
+	}
+
+	if !util.IsMacOS() {
+		return false
+	}
+
 	return strings.HasSuffix(base, ".photoslibrary") ||
 		strings.HasSuffix(base, ".lrlibrary") ||
 		strings.HasSuffix(base, ".lrdata")

@@ -143,8 +143,10 @@ func (u *uiImpl) ShowToolbarMsg(ctx context.Context, msg interface{}) {
 	u.invokeWebsocketMethod(ctx, "ShowToolbarMsg", msg)
 }
 
-func (u *uiImpl) ClearToolbarMsg(ctx context.Context) {
-	u.invokeWebsocketMethod(ctx, "ClearToolbarMsg", nil)
+func (u *uiImpl) ClearToolbarMsg(ctx context.Context, toolbarMsgId string) {
+	u.invokeWebsocketMethod(ctx, "ClearToolbarMsg", map[string]any{
+		"toolbarMsgId": toolbarMsgId,
+	})
 }
 
 func (u *uiImpl) IsInSettingView() bool {
@@ -479,21 +481,21 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	logger.Info(ctx, fmt.Sprintf("start to handle query changed: %s, queryId: %s", changedQuery.String(), queryId))
 
 	if changedQuery.QueryType == plugin.QueryTypeInput && changedQuery.QueryText == "" {
-		plugin.GetPluginManager().HandleQueryContext(ctx, plugin.Query{
+		plugin.GetPluginManager().HandleQueryLifecycle(ctx, plugin.Query{
 			Id:        queryId,
 			SessionId: sessionId,
 			Type:      plugin.QueryTypeInput,
 		}, nil)
-		responseUISuccessWithData(ctx, request, []string{})
+		responseUIQueryResults(ctx, request, queryId, []plugin.QueryResultUI{}, true)
 		return
 	}
 	if changedQuery.QueryType == plugin.QueryTypeSelection && changedQuery.QuerySelection.String() == "" {
-		plugin.GetPluginManager().HandleQueryContext(ctx, plugin.Query{
+		plugin.GetPluginManager().HandleQueryLifecycle(ctx, plugin.Query{
 			Id:        queryId,
 			SessionId: sessionId,
 			Type:      plugin.QueryTypeSelection,
 		}, nil)
-		responseUISuccessWithData(ctx, request, []string{})
+		responseUIQueryResults(ctx, request, queryId, []plugin.QueryResultUI{}, true)
 		return
 	}
 
@@ -504,7 +506,7 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 		return
 	}
 
-	plugin.GetPluginManager().HandleQueryContext(ctx, query, queryPlugin)
+	plugin.GetPluginManager().HandleQueryLifecycle(ctx, query, queryPlugin)
 
 	var totalResultCount int
 	var startTimestamp = util.GetSystemTimestamp()

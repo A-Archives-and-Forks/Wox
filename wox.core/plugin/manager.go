@@ -94,10 +94,13 @@ type Manager struct {
 	scriptReloadTimers  *util.HashMap[string, *time.Timer]
 
 	// Plugin query latency tracking (EWMA per plugin)
-	pluginQueryLatency   *util.HashMap[string, *util.EWMA]
-	toolbarMsgs          *util.HashMap[string, *toolbarMsgStore]
+	pluginQueryLatency *util.HashMap[string, *util.EWMA]
+
+	toolbarMsgActions   *util.HashMap[string, *toolbarMsgActionEntry]
+	pluginToolbarMsgIds *util.HashMap[string, string]
+
+	// sessionPluginQueries tracks which plugin query is currently active for each UI session (sessionId -> state)
 	sessionPluginQueries *util.HashMap[string, *sessionPluginQueryState]
-	toolbarMsgSequence   atomic.Uint64
 }
 
 const (
@@ -114,7 +117,8 @@ func GetPluginManager() *Manager {
 			aiProviders:             util.NewHashMap[string, ai.Provider](),
 			scriptReloadTimers:      util.NewHashMap[string, *time.Timer](),
 			pluginQueryLatency:      util.NewHashMap[string, *util.EWMA](),
-			toolbarMsgs:             util.NewHashMap[string, *toolbarMsgStore](),
+			toolbarMsgActions:       util.NewHashMap[string, *toolbarMsgActionEntry](),
+			pluginToolbarMsgIds:     util.NewHashMap[string, string](),
 			sessionPluginQueries:    util.NewHashMap[string, *sessionPluginQueryState](),
 		}
 		logger = util.GetLogger()
@@ -2453,4 +2457,306 @@ func normalizeHotkeyForPlatform(hotkey string) string {
 	}
 
 	return strings.Join(parts, "+")
+}
+
+type toolbarMsgActionEntry struct {
+	PluginId string
+	Actions  map[string]ToolbarMsgAction
+}
+
+type sessionPluginQueryState struct {
+	PluginId string
+	QueryId  string
+}
+
+// ShowToolbarMsg normalizes action callbacks, replaces the current toolbar msg owned by this plugin,
+// and forwards the latest snapshot to UI.
+func (m *Manager) ShowToolbarMsg(ctx context.Context, pluginInstance *Instance, msg ToolbarMsg) {
+	if pluginInstance == nil {
+		return
+	}
+	resolvedCtx, ok := m.resolveActiveToolbarMsgContext(ctx, pluginInstance.Metadata.Id)
+	if !ok {
+		logger.Warn(ctx, fmt.Sprintf("[%s] ignored toolbar msg outside active plugin query", pluginInstance.GetName(ctx)))
+		return
+	}
+	if msg.Id == "" {
+		msg.Id = uuid.NewString()
+	}
+
+	normalized := m.normalizeToolbarMsg(resolvedCtx, pluginInstance, msg)
+	m.clearCurrentPluginToolbarMsgAction(pluginInstance.Metadata.Id)
+
+	actionEntry := &toolbarMsgActionEntry{
+		PluginId: pluginInstance.Metadata.Id,
+		Actions:  make(map[string]ToolbarMsgAction, len(normalized.Actions)),
+	}
+	for _, action := range normalized.Actions {
+		actionEntry.Actions[action.Id] = action
+	}
+
+	m.toolbarMsgActions.Store(normalized.Id, actionEntry)
+	m.pluginToolbarMsgIds.Store(pluginInstance.Metadata.Id, normalized.Id)
+	m.GetUI().ShowToolbarMsg(resolvedCtx, normalized.toToolbarMsgUI())
+}
+
+// ClearToolbarMsg removes the toolbar msg action callbacks owned by the current plugin and asks UI
+// to clear the matching toolbar msg if it is still visible.
+func (m *Manager) ClearToolbarMsg(ctx context.Context, pluginInstance *Instance, toolbarMsgId string) {
+	if pluginInstance == nil || toolbarMsgId == "" {
+		return
+	}
+	resolvedCtx, ok := m.resolveActiveToolbarMsgContext(ctx, pluginInstance.Metadata.Id)
+	if !ok {
+		resolvedCtx = ctx
+	}
+
+	if currentToolbarMsgId, found := m.pluginToolbarMsgIds.Load(pluginInstance.Metadata.Id); found && currentToolbarMsgId == toolbarMsgId {
+		m.pluginToolbarMsgIds.Delete(pluginInstance.Metadata.Id)
+	}
+	m.toolbarMsgActions.Delete(toolbarMsgId)
+	m.GetUI().ClearToolbarMsg(resolvedCtx, toolbarMsgId)
+}
+
+// ExecuteToolbarMsgAction resolves the current toolbar msg action callback and invokes it.
+func (m *Manager) ExecuteToolbarMsgAction(ctx context.Context, sessionId string, toolbarMsgId string, actionId string) error {
+	entry, found := m.toolbarMsgActions.Load(toolbarMsgId)
+	if !found {
+		return fmt.Errorf("toolbar msg not found: %s", toolbarMsgId)
+	}
+
+	action, found := entry.Actions[actionId]
+	if !found {
+		return fmt.Errorf("toolbar msg action not found: %s", actionId)
+	}
+	if action.Action == nil {
+		return fmt.Errorf("toolbar msg action callback missing: %s", actionId)
+	}
+
+	actionCtx := ToolbarMsgActionContext{
+		ToolbarMsgId:       toolbarMsgId,
+		ToolbarMsgActionId: actionId,
+		ContextData:        common.ContextData(lo.Assign(map[string]string{}, action.ContextData)),
+	}
+
+	callbackCtx := ctx
+	if sessionId != "" {
+		callbackCtx = util.WithSessionContext(callbackCtx, sessionId)
+	}
+	action.Action(callbackCtx, actionCtx)
+	return nil
+}
+
+// HasVisibleToolbarMsg reports whether backend currently tracks any persistent toolbar msg. This is
+// an approximation used for routing Notify() calls without maintaining toolbar visibility policy.
+func (m *Manager) HasVisibleToolbarMsg(ctx context.Context) bool {
+	return m.pluginToolbarMsgIds.Len() > 0
+}
+
+func (m *Manager) clearCurrentPluginToolbarMsgAction(pluginId string) {
+	if pluginId == "" {
+		return
+	}
+
+	currentToolbarMsgId, found := m.pluginToolbarMsgIds.Load(pluginId)
+	if !found || currentToolbarMsgId == "" {
+		return
+	}
+
+	m.pluginToolbarMsgIds.Delete(pluginId)
+	m.toolbarMsgActions.Delete(currentToolbarMsgId)
+}
+
+func (m *Manager) clearCurrentPluginToolbarMsg(ctx context.Context, pluginId string) {
+	if pluginId == "" {
+		return
+	}
+
+	currentToolbarMsgId, found := m.pluginToolbarMsgIds.Load(pluginId)
+	if !found || currentToolbarMsgId == "" {
+		return
+	}
+
+	m.clearCurrentPluginToolbarMsgAction(pluginId)
+	m.GetUI().ClearToolbarMsg(ctx, currentToolbarMsgId)
+}
+
+func (m *Manager) resolveActiveToolbarMsgContext(ctx context.Context, pluginId string) (context.Context, bool) {
+	sessionId := util.GetContextSessionId(ctx)
+	if sessionId != "" {
+		return ctx, m.isPluginActiveInSession(sessionId, pluginId)
+	}
+
+	activeSessionId, activeQueryId, found := m.findActivePluginQuery(pluginId)
+	if !found {
+		return nil, false
+	}
+
+	resolvedCtx := util.WithSessionContext(ctx, activeSessionId)
+	if activeQueryId != "" {
+		resolvedCtx = util.WithQueryIdContext(resolvedCtx, activeQueryId)
+	}
+	return resolvedCtx, true
+}
+
+// normalizeToolbarMsg translates user-facing text, clones context data, and backfills host proxies
+// for external plugin action callbacks.
+func (m *Manager) normalizeToolbarMsg(ctx context.Context, pluginInstance *Instance, msg ToolbarMsg) ToolbarMsg {
+	normalized := ToolbarMsg{
+		Id:            msg.Id,
+		Title:         pluginInstance.translateMetadataText(ctx, common.I18nString(msg.Title)),
+		Icon:          msg.Icon,
+		Progress:      msg.Progress,
+		Indeterminate: msg.Indeterminate,
+		Actions:       make([]ToolbarMsgAction, 0, len(msg.Actions)),
+	}
+
+	for _, action := range msg.Actions {
+		if action.Id == "" {
+			action.Id = uuid.NewString()
+		}
+		action.Name = pluginInstance.translateMetadataText(ctx, common.I18nString(action.Name))
+		action.ContextData = common.ContextData(lo.Assign(map[string]string{}, action.ContextData))
+
+		if action.Action == nil {
+			if proxyCreator, ok := pluginInstance.Plugin.(ToolbarMsgActionProxyCreator); ok {
+				action.Action = proxyCreator.CreateToolbarMsgActionProxy(action.Id)
+			}
+		}
+
+		normalized.Actions = append(normalized.Actions, action)
+	}
+
+	return normalized
+}
+
+// toToolbarMsgUI strips callbacks and returns a UI-safe snapshot.
+func (m ToolbarMsg) toToolbarMsgUI() ToolbarMsgUI {
+	uiMsg := ToolbarMsgUI{
+		Id:            m.Id,
+		Title:         m.Title,
+		Icon:          m.Icon,
+		Progress:      m.Progress,
+		Indeterminate: m.Indeterminate,
+		Actions:       make([]ToolbarMsgActionUI, 0, len(m.Actions)),
+	}
+	for _, action := range m.Actions {
+		uiMsg.Actions = append(uiMsg.Actions, ToolbarMsgActionUI{
+			Id:                     action.Id,
+			Name:                   action.Name,
+			Icon:                   action.Icon,
+			Hotkey:                 action.Hotkey,
+			IsDefault:              action.IsDefault,
+			PreventHideAfterAction: action.PreventHideAfterAction,
+			ContextData:            common.ContextData(lo.Assign(map[string]string{}, action.ContextData)),
+		})
+	}
+	return uiMsg
+}
+
+// HandleQueryLifecycle updates the active plugin query for the session and fires enter/leave callbacks
+// when the owning plugin changes. Leaving a plugin query also clears its toolbar msg snapshot.
+func (m *Manager) HandleQueryLifecycle(ctx context.Context, query Query, pluginInstance *Instance) {
+	sessionId := query.SessionId
+	if sessionId == "" {
+		return
+	}
+
+	nextPluginId := ""
+	if pluginInstance != nil && query.Type == QueryTypeInput && query.TriggerKeyword != "" {
+		nextPluginId = pluginInstance.Metadata.Id
+	}
+
+	prevState, hasPrev := m.sessionPluginQueries.Load(sessionId)
+	prevPluginId := ""
+	prevQueryId := ""
+	if hasPrev {
+		prevPluginId = prevState.PluginId
+		prevQueryId = prevState.QueryId
+	}
+
+	if prevPluginId == nextPluginId {
+		if nextPluginId == "" {
+			m.sessionPluginQueries.Delete(sessionId)
+		} else {
+			m.sessionPluginQueries.Store(sessionId, &sessionPluginQueryState{PluginId: nextPluginId, QueryId: query.Id})
+		}
+		return
+	}
+
+	// Switch the active owner first so background plugin callbacks cannot re-resolve the
+	// previous plugin after we leave its query context.
+	if nextPluginId == "" {
+		m.sessionPluginQueries.Delete(sessionId)
+	} else {
+		m.sessionPluginQueries.Store(sessionId, &sessionPluginQueryState{PluginId: nextPluginId, QueryId: query.Id})
+	}
+
+	if prevPluginId != "" {
+		leaveCtx := util.WithQueryIdContext(util.WithSessionContext(ctx, sessionId), prevQueryId)
+		m.clearCurrentPluginToolbarMsg(leaveCtx, prevPluginId)
+
+		if prevInstance := m.getPluginInstance(prevPluginId); prevInstance != nil {
+			for _, callback := range prevInstance.LeavePluginQueryCallbacks {
+				util.Go(leaveCtx, fmt.Sprintf("[%s] leave plugin query callback", prevInstance.GetName(leaveCtx)), func() {
+					callback(leaveCtx)
+				})
+			}
+		}
+	}
+
+	if nextPluginId == "" {
+		return
+	}
+
+	if nextInstance := m.getPluginInstance(nextPluginId); nextInstance != nil {
+		enterCtx := util.WithQueryIdContext(util.WithSessionContext(ctx, sessionId), query.Id)
+		for _, callback := range nextInstance.EnterPluginQueryCallbacks {
+			util.Go(enterCtx, fmt.Sprintf("[%s] enter plugin query callback", nextInstance.GetName(enterCtx)), func() {
+				callback(enterCtx)
+			})
+		}
+	}
+}
+
+// ClearSessionState removes the active plugin query record and result cache for a hidden or closed UI session.
+func (m *Manager) ClearSessionState(sessionId string) {
+	if sessionId == "" {
+		return
+	}
+
+	m.sessionQueryResultCache.Delete(sessionId)
+	m.sessionPluginQueries.Delete(sessionId)
+}
+
+// isPluginActiveInSession reports whether the given plugin currently owns the session query context.
+func (m *Manager) isPluginActiveInSession(sessionId string, pluginId string) bool {
+	if sessionId == "" || pluginId == "" {
+		return false
+	}
+
+	state, found := m.sessionPluginQueries.Load(sessionId)
+	return found && state.PluginId == pluginId
+}
+
+// findActivePluginQuery returns one active session/query pair for the plugin.
+// Toolbar msg routing uses this to resolve the UI session when plugins fire status updates
+// without carrying a session-bound context.
+func (m *Manager) findActivePluginQuery(pluginId string) (string, string, bool) {
+	if pluginId == "" {
+		return "", "", false
+	}
+
+	var sessionId string
+	var queryId string
+	m.sessionPluginQueries.Range(func(currentSessionId string, state *sessionPluginQueryState) bool {
+		if state != nil && state.PluginId == pluginId {
+			sessionId = currentSessionId
+			queryId = state.QueryId
+			return false
+		}
+		return true
+	})
+
+	return sessionId, queryId, sessionId != ""
 }

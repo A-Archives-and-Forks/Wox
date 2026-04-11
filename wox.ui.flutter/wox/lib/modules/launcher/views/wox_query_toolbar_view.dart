@@ -43,10 +43,7 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (controller.resolvedToolbarIcon != null)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: WoxImageView(woxImage: controller.resolvedToolbarIcon!, width: 24, height: 24),
-              ),
+              Padding(padding: const EdgeInsets.only(right: 8), child: WoxImageView(woxImage: controller.resolvedToolbarIcon!, width: 24, height: 24)),
             // Text area flexes inside the capped max width and will ellipsize when needed
             Flexible(
               child: LayoutBuilder(
@@ -252,10 +249,7 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
             actionWidgets.add(_buildClickableToolbarAction(actionInfo, hotkey));
           }
 
-          return Align(
-            alignment: Alignment.centerRight,
-            child: Row(mainAxisSize: MainAxisSize.min, children: actionWidgets),
-          );
+          return Align(alignment: Alignment.centerRight, child: Row(mainAxisSize: MainAxisSize.min, children: actionWidgets));
         },
       );
     });
@@ -281,9 +275,10 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
             const SizedBox(width: 8),
             WoxHotkeyView(
               hotkey: hotkey,
-              backgroundColor: hasResultItems
-                  ? safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarBackgroundColor)
-                  : safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.appBackgroundColor).withValues(alpha: 0.1),
+              backgroundColor:
+                  hasResultItems
+                      ? safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarBackgroundColor)
+                      : safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.appBackgroundColor).withValues(alpha: 0.1),
               borderColor: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarFontColor),
               textColor: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarFontColor),
             ),

@@ -26,10 +26,11 @@ func (h searchHandle) Cancel() {
 }
 
 type Engine struct {
-	db            *FileSearchDB
-	localProvider *LocalIndexProvider
-	providers     []SearchProvider
-	scanner       *Scanner
+	db              *FileSearchDB
+	localProvider   *LocalIndexProvider
+	providers       []SearchProvider
+	scanner         *Scanner
+	statusListeners *util.HashMap[string, func(StatusSnapshot)]
 }
 
 func NewEngine(ctx context.Context) (*Engine, error) {
@@ -40,11 +41,13 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 
 	localProvider := NewLocalIndexProvider()
 	engine := &Engine{
-		db:            db,
-		localProvider: localProvider,
+		db:              db,
+		localProvider:   localProvider,
+		statusListeners: util.NewHashMap[string, func(StatusSnapshot)](),
 	}
 
 	engine.scanner = NewScanner(db, localProvider)
+	engine.scanner.SetStateChangeHandler(engine.notifyStatusChanged)
 
 	if err := engine.reloadLocalEntries(ctx); err != nil {
 		db.Close()
@@ -140,8 +143,9 @@ func (e *Engine) GetStatus(ctx context.Context) (StatusSnapshot, error) {
 		RootCount: len(roots),
 	}
 	for _, root := range roots {
-		status.ProgressCurrent += root.ProgressCurrent
-		status.ProgressTotal += root.ProgressTotal
+		progressCurrent, progressTotal := normalizeRootProgress(root)
+		status.ProgressCurrent += progressCurrent
+		status.ProgressTotal += progressTotal
 
 		switch root.Status {
 		case RootStatusScanning:
@@ -154,9 +158,63 @@ func (e *Engine) GetStatus(ctx context.Context) (StatusSnapshot, error) {
 		}
 	}
 
-	status.IsInitialIndexing = status.RootCount > 0 && status.ProgressTotal == 0
+	status.IsInitialIndexing = status.RootCount > 0 && status.ProgressCurrent == 0 && status.ScanningRootCount > 0
 	status.IsIndexing = status.ScanningRootCount > 0 || status.IsInitialIndexing
 	return status, nil
+}
+
+func (e *Engine) OnStatusChanged(callback func(StatusSnapshot)) func() {
+	if callback == nil {
+		return func() {}
+	}
+
+	listenerId := uuid.NewString()
+	e.statusListeners.Store(listenerId, callback)
+	return func() {
+		e.statusListeners.Delete(listenerId)
+	}
+}
+
+func (e *Engine) notifyStatusChanged(ctx context.Context) {
+	status, err := e.GetStatus(ctx)
+	if err != nil {
+		util.GetLogger().Warn(ctx, "filesearch failed to emit status changed event: "+err.Error())
+		return
+	}
+
+	e.statusListeners.Range(func(_ string, callback func(StatusSnapshot)) bool {
+		callback(status)
+		return true
+	})
+}
+
+func normalizeRootProgress(root RootRecord) (int64, int64) {
+	switch root.Status {
+	case RootStatusScanning:
+		total := root.ProgressTotal
+		if total <= 0 || total > RootProgressScale {
+			total = RootProgressScale
+		}
+
+		current := root.ProgressCurrent
+		if current < 0 {
+			current = 0
+		}
+		if current > total {
+			current = total
+		}
+
+		return current, total
+	case RootStatusIdle:
+		if root.ProgressTotal > 0 {
+			return RootProgressScale, RootProgressScale
+		}
+		return 0, RootProgressScale
+	case RootStatusError:
+		return 0, 0
+	default:
+		return 0, RootProgressScale
+	}
 }
 
 func (e *Engine) SyncUserRoots(ctx context.Context, rootPaths []string) error {

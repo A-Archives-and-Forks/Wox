@@ -604,6 +604,9 @@ func (m *Manager) PostOnHide(ctx context.Context) {
 		impl.isVisible = false
 		impl.isInSettingView = false
 	}
+
+	sessionId := util.GetContextSessionId(ctx)
+	plugin.GetPluginManager().ClearSessionState(sessionId)
 }
 
 func (m *Manager) PostOnSetting(ctx context.Context, isInSettingView bool) {

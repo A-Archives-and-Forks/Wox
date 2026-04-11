@@ -5,8 +5,8 @@ import 'package:wox/utils/windows/window_manager.dart';
 import 'smoke_test_helper.dart';
 
 void registerLauncherStartupSmokeTests() {
-  group('P0-SMK: Startup Smoke Tests', () {
-    testWidgets('P0-SMK-00: Startup shows launcher UI within N seconds', (tester) async {
+  group('T1: Startup Smoke Tests', () {
+    testWidgets('T1-01: Startup shows launcher UI within N seconds', (tester) async {
       final result = await launchLauncherAppAndMeasureStartup(tester, timeout: const Duration(seconds: 5));
 
       expect(result.elapsed, lessThanOrEqualTo(const Duration(seconds: 3)));
