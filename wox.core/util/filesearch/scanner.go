@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultScanInterval        = 5 * time.Minute
+	defaultScanInterval        = 24 * time.Hour
 	defaultDirtyDebounceWindow = 750 * time.Millisecond
 	progressBatchSize          = 256
 	progressUpdateGap          = 250 * time.Millisecond
@@ -23,10 +23,11 @@ const (
 type Scanner struct {
 	db                 *FileSearchDB
 	localProvider      *LocalIndexProvider
+	policy             *policyState
 	onStateChange      func(ctx context.Context)
 	stopOnce           sync.Once
 	stopCh             chan struct{}
-	requestCh          chan struct{}
+	requestCh          chan scanRequest
 	dirtyCh            chan struct{}
 	runningMu          sync.Mutex
 	scanRunning        bool
@@ -40,6 +41,11 @@ type Scanner struct {
 	transientSyncState *TransientSyncState
 }
 
+type scanRequest struct {
+	Reason  string
+	TraceID string
+}
+
 func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
 	dirtyQueueConfig := DirtyQueueConfig{
 		DebounceWindow:               defaultDirtyDebounceWindow,
@@ -48,16 +54,19 @@ func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
 		RootEscalationDirectoryRatio: 0.10,
 	}
 
+	policy := newPolicyState(Policy{})
+
 	return &Scanner{
 		db:               db,
 		localProvider:    localProvider,
+		policy:           policy,
 		stopCh:           make(chan struct{}),
-		requestCh:        make(chan struct{}, 1),
+		requestCh:        make(chan scanRequest, 1),
 		dirtyCh:          make(chan struct{}, 1),
 		changeFeed:       newPlatformChangeFeed(),
 		dirtyQueueConfig: dirtyQueueConfig,
 		dirtyQueue:       NewDirtyQueue(dirtyQueueConfig),
-		reconciler:       NewReconciler(db),
+		reconciler:       NewReconciler(db, policy),
 	}
 }
 
@@ -72,7 +81,7 @@ func (s *Scanner) Start(ctx context.Context) {
 
 	util.Go(ctx, "filesearch scan loop", func() {
 		util.GetLogger().Info(ctx, "filesearch scanner started")
-		s.scanAllRoots(ctx)
+		s.scanAllRootsWithReason(ctx, "startup")
 		s.refreshChangeFeed(ctx)
 
 		fullScanTimer := time.NewTimer(defaultScanInterval)
@@ -87,13 +96,15 @@ func (s *Scanner) Start(ctx context.Context) {
 		for {
 			select {
 			case <-fullScanTimer.C:
-				s.enqueueAllRootsDirty(util.NewTraceContext())
+				s.enqueueAllRootsDirtyWithReason(util.NewTraceContext(), "scheduled_interval")
 				s.resetDirtyTimer(dirtyTimer)
 				fullScanTimer.Reset(defaultScanInterval)
-			case <-s.requestCh:
-				s.resetDirtyQueue()
-				s.scanAllRoots(util.NewTraceContext())
-				s.refreshChangeFeed(util.NewTraceContext())
+			case request := <-s.requestCh:
+				rescanCtx := contextWithTraceID(util.NewTraceContext(), request.TraceID)
+				util.GetLogger().Info(rescanCtx, fmt.Sprintf("filesearch full rescan triggered: reason=%s", request.Reason))
+				s.resetDirtyQueueWithReason(rescanCtx, "full_rescan")
+				s.scanAllRootsWithReason(rescanCtx, request.Reason)
+				s.refreshChangeFeed(rescanCtx)
 				if !fullScanTimer.Stop() {
 					select {
 					case <-fullScanTimer.C:
@@ -121,18 +132,27 @@ func (s *Scanner) Stop() {
 	})
 }
 
-func (s *Scanner) RequestRescan() {
+func (s *Scanner) RequestRescan(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	traceID := util.GetContextTraceId(ctx)
 	select {
-	case s.requestCh <- struct{}{}:
-		util.GetLogger().Debug(context.Background(), "filesearch rescan requested")
+	case s.requestCh <- scanRequest{Reason: "request", TraceID: traceID}:
+		util.GetLogger().Debug(contextWithTraceID(ctx, traceID), "filesearch rescan requested")
 	default:
 	}
 }
 
 func (s *Scanner) scanAllRoots(ctx context.Context) {
+	s.scanAllRootsWithReason(ctx, "unspecified")
+}
+
+func (s *Scanner) scanAllRootsWithReason(ctx context.Context, reason string) {
 	s.runningMu.Lock()
 	if s.scanRunning {
 		s.runningMu.Unlock()
+		util.GetLogger().Debug(ctx, fmt.Sprintf("filesearch scan cycle skipped: reason=%s active=true", reason))
 		return
 	}
 	s.scanRunning = true
@@ -149,7 +169,7 @@ func (s *Scanner) scanAllRoots(ctx context.Context) {
 		util.GetLogger().Warn(ctx, "filesearch failed to load roots: "+err.Error())
 		return
 	}
-	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle started: roots=%d", len(roots)))
+	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle started: reason=%s roots=%d", reason, len(roots)))
 
 	for index, root := range roots {
 		s.scanRoot(ctx, root, index+1, len(roots))
@@ -161,7 +181,7 @@ func (s *Scanner) scanAllRoots(ctx context.Context) {
 		return
 	}
 	s.localProvider.ReplaceEntries(entries)
-	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: entries=%d", len(entries)))
+	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: reason=%s entries=%d", reason, len(entries)))
 }
 
 func (s *Scanner) refreshChangeFeed(ctx context.Context) {
@@ -268,7 +288,15 @@ func (s *Scanner) clearTransientSyncState(rootID string) {
 
 func (s *Scanner) scanRoot(ctx context.Context, root RootRecord, rootIndex int, rootTotal int) {
 	startTime := util.GetSystemTimestamp()
-	util.GetLogger().Info(ctx, "filesearch scanning root: "+root.Path)
+	util.GetLogger().Info(ctx, fmt.Sprintf(
+		"filesearch scanning root: index=%d/%d path=%s kind=%s feed_type=%s feed_state=%s",
+		rootIndex,
+		rootTotal,
+		root.Path,
+		root.Kind,
+		root.FeedType,
+		root.FeedState,
+	))
 	s.clearTransientRootState(root.ID)
 	if root.FeedType == "" {
 		root.FeedType = RootFeedTypeFallback
@@ -429,7 +457,9 @@ func (s *Scanner) scanRoot(ctx context.Context, root RootRecord, rootIndex int, 
 	s.clearTransientRootState(root.ID)
 	s.emitStateChange(ctx)
 	util.GetLogger().Info(ctx, fmt.Sprintf(
-		"filesearch scanned root: path=%s entries=%d cost=%dms",
+		"filesearch scanned root: index=%d/%d path=%s entries=%d cost=%dms",
+		rootIndex,
+		rootTotal,
 		root.Path,
 		len(entries),
 		util.GetSystemTimestamp()-startTime,
@@ -489,7 +519,7 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 			if shouldSkipSystemPath(fullPath, isDir) {
 				continue
 			}
-			if shouldIgnorePath(localPatterns, fullPath, isDir) {
+			if !s.shouldIndexPath(root, fullPath, isDir) {
 				continue
 			}
 
@@ -576,7 +606,7 @@ func (s *Scanner) collectEntries(ctx context.Context, root RootRecord, plan scan
 				}
 				continue
 			}
-			if shouldIgnorePath(plannedDirectory.patterns, fullPath, isDir) {
+			if !s.shouldIndexPath(root, fullPath, isDir) {
 				processedItems++
 				count++
 				if count%progressBatchSize == 0 || time.Since(lastProgressUpdateAt) >= progressUpdateGap {
@@ -672,17 +702,60 @@ func (s *Scanner) emitStateChange(ctx context.Context) {
 	}
 }
 
+func (s *Scanner) shouldIndexPath(root RootRecord, path string, isDir bool) bool {
+	if shouldSkipSystemPath(path, isDir) {
+		return false
+	}
+	if s.policy == nil {
+		return true
+	}
+	return s.policy.shouldIndexPath(root, path, isDir)
+}
+
+func (s *Scanner) shouldProcessChange(root RootRecord, signal ChangeSignal) bool {
+	if signal.Kind == ChangeSignalKindRequiresRootReconcile || signal.Kind == ChangeSignalKindFeedUnavailable {
+		return true
+	}
+	if signal.SemanticKind == ChangeSemanticKindRemove || signal.SemanticKind == ChangeSemanticKindRename {
+		return true
+	}
+	if root.FeedState != RootFeedStateReady {
+		return true
+	}
+	if s.policy == nil {
+		return true
+	}
+	return s.policy.shouldProcessChange(root, signal)
+}
+
 func (s *Scanner) enqueueDirty(signal DirtySignal) {
+	s.enqueueDirtyWithContext(context.Background(), signal)
+}
+
+func (s *Scanner) enqueueDirtyWithContext(ctx context.Context, signal DirtySignal) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	normalized, ok := normalizeDirtySignal(signal)
 	if !ok {
 		return
+	}
+	if normalized.TraceID == "" {
+		normalized.TraceID = util.GetContextTraceId(ctx)
 	}
 
 	if s.dirtyQueue != nil {
 		s.dirtyQueue.Push(normalized)
 	}
 	s.refreshTransientSyncPendingCounts()
-	s.emitStateChange(context.Background())
+	pendingRootCount, pendingPathCount := s.pendingDirtyCounts()
+	util.GetLogger().Debug(contextWithTraceID(ctx, normalized.TraceID), fmt.Sprintf(
+		"filesearch dirty enqueued: %s pending_roots=%d pending_paths=%d",
+		summarizeDirtySignal(normalized),
+		pendingRootCount,
+		pendingPathCount,
+	))
+	s.emitStateChange(contextWithTraceID(ctx, normalized.TraceID))
 
 	select {
 	case s.dirtyCh <- struct{}{}:
@@ -691,14 +764,36 @@ func (s *Scanner) enqueueDirty(signal DirtySignal) {
 }
 
 func (s *Scanner) enqueueAllRootsDirty(ctx context.Context) {
+	s.enqueueAllRootsDirtyWithReason(ctx, "unspecified")
+}
+
+func (s *Scanner) enqueueAllRootsDirtyWithReason(ctx context.Context, reason string) {
 	roots, err := s.db.ListRoots(ctx)
 	if err != nil {
 		util.GetLogger().Warn(ctx, "filesearch failed to enqueue dirty roots: "+err.Error())
 		return
 	}
 
+	rootPaths := make([]string, 0, len(roots))
 	for _, root := range roots {
-		s.enqueueDirty(DirtySignal{
+		rootPaths = append(rootPaths, root.Path)
+	}
+	util.GetLogger().Info(ctx, fmt.Sprintf(
+		"filesearch queued full root reconcile: reason=%s roots=%d interval=%s",
+		reason,
+		len(roots),
+		defaultScanInterval,
+	))
+	if len(rootPaths) > 0 {
+		util.GetLogger().Debug(ctx, fmt.Sprintf(
+			"filesearch queued full root reconcile roots: reason=%s paths=%s",
+			reason,
+			summarizeLogPaths(rootPaths),
+		))
+	}
+
+	for _, root := range roots {
+		s.enqueueDirtyWithContext(ctx, DirtySignal{
 			Kind:          DirtySignalKindRoot,
 			RootID:        root.ID,
 			Path:          root.Path,
@@ -728,7 +823,7 @@ func (s *Scanner) enqueueDirtyForPath(ctx context.Context, path string) bool {
 		pathTypeKnown = true
 	}
 
-	s.enqueueDirty(DirtySignal{
+	s.enqueueDirtyWithContext(ctx, DirtySignal{
 		Kind:          kind,
 		RootID:        root.ID,
 		Path:          cleanPath,
@@ -748,45 +843,100 @@ func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
 		return err
 	}
 
+	queuedRootCount, queuedPathCount := s.pendingDirtyCounts()
 	batches := s.dirtyQueue.FlushReady(now, rootDirectoryCounts)
 	if len(batches) == 0 {
 		return nil
 	}
+	remainingRootCount, remainingPathCount := s.pendingDirtyCounts()
+	util.GetLogger().Info(ctx, fmt.Sprintf(
+		"filesearch dirty queue flushed: batches=%d queued_roots=%d queued_paths=%d remaining_roots=%d remaining_paths=%d",
+		len(batches),
+		queuedRootCount,
+		queuedPathCount,
+		remainingRootCount,
+		remainingPathCount,
+	))
 
 	rootTotal := len(rootsByID)
 	for batchIndex, batch := range batches {
+		batchCtx := contextWithTraceID(ctx, batch.TraceID)
 		root, ok := rootsByID[batch.RootID]
 		if !ok {
 			s.refreshTransientSyncPendingCounts()
 			continue
 		}
+		originalMode := batch.Mode
 		batch = forceReconcileBatchForFeedState(root, batch)
+		if batch.Mode != originalMode {
+			util.GetLogger().Info(batchCtx, fmt.Sprintf(
+				"filesearch reconcile batch escalated: root=%s path=%s from=%s to=%s feed_state=%s",
+				batch.RootID,
+				root.Path,
+				originalMode,
+				batch.Mode,
+				root.FeedState,
+			))
+		}
+		util.GetLogger().Info(batchCtx, fmt.Sprintf(
+			"filesearch reconcile batch started: index=%d/%d root=%s path=%s mode=%s dirty_paths=%d scopes=%d feed_state=%s feed_type=%s",
+			batchIndex+1,
+			len(batches),
+			batch.RootID,
+			root.Path,
+			batch.Mode,
+			batch.DirtyPathCount,
+			len(batch.Paths),
+			root.FeedState,
+			root.FeedType,
+		))
+		if len(batch.Paths) > 0 {
+			util.GetLogger().Debug(batchCtx, fmt.Sprintf(
+				"filesearch reconcile batch scopes: root=%s paths=%s",
+				batch.RootID,
+				summarizeLogPaths(batch.Paths),
+			))
+		}
 
 		pendingRootCount, pendingPathCount := s.pendingDirtyCounts()
 		s.setTransientSyncState(newTransientSyncState(root, rootIndexByID[batch.RootID], rootTotal, batch, pendingRootCount, pendingPathCount))
-		s.emitStateChange(ctx)
+		s.emitStateChange(batchCtx)
 
-		result, err := s.reconciler.Reconcile(ctx, batch)
+		batchStart := util.GetSystemTimestamp()
+		result, err := s.reconciler.Reconcile(batchCtx, batch)
 		if err != nil {
 			s.clearTransientSyncState(batch.RootID)
-			s.handleDirtyQueueFailure(ctx, root, batch, batches[batchIndex+1:])
+			s.handleDirtyQueueFailure(batchCtx, root, batch, batches[batchIndex+1:], err)
 			return err
 		}
 
 		if result.ReloadNeeded {
-			if err := s.reloadLocalProviderFromDB(ctx); err != nil {
+			if _, err := s.reloadLocalProviderFromDB(batchCtx); err != nil {
 				s.clearTransientSyncState(batch.RootID)
-				s.handleDirtyQueueFailure(ctx, root, batch, batches[batchIndex+1:])
+				s.handleDirtyQueueFailure(batchCtx, root, batch, batches[batchIndex+1:], err)
 				return err
 			}
 		}
 		if result.Mode == ReconcileModeRoot {
-			s.refreshRootFeedSnapshot(ctx, batch.RootID)
+			util.GetLogger().Debug(batchCtx, fmt.Sprintf("filesearch refreshing root feed snapshot after reconcile: root=%s path=%s", batch.RootID, root.Path))
+			s.refreshRootFeedSnapshot(batchCtx, batch.RootID)
 		}
 
 		s.clearTransientSyncState(batch.RootID)
 		s.refreshTransientSyncPendingCounts()
-		s.emitStateChange(ctx)
+		remainingRootCount, remainingPathCount = s.pendingDirtyCounts()
+		util.GetLogger().Info(batchCtx, fmt.Sprintf(
+			"filesearch reconcile batch completed: root=%s mode=%s dirty_paths=%d scopes=%d reload_needed=%t remaining_roots=%d remaining_paths=%d cost=%dms",
+			batch.RootID,
+			result.Mode,
+			batch.DirtyPathCount,
+			len(batch.Paths),
+			result.ReloadNeeded,
+			remainingRootCount,
+			remainingPathCount,
+			util.GetSystemTimestamp()-batchStart,
+		))
+		s.emitStateChange(batchCtx)
 	}
 
 	return nil
@@ -794,10 +944,33 @@ func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
 
 func (s *Scanner) handleChangeSignal(ctx context.Context, signal ChangeSignal) {
 	s.updateRootFeedMetadata(ctx, signal.RootID, signal.FeedType, signal.Cursor)
+	util.GetLogger().Debug(ctx, fmt.Sprintf(
+		"filesearch change signal received: kind=%s semantic=%s root=%s path=%s feed_type=%s reason=%q path_is_dir=%t path_type_known=%t",
+		signal.Kind,
+		signal.SemanticKind,
+		signal.RootID,
+		summarizeLogPath(signal.Path),
+		signal.FeedType,
+		strings.TrimSpace(signal.Reason),
+		signal.PathIsDir,
+		signal.PathTypeKnown,
+	))
+
+	root, rootFound := s.findRootByID(ctx, signal.RootID)
+	if rootFound && !s.shouldProcessChange(root, signal) {
+		util.GetLogger().Debug(ctx, fmt.Sprintf(
+			"filesearch change signal ignored by policy: kind=%s semantic=%s root=%s path=%s",
+			signal.Kind,
+			signal.SemanticKind,
+			signal.RootID,
+			summarizeLogPath(signal.Path),
+		))
+		return
+	}
 
 	switch signal.Kind {
 	case ChangeSignalKindDirtyRoot:
-		s.enqueueDirty(DirtySignal{
+		s.enqueueDirtyWithContext(ctx, DirtySignal{
 			Kind:          DirtySignalKindRoot,
 			RootID:        signal.RootID,
 			Path:          cleanDirtyQueuePath(signal.Path),
@@ -806,9 +979,8 @@ func (s *Scanner) handleChangeSignal(ctx context.Context, signal ChangeSignal) {
 			At:            signal.At,
 		})
 	case ChangeSignalKindDirtyPath:
-		root, ok := s.findRootByID(ctx, signal.RootID)
-		if !ok || root.FeedState == RootFeedStateReady {
-			s.enqueueDirty(DirtySignal{
+		if !rootFound || root.FeedState == RootFeedStateReady {
+			s.enqueueDirtyWithContext(ctx, DirtySignal{
 				Kind:          DirtySignalKindPath,
 				RootID:        signal.RootID,
 				Path:          signal.Path,
@@ -818,7 +990,13 @@ func (s *Scanner) handleChangeSignal(ctx context.Context, signal ChangeSignal) {
 			})
 			return
 		}
-		s.enqueueDirty(DirtySignal{
+		util.GetLogger().Info(ctx, fmt.Sprintf(
+			"filesearch dirty path escalated to root reconcile: root=%s path=%s feed_state=%s",
+			signal.RootID,
+			summarizeLogPath(signal.Path),
+			root.FeedState,
+		))
+		s.enqueueDirtyWithContext(ctx, DirtySignal{
 			Kind:          DirtySignalKindRoot,
 			RootID:        signal.RootID,
 			Path:          root.Path,
@@ -827,8 +1005,15 @@ func (s *Scanner) handleChangeSignal(ctx context.Context, signal ChangeSignal) {
 			At:            signal.At,
 		})
 	case ChangeSignalKindRequiresRootReconcile:
+		util.GetLogger().Info(ctx, fmt.Sprintf(
+			"filesearch change feed requested root reconcile: root=%s path=%s feed_type=%s reason=%q",
+			signal.RootID,
+			summarizeLogPath(signal.Path),
+			signal.FeedType,
+			strings.TrimSpace(signal.Reason),
+		))
 		s.updateRootFeedState(ctx, signal.RootID, RootFeedStateDegraded)
-		s.enqueueDirty(DirtySignal{
+		s.enqueueDirtyWithContext(ctx, DirtySignal{
 			Kind:          DirtySignalKindRoot,
 			RootID:        signal.RootID,
 			Path:          signal.Path,
@@ -837,8 +1022,15 @@ func (s *Scanner) handleChangeSignal(ctx context.Context, signal ChangeSignal) {
 			At:            signal.At,
 		})
 	case ChangeSignalKindFeedUnavailable:
+		util.GetLogger().Info(ctx, fmt.Sprintf(
+			"filesearch change feed unavailable: root=%s path=%s feed_type=%s reason=%q",
+			signal.RootID,
+			summarizeLogPath(signal.Path),
+			signal.FeedType,
+			strings.TrimSpace(signal.Reason),
+		))
 		s.updateRootFeedState(ctx, signal.RootID, RootFeedStateUnavailable)
-		s.enqueueDirty(DirtySignal{
+		s.enqueueDirtyWithContext(ctx, DirtySignal{
 			Kind:          DirtySignalKindRoot,
 			RootID:        signal.RootID,
 			Path:          signal.Path,
@@ -849,9 +1041,26 @@ func (s *Scanner) handleChangeSignal(ctx context.Context, signal ChangeSignal) {
 	}
 }
 
-func (s *Scanner) handleDirtyQueueFailure(ctx context.Context, root RootRecord, batch ReconcileBatch, remaining []ReconcileBatch) {
+func (s *Scanner) handleDirtyQueueFailure(ctx context.Context, root RootRecord, batch ReconcileBatch, remaining []ReconcileBatch, cause error) {
+	util.GetLogger().Warn(ctx, fmt.Sprintf(
+		"filesearch reconcile batch failed: root=%s path=%s mode=%s dirty_paths=%d scopes=%d remaining_batches=%d err=%s",
+		batch.RootID,
+		root.Path,
+		batch.Mode,
+		batch.DirtyPathCount,
+		len(batch.Paths),
+		len(remaining),
+		cause.Error(),
+	))
+	if len(batch.Paths) > 0 {
+		util.GetLogger().Debug(ctx, fmt.Sprintf(
+			"filesearch reconcile batch failed scopes: root=%s paths=%s",
+			batch.RootID,
+			summarizeLogPaths(batch.Paths),
+		))
+	}
 	s.updateRootFeedState(ctx, root.ID, RootFeedStateDegraded)
-	s.enqueueDirty(DirtySignal{
+	s.enqueueDirtyWithContext(ctx, DirtySignal{
 		Kind:          DirtySignalKindRoot,
 		RootID:        batch.RootID,
 		Path:          root.Path,
@@ -859,7 +1068,7 @@ func (s *Scanner) handleDirtyQueueFailure(ctx context.Context, root RootRecord, 
 		PathTypeKnown: true,
 		At:            time.Now(),
 	})
-	s.requeueDirtyBatches(remaining)
+	s.requeueDirtyBatches(ctx, remaining)
 	s.refreshTransientSyncPendingCounts()
 	s.emitStateChange(ctx)
 }
@@ -890,7 +1099,15 @@ func (s *Scanner) updateRootFeedMetadata(ctx context.Context, rootID string, fee
 	root.UpdatedAt = util.GetSystemTimestamp()
 	if err := s.db.UpdateRootState(ctx, root); err != nil {
 		util.GetLogger().Warn(ctx, "filesearch failed to update root feed metadata: "+err.Error())
+		return
 	}
+	util.GetLogger().Debug(ctx, fmt.Sprintf(
+		"filesearch root feed metadata updated: root=%s path=%s feed_type=%s cursor_updated=%t",
+		root.ID,
+		root.Path,
+		root.FeedType,
+		cursor != "",
+	))
 }
 
 func (s *Scanner) captureRootFeedSnapshot(ctx context.Context, root RootRecord) RootRecord {
@@ -940,6 +1157,13 @@ func (s *Scanner) refreshRootFeedSnapshot(ctx context.Context, rootID string) {
 		util.GetLogger().Warn(ctx, "filesearch failed to persist refreshed root feed snapshot: "+err.Error())
 		return
 	}
+	util.GetLogger().Debug(ctx, fmt.Sprintf(
+		"filesearch root feed snapshot refreshed: root=%s path=%s feed_type=%s feed_state=%s",
+		root.ID,
+		root.Path,
+		root.FeedType,
+		root.FeedState,
+	))
 	s.emitStateChange(ctx)
 }
 
@@ -965,10 +1189,21 @@ func (s *Scanner) dirtyDebounceWindow() time.Duration {
 }
 
 func (s *Scanner) resetDirtyQueue() {
+	s.resetDirtyQueueWithReason(context.Background(), "unspecified")
+}
+
+func (s *Scanner) resetDirtyQueueWithReason(ctx context.Context, reason string) {
+	pendingRootCount, pendingPathCount := s.pendingDirtyCounts()
+	util.GetLogger().Info(ctx, fmt.Sprintf(
+		"filesearch dirty queue reset: reason=%s dropped_pending_roots=%d dropped_pending_paths=%d",
+		reason,
+		pendingRootCount,
+		pendingPathCount,
+	))
 	s.clearTransientSyncState("")
 	s.dirtyQueue = NewDirtyQueue(s.dirtyQueueConfig)
 	s.refreshTransientSyncPendingCounts()
-	s.emitStateChange(context.Background())
+	s.emitStateChange(ctx)
 }
 
 func (s *Scanner) loadDirtyQueueContext(ctx context.Context) (map[string]int, map[string]RootRecord, map[string]int, error) {
@@ -994,13 +1229,14 @@ func (s *Scanner) loadDirtyQueueContext(ctx context.Context) (map[string]int, ma
 	return rootDirectoryCounts, rootsByID, rootIndexByID, nil
 }
 
-func (s *Scanner) reloadLocalProviderFromDB(ctx context.Context) error {
+func (s *Scanner) reloadLocalProviderFromDB(ctx context.Context) (int, error) {
 	entries, err := s.db.ListEntries(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	s.localProvider.ReplaceEntries(entries)
-	return nil
+	util.GetLogger().Debug(ctx, fmt.Sprintf("filesearch local index reloaded from db: entries=%d", len(entries)))
+	return len(entries), nil
 }
 
 func (s *Scanner) findRootByID(ctx context.Context, rootID string) (RootRecord, bool) {
@@ -1026,12 +1262,21 @@ func (s *Scanner) updateRootFeedState(ctx context.Context, rootID string, state 
 	if root.FeedType == "" {
 		root.FeedType = RootFeedTypeFallback
 	}
+	previousState := root.FeedState
 	root.FeedState = state
 	root.UpdatedAt = util.GetSystemTimestamp()
 	if err := s.db.UpdateRootState(ctx, root); err != nil {
 		util.GetLogger().Warn(ctx, "filesearch failed to update root feed state: "+err.Error())
 		return
 	}
+	util.GetLogger().Info(ctx, fmt.Sprintf(
+		"filesearch root feed state updated: root=%s path=%s from=%s to=%s feed_type=%s",
+		root.ID,
+		root.Path,
+		previousState,
+		root.FeedState,
+		root.FeedType,
+	))
 	s.emitStateChange(ctx)
 }
 
@@ -1099,12 +1344,22 @@ func (s *Scanner) refreshTransientSyncPendingCounts() {
 	s.transientSyncState.PendingPathCount = pendingPathCount
 }
 
-func (s *Scanner) requeueDirtyBatches(batches []ReconcileBatch) {
+func (s *Scanner) requeueDirtyBatches(ctx context.Context, batches []ReconcileBatch) {
+	if len(batches) > 0 {
+		util.GetLogger().Info(ctx, fmt.Sprintf("filesearch requeueing dirty batches: batches=%d", len(batches)))
+	}
 	requeuedAt := time.Now()
 	for _, batch := range batches {
+		batchCtx := contextWithTraceID(ctx, batch.TraceID)
+		util.GetLogger().Debug(batchCtx, fmt.Sprintf(
+			"filesearch requeue dirty batch: root=%s mode=%s paths=%s",
+			batch.RootID,
+			batch.Mode,
+			summarizeLogPaths(batch.Paths),
+		))
 		switch batch.Mode {
 		case ReconcileModeRoot:
-			s.enqueueDirty(DirtySignal{
+			s.enqueueDirtyWithContext(batchCtx, DirtySignal{
 				Kind:          DirtySignalKindRoot,
 				RootID:        batch.RootID,
 				PathIsDir:     true,
@@ -1113,7 +1368,7 @@ func (s *Scanner) requeueDirtyBatches(batches []ReconcileBatch) {
 			})
 		case ReconcileModeSubtree:
 			for _, path := range batch.Paths {
-				s.enqueueDirty(DirtySignal{
+				s.enqueueDirtyWithContext(batchCtx, DirtySignal{
 					Kind:          DirtySignalKindPath,
 					RootID:        batch.RootID,
 					Path:          path,
@@ -1358,21 +1613,7 @@ func buildDirectorySnapshotRecords(root RootRecord, plan scanPlan, scanTimestamp
 }
 
 func shouldSkipSystemPath(fullPath string, isDir bool) bool {
-	if !isDir {
-		return false
-	}
-
-	base := strings.ToLower(filepath.Base(fullPath))
-
-	if base == ".git" || base == ".hg" || base == ".svn" {
-		return true
-	}
-
-	if !util.IsMacOS() {
-		return false
-	}
-
-	return strings.HasSuffix(base, ".photoslibrary") ||
-		strings.HasSuffix(base, ".lrlibrary") ||
-		strings.HasSuffix(base, ".lrdata")
+	_ = fullPath
+	_ = isDir
+	return false
 }

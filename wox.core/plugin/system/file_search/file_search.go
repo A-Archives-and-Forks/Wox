@@ -90,7 +90,9 @@ func (c *FileSearchPlugin) GetMetadata() plugin.Metadata {
 func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 	c.api = initParams.API
 
-	engine, initErr := filesearch.NewEngine(ctx)
+	engine, initErr := filesearch.NewEngineWithOptions(ctx, filesearch.EngineOptions{
+		Policy: newFileSearchIndexPolicy().toFilesearchPolicy(),
+	})
 	if initErr != nil {
 		c.api.Log(ctx, plugin.LogLevelError, initErr.Error())
 		return

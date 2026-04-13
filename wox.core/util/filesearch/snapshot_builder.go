@@ -10,10 +10,15 @@ import (
 	"wox/util"
 )
 
-type SnapshotBuilder struct{}
+type SnapshotBuilder struct {
+	policy *policyState
+}
 
-func NewSnapshotBuilder() *SnapshotBuilder {
-	return &SnapshotBuilder{}
+func NewSnapshotBuilder(policy *policyState) *SnapshotBuilder {
+	if policy == nil {
+		policy = newPolicyState(Policy{})
+	}
+	return &SnapshotBuilder{policy: policy}
 }
 
 func (b *SnapshotBuilder) BuildRootEntries(ctx context.Context, root RootRecord) ([]EntryRecord, error) {
@@ -51,6 +56,10 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 			return batch, nil
 		}
 		return batch, err
+	}
+
+	if scopePath != filepath.Clean(root.Path) && !b.shouldIndexPath(root, scopePath, info.IsDir()) {
+		return batch, nil
 	}
 
 	if !info.IsDir() {
@@ -112,7 +121,7 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 			if shouldSkipSystemPath(childPath, isDir) {
 				continue
 			}
-			if shouldIgnorePath(localPatterns, childPath, isDir) {
+			if !b.shouldIndexPath(root, childPath, isDir) {
 				continue
 			}
 
@@ -130,4 +139,14 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 	}
 
 	return batch, nil
+}
+
+func (b *SnapshotBuilder) shouldIndexPath(root RootRecord, path string, isDir bool) bool {
+	if shouldSkipSystemPath(path, isDir) {
+		return false
+	}
+	if b == nil || b.policy == nil {
+		return true
+	}
+	return b.policy.shouldIndexPath(root, path, isDir)
 }

@@ -58,7 +58,7 @@ func TestReconcilerSubtreeRefreshesOnlyRequestedScope(t *testing.T) {
 		t.Fatalf("insert directory snapshots: %v", err)
 	}
 
-	reconciler := NewReconciler(db)
+	reconciler := NewReconciler(db, nil)
 	result, err := reconciler.Reconcile(ctx, ReconcileBatch{
 		RootID: root.ID,
 		Mode:   ReconcileModeSubtree,
@@ -145,7 +145,7 @@ func TestReconcilerRootRefreshesWholeRoot(t *testing.T) {
 		t.Fatalf("insert stale entry snapshots: %v", err)
 	}
 
-	reconciler := NewReconciler(db)
+	reconciler := NewReconciler(db, nil)
 	result, err := reconciler.Reconcile(ctx, ReconcileBatch{
 		RootID: root.ID,
 		Mode:   ReconcileModeRoot,

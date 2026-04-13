@@ -2,7 +2,6 @@ package filesearch
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -42,12 +41,13 @@ func (f *FallbackChangeFeed) Refresh(ctx context.Context, roots []RootRecord) er
 	for _, root := range roots {
 		if err := watcher.Add(root.Path); err != nil {
 			f.emit(ChangeSignal{
-				Kind:     ChangeSignalKindFeedUnavailable,
-				RootID:   root.ID,
-				FeedType: RootFeedTypeFallback,
-				Path:     root.Path,
-				Reason:   err.Error(),
-				At:       time.Now(),
+				Kind:         ChangeSignalKindFeedUnavailable,
+				SemanticKind: ChangeSemanticKindFeedUnavailable,
+				RootID:       root.ID,
+				FeedType:     RootFeedTypeFallback,
+				Path:         root.Path,
+				Reason:       err.Error(),
+				At:           time.Now(),
 			})
 			continue
 		}
@@ -55,12 +55,13 @@ func (f *FallbackChangeFeed) Refresh(ctx context.Context, roots []RootRecord) er
 		watchedRoots = append(watchedRoots, root)
 		if root.FeedState == RootFeedStateUnavailable {
 			f.emit(ChangeSignal{
-				Kind:     ChangeSignalKindRequiresRootReconcile,
-				RootID:   root.ID,
-				FeedType: RootFeedTypeFallback,
-				Path:     root.Path,
-				Reason:   "fallback change feed recovered",
-				At:       time.Now(),
+				Kind:         ChangeSignalKindRequiresRootReconcile,
+				SemanticKind: ChangeSemanticKindRequiresRootReconcile,
+				RootID:       root.ID,
+				FeedType:     RootFeedTypeFallback,
+				Path:         root.Path,
+				Reason:       "fallback change feed recovered",
+				At:           time.Now(),
 			})
 		}
 	}
@@ -138,12 +139,13 @@ func (f *FallbackChangeFeed) watchLoop(ctx context.Context, watcher *fsnotify.Wa
 			}
 			for _, root := range roots {
 				f.emit(ChangeSignal{
-					Kind:     ChangeSignalKindRequiresRootReconcile,
-					RootID:   root.ID,
-					FeedType: RootFeedTypeFallback,
-					Path:     root.Path,
-					Reason:   err.Error(),
-					At:       time.Now(),
+					Kind:         ChangeSignalKindRequiresRootReconcile,
+					SemanticKind: ChangeSemanticKindRequiresRootReconcile,
+					RootID:       root.ID,
+					FeedType:     RootFeedTypeFallback,
+					Path:         root.Path,
+					Reason:       err.Error(),
+					At:           time.Now(),
 				})
 			}
 			return
@@ -173,15 +175,11 @@ func (f *FallbackChangeFeed) handleEventForRoots(roots []RootRecord, event fsnot
 		kind = ChangeSignalKindDirtyRoot
 	}
 
-	pathIsDir := false
-	pathTypeKnown := false
-	if info, err := os.Stat(cleanPath); err == nil {
-		pathIsDir = info.IsDir()
-		pathTypeKnown = true
-	}
+	pathIsDir, pathTypeKnown := statPathType(cleanPath)
 
 	f.emit(ChangeSignal{
 		Kind:          kind,
+		SemanticKind:  classifyFallbackSemanticKind(event),
 		RootID:        root.ID,
 		FeedType:      RootFeedTypeFallback,
 		Path:          cleanPath,
@@ -189,6 +187,23 @@ func (f *FallbackChangeFeed) handleEventForRoots(roots []RootRecord, event fsnot
 		PathTypeKnown: pathTypeKnown,
 		At:            time.Now(),
 	})
+}
+
+func classifyFallbackSemanticKind(event fsnotify.Event) ChangeSemanticKind {
+	switch {
+	case event.Op&fsnotify.Rename != 0:
+		return ChangeSemanticKindRename
+	case event.Op&fsnotify.Remove != 0:
+		return ChangeSemanticKindRemove
+	case event.Op&fsnotify.Create != 0:
+		return ChangeSemanticKindCreate
+	case event.Op&fsnotify.Write != 0:
+		return ChangeSemanticKindModify
+	case event.Op&fsnotify.Chmod != 0:
+		return ChangeSemanticKindMetadata
+	default:
+		return ChangeSemanticKindUnknown
+	}
 }
 
 func (f *FallbackChangeFeed) emit(signal ChangeSignal) {

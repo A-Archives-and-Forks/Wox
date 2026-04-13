@@ -79,10 +79,13 @@ func buildReconcileBatch(rootID string, signals []DirtySignal, directoryCount in
 		return ReconcileBatch{RootID: rootID}
 	}
 
+	latestSignal := latestDirtySignal(signals)
+
 	for _, signal := range signals {
 		if signal.Kind == DirtySignalKindRoot {
 			return ReconcileBatch{
 				RootID:         rootID,
+				TraceID:        latestSignal.TraceID,
 				Mode:           ReconcileModeRoot,
 				DirtyPathCount: len(signals),
 			}
@@ -94,6 +97,7 @@ func buildReconcileBatch(rootID string, signals []DirtySignal, directoryCount in
 	if shouldEscalateRoot(len(paths), directoryCount, config) {
 		return ReconcileBatch{
 			RootID:         rootID,
+			TraceID:        latestSignal.TraceID,
 			Mode:           ReconcileModeRoot,
 			DirtyPathCount: len(signals),
 		}
@@ -101,6 +105,7 @@ func buildReconcileBatch(rootID string, signals []DirtySignal, directoryCount in
 
 	return ReconcileBatch{
 		RootID:         rootID,
+		TraceID:        latestSignal.TraceID,
 		Mode:           ReconcileModeSubtree,
 		Paths:          paths,
 		DirtyPathCount: len(signals),
@@ -303,6 +308,16 @@ func latestDirtySignalAt(signals []DirtySignal) time.Time {
 	for i := 1; i < len(signals); i++ {
 		if signals[i].At.After(latest) {
 			latest = signals[i].At
+		}
+	}
+	return latest
+}
+
+func latestDirtySignal(signals []DirtySignal) DirtySignal {
+	latest := signals[0]
+	for i := 1; i < len(signals); i++ {
+		if signals[i].At.After(latest.At) {
+			latest = signals[i]
 		}
 	}
 	return latest

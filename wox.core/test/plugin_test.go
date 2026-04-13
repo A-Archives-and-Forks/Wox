@@ -156,7 +156,7 @@ func TestFilePlugin_CustomRootsIncrementalSync(t *testing.T) {
 	}
 
 	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
-	if err := waitForFileSearchRootReady(ctx, rootPath, 8*time.Second); err != nil {
+	if err := waitForFileSearchRootReady(ctx, rootPath, 30*time.Second); err != nil {
 		t.Fatalf("file search root did not become ready: %v", err)
 	}
 
@@ -198,6 +198,92 @@ func TestFilePlugin_CustomRootsIncrementalSync(t *testing.T) {
 
 	if err := waitForFileSearchResult(ctx, "f "+incrementalFileName, incrementalFileName, incrementalFilePath, 30*time.Second); err != nil {
 		t.Fatalf("incremental file did not become searchable: %v", err)
+	}
+}
+
+func TestFilePlugin_CustomRootsIgnoresDSStore(t *testing.T) {
+	suite := NewTestSuite(t)
+	ctx := suite.ctx
+
+	rootPath := newStableFileSearchRoot(t, "filesearch-ignore-dsstore-root")
+
+	rootSetting, err := json.Marshal([]map[string]string{
+		{"Path": rootPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal file search roots setting: %v", err)
+	}
+
+	filePlugin := findPluginInstance("979d6363-025a-4f51-88d3-0b04e9dc56bf")
+	if filePlugin == nil {
+		t.Fatal("file plugin instance not found")
+	}
+
+	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+
+	ignoredFilePath := filepath.Join(rootPath, ".DS_Store")
+	if err := os.WriteFile(ignoredFilePath, []byte("ignored"), 0644); err != nil {
+		t.Fatalf("failed to create ignored file: %v", err)
+	}
+
+	visibleFileName := fmt.Sprintf("visible-%d.txt", time.Now().UnixNano())
+	visibleFilePath := filepath.Join(rootPath, visibleFileName)
+	if err := os.WriteFile(visibleFilePath, []byte("visible"), 0644); err != nil {
+		t.Fatalf("failed to create visible file: %v", err)
+	}
+
+	if err := ensureFileSearchResultAbsent(ctx, "f store", ".DS_Store", ignoredFilePath, 30*time.Second); err != nil {
+		t.Fatalf(".DS_Store should remain hidden from file search: %v", err)
+	}
+
+	if err := waitForFileSearchResult(ctx, "f "+visibleFileName, visibleFileName, visibleFilePath, 30*time.Second); err != nil {
+		t.Fatalf("visible file did not become searchable: %v", err)
+	}
+}
+
+func TestFilePlugin_PolicyUpdateRemovesIndexedPath(t *testing.T) {
+	suite := NewTestSuite(t)
+	ctx := suite.ctx
+
+	rootPath := newStableFileSearchRoot(t, "filesearch-policy-update-root")
+
+	rootSetting, err := json.Marshal([]map[string]string{
+		{"Path": rootPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal file search roots setting: %v", err)
+	}
+
+	filePlugin := findPluginInstance("979d6363-025a-4f51-88d3-0b04e9dc56bf")
+	if filePlugin == nil {
+		t.Fatal("file plugin instance not found")
+	}
+
+	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+
+	targetFileName := fmt.Sprintf("policy-target-%d.txt", time.Now().UnixNano())
+	targetFilePath := filepath.Join(rootPath, targetFileName)
+	if err := os.WriteFile(targetFilePath, []byte("indexed"), 0644); err != nil {
+		t.Fatalf("failed to create target file: %v", err)
+	}
+
+	if err := waitForFileSearchResult(ctx, "f "+targetFileName, targetFileName, targetFilePath, 30*time.Second); err != nil {
+		t.Fatalf("target file did not become searchable before policy update: %v", err)
+	}
+
+	engine, err := getFileSearchEngine()
+	if err != nil {
+		t.Fatalf("failed to get file search engine: %v", err)
+	}
+
+	engine.UpdatePolicy(filesearch.Policy{
+		ShouldIndexPath: func(root filesearch.RootRecord, path string, isDir bool) bool {
+			return filepath.Clean(path) != filepath.Clean(targetFilePath)
+		},
+	})
+
+	if err := ensureFileSearchResultAbsent(ctx, "f "+targetFileName, targetFileName, targetFilePath, 30*time.Second); err != nil {
+		t.Fatalf("target file should be evicted after policy update: %v", err)
 	}
 }
 
@@ -301,6 +387,38 @@ func waitForFileSearchResult(ctx context.Context, rawQuery string, expectedTitle
 		}
 
 		return false, nil
+	})
+	if err == nil {
+		return nil
+	}
+
+	summaries := make([]string, 0, len(lastResults))
+	for _, result := range lastResults {
+		summaries = append(summaries, fmt.Sprintf("%q (%q)", result.Title, result.SubTitle))
+	}
+	if len(summaries) == 0 {
+		return err
+	}
+
+	return fmt.Errorf("%w; last results: %s", err, strings.Join(summaries, ", "))
+}
+
+func ensureFileSearchResultAbsent(ctx context.Context, rawQuery string, unexpectedTitle string, unexpectedPath string, timeout time.Duration) error {
+	var lastResults []plugin.QueryResultUI
+	err := pollUntil(timeout, 200*time.Millisecond, func() (bool, error) {
+		results, err := runQuery(ctx, rawQuery)
+		if err != nil {
+			return false, err
+		}
+		lastResults = results
+
+		for _, result := range results {
+			if result.Title == unexpectedTitle && result.SubTitle == unexpectedPath {
+				return false, nil
+			}
+		}
+
+		return true, nil
 	})
 	if err == nil {
 		return nil

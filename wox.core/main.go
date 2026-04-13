@@ -48,6 +48,8 @@ import (
 	_ "wox/plugin/system/explorer"
 
 	_ "wox/plugin/system/browser_bookmark"
+
+	_ "wox/plugin/system/file_search"
 )
 
 func main() {

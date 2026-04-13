@@ -30,10 +30,15 @@ type Engine struct {
 	localProvider   *LocalIndexProvider
 	providers       []SearchProvider
 	scanner         *Scanner
+	policy          *policyState
 	statusListeners *util.HashMap[string, func(StatusSnapshot)]
 }
 
 func NewEngine(ctx context.Context) (*Engine, error) {
+	return NewEngineWithOptions(ctx, DefaultEngineOptions())
+}
+
+func NewEngineWithOptions(ctx context.Context, options EngineOptions) (*Engine, error) {
 	db, err := NewFileSearchDB(ctx)
 	if err != nil {
 		return nil, err
@@ -47,6 +52,10 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 	}
 
 	engine.scanner = NewScanner(db, localProvider)
+	engine.policy = engine.scanner.policy
+	if engine.policy != nil {
+		engine.policy.Set(options.Policy)
+	}
 	engine.scanner.SetStateChangeHandler(engine.notifyStatusChanged)
 
 	if err := engine.reloadLocalEntries(ctx); err != nil {
@@ -54,11 +63,24 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 		return nil, err
 	}
 
-	engine.providers = append([]SearchProvider{localProvider}, NewSystemProviders()...)
+	// engine.providers = append([]SearchProvider{localProvider}, NewSystemProviders()...)
+	engine.providers = append([]SearchProvider{localProvider})
 	engine.scanner.Start(util.NewTraceContext())
 	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch engine initialized: providers=%d", len(engine.providers)))
 
 	return engine, nil
+}
+
+func (e *Engine) UpdatePolicy(policy Policy) {
+	if e == nil {
+		return
+	}
+	if e.policy != nil {
+		e.policy.Set(policy)
+	}
+	if e.scanner != nil {
+		e.scanner.RequestRescan(util.NewTraceContext())
+	}
 }
 
 func (e *Engine) Close() error {
@@ -107,7 +129,7 @@ func (e *Engine) AddRoot(ctx context.Context, rootPath string) error {
 		}
 	}
 
-	e.scanner.RequestRescan()
+	e.scanner.RequestRescan(ctx)
 	return nil
 }
 
@@ -125,7 +147,7 @@ func (e *Engine) RemoveRoot(ctx context.Context, rootPath string) error {
 		return err
 	}
 
-	e.scanner.RequestRescan()
+	e.scanner.RequestRescan(ctx)
 	return nil
 }
 
@@ -406,7 +428,7 @@ func (e *Engine) SyncUserRoots(ctx context.Context, rootPaths []string) error {
 		changed,
 	))
 	if changed && e.scanner != nil {
-		e.scanner.RequestRescan()
+		e.scanner.RequestRescan(ctx)
 	}
 
 	return nil

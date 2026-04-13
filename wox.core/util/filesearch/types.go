@@ -66,6 +66,7 @@ const (
 type DirtySignal struct {
 	Kind          DirtySignalKind
 	RootID        string
+	TraceID       string
 	Path          string
 	PathIsDir     bool
 	PathTypeKnown bool
@@ -81,6 +82,7 @@ const (
 
 type ReconcileBatch struct {
 	RootID         string
+	TraceID        string
 	Mode           ReconcileMode
 	Paths          []string
 	DirtyPathCount int

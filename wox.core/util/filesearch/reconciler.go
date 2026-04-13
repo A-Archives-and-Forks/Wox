@@ -17,13 +17,13 @@ type Reconciler struct {
 	snapshot *SnapshotBuilder
 }
 
-func NewReconciler(db *FileSearchDB) *Reconciler {
-	return newReconciler(db, NewSnapshotBuilder())
+func NewReconciler(db *FileSearchDB, policy *policyState) *Reconciler {
+	return newReconciler(db, NewSnapshotBuilder(policy))
 }
 
 func newReconciler(db *FileSearchDB, snapshot *SnapshotBuilder) *Reconciler {
 	if snapshot == nil {
-		snapshot = NewSnapshotBuilder()
+		snapshot = NewSnapshotBuilder(nil)
 	}
 
 	return &Reconciler{
@@ -48,10 +48,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, batch ReconcileBatch) (Recon
 
 	switch batch.Mode {
 	case ReconcileModeRoot:
+		util.GetLogger().Debug(ctx, fmt.Sprintf(
+			"filesearch reconcile snapshot build started: root=%s mode=%s scope=%s",
+			root.ID,
+			batch.Mode,
+			root.Path,
+		))
 		snapshot, err := r.snapshot.BuildSubtreeSnapshot(ctx, *root, root.Path)
 		if err != nil {
 			return result, err
 		}
+		util.GetLogger().Debug(ctx, fmt.Sprintf(
+			"filesearch reconcile snapshot built: root=%s mode=%s scope=%s directories=%d entries=%d",
+			root.ID,
+			batch.Mode,
+			root.Path,
+			len(snapshot.Directories),
+			len(snapshot.Entries),
+		))
 		if err := r.db.ReplaceRootSnapshot(ctx, *root, snapshot.Directories, snapshot.Entries, nil); err != nil {
 			return result, err
 		}
@@ -65,14 +79,32 @@ func (r *Reconciler) Reconcile(ctx context.Context, batch ReconcileBatch) (Recon
 		result.ReloadNeeded = true
 		return result, nil
 	case ReconcileModeSubtree:
+		util.GetLogger().Debug(ctx, fmt.Sprintf(
+			"filesearch reconcile snapshot build started: root=%s mode=%s scopes=%s",
+			root.ID,
+			batch.Mode,
+			summarizeLogPaths(batch.Paths),
+		))
 		snapshots := make([]SubtreeSnapshotBatch, 0, len(batch.Paths))
+		totalDirectories := 0
+		totalEntries := 0
 		for _, scopePath := range batch.Paths {
 			snapshot, err := r.snapshot.BuildSubtreeSnapshot(ctx, *root, scopePath)
 			if err != nil {
 				return result, err
 			}
 			snapshots = append(snapshots, snapshot)
+			totalDirectories += len(snapshot.Directories)
+			totalEntries += len(snapshot.Entries)
 		}
+		util.GetLogger().Debug(ctx, fmt.Sprintf(
+			"filesearch reconcile snapshots built: root=%s mode=%s scopes=%d directories=%d entries=%d",
+			root.ID,
+			batch.Mode,
+			len(batch.Paths),
+			totalDirectories,
+			totalEntries,
+		))
 		if err := r.db.ReplaceSubtreeSnapshots(ctx, snapshots); err != nil {
 			return result, err
 		}

@@ -14,8 +14,22 @@ const (
 	ChangeSignalKindFeedUnavailable       ChangeSignalKind = "feed_unavailable"
 )
 
+type ChangeSemanticKind string
+
+const (
+	ChangeSemanticKindUnknown               ChangeSemanticKind = "unknown"
+	ChangeSemanticKindCreate                ChangeSemanticKind = "create"
+	ChangeSemanticKindRemove                ChangeSemanticKind = "remove"
+	ChangeSemanticKindRename                ChangeSemanticKind = "rename"
+	ChangeSemanticKindModify                ChangeSemanticKind = "modify"
+	ChangeSemanticKindMetadata              ChangeSemanticKind = "metadata"
+	ChangeSemanticKindRequiresRootReconcile ChangeSemanticKind = "requires_root_reconcile"
+	ChangeSemanticKindFeedUnavailable       ChangeSemanticKind = "feed_unavailable"
+)
+
 type ChangeSignal struct {
 	Kind          ChangeSignalKind
+	SemanticKind  ChangeSemanticKind
 	RootID        string
 	FeedType      RootFeedType
 	Path          string

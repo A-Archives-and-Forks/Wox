@@ -157,7 +157,8 @@ func requestUI(ctx context.Context, request WebsocketMsg) error {
 
 	jsonData, _ := json.Marshal(request.Data)
 
-	if request.Method != "UpdateResult" { // UpdateResult is too frequent, skip logging to avoid performance issue
+	// some messages are too frequent, skip logging to avoid performance issue
+	if request.Method != "UpdateResult" && request.Method != "ShowToolbarMsg" {
 		util.GetLogger().Debug(ctx, fmt.Sprintf("[Wox -> UI] %s: %s", request.Method, jsonData))
 	}
 	return m.Broadcast(marshalData)
