@@ -2719,16 +2719,6 @@ func (m *Manager) HandleQueryLifecycle(ctx context.Context, query Query, pluginI
 	}
 }
 
-// ClearSessionState removes the active plugin query record and result cache for a hidden or closed UI session.
-func (m *Manager) ClearSessionState(sessionId string) {
-	if sessionId == "" {
-		return
-	}
-
-	m.sessionQueryResultCache.Delete(sessionId)
-	m.sessionPluginQueries.Delete(sessionId)
-}
-
 // isPluginActiveInSession reports whether the given plugin currently owns the session query context.
 func (m *Manager) isPluginActiveInSession(sessionId string, pluginId string) bool {
 	if sessionId == "" || pluginId == "" {

@@ -1,18 +1,36 @@
 package filesearch
 
+import "time"
+
 type SearchQuery struct {
 	Raw string
 }
 
 type StatusSnapshot struct {
-	RootCount         int
-	ScanningRootCount int
-	ErrorRootCount    int
-	ProgressCurrent   int64
-	ProgressTotal     int64
-	IsIndexing        bool
-	IsInitialIndexing bool
-	LastError         string
+	RootCount             int
+	PreparingRootCount    int
+	ScanningRootCount     int
+	SyncingRootCount      int
+	WritingRootCount      int
+	FinalizingRootCount   int
+	ErrorRootCount        int
+	PendingDirtyRootCount int
+	PendingDirtyPathCount int
+	ProgressCurrent       int64
+	ProgressTotal         int64
+	ActiveRootStatus      RootStatus
+	ActiveProgressCurrent int64
+	ActiveProgressTotal   int64
+	ActiveRootIndex       int
+	ActiveRootTotal       int
+	ActiveDiscoveredCount int64
+	ActiveDirectoryIndex  int
+	ActiveDirectoryTotal  int
+	ActiveItemCurrent     int64
+	ActiveItemTotal       int64
+	IsIndexing            bool
+	IsInitialIndexing     bool
+	LastError             string
 }
 
 type SearchResult struct {
@@ -38,6 +56,52 @@ type SearchUpdate struct {
 	IsFinal bool
 }
 
+type DirtySignalKind string
+
+const (
+	DirtySignalKindRoot DirtySignalKind = "root"
+	DirtySignalKindPath DirtySignalKind = "path"
+)
+
+type DirtySignal struct {
+	Kind          DirtySignalKind
+	RootID        string
+	Path          string
+	PathIsDir     bool
+	PathTypeKnown bool
+	At            time.Time
+}
+
+type ReconcileMode string
+
+const (
+	ReconcileModeSubtree ReconcileMode = "subtree"
+	ReconcileModeRoot    ReconcileMode = "root"
+)
+
+type ReconcileBatch struct {
+	RootID         string
+	Mode           ReconcileMode
+	Paths          []string
+	DirtyPathCount int
+}
+
+type RootFeedType string
+
+const (
+	RootFeedTypeFallback RootFeedType = "fallback"
+	RootFeedTypeFSEvents RootFeedType = "fsevents"
+	RootFeedTypeUSN      RootFeedType = "usn"
+)
+
+type RootFeedState string
+
+const (
+	RootFeedStateReady       RootFeedState = "ready"
+	RootFeedStateDegraded    RootFeedState = "degraded"
+	RootFeedStateUnavailable RootFeedState = "unavailable"
+)
+
 type RootKind string
 
 const (
@@ -48,16 +112,61 @@ const (
 type RootStatus string
 
 const (
-	RootStatusIdle     RootStatus = "idle"
-	RootStatusScanning RootStatus = "scanning"
-	RootStatusError    RootStatus = "error"
+	RootStatusIdle       RootStatus = "idle"
+	RootStatusPreparing  RootStatus = "preparing"
+	RootStatusScanning   RootStatus = "scanning"
+	RootStatusSyncing    RootStatus = "syncing"
+	RootStatusWriting    RootStatus = "writing"
+	RootStatusFinalizing RootStatus = "finalizing"
+	RootStatusError      RootStatus = "error"
 )
+
+type ReplaceEntriesStage string
+
+const (
+	ReplaceEntriesStagePreparing  ReplaceEntriesStage = "preparing"
+	ReplaceEntriesStageWriting    ReplaceEntriesStage = "writing"
+	ReplaceEntriesStageFinalizing ReplaceEntriesStage = "finalizing"
+)
+
+type ReplaceEntriesProgress struct {
+	Stage   ReplaceEntriesStage
+	Current int64
+	Total   int64
+}
+
+type TransientRootState struct {
+	Root            RootRecord
+	RootIndex       int
+	RootTotal       int
+	DiscoveredCount int64
+	DirectoryIndex  int
+	DirectoryTotal  int
+	ItemCurrent     int64
+	ItemTotal       int64
+}
+
+type TransientSyncState struct {
+	Root             RootRecord
+	RootIndex        int
+	RootTotal        int
+	Mode             ReconcileMode
+	ScopeCount       int
+	DirtyPathCount   int
+	PendingRootCount int
+	PendingPathCount int
+}
 
 type RootRecord struct {
 	ID              string
 	Path            string
 	Kind            RootKind
 	Status          RootStatus
+	FeedType        RootFeedType
+	FeedCursor      string
+	FeedState       RootFeedState
+	LastReconcileAt int64
+	LastFullScanAt  int64
 	ProgressCurrent int64
 	ProgressTotal   int64
 	LastError       *string
@@ -80,6 +189,21 @@ type EntryRecord struct {
 	Mtime          int64
 	Size           int64
 	UpdatedAt      int64
+}
+
+type DirectoryRecord struct {
+	Path         string
+	RootID       string
+	ParentPath   string
+	LastScanTime int64
+	Exists       bool
+}
+
+type SubtreeSnapshotBatch struct {
+	RootID      string
+	ScopePath   string
+	Directories []DirectoryRecord
+	Entries     []EntryRecord
 }
 
 type ProviderCandidate struct {

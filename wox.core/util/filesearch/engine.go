@@ -89,7 +89,7 @@ func (e *Engine) AddRoot(ctx context.Context, rootPath string) error {
 	if existing != nil {
 		existing.Kind = RootKindUser
 		existing.UpdatedAt = now
-		existing.Status = RootStatusIdle
+		existing.Status = RootStatusPreparing
 		if err := e.db.UpsertRoot(ctx, *existing); err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func (e *Engine) AddRoot(ctx context.Context, rootPath string) error {
 			ID:        uuid.NewString(),
 			Path:      cleaned,
 			Kind:      RootKindUser,
-			Status:    RootStatusIdle,
+			Status:    RootStatusPreparing,
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
@@ -139,28 +139,94 @@ func (e *Engine) GetStatus(ctx context.Context) (StatusSnapshot, error) {
 		return StatusSnapshot{}, err
 	}
 
+	var transientScanState TransientRootState
+	hasTransientScanState := false
+	var transientSyncState TransientSyncState
+	hasTransientSyncState := false
+
+	if e.scanner != nil {
+		if activeState, ok := e.scanner.GetTransientRootState(); ok {
+			transientScanState = activeState
+			hasTransientScanState = true
+			mergeTransientRootState(roots, activeState.Root)
+		}
+		if activeState, ok := e.scanner.GetTransientSyncState(); ok {
+			transientSyncState = activeState
+			hasTransientSyncState = true
+			if activeState.Root.ID != "" {
+				mergeTransientRootState(roots, activeState.Root)
+			}
+		}
+	}
+
 	status := StatusSnapshot{
 		RootCount: len(roots),
 	}
+	if hasTransientSyncState {
+		status.PendingDirtyRootCount = transientSyncState.PendingRootCount
+		status.PendingDirtyPathCount = transientSyncState.PendingPathCount
+	}
+
 	for _, root := range roots {
 		progressCurrent, progressTotal := normalizeRootProgress(root)
 		status.ProgressCurrent += progressCurrent
 		status.ProgressTotal += progressTotal
 
 		switch root.Status {
+		case RootStatusPreparing:
+			status.PreparingRootCount++
 		case RootStatusScanning:
 			status.ScanningRootCount++
+		case RootStatusSyncing:
+			status.SyncingRootCount++
+		case RootStatusWriting:
+			status.WritingRootCount++
+		case RootStatusFinalizing:
+			status.FinalizingRootCount++
 		case RootStatusError:
 			status.ErrorRootCount++
 			if status.LastError == "" && root.LastError != nil {
 				status.LastError = strings.TrimSpace(*root.LastError)
 			}
 		}
+
+		if isActiveRootStatus(root.Status) && activeRootStatusPriority(root.Status) >= activeRootStatusPriority(status.ActiveRootStatus) {
+			status.ActiveRootStatus = root.Status
+			status.ActiveProgressCurrent = root.ProgressCurrent
+			status.ActiveProgressTotal = root.ProgressTotal
+			switch {
+			case hasTransientSyncState && transientSyncState.Root.ID == root.ID:
+				status.ActiveRootIndex = transientSyncState.RootIndex
+				status.ActiveRootTotal = transientSyncState.RootTotal
+				status.ActiveDiscoveredCount = 0
+				status.ActiveDirectoryIndex = transientSyncState.ScopeCount
+				status.ActiveDirectoryTotal = transientSyncState.ScopeCount
+				status.ActiveItemCurrent = 0
+				status.ActiveItemTotal = int64(transientSyncState.DirtyPathCount)
+			case hasTransientScanState && transientScanState.Root.ID == root.ID:
+				status.ActiveRootIndex = transientScanState.RootIndex
+				status.ActiveRootTotal = transientScanState.RootTotal
+				status.ActiveDiscoveredCount = transientScanState.DiscoveredCount
+				status.ActiveDirectoryIndex = transientScanState.DirectoryIndex
+				status.ActiveDirectoryTotal = transientScanState.DirectoryTotal
+				status.ActiveItemCurrent = transientScanState.ItemCurrent
+				status.ActiveItemTotal = transientScanState.ItemTotal
+			}
+		}
 	}
 
-	status.IsInitialIndexing = status.RootCount > 0 && status.ProgressCurrent == 0 && status.ScanningRootCount > 0
-	status.IsIndexing = status.ScanningRootCount > 0 || status.IsInitialIndexing
+	status.IsInitialIndexing = status.RootCount > 0 && (status.ActiveRootStatus == RootStatusPreparing || status.ActiveRootStatus == RootStatusScanning) && status.ActiveProgressCurrent == 0 && (status.PreparingRootCount > 0 || status.ScanningRootCount > 0)
+	status.IsIndexing = status.PreparingRootCount > 0 || status.ScanningRootCount > 0 || status.SyncingRootCount > 0 || status.WritingRootCount > 0 || status.FinalizingRootCount > 0 || status.IsInitialIndexing
 	return status, nil
+}
+
+func mergeTransientRootState(roots []RootRecord, transientRoot RootRecord) {
+	for index := range roots {
+		if roots[index].ID == transientRoot.ID {
+			roots[index] = transientRoot
+			return
+		}
+	}
 }
 
 func (e *Engine) OnStatusChanged(callback func(StatusSnapshot)) func() {
@@ -190,7 +256,9 @@ func (e *Engine) notifyStatusChanged(ctx context.Context) {
 
 func normalizeRootProgress(root RootRecord) (int64, int64) {
 	switch root.Status {
-	case RootStatusScanning:
+	case RootStatusPreparing:
+		return 0, RootProgressScale
+	case RootStatusScanning, RootStatusSyncing, RootStatusWriting:
 		total := root.ProgressTotal
 		if total <= 0 || total > RootProgressScale {
 			total = RootProgressScale
@@ -205,6 +273,22 @@ func normalizeRootProgress(root RootRecord) (int64, int64) {
 		}
 
 		return current, total
+	case RootStatusFinalizing:
+		if root.ProgressTotal > 0 {
+			total := root.ProgressTotal
+			if total > RootProgressScale {
+				total = RootProgressScale
+			}
+			current := root.ProgressCurrent
+			if current < 0 {
+				current = 0
+			}
+			if current > total {
+				current = total
+			}
+			return current, total
+		}
+		return RootProgressScale, RootProgressScale
 	case RootStatusIdle:
 		if root.ProgressTotal > 0 {
 			return RootProgressScale, RootProgressScale
@@ -214,6 +298,32 @@ func normalizeRootProgress(root RootRecord) (int64, int64) {
 		return 0, 0
 	default:
 		return 0, RootProgressScale
+	}
+}
+
+func isActiveRootStatus(status RootStatus) bool {
+	switch status {
+	case RootStatusPreparing, RootStatusScanning, RootStatusSyncing, RootStatusWriting, RootStatusFinalizing:
+		return true
+	default:
+		return false
+	}
+}
+
+func activeRootStatusPriority(status RootStatus) int {
+	switch status {
+	case RootStatusFinalizing:
+		return 5
+	case RootStatusWriting:
+		return 4
+	case RootStatusSyncing:
+		return 3
+	case RootStatusScanning:
+		return 2
+	case RootStatusPreparing:
+		return 1
+	default:
+		return 0
 	}
 }
 
@@ -276,7 +386,7 @@ func (e *Engine) SyncUserRoots(ctx context.Context, rootPaths []string) error {
 			ID:        uuid.NewString(),
 			Path:      desiredPath,
 			Kind:      RootKindUser,
-			Status:    RootStatusIdle,
+			Status:    RootStatusPreparing,
 			CreatedAt: now,
 			UpdatedAt: now,
 		}

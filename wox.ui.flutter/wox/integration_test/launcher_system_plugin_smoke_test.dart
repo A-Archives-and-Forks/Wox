@@ -117,7 +117,16 @@ void registerSystemPluginSmokeTests() {
 
       expect(
         controller.resolvedToolbarText,
-        anyOf(equals('File search is ready'), equals('Indexing files'), equals('File search needs file access'), equals('File search needs attention')),
+        anyOf(
+          equals('File search is ready'),
+          equals('Indexing files'),
+          startsWith('Analyzing folders'),
+          startsWith('Scanning folders'),
+          startsWith('Writing index'),
+          equals('Finalizing index'),
+          equals('File search needs file access'),
+          equals('File search needs attention'),
+        ),
       );
       expect(controller.isToolbarShowedWithoutResults, isTrue);
     });

@@ -311,12 +311,26 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 	}
 
 	c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf(
-		"File search status: roots=%d scanning=%d errors=%d progress=%d/%d initial=%v",
+		"File search status: roots=%d preparing=%d scanning=%d syncing=%d writing=%d finalizing=%d errors=%d active=%s progress=%d/%d root=%d/%d dirs=%d/%d items=%d/%d pending=%d/%d discovered=%d initial=%v",
 		status.RootCount,
+		status.PreparingRootCount,
 		status.ScanningRootCount,
+		status.SyncingRootCount,
+		status.WritingRootCount,
+		status.FinalizingRootCount,
 		status.ErrorRootCount,
-		status.ProgressCurrent,
-		status.ProgressTotal,
+		status.ActiveRootStatus,
+		status.ActiveProgressCurrent,
+		status.ActiveProgressTotal,
+		status.ActiveRootIndex,
+		status.ActiveRootTotal,
+		status.ActiveDirectoryIndex,
+		status.ActiveDirectoryTotal,
+		status.ActiveItemCurrent,
+		status.ActiveItemTotal,
+		status.PendingDirtyRootCount,
+		status.PendingDirtyPathCount,
+		status.ActiveDiscoveredCount,
 		status.IsInitialIndexing,
 	))
 
@@ -325,27 +339,43 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 	progress := (*int)(nil)
 	indeterminate := false
 	hasPermissionError := util.IsMacOS() && isFileAccessPermissionError(status.LastError)
-	if status.IsIndexing {
-		title = c.api.GetTranslation(ctx, "plugin_file_status_indexing")
+	if status.ActiveRootStatus == filesearch.RootStatusPreparing {
+		title = c.buildPreparingToolbarTitle(ctx, status)
 		icon = fileIcon
-		if status.ProgressTotal > 0 {
-			progressValue := int((status.ProgressCurrent * 100) / status.ProgressTotal)
-			if progressValue < 0 {
-				progressValue = 0
-			}
-			if progressValue > 100 {
-				progressValue = 100
-			}
+		indeterminate = true
+	} else if status.ActiveRootStatus == filesearch.RootStatusSyncing {
+		title = c.buildSyncingToolbarTitle(ctx, status)
+		icon = fileIcon
+		indeterminate = true
+	} else if status.ActiveRootStatus == filesearch.RootStatusWriting {
+		title = c.api.GetTranslation(ctx, "plugin_file_status_writing")
+		icon = fileIcon
+		if progressValue, ok := resolveToolbarProgressPercent(status.ActiveProgressCurrent, status.ActiveProgressTotal); ok {
 			progress = &progressValue
 			title = fmt.Sprintf("%s %d%%", title, progressValue)
 		} else {
 			indeterminate = true
 		}
+	} else if status.ActiveRootStatus == filesearch.RootStatusFinalizing {
+		title = c.api.GetTranslation(ctx, "plugin_file_status_finalizing")
+		icon = fileIcon
+		indeterminate = true
+	} else if status.ActiveRootStatus == filesearch.RootStatusScanning {
+		title = c.buildScanningToolbarTitle(ctx, status)
+		icon = fileIcon
+		if progressValue, ok := resolveToolbarProgressPercent(status.ActiveItemCurrent, status.ActiveItemTotal); ok {
+			progress = &progressValue
+		} else {
+			indeterminate = true
+		}
+	} else if status.IsIndexing {
+		title = c.api.GetTranslation(ctx, "plugin_file_status_indexing")
+		icon = fileIcon
+		indeterminate = true
 	} else if hasPermissionError {
 		title = c.api.GetTranslation(ctx, "plugin_file_status_permission")
 	} else if status.ErrorRootCount == 0 {
-		title = c.api.GetTranslation(ctx, "plugin_file_status_ready")
-		icon = fileIcon
+		return plugin.ToolbarMsg{}, false
 	}
 
 	return plugin.ToolbarMsg{
@@ -360,6 +390,59 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 
 func (c *FileSearchPlugin) handleStatusChanged(status filesearch.StatusSnapshot) {
 	c.syncToolbarMsgWithStatus(util.NewTraceContext(), status, false)
+}
+
+func (c *FileSearchPlugin) buildPreparingToolbarTitle(ctx context.Context, status filesearch.StatusSnapshot) string {
+	if status.ActiveDiscoveredCount <= 0 {
+		return c.api.GetTranslation(ctx, "plugin_file_status_preparing")
+	}
+
+	return fmt.Sprintf(
+		c.api.GetTranslation(ctx, "plugin_file_status_preparing_progress"),
+		status.ActiveDiscoveredCount,
+	)
+}
+
+func (c *FileSearchPlugin) buildScanningToolbarTitle(ctx context.Context, status filesearch.StatusSnapshot) string {
+	if status.ActiveDirectoryTotal <= 0 || status.ActiveItemTotal <= 0 {
+		return c.api.GetTranslation(ctx, "plugin_file_status_indexing")
+	}
+
+	return fmt.Sprintf(
+		c.api.GetTranslation(ctx, "plugin_file_status_scanning_progress"),
+		status.ActiveDirectoryIndex,
+		status.ActiveDirectoryTotal,
+		status.ActiveItemCurrent,
+		status.ActiveItemTotal,
+	)
+}
+
+func (c *FileSearchPlugin) buildSyncingToolbarTitle(ctx context.Context, status filesearch.StatusSnapshot) string {
+	if status.PendingDirtyRootCount <= 0 && status.PendingDirtyPathCount <= 0 {
+		return c.api.GetTranslation(ctx, "plugin_file_status_syncing")
+	}
+
+	return fmt.Sprintf(
+		c.api.GetTranslation(ctx, "plugin_file_status_syncing_progress"),
+		status.PendingDirtyRootCount,
+		status.PendingDirtyPathCount,
+	)
+}
+
+func resolveToolbarProgressPercent(current int64, total int64) (int, bool) {
+	if total <= 0 {
+		return 0, false
+	}
+
+	progressValue := int((current * 100) / total)
+	if progressValue < 0 {
+		progressValue = 0
+	}
+	if progressValue > 100 {
+		progressValue = 100
+	}
+
+	return progressValue, true
 }
 
 func (c *FileSearchPlugin) toolbarMsgActions(ctx context.Context, hasPermissionError bool) []plugin.ToolbarMsgAction {

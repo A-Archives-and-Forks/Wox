@@ -1,0 +1,236 @@
+package filesearch
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+)
+
+type FallbackChangeFeed struct {
+	mu      sync.RWMutex
+	watcher *fsnotify.Watcher
+	roots   []RootRecord
+	signals chan ChangeSignal
+	closed  bool
+}
+
+func NewFallbackChangeFeed() *FallbackChangeFeed {
+	return &FallbackChangeFeed{
+		signals: make(chan ChangeSignal, 128),
+	}
+}
+
+func (f *FallbackChangeFeed) Mode() string {
+	return "root-only"
+}
+
+func (f *FallbackChangeFeed) Signals() <-chan ChangeSignal {
+	return f.signals
+}
+
+func (f *FallbackChangeFeed) Refresh(ctx context.Context, roots []RootRecord) error {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+
+	watchedRoots := make([]RootRecord, 0, len(roots))
+	for _, root := range roots {
+		if err := watcher.Add(root.Path); err != nil {
+			f.emit(ChangeSignal{
+				Kind:     ChangeSignalKindFeedUnavailable,
+				RootID:   root.ID,
+				FeedType: RootFeedTypeFallback,
+				Path:     root.Path,
+				Reason:   err.Error(),
+				At:       time.Now(),
+			})
+			continue
+		}
+
+		watchedRoots = append(watchedRoots, root)
+		if root.FeedState == RootFeedStateUnavailable {
+			f.emit(ChangeSignal{
+				Kind:     ChangeSignalKindRequiresRootReconcile,
+				RootID:   root.ID,
+				FeedType: RootFeedTypeFallback,
+				Path:     root.Path,
+				Reason:   "fallback change feed recovered",
+				At:       time.Now(),
+			})
+		}
+	}
+
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		_ = watcher.Close()
+		return nil
+	}
+	oldWatcher := f.watcher
+	f.watcher = watcher
+	f.roots = append([]RootRecord(nil), watchedRoots...)
+	f.mu.Unlock()
+
+	if oldWatcher != nil {
+		_ = oldWatcher.Close()
+	}
+
+	if len(watchedRoots) == 0 {
+		_ = watcher.Close()
+		f.mu.Lock()
+		if f.watcher == watcher {
+			f.watcher = nil
+		}
+		f.mu.Unlock()
+		return nil
+	}
+
+	go f.watchLoop(ctx, watcher, watchedRoots)
+	return nil
+}
+
+func (f *FallbackChangeFeed) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.closed {
+		return nil
+	}
+	f.closed = true
+
+	if f.watcher != nil {
+		err := f.watcher.Close()
+		f.watcher = nil
+		f.roots = nil
+		return err
+	}
+
+	f.roots = nil
+	return nil
+}
+
+func (f *FallbackChangeFeed) SnapshotRootFeed(ctx context.Context, root RootRecord) (RootFeedSnapshot, error) {
+	_ = ctx
+	_ = root
+	return RootFeedSnapshot{
+		FeedType:   RootFeedTypeFallback,
+		FeedCursor: "",
+		FeedState:  RootFeedStateReady,
+	}, nil
+}
+
+func (f *FallbackChangeFeed) watchLoop(ctx context.Context, watcher *fsnotify.Watcher, roots []RootRecord) {
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			f.handleEventForRoots(roots, event)
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			for _, root := range roots {
+				f.emit(ChangeSignal{
+					Kind:     ChangeSignalKindRequiresRootReconcile,
+					RootID:   root.ID,
+					FeedType: RootFeedTypeFallback,
+					Path:     root.Path,
+					Reason:   err.Error(),
+					At:       time.Now(),
+				})
+			}
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (f *FallbackChangeFeed) handleEvent(event fsnotify.Event) {
+	f.mu.RLock()
+	roots := append([]RootRecord(nil), f.roots...)
+	f.mu.RUnlock()
+	f.handleEventForRoots(roots, event)
+}
+
+func (f *FallbackChangeFeed) handleEventForRoots(roots []RootRecord, event fsnotify.Event) {
+	root, ok := findRootForPathInRoots(roots, event.Name)
+	if !ok {
+		return
+	}
+
+	cleanPath := filepath.Clean(event.Name)
+	cleanRootPath := filepath.Clean(root.Path)
+	kind := ChangeSignalKindDirtyPath
+	if cleanPath == cleanRootPath || filepath.Dir(cleanPath) == cleanRootPath {
+		kind = ChangeSignalKindDirtyRoot
+	}
+
+	pathIsDir := false
+	pathTypeKnown := false
+	if info, err := os.Stat(cleanPath); err == nil {
+		pathIsDir = info.IsDir()
+		pathTypeKnown = true
+	}
+
+	f.emit(ChangeSignal{
+		Kind:          kind,
+		RootID:        root.ID,
+		FeedType:      RootFeedTypeFallback,
+		Path:          cleanPath,
+		PathIsDir:     pathIsDir,
+		PathTypeKnown: pathTypeKnown,
+		At:            time.Now(),
+	})
+}
+
+func (f *FallbackChangeFeed) emit(signal ChangeSignal) {
+	if signal.RootID == "" {
+		return
+	}
+	if signal.At.IsZero() {
+		signal.At = time.Now()
+	}
+
+	f.mu.RLock()
+	closed := f.closed
+	f.mu.RUnlock()
+	if closed {
+		return
+	}
+
+	select {
+	case f.signals <- signal:
+	default:
+		// Keep the fallback feed lossy rather than blocking the watcher loop.
+	}
+}
+
+func findRootForPathInRoots(roots []RootRecord, path string) (RootRecord, bool) {
+	cleanPath := filepath.Clean(path)
+	bestIndex := -1
+	bestLength := -1
+	for index, root := range roots {
+		if !pathWithinScope(root.Path, cleanPath) {
+			continue
+		}
+		if len(root.Path) <= bestLength {
+			continue
+		}
+		bestIndex = index
+		bestLength = len(root.Path)
+	}
+
+	if bestIndex < 0 {
+		return RootRecord{}, false
+	}
+
+	return roots[bestIndex], true
+}

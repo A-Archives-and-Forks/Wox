@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
+import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/enums/wox_launch_mode_enum.dart';
 import 'package:wox/enums/wox_position_type_enum.dart';
 import 'package:wox/enums/wox_query_type_enum.dart';
@@ -323,6 +325,34 @@ void registerLauncherCoreSmokeTests() {
 
       expect(controller.activeResultViewController.items, isEmpty, reason: 'Fresh mode should clear results on hide');
       expect(controller.queryBoxTextFieldController.text, isEmpty, reason: 'Fresh mode should clear query text on hide');
+    });
+
+    testWidgets('T2-17: Continue launch keeps result actions executable after hide and re-show', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_CONTINUE.code);
+
+      final result = await queryAndWaitForActiveResult(tester, controller, 'wox settings');
+      expect(result.title, equals('Open Wox Settings'));
+      expectResultActionByName(result, 'execute');
+
+      controller.executeDefaultAction(const UuidV4().generate());
+      await pumpUntil(tester, () => controller.isInSettingView.value && find.byType(WoxSettingView).evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
+
+      final settingController = Get.find<WoxSettingController>();
+      await closeSettings(tester, settingController, controller);
+      await waitForQueryBoxText(tester, controller, 'wox settings');
+      expect(controller.activeResultViewController.items, isNotEmpty);
+
+      await hideLauncherByEscape(tester, controller);
+      await triggerBackendShowApp(tester);
+      await waitForQueryBoxText(tester, controller, 'wox settings');
+      expect(controller.activeResultViewController.items, isNotEmpty, reason: 'Continue mode should preserve prior results on re-show');
+
+      controller.executeDefaultAction(const UuidV4().generate());
+      await pumpUntil(tester, () => controller.isInSettingView.value && find.byType(WoxSettingView).evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
+
+      final settingControllerAfterReshow = Get.find<WoxSettingController>();
+      await closeSettings(tester, settingControllerAfterReshow, controller);
     });
   });
 }

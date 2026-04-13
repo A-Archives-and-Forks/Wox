@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -322,6 +323,15 @@ func ensureServicesInitialized(t *testing.T) {
 		// Setup test logger
 		testLogger = NewTestLogger(testLocation)
 		t.Logf("Test environment setup complete")
+
+		// The runtime location layer reads test directory overrides from env.
+		// Export them here so database/resource initialization stays inside the isolated test directories.
+		if err = os.Setenv(util.TestWoxDataDirEnv, testConfig.TestDataDirectory); err != nil {
+			t.Fatalf("Failed to export %s: %v", util.TestWoxDataDirEnv, err)
+		}
+		if err = os.Setenv(util.TestUserDataDirEnv, testConfig.TestUserDirectory); err != nil {
+			t.Fatalf("Failed to export %s: %v", util.TestUserDataDirEnv, err)
+		}
 
 		// Initialize location (this will use the default location, but we'll override paths as needed)
 		err = util.GetLocation().Init()

@@ -1955,14 +1955,10 @@ class WoxLauncherController extends GetxController {
     isShowActionPanel.value = false;
     syncPreviewFullscreenState();
 
-    if (isShowDoctorCheckInfo) {
-      Logger.instance.debug(traceId, "update toolbar to doctor warning, query is empty and doctor check not passed");
-    } else {
-      Logger.instance.debug(traceId, "update toolbar to empty because of query changed and is empty");
-      toolbar.value = toolbar.value.emptyRightSide();
-    }
-
-    updateDoctorToolbarIfNeeded(traceId);
+    // Recompute toolbar actions from the current state instead of clearing the
+    // right side directly. Persistent toolbar messages keep their own actions,
+    // and clearing them here makes the toolbar and action panel disagree.
+    refreshToolbarActionsForCurrentState(traceId);
     await resizeHeight(traceId: traceId, reason: "clear query results");
   }
 
