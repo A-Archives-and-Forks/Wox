@@ -241,6 +241,47 @@ func TestFilePlugin_CustomRootsIgnoresDSStore(t *testing.T) {
 	}
 }
 
+func TestFilePlugin_WildcardExtensionFilter(t *testing.T) {
+	suite := NewTestSuite(t)
+	ctx := suite.ctx
+
+	rootPath := newStableFileSearchRoot(t, "filesearch-wildcard-root")
+
+	rootSetting, err := json.Marshal([]map[string]string{
+		{"Path": rootPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal file search roots setting: %v", err)
+	}
+
+	filePlugin := findPluginInstance("979d6363-025a-4f51-88d3-0b04e9dc56bf")
+	if filePlugin == nil {
+		t.Fatal("file plugin instance not found")
+	}
+
+	pngFileName := fmt.Sprintf("wildcard-target-%d.png", time.Now().UnixNano())
+	pngFilePath := filepath.Join(rootPath, pngFileName)
+	if err := os.WriteFile(pngFilePath, []byte("png"), 0644); err != nil {
+		t.Fatalf("failed to create png file: %v", err)
+	}
+
+	textFileName := fmt.Sprintf("wildcard-target-%d.txt", time.Now().UnixNano())
+	textFilePath := filepath.Join(rootPath, textFileName)
+	if err := os.WriteFile(textFilePath, []byte("txt"), 0644); err != nil {
+		t.Fatalf("failed to create text file: %v", err)
+	}
+
+	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+
+	if err := waitForFileSearchResult(ctx, "f *.png", pngFileName, pngFilePath, 30*time.Second); err != nil {
+		t.Fatalf("png file did not become searchable with wildcard filter: %v", err)
+	}
+
+	if err := ensureFileSearchResultAbsent(ctx, "f *.png", textFileName, textFilePath, 5*time.Second); err != nil {
+		t.Fatalf("non-png file should be excluded by wildcard filter: %v", err)
+	}
+}
+
 func TestFilePlugin_PolicyUpdateRemovesIndexedPath(t *testing.T) {
 	suite := NewTestSuite(t)
 	ctx := suite.ctx

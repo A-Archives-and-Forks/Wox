@@ -28,6 +28,8 @@ func (p *EverythingProvider) Name() string {
 }
 
 func (p *EverythingProvider) Search(ctx context.Context, query SearchQuery, limit int) ([]ProviderCandidate, error) {
+	query = normalizeSearchQuery(query)
+
 	var results []SearchResult
 
 	err := WalkEverything(query.Raw, limit*2, func(path string, info FileInfo, err error) error {
@@ -43,7 +45,7 @@ func (p *EverythingProvider) Search(ctx context.Context, query SearchQuery, limi
 
 		name := filepath.Base(path)
 		pinyinFull, pinyinInitials := buildPinyinFields(name)
-		matched, score := scoreSearchTerms(query.Raw, buildSearchTerms(name, path, pinyinFull, pinyinInitials))
+		matched, score := matchSearchQuery(query, name, path, pinyinFull, pinyinInitials)
 		if !matched {
 			return nil
 		}

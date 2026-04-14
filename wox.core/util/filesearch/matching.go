@@ -1,15 +1,29 @@
 package filesearch
 
 import (
+	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"wox/util"
 )
 
+type wildcardQuery struct {
+	expression       *regexp.Regexp
+	hasPathSeparator bool
+	literalCount     int
+}
+
 func normalizeQuery(raw string) string {
 	return strings.TrimSpace(raw)
+}
+
+func normalizeSearchQuery(query SearchQuery) SearchQuery {
+	query.Raw = normalizeQuery(query.Raw)
+	query.wildcard = buildWildcardQuery(query.Raw)
+	return query
 }
 
 func normalizePath(path string) string {
@@ -23,6 +37,16 @@ func normalizePath(path string) string {
 func buildSearchTerms(name string, path string, pinyinFull string, pinyinInitials string) []string {
 	terms := []string{name, pinyinFull, pinyinInitials}
 	return util.UniqueStrings(filterNonEmpty(terms))
+}
+
+func matchSearchQuery(query SearchQuery, name string, path string, pinyinFull string, pinyinInitials string) (bool, int64) {
+	if query.Raw == "" {
+		return false, 0
+	}
+	if query.wildcard != nil {
+		return query.wildcard.match(name, path)
+	}
+	return scoreSearchTerms(query.Raw, buildSearchTerms(name, path, pinyinFull, pinyinInitials))
 }
 
 func scoreSearchTerms(query string, terms []string) (bool, int64) {
@@ -89,4 +113,57 @@ func filterNonEmpty(values []string) []string {
 		filtered = append(filtered, value)
 	}
 	return filtered
+}
+
+func buildWildcardQuery(raw string) *wildcardQuery {
+	if !strings.Contains(raw, "*") {
+		return nil
+	}
+
+	pattern := filepath.ToSlash(strings.TrimSpace(raw))
+	if pattern == "" {
+		return nil
+	}
+
+	quoted := regexp.QuoteMeta(pattern)
+	quoted = strings.ReplaceAll(quoted, "\\*", ".*")
+
+	if strings.Contains(pattern, "/") && !isRootedWildcardPattern(pattern) {
+		quoted = "(?:.*/)?" + quoted
+	}
+
+	expression, err := regexp.Compile("(?i)^" + quoted + "$")
+	if err != nil {
+		return nil
+	}
+
+	return &wildcardQuery{
+		expression:       expression,
+		hasPathSeparator: strings.Contains(pattern, "/"),
+		literalCount:     len(strings.ReplaceAll(pattern, "*", "")),
+	}
+}
+
+func isRootedWildcardPattern(pattern string) bool {
+	if strings.HasPrefix(pattern, "/") {
+		return true
+	}
+	return filepath.VolumeName(filepath.FromSlash(pattern)) != ""
+}
+
+func (q *wildcardQuery) match(name string, fullPath string) (bool, int64) {
+	if q == nil || q.expression == nil {
+		return false, 0
+	}
+
+	target := name
+	if q.hasPathSeparator {
+		target = path.Clean(filepath.ToSlash(fullPath))
+	}
+
+	if !q.expression.MatchString(target) {
+		return false, 0
+	}
+
+	return true, int64(q.literalCount*1000 - len(target))
 }

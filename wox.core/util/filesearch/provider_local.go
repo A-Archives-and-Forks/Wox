@@ -26,6 +26,8 @@ func (p *LocalIndexProvider) ReplaceEntries(entries []EntryRecord) {
 }
 
 func (p *LocalIndexProvider) Search(ctx context.Context, query SearchQuery, limit int) ([]ProviderCandidate, error) {
+	query = normalizeSearchQuery(query)
+
 	p.mu.RLock()
 	entries := append([]EntryRecord(nil), p.entries...)
 	p.mu.RUnlock()
@@ -38,8 +40,7 @@ func (p *LocalIndexProvider) Search(ctx context.Context, query SearchQuery, limi
 		default:
 		}
 
-		terms := buildSearchTerms(entry.Name, entry.Path, entry.PinyinFull, entry.PinyinInitials)
-		matched, score := scoreSearchTerms(query.Raw, terms)
+		matched, score := matchSearchQuery(query, entry.Name, entry.Path, entry.PinyinFull, entry.PinyinInitials)
 		if !matched {
 			continue
 		}

@@ -31,6 +31,7 @@ func (p *SpotlightProvider) Name() string {
 }
 
 func (p *SpotlightProvider) Search(ctx context.Context, query SearchQuery, limit int) ([]ProviderCandidate, error) {
+	query = normalizeSearchQuery(query)
 	if len(query.Raw) == 0 {
 		return nil, nil
 	}
@@ -50,7 +51,7 @@ func (p *SpotlightProvider) Search(ctx context.Context, query SearchQuery, limit
 
 		name := filepath.Base(path)
 		pinyinFull, pinyinInitials := buildPinyinFields(name)
-		matched, score := scoreSearchTerms(query.Raw, buildSearchTerms(name, path, pinyinFull, pinyinInitials))
+		matched, score := matchSearchQuery(query, name, path, pinyinFull, pinyinInitials)
 		if !matched {
 			continue
 		}
@@ -118,6 +119,11 @@ func searchByMDQueryPaths(name string, maxResults int) ([]string, error) {
 }
 
 func buildSpotlightQuery(value string) string {
+	if strings.Contains(value, "*") {
+		escaped := escapeMDQueryWildcard(value)
+		return fmt.Sprintf("(kMDItemDisplayName=='%[1]s'cd || kMDItemFSName=='%[1]s'cd)", escaped)
+	}
+
 	escaped := escapeMDQueryLiteral(value)
 	return fmt.Sprintf("(kMDItemDisplayName=='*%[1]s*'cd || kMDItemFSName=='*%[1]s*'cd)", escaped)
 }
@@ -127,6 +133,15 @@ func escapeMDQueryLiteral(value string) string {
 		"\\", "\\\\",
 		"'", "\\'",
 		"*", "\\*",
+		"?", "\\?",
+	)
+	return replacer.Replace(value)
+}
+
+func escapeMDQueryWildcard(value string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		"'", "\\'",
 		"?", "\\?",
 	)
 	return replacer.Replace(value)

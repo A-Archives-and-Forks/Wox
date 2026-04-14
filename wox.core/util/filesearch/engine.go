@@ -435,7 +435,7 @@ func (e *Engine) SyncUserRoots(ctx context.Context, rootPaths []string) error {
 }
 
 func (e *Engine) SearchStream(ctx context.Context, query SearchQuery, limit int, onUpdate func(SearchUpdate)) SearchHandle {
-	query.Raw = normalizeQuery(query.Raw)
+	query = normalizeSearchQuery(query)
 	streamCtx, cancel := context.WithCancel(ctx)
 	queryID := uuid.NewString()
 
@@ -444,7 +444,7 @@ func (e *Engine) SearchStream(ctx context.Context, query SearchQuery, limit int,
 }
 
 func (e *Engine) SearchOnce(ctx context.Context, query SearchQuery, limit int) ([]SearchResult, error) {
-	query.Raw = normalizeQuery(query.Raw)
+	query = normalizeSearchQuery(query)
 	if query.Raw == "" {
 		return []SearchResult{}, nil
 	}

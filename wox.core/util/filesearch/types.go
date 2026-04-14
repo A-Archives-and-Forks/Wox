@@ -3,7 +3,8 @@ package filesearch
 import "time"
 
 type SearchQuery struct {
-	Raw string
+	Raw      string
+	wildcard *wildcardQuery
 }
 
 type StatusSnapshot struct {

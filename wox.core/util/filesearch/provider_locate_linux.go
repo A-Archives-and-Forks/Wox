@@ -22,6 +22,8 @@ func (p *LocateProvider) Name() string {
 }
 
 func (p *LocateProvider) Search(ctx context.Context, query SearchQuery, limit int) ([]ProviderCandidate, error) {
+	query = normalizeSearchQuery(query)
+
 	paths, err := locateWithOptions(ctx, query.Raw, limit*2)
 	if err != nil {
 		return nil, err
@@ -31,7 +33,7 @@ func (p *LocateProvider) Search(ctx context.Context, query SearchQuery, limit in
 	for _, item := range paths {
 		name := filepath.Base(item)
 		pinyinFull, pinyinInitials := buildPinyinFields(name)
-		matched, score := scoreSearchTerms(query.Raw, buildSearchTerms(name, item, pinyinFull, pinyinInitials))
+		matched, score := matchSearchQuery(query, name, item, pinyinFull, pinyinInitials)
 		if !matched {
 			continue
 		}
