@@ -280,38 +280,41 @@ void FlutterWindow::FlushPendingChildKeyUps()
     return;
   }
 
-  const std::unordered_set<uint64_t> pending_keydowns = pending_child_keydowns_;
-  pending_child_keydowns_.clear();
-
   if (child_window_ == nullptr || !IsWindow(child_window_))
   {
     return;
   }
 
-  // This is the missing half of the root-keyup reroute fix above.
+  // Flush every still-pending child keydown as a synthetic keyup.
   //
-  // The previous fix handles:
-  //   child receives keydown -> root receives keyup
+  // This handles two scenarios:
+  //   1. Hide-on-keydown (e.g. Escape): child receives keydown -> Dart hides
+  //      the window immediately -> the real keyup is never delivered through
+  //      Flutter -> HardwareKeyboard keeps the key marked as pressed.
+  //   2. Defense-in-depth on show: if a previous hide-flush was ineffective
+  //      (engine dropped the synthetic keyup), the show-flush retries.
   //
-  // But hide-on-keydown actions such as Escape take a different path:
-  //   child receives keydown -> Dart handles Escape immediately ->
-  //   native hide() runs -> window disappears before the real keyup is
-  //   delivered back through Flutter
-  //
-  // In that sequence Flutter's HardwareKeyboard keeps Escape marked as
-  // pressed. The next time Wox is shown, the first Escape keydown is filtered
-  // as an already-pressed key, so the user has to press Escape twice.
-  //
-  // To keep Flutter's keyboard state consistent across hide/show cycles, flush
-  // every still-pending child keydown as a synthetic keyup before SW_HIDE.
-  // We clear the set first so if the synthetic SendMessage re-enters keyboard
-  // handling we do not generate duplicate releases.
-  for (const uint64_t signature : pending_keydowns)
+  // Take a snapshot for safe iteration: SendMessage below re-enters
+  // ChildWindowProc which calls ClearTrackedChildKeyDown, removing
+  // entries from pending_child_keydowns_ during iteration.
+  const std::unordered_set<uint64_t> snapshot = pending_child_keydowns_;
+
+  for (const uint64_t signature : snapshot)
   {
+    const WPARAM vk = KeyboardVirtualKeyFromSignature(signature);
+
+    // Only send a synthetic keyup if the OS says the key is NOT currently
+    // pressed. This avoids incorrectly releasing a key the user is still
+    // holding (e.g. while the window shows via a keyboard shortcut).
+    if ((GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0)
+    {
+      continue;
+    }
+
     SendMessage(
         child_window_,
         KeyboardKeyUpMessageFromSignature(signature),
-        KeyboardVirtualKeyFromSignature(signature),
+        vk,
         MakeKeyboardKeyUpLParamFromSignature(signature));
   }
 }
@@ -699,16 +702,21 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message, WPARAM const wparam
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_)
   {
+    // Reroute BEFORE HandleTopLevelWindowProc. Otherwise the engine's
+    // top-level handler consumes the WM_KEYUP at the root window without
+    // generating a Dart KeyUpEvent, leaving HardwareKeyboard._pressedKeys
+    // with a stale entry. The visible symptom is that the affected key
+    // stops working until the next app restart.
+    if (RerouteIgnoredRootKeyUp(hwnd, message, wparam, lparam))
+    {
+      return 0;
+    }
+
     std::optional<LRESULT> result = flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam, lparam);
 
     if (result)
     {
       return *result;
-    }
-
-    if (RerouteIgnoredRootKeyUp(hwnd, message, wparam, lparam))
-    {
-      return 0;
     }
   }
 
@@ -1222,6 +1230,13 @@ void FlutterWindow::HandleWindowManagerMethodCall(
     else if (method_name == "show")
     {
       SavePreviousActiveWindow(hwnd);
+
+      // Flush stale keyboard state before showing the window.
+      // If the previous hide-flush was ineffective (e.g. the engine dropped
+      // the synthetic keyup), retrying here clears any remaining entries so
+      // the user doesn't encounter stuck keys after Wox reappears.
+      FlushPendingChildKeyUps();
+
       // Suppress transient blur events that fire between show() and the
       // subsequent focus() call from Dart.  Without this, Windows may
       // deactivate the newly-shown window (e.g. Explorer steals focus),
