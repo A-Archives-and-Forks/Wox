@@ -145,11 +145,7 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plug
 	queryResults := lo.Map(results, func(item filesearch.SearchResult, _ int) plugin.QueryResult {
 		icon := fileIcon
 		if info, err := os.Stat(item.Path); err == nil {
-			if info.IsDir() {
-				icon = common.FolderIcon
-			} else {
-				icon = common.NewWoxImageFileIcon(item.Path)
-			}
+			icon = resolveFileSearchResultIcon(item.Path, info)
 		}
 
 		return plugin.QueryResult{
@@ -203,6 +199,27 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plug
 	})
 
 	return queryResults
+}
+
+func resolveFileSearchResultIcon(filePath string, info os.FileInfo) common.WoxImage {
+	if info.IsDir() {
+		return common.FolderIcon
+	}
+
+	if shouldUseFileSearchImageThumbnail(filePath) {
+		return common.NewWoxImageAbsolutePath(filePath)
+	}
+
+	return common.NewWoxImageFileIcon(filePath)
+}
+
+func shouldUseFileSearchImageThumbnail(filePath string) bool {
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(filePath))) {
+	case ".avif", ".bmp", ".gif", ".heic", ".heif", ".ico", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *FileSearchPlugin) syncUserRoots(ctx context.Context) {

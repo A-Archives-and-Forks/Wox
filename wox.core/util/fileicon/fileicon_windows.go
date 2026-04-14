@@ -186,10 +186,8 @@ func getFileIconImpl(ctx context.Context, filePath string) (string, error) {
 		img, err = getIconUsingExtractIconEx(ctx, filePath)
 	}
 	if err != nil {
-		img, err = getWindowsDefaultIcon(ctx)
-	}
-	if err != nil {
-		return "", err
+		util.GetLogger().Debug(ctx, "No embedded file icon found, fallback to associated file type icon: "+filePath)
+		return GetFileTypeIcon(ctx, filepath.Ext(filePath))
 	}
 
 	if mkdirErr := os.MkdirAll(filepath.Dir(cachePath), 0o755); mkdirErr != nil {
