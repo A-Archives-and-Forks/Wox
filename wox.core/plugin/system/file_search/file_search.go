@@ -238,6 +238,13 @@ func (c *FileSearchPlugin) getEffectiveRootPaths(ctx context.Context) []string {
 }
 
 func (c *FileSearchPlugin) defaultRootPaths() []string {
+	// Integration tests provide explicit roots and should not inherit the
+	// developer machine's personal folders, which can keep the scanner busy
+	// and make file search assertions race with unrelated indexing work.
+	if util.IsTestMode() {
+		return nil
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil

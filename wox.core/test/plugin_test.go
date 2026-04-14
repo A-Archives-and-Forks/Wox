@@ -219,8 +219,6 @@ func TestFilePlugin_CustomRootsIgnoresDSStore(t *testing.T) {
 		t.Fatal("file plugin instance not found")
 	}
 
-	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
-
 	ignoredFilePath := filepath.Join(rootPath, ".DS_Store")
 	if err := os.WriteFile(ignoredFilePath, []byte("ignored"), 0644); err != nil {
 		t.Fatalf("failed to create ignored file: %v", err)
@@ -231,6 +229,8 @@ func TestFilePlugin_CustomRootsIgnoresDSStore(t *testing.T) {
 	if err := os.WriteFile(visibleFilePath, []byte("visible"), 0644); err != nil {
 		t.Fatalf("failed to create visible file: %v", err)
 	}
+
+	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
 
 	if err := ensureFileSearchResultAbsent(ctx, "f store", ".DS_Store", ignoredFilePath, 30*time.Second); err != nil {
 		t.Fatalf(".DS_Store should remain hidden from file search: %v", err)
