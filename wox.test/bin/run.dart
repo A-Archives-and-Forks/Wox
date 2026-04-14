@@ -104,7 +104,7 @@ void _printHelp() {
 Future<int> _runSmoke({String? testName}) async {
   final packageRoot = _resolvePackageRoot();
   final repoRoot = packageRoot.parent;
-  final artifactsDir = await _createArtifactsDir(packageRoot);
+  final artifactsDir = await _createFreshArtifactsDir(packageRoot);
   final coreBinary = File('${artifactsDir.path}${Platform.pathSeparator}wox-core-smoke${Platform.isWindows ? '.exe' : ''}');
   final woxDataDir = Directory('${artifactsDir.path}${Platform.pathSeparator}wox-data');
   final userDataDir = Directory('${artifactsDir.path}${Platform.pathSeparator}user-data');
@@ -284,9 +284,16 @@ Directory _resolvePackageRoot() {
   throw StateError('Unable to locate wox.test package root from ${current.path}. Run this command from wox.test or the repository root.');
 }
 
-Future<Directory> _createArtifactsDir(Directory packageRoot) async {
+Future<Directory> _createFreshArtifactsDir(Directory packageRoot) async {
+  final artifactsRoot = Directory('${packageRoot.path}${Platform.pathSeparator}artifacts');
+  // Keep only the current smoke run artifacts to avoid unbounded accumulation.
+  if (await artifactsRoot.exists()) {
+    await artifactsRoot.delete(recursive: true);
+  }
+  await artifactsRoot.create(recursive: true);
+
   final timestamp = _formatLocalArtifactsTimestamp(DateTime.now());
-  final dir = Directory('${packageRoot.path}${Platform.pathSeparator}artifacts${Platform.pathSeparator}$timestamp');
+  final dir = Directory('${artifactsRoot.path}${Platform.pathSeparator}$timestamp');
   await dir.create(recursive: true);
   return dir;
 }

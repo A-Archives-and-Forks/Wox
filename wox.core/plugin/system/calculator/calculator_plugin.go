@@ -58,6 +58,7 @@ func (c *CalculatorPlugin) GetMetadata() plugin.Metadata {
 		Commands: []plugin.MetadataCommand{},
 		SupportedOS: []string{
 			"Macos",
+			"Windows",
 			"Linux",
 		},
 		SettingDefinitions: []definition.PluginSettingDefinitionItem{

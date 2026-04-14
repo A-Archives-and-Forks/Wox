@@ -38,7 +38,7 @@ dart run bin/run.dart smoke "P0-SMK-04"
 
 ## Artifacts
 
-Each run creates a timestamped directory under `wox.test/artifacts/` with:
+Each run starts by clearing `wox.test/artifacts/`, then creates a timestamped directory for the current run with:
 
 - `core.log`
 - `flutter_test.log`
