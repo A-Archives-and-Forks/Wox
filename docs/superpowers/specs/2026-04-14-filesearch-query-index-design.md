@@ -207,6 +207,7 @@ Fields:
 - `docCount`
 - `docTable map[DocID]DocRecord`
 - `pathToDocID map[normalizedPath]DocID`
+- `freedDocIDs []DocID`
 - field-specific inverted indexes
 
 ### `DocRecord`
@@ -256,7 +257,9 @@ Fields:
 - `Raw`
 - `Clauses []QueryClause`
 - `RecallStrategy`
-- `CandidateLimit`
+- `PerClauseLimit`
+- `PostIntersectionLimit`
+- `PreRerankLimit`
 
 ## Index Layout
 
@@ -266,64 +269,77 @@ Version 1 should index all query families discussed during brainstorming.
 
 Structure:
 
-- `ext -> []DocID`
+- `lowercaseExt -> []DocID`
 
 Purpose:
 
 - direct recall for `*.png`
 - strong narrowing for mixed wildcard queries such as `foo*.md`
 
+Version 1 should treat extension lookup as exact, case-insensitive key lookup. It is not gram-based.
+
 ### 2. Name Gram Index
 
 Structure:
 
-- `gram -> []DocID` for filename-derived grams
+- `trigram -> []DocID` for filename-derived trigrams
+- bounded `bigram -> []DocID` fallback for two-character filename queries
 
 Purpose:
 
 - recall for normal filename search
 - recall for fuzzy-like text queries before rerank
 
+Version 1 should use trigram postings as the default filename gram strategy. Two-character filename queries may use the bounded bigram side index. One-character queries should bypass gram recall entirely and use the short-query fallback path described below.
+
 ### 3. Path Segment Index
 
 Structure:
 
-- `segment -> []DocID`
+- `directorySegment -> []DocID`
 
 Purpose:
 
 - fast recall for directory and path fragment queries such as `src/plugin`
 - lower memory cost than indexing full path substrings alone
 
+The segment index should include directory names only. It should not index the filename itself. Filename recall belongs to the name index so the responsibilities stay distinct.
+
 ### 4. Path Gram Index
 
 Structure:
 
-- `gram -> []DocID` for normalized full path grams
+- `trigram -> []DocID` for normalized directory-path trigrams
 
 Purpose:
 
 - support path contains-style recall when segment-only matching is insufficient
 
+Version 1 should not maintain a path bigram index. Two-character path queries should rely on the path segment index or degrade to filter-only behavior when recall would be too broad.
+
 ### 5. Pinyin Full Gram Index
 
 Structure:
 
-- `gram -> []DocID`
+- `trigram -> []DocID`
+- bounded `bigram -> []DocID` fallback for two-character pinyin-full queries
 
 Purpose:
 
 - direct recall for full pinyin queries
 
-### 6. Pinyin Initial Prefix Index
+### 6. Pinyin Initial Index
 
 Structure:
 
-- `prefix -> []DocID`
+- `initialsTrie`
+- each terminal node stores the posting list for the complete initials string
 
 Purpose:
 
 - direct recall for initial-style queries such as `zsbg`
+
+Version 1 should not materialize every initials prefix as its own posting list. The initials index should store complete initials strings and support prefix traversal through a dedicated trie-like structure.
 
 ### Posting Representation
 
@@ -363,6 +379,25 @@ Examples:
 
 The parser does not need to be perfect in version 1. It only needs to classify queries well enough to recall candidates without changing user-visible matching semantics unexpectedly.
 
+### Short Query Policy
+
+Very short queries should not blindly enter the gram-based recall path.
+
+Version 1 should apply the following policy:
+
+1. one-character queries:
+   - skip gram indexes
+   - use bounded filename prefix recall only
+   - if even prefix recall is too broad, fall back to a tightly capped sequential scan path for that root
+2. two-character queries:
+   - use the bounded filename and pinyin-full bigram side indexes where available
+   - keep stricter candidate caps than longer queries
+   - path recall should prefer directory segments over path grams
+3. three or more characters:
+   - use the normal trigram-based recall path
+
+This keeps short queries from exploding recall cost while preserving acceptable behavior for common launcher usage.
+
 ## Query Execution
 
 ### Phase 1: Recall
@@ -372,19 +407,48 @@ Recall should narrow the candidate set before scoring.
 Execution rules:
 
 1. Evaluate the most selective clauses first.
-2. Prefer intersection when multiple clauses are available.
-3. Apply candidate caps before reranking.
-4. Keep clause-level recall results observable for debugging and tuning.
+2. Multiple clauses use `AND` semantics by default.
+3. Prefer intersection when multiple clauses are available.
+4. When one clause produces a very small posting list, use it as the seed candidate set and validate the remaining clauses as sequential filters instead of intersecting large lists.
+5. Wildcard clauses do not own a standalone inverted index in version 1. They may contribute narrowing through their literal components and extension clause, but full wildcard validation happens later.
+6. Apply clause-level candidate caps before reranking.
+7. Keep clause-level recall results observable for debugging and tuning.
 
 Suggested selectivity order:
 
 1. extension
-2. pinyin initials prefix
+2. pinyin initials trie
 3. path segment
 4. wildcard-derived narrowing
 5. name grams
 6. path grams
 7. pinyin full grams
+
+### Mixed-Query Strategy
+
+Examples such as `foo*.md` should execute as a mixed-query plan:
+
+1. `ExtClause(md)` recalls exact extension candidates.
+2. `NameClause(foo)` recalls filename candidates.
+3. The planner chooses the smaller recall set as the seed where practical.
+4. Full wildcard validation runs after the seed candidate set is formed.
+
+This avoids expensive intersections between very large posting lists when a smaller clause can act as the primary filter.
+
+### Candidate Caps
+
+Candidate control should happen in layers, not only once before rerank.
+
+Version 1 should support:
+
+1. `PerClauseLimit`
+   - limits the result size returned by one clause
+2. `PostIntersectionLimit`
+   - limits the merged or intersected recall set
+3. `PreRerankLimit`
+   - limits the set that enters reranking
+
+Low-selectivity clauses should be allowed to switch into `filter-only` mode when their expected posting list is too large to justify direct recall work.
 
 ### Phase 2: Rerank
 
@@ -397,14 +461,20 @@ Rerank should preserve current search quality while making scoring rules more ex
 - `path` match has lower weight than filename match
 - extension exactness and wildcard exactness apply as boosts
 
-Version 1 should keep the existing fuzzy matcher as the scoring primitive where practical rather than introducing a second ranking engine.
+Version 1 should keep the existing fuzzy matcher as the scoring primitive where practical rather than introducing a second ranking engine. However, rerank should receive recall match hints so it can skip unnecessary work:
+
+- candidates recalled through pinyin-specific clauses should go through the pinyin scoring path directly
+- candidates recalled through filename clauses should not pay for redundant pinyin work unless needed for tie-breaking or fallback
+- wildcard validation should run as a final filter on the recalled candidate set rather than against the full shard
+
+This avoids repeating expensive pinyin matching work that recall has already partially resolved.
 
 ### Result Ordering
 
 The final ordering should remain stable and predictable:
 
 1. final score descending
-2. directory preference only when scores are equal or nearly equal
+2. directory preference only when scores are exactly equal
 3. name ascending
 4. path ascending
 
@@ -478,6 +548,8 @@ Instead, the query-index should update from stable entry-level state after recon
 3. derive tokens
 4. insert `DocID` into relevant posting lists
 
+Version 1 should reuse IDs from `freedDocIDs` before allocating new shard-local IDs so the shard stays compact over time.
+
 #### Update
 
 Version 1 should treat update as:
@@ -487,6 +559,8 @@ Version 1 should treat update as:
 3. update `DocRecord`
 4. insert new tokens
 
+The existing `DocID` should be preserved across update so rename and move operations do not create unnecessary ID churn.
+
 No field-specific partial optimization is required in version 1.
 
 #### Remove
@@ -495,6 +569,7 @@ No field-specific partial optimization is required in version 1.
 2. remove `DocID` from all postings referenced by the old record
 3. remove the record from `docTable`
 4. remove old path mappings
+5. push the released `DocID` into `freedDocIDs`
 
 ### Fallback to Root Rebuild
 
@@ -517,6 +592,14 @@ Recommended model:
 - search reads a stable `QueryIndex` snapshot
 - patch and rebuild work happens on background copies
 - publication happens through short atomic shard or snapshot replacement
+
+Update scheduling should be serialized per root:
+
+- each root owns a dedicated update worker or equivalent sequential queue
+- batches for different roots may run in parallel
+- patch and rebuild for the same root are mutually exclusive
+- if a rebuild is in progress, new delta batches for that root queue behind it and are re-evaluated after rebuild publication
+- if rebuild output already reflects the queued changes, queued deltas may be dropped safely
 
 This can be implemented with pointer replacement guarded by a short lock or another equivalent snapshot publication mechanism.
 
@@ -554,6 +637,14 @@ Required metrics or logs:
 - rebuild count
 - patch-to-rebuild fallback count
 - approximate memory usage per shard and index family
+- slow-query traces with:
+  - raw query
+  - query plan
+  - clause-level recall counts
+  - post-intersection count
+  - pre-rerank count
+  - recall time
+  - rerank time
 
 Without these signals it will be difficult to know whether slow queries come from weak recall, oversized candidate sets, or expensive reranking.
 
@@ -630,9 +721,9 @@ Tune recall thresholds, candidate caps, and memory behavior using observed metri
 
 The following items are intentionally deferred to the implementation plan because they affect tuning more than architecture:
 
-1. exact gram size and tokenization rules
+1. exact token normalization rules and gram generation boundaries within the chosen trigram-first strategy
 2. exact thresholds for patch vs rebuild
-3. exact candidate caps before rerank
+3. exact numeric values for layered candidate caps
 4. exact score weighting formula for combined ranking
 5. whether to keep the current scan path behind a debug or emergency fallback switch
 
