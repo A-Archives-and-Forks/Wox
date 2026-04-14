@@ -4,9 +4,109 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
+
+func makeTestEntryRecord(root RootRecord, fullPath string, isDir bool, size int64, mtime time.Time) EntryRecord {
+	name := filepath.Base(fullPath)
+	pinyinFull, pinyinInitials := buildPinyinFields(name)
+
+	return EntryRecord{
+		Path:           fullPath,
+		RootID:         root.ID,
+		ParentPath:     filepath.Dir(fullPath),
+		Name:           name,
+		NormalizedName: normalizeIndexText(name),
+		NormalizedPath: normalizePath(fullPath),
+		PinyinFull:     pinyinFull,
+		PinyinInitials: pinyinInitials,
+		IsDir:          isDir,
+		Mtime:          mtime.UnixMilli(),
+		Size:           size,
+		UpdatedAt:      time.Now().UnixMilli(),
+	}
+}
+
+func TestScannerReloadLocalProviderFromDBRootOnlyRefreshesTargetRoot(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now()
+	rootAPath := filepath.Join(t.TempDir(), "root-a-refresh")
+	rootBPath := filepath.Join(t.TempDir(), "root-b-refresh")
+	rootAInitialFilePath := filepath.Join(rootAPath, "initial-a.txt")
+	rootANewFilePath := filepath.Join(rootAPath, "new-a.txt")
+	rootBInitialFilePath := filepath.Join(rootBPath, "initial-b.txt")
+
+	mustMkdirAll(t, rootAPath)
+	mustMkdirAll(t, rootBPath)
+	mustWriteTestFile(t, rootAInitialFilePath, "initial-a")
+	mustWriteTestFile(t, rootBInitialFilePath, "initial-b")
+
+	rootA := RootRecord{
+		ID:        "root-a-refresh",
+		Path:      rootAPath,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now.UnixMilli(),
+		UpdatedAt: now.UnixMilli(),
+	}
+	rootB := RootRecord{
+		ID:        "root-b-refresh",
+		Path:      rootBPath,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now.UnixMilli(),
+		UpdatedAt: now.UnixMilli(),
+	}
+	mustInsertRoot(t, ctx, db, rootA)
+	mustInsertRoot(t, ctx, db, rootB)
+
+	localProvider := NewLocalIndexProvider()
+	scanner := NewScanner(db, localProvider)
+	scanner.scanAllRoots(ctx)
+
+	mustWriteTestFile(t, rootANewFilePath, "new-a")
+
+	rootANewInfo, err := os.Stat(rootANewFilePath)
+	if err != nil {
+		t.Fatalf("stat new root-a file: %v", err)
+	}
+
+	if err := db.ReplaceRootEntries(ctx, rootA, []EntryRecord{
+		makeTestEntryRecord(rootA, rootANewFilePath, rootANewInfo.IsDir(), rootANewInfo.Size(), rootANewInfo.ModTime()),
+	}, nil); err != nil {
+		t.Fatalf("replace root-a entries: %v", err)
+	}
+
+	if _, err := scanner.reloadLocalProviderRootFromDB(ctx, rootA.ID); err != nil {
+		t.Fatalf("reload local provider for root-a: %v", err)
+	}
+
+	results, err := localProvider.Search(context.Background(), SearchQuery{Raw: "new-a"}, 10)
+	if err != nil {
+		t.Fatalf("search local provider for reloaded root-a file: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != rootANewFilePath {
+		t.Fatalf("expected root-a new file %q after root reload, got %#v", rootANewFilePath, results)
+	}
+
+	results, err = localProvider.Search(context.Background(), SearchQuery{Raw: "initial-a"}, 10)
+	if err != nil {
+		t.Fatalf("search local provider for removed root-a file: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected removed root-a file %q to be evicted after root reload, got %#v", rootAInitialFilePath, results)
+	}
+
+	results, err = localProvider.Search(context.Background(), SearchQuery{Raw: "initial-b"}, 10)
+	if err != nil {
+		t.Fatalf("search local provider for untouched root-b file: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != rootBInitialFilePath {
+		t.Fatalf("expected untouched root-b file %q after root-a reload, got %#v", rootBInitialFilePath, results)
+	}
+}
 
 func TestScannerProcessDirtyQueueReloadsLocalProviderAfterReconcile(t *testing.T) {
 	db, ctx := openTestFileSearchDB(t)
@@ -346,6 +446,152 @@ func TestScannerProcessDirtyQueueCapturesFreshCursorAfterRootReconcile(t *testin
 	}
 }
 
+func TestScannerReloadLocalProviderRootFromDBSerializesConcurrentSameRootRefreshes(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now()
+	rootPath := filepath.Join(t.TempDir(), "root-queued-refresh")
+	initialFilePath := filepath.Join(rootPath, "initial.txt")
+	firstRefreshFilePath := filepath.Join(rootPath, "queued-first.txt")
+	secondRefreshFilePath := filepath.Join(rootPath, "queued-second.txt")
+
+	mustMkdirAll(t, rootPath)
+	mustWriteTestFile(t, initialFilePath, "initial")
+	mustWriteTestFile(t, firstRefreshFilePath, "queued-first")
+	mustWriteTestFile(t, secondRefreshFilePath, "queued-second")
+
+	root := RootRecord{
+		ID:        "root-queued-refresh",
+		Path:      rootPath,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now.UnixMilli(),
+		UpdatedAt: now.UnixMilli(),
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	initialInfo, err := os.Stat(initialFilePath)
+	if err != nil {
+		t.Fatalf("stat initial file: %v", err)
+	}
+	if err := db.ReplaceRootEntries(ctx, root, []EntryRecord{
+		makeTestEntryRecord(root, initialFilePath, initialInfo.IsDir(), initialInfo.Size(), initialInfo.ModTime()),
+	}, nil); err != nil {
+		t.Fatalf("replace initial root entries: %v", err)
+	}
+
+	localProvider := NewLocalIndexProvider()
+	scanner := NewScanner(db, localProvider)
+	defer scanner.Stop()
+
+	if _, err := scanner.reloadLocalProviderRootFromDB(ctx, root.ID); err != nil {
+		t.Fatalf("initial root reload: %v", err)
+	}
+
+	firstRefreshInfo, err := os.Stat(firstRefreshFilePath)
+	if err != nil {
+		t.Fatalf("stat first refresh file: %v", err)
+	}
+	if err := db.ReplaceRootEntries(ctx, root, []EntryRecord{
+		makeTestEntryRecord(root, firstRefreshFilePath, firstRefreshInfo.IsDir(), firstRefreshInfo.Size(), firstRefreshInfo.ModTime()),
+	}, nil); err != nil {
+		t.Fatalf("replace root entries for first refresh: %v", err)
+	}
+
+	firstApplyReached := make(chan struct{})
+	secondApplyReached := make(chan struct{})
+	releaseFirstApply := make(chan struct{})
+	var applyCallMu sync.Mutex
+	applyCalls := 0
+	scanner.beforeApplyRootReload = func(reloadRootID string, entries []EntryRecord) {
+		if reloadRootID != root.ID {
+			return
+		}
+
+		applyCallMu.Lock()
+		applyCalls++
+		callIndex := applyCalls
+		applyCallMu.Unlock()
+
+		switch callIndex {
+		case 1:
+			close(firstApplyReached)
+			<-releaseFirstApply
+		case 2:
+			close(secondApplyReached)
+		}
+	}
+
+	firstReloadDone := make(chan error, 1)
+	go func() {
+		_, err := scanner.reloadLocalProviderRootFromDB(ctx, root.ID)
+		firstReloadDone <- err
+	}()
+
+	select {
+	case <-firstApplyReached:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for first root reload to reach apply")
+	}
+
+	secondRefreshInfo, err := os.Stat(secondRefreshFilePath)
+	if err != nil {
+		t.Fatalf("stat second refresh file: %v", err)
+	}
+	if err := db.ReplaceRootEntries(ctx, root, []EntryRecord{
+		makeTestEntryRecord(root, secondRefreshFilePath, secondRefreshInfo.IsDir(), secondRefreshInfo.Size(), secondRefreshInfo.ModTime()),
+	}, nil); err != nil {
+		t.Fatalf("replace root entries for second refresh: %v", err)
+	}
+
+	secondReloadDone := make(chan error, 1)
+	go func() {
+		_, err := scanner.reloadLocalProviderRootFromDB(ctx, root.ID)
+		secondReloadDone <- err
+	}()
+
+	select {
+	case <-secondApplyReached:
+		t.Fatalf("expected same-root reload requests to remain queued behind the in-flight apply")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(releaseFirstApply)
+
+	select {
+	case err := <-firstReloadDone:
+		if err != nil {
+			t.Fatalf("first concurrent root reload: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for first concurrent root reload")
+	}
+
+	select {
+	case err := <-secondReloadDone:
+		if err != nil {
+			t.Fatalf("second concurrent root reload: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for second concurrent root reload")
+	}
+
+	results, err := localProvider.Search(context.Background(), SearchQuery{Raw: "queued-second"}, 10)
+	if err != nil {
+		t.Fatalf("search local provider for latest root refresh file: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != secondRefreshFilePath {
+		t.Fatalf("expected latest root refresh file %q, got %#v", secondRefreshFilePath, results)
+	}
+
+	results, err = localProvider.Search(context.Background(), SearchQuery{Raw: "queued-first"}, 10)
+	if err != nil {
+		t.Fatalf("search local provider for stale root refresh file: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected stale root refresh file %q to be absent, got %#v", firstRefreshFilePath, results)
+	}
+}
+
 func TestScopePathForDirtySignalPreservesFilesystemRootDirectory(t *testing.T) {
 	scopePath, ok := scopePathForDirtySignal(string(filepath.Separator), true, true)
 	if !ok {
@@ -354,4 +600,58 @@ func TestScopePathForDirtySignalPreservesFilesystemRootDirectory(t *testing.T) {
 	if scopePath != string(filepath.Separator) {
 		t.Fatalf("expected filesystem root to resolve back to %q, got %q", string(filepath.Separator), scopePath)
 	}
+}
+
+func TestScannerRootReloadWorkerExpiresAfterIdleTimeout(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now()
+	rootPath := filepath.Join(t.TempDir(), "root-worker-idle")
+	filePath := filepath.Join(rootPath, "idle.txt")
+
+	mustMkdirAll(t, rootPath)
+	mustWriteTestFile(t, filePath, "idle")
+
+	root := RootRecord{
+		ID:        "root-worker-idle",
+		Path:      rootPath,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now.UnixMilli(),
+		UpdatedAt: now.UnixMilli(),
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	info, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("stat idle test file: %v", err)
+	}
+	if err := db.ReplaceRootEntries(ctx, root, []EntryRecord{
+		makeTestEntryRecord(root, filePath, info.IsDir(), info.Size(), info.ModTime()),
+	}, nil); err != nil {
+		t.Fatalf("replace root entries for idle worker test: %v", err)
+	}
+
+	scanner := NewScanner(db, NewLocalIndexProvider())
+	scanner.rootReloadWorkerIdleTimeout = 20 * time.Millisecond
+	defer scanner.Stop()
+
+	if _, err := scanner.reloadLocalProviderRootFromDB(ctx, root.ID); err != nil {
+		t.Fatalf("initial root reload: %v", err)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		scanner.reloadWorkersMu.Lock()
+		workerCount := len(scanner.reloadWorkers)
+		scanner.reloadWorkersMu.Unlock()
+		if workerCount == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	scanner.reloadWorkersMu.Lock()
+	workerCount := len(scanner.reloadWorkers)
+	scanner.reloadWorkersMu.Unlock()
+	t.Fatalf("expected idle reload worker to expire, found %d workers", workerCount)
 }

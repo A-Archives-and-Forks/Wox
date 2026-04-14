@@ -5,6 +5,7 @@ import "time"
 type SearchQuery struct {
 	Raw      string
 	wildcard *wildcardQuery
+	plan     *queryPlan
 }
 
 type StatusSnapshot struct {
@@ -192,6 +193,21 @@ type EntryRecord struct {
 	Mtime          int64
 	Size           int64
 	UpdatedAt      int64
+}
+
+type EntryUpdate struct {
+	Old EntryRecord
+	New EntryRecord
+}
+
+type EntryDeltaBatch struct {
+	RootID        string
+	PreviousCount int
+	NextCount     int
+	Added         []EntryRecord
+	Updated       []EntryUpdate
+	Removed       []EntryRecord
+	ForceRebuild  bool
 }
 
 type DirectoryRecord struct {

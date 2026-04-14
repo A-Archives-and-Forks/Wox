@@ -23,6 +23,7 @@ func normalizeQuery(raw string) string {
 func normalizeSearchQuery(query SearchQuery) SearchQuery {
 	query.Raw = normalizeQuery(query.Raw)
 	query.wildcard = buildWildcardQuery(query.Raw)
+	query.plan = buildQueryPlan(query)
 	return query
 }
 
@@ -35,7 +36,7 @@ func normalizePath(path string) string {
 }
 
 func buildSearchTerms(name string, path string, pinyinFull string, pinyinInitials string) []string {
-	terms := []string{name, pinyinFull, pinyinInitials}
+	terms := []string{name, path, pinyinFull, pinyinInitials}
 	return util.UniqueStrings(filterNonEmpty(terms))
 }
 
@@ -45,6 +46,9 @@ func matchSearchQuery(query SearchQuery, name string, path string, pinyinFull st
 	}
 	if query.wildcard != nil {
 		return query.wildcard.match(name, path)
+	}
+	if query.plan != nil && query.plan.pathLike {
+		return scorePathMatch(path, query.plan.pathQuery)
 	}
 	return scoreSearchTerms(query.Raw, buildSearchTerms(name, path, pinyinFull, pinyinInitials))
 }
@@ -166,4 +170,23 @@ func (q *wildcardQuery) match(name string, fullPath string) (bool, int64) {
 	}
 
 	return true, int64(q.literalCount*1000 - len(target))
+}
+
+func scorePathMatch(path string, query string) (bool, int64) {
+	normalizedPath := normalizePathQuery(path)
+	normalizedQuery := normalizePathQuery(query)
+	if normalizedPath == "" || normalizedQuery == "" {
+		return false, 0
+	}
+
+	if strings.Contains(normalizedPath, normalizedQuery) {
+		return true, int64(8000 + utf8Len(normalizedQuery)*100 - utf8Len(normalizedPath))
+	}
+
+	matched, score := util.IsStringMatchScore(normalizedPath, normalizedQuery, false)
+	if !matched {
+		return false, 0
+	}
+
+	return true, score + 2000
 }

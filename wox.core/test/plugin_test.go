@@ -282,6 +282,73 @@ func TestFilePlugin_WildcardExtensionFilter(t *testing.T) {
 	}
 }
 
+func TestFilePlugin_PathFragmentSearch(t *testing.T) {
+	suite := NewTestSuite(t)
+	ctx := suite.ctx
+
+	rootPath := newStableFileSearchRoot(t, "filesearch-path-fragment-root")
+
+	rootSetting, err := json.Marshal([]map[string]string{
+		{"Path": rootPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal file search roots setting: %v", err)
+	}
+
+	filePlugin := findPluginInstance("979d6363-025a-4f51-88d3-0b04e9dc56bf")
+	if filePlugin == nil {
+		t.Fatal("file plugin instance not found")
+	}
+
+	targetDirectory := filepath.Join(rootPath, "alpha", "beta")
+	if err := os.MkdirAll(targetDirectory, 0755); err != nil {
+		t.Fatalf("failed to create target directory: %v", err)
+	}
+
+	targetFileName := fmt.Sprintf("path-target-%d.txt", time.Now().UnixNano())
+	targetFilePath := filepath.Join(targetDirectory, targetFileName)
+	if err := os.WriteFile(targetFilePath, []byte("path"), 0644); err != nil {
+		t.Fatalf("failed to create target file: %v", err)
+	}
+
+	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+
+	if err := waitForFileSearchResult(ctx, "f alpha/beta", targetFileName, targetFilePath, 30*time.Second); err != nil {
+		t.Fatalf("path fragment query did not return target file: %v", err)
+	}
+}
+
+func TestFilePlugin_PinyinInitialSearch(t *testing.T) {
+	suite := NewTestSuite(t)
+	ctx := suite.ctx
+
+	rootPath := newStableFileSearchRoot(t, "filesearch-pinyin-root")
+
+	rootSetting, err := json.Marshal([]map[string]string{
+		{"Path": rootPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal file search roots setting: %v", err)
+	}
+
+	filePlugin := findPluginInstance("979d6363-025a-4f51-88d3-0b04e9dc56bf")
+	if filePlugin == nil {
+		t.Fatal("file plugin instance not found")
+	}
+
+	targetFileName := fmt.Sprintf("总结报告-%d.txt", time.Now().UnixNano())
+	targetFilePath := filepath.Join(rootPath, targetFileName)
+	if err := os.WriteFile(targetFilePath, []byte("pinyin"), 0644); err != nil {
+		t.Fatalf("failed to create pinyin target file: %v", err)
+	}
+
+	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+
+	if err := waitForFileSearchResult(ctx, "f zjbg", targetFileName, targetFilePath, 30*time.Second); err != nil {
+		t.Fatalf("pinyin initials query did not return target file: %v", err)
+	}
+}
+
 func TestFilePlugin_PolicyUpdateRemovesIndexedPath(t *testing.T) {
 	suite := NewTestSuite(t)
 	ctx := suite.ctx

@@ -779,6 +779,45 @@ func (d *FileSearchDB) ListEntries(ctx context.Context) ([]EntryRecord, error) {
 	return entries, rows.Err()
 }
 
+func (d *FileSearchDB) ListEntriesByRoot(ctx context.Context, rootID string) ([]EntryRecord, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT path, root_id, parent_path, name, normalized_name, normalized_path,
+		       pinyin_full, pinyin_initials, is_dir, mtime, size, updated_at
+		FROM entries
+		WHERE root_id = ?
+	`, rootID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []EntryRecord
+	for rows.Next() {
+		var entry EntryRecord
+		var isDir int
+		if err := rows.Scan(
+			&entry.Path,
+			&entry.RootID,
+			&entry.ParentPath,
+			&entry.Name,
+			&entry.NormalizedName,
+			&entry.NormalizedPath,
+			&entry.PinyinFull,
+			&entry.PinyinInitials,
+			&isDir,
+			&entry.Mtime,
+			&entry.Size,
+			&entry.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		entry.IsDir = isDir == 1
+		entries = append(entries, entry)
+	}
+
+	return entries, rows.Err()
+}
+
 func boolToInt(value bool) int {
 	if value {
 		return 1

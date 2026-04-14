@@ -241,13 +241,28 @@ func (t *dirtyPathTree) add(path string) {
 	}
 
 	node := t.root
-	if path == string(filepath.Separator) {
+	rootPath, segments := splitDirtyPath(path)
+	if rootPath != "" {
+		if node.children == nil {
+			node.children = map[string]*dirtyPathNode{}
+		}
+		child := node.children[rootPath]
+		if child == nil {
+			child = &dirtyPathNode{
+				path:     rootPath,
+				children: map[string]*dirtyPathNode{},
+			}
+			node.children[rootPath] = child
+		}
+		node = child
+	}
+
+	if len(segments) == 0 {
 		node.dirty = true
-		node.path = path
 		return
 	}
 
-	for _, segment := range splitDirtyPath(path) {
+	for _, segment := range segments {
 		if node.children == nil {
 			node.children = map[string]*dirtyPathNode{}
 		}
@@ -294,10 +309,7 @@ func reduceDirtyPathNode(node *dirtyPathNode, threshold int) []string {
 	}
 
 	if len(paths) >= threshold {
-		if node.path == "" {
-			return []string{string(filepath.Separator)}
-		}
-		return []string{node.path}
+		return []string{collapseDirtyPath(node)}
 	}
 
 	return paths
@@ -331,8 +343,18 @@ func cleanDirtyQueuePath(value string) string {
 	return filepath.Clean(value)
 }
 
-func splitDirtyPath(path string) []string {
-	parts := strings.Split(path, string(filepath.Separator))
+func splitDirtyPath(path string) (string, []string) {
+	root := filepath.VolumeName(path)
+	trimmed := path
+	if root != "" {
+		trimmed = strings.TrimPrefix(trimmed, root)
+	}
+	if strings.HasPrefix(trimmed, string(filepath.Separator)) {
+		root += string(filepath.Separator)
+		trimmed = strings.TrimPrefix(trimmed, string(filepath.Separator))
+	}
+
+	parts := strings.Split(trimmed, string(filepath.Separator))
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if part == "" || part == "." {
@@ -340,18 +362,27 @@ func splitDirtyPath(path string) []string {
 		}
 		out = append(out, part)
 	}
-	return out
+	return root, out
 }
 
 func joinDirtyPath(parent, segment string) string {
 	if parent == "" {
-		if strings.HasPrefix(segment, string(filepath.Separator)) {
-			return segment
-		}
-		return string(filepath.Separator) + segment
-	}
-	if parent == string(filepath.Separator) {
-		return filepath.Join(parent, segment)
+		return segment
 	}
 	return filepath.Join(parent, segment)
+}
+
+func collapseDirtyPath(node *dirtyPathNode) string {
+	if node == nil {
+		return ""
+	}
+	if node.path != "" {
+		return node.path
+	}
+	if len(node.children) == 1 {
+		for _, child := range node.children {
+			return child.path
+		}
+	}
+	return string(filepath.Separator)
 }

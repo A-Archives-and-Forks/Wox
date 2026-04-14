@@ -14,36 +14,56 @@ import (
 )
 
 const (
-	defaultScanInterval        = 24 * time.Hour
-	defaultDirtyDebounceWindow = 750 * time.Millisecond
-	progressBatchSize          = 256
-	progressUpdateGap          = 250 * time.Millisecond
+	defaultScanInterval                = 24 * time.Hour
+	defaultDirtyDebounceWindow         = 750 * time.Millisecond
+	defaultRootReloadWorkerIdleTimeout = 30 * time.Second
+	progressBatchSize                  = 256
+	progressUpdateGap                  = 250 * time.Millisecond
 )
 
 type Scanner struct {
-	db                 *FileSearchDB
-	localProvider      *LocalIndexProvider
-	policy             *policyState
-	onStateChange      func(ctx context.Context)
-	stopOnce           sync.Once
-	stopCh             chan struct{}
-	requestCh          chan scanRequest
-	dirtyCh            chan struct{}
-	runningMu          sync.Mutex
-	scanRunning        bool
-	changeFeed         ChangeFeed
-	dirtyQueue         *DirtyQueue
-	dirtyQueueConfig   DirtyQueueConfig
-	reconciler         *Reconciler
-	transientRootMu    sync.RWMutex
-	transientRootState *TransientRootState
-	transientSyncMu    sync.RWMutex
-	transientSyncState *TransientSyncState
+	db                          *FileSearchDB
+	localProvider               *LocalIndexProvider
+	policy                      *policyState
+	onStateChange               func(ctx context.Context)
+	stopOnce                    sync.Once
+	stopCh                      chan struct{}
+	requestCh                   chan scanRequest
+	dirtyCh                     chan struct{}
+	runningMu                   sync.Mutex
+	scanRunning                 bool
+	changeFeed                  ChangeFeed
+	dirtyQueue                  *DirtyQueue
+	dirtyQueueConfig            DirtyQueueConfig
+	reconciler                  *Reconciler
+	reloadWorkersMu             sync.Mutex
+	reloadWorkers               map[string]*rootReloadWorker
+	rootReloadWorkerIdleTimeout time.Duration
+	transientRootMu             sync.RWMutex
+	transientRootState          *TransientRootState
+	transientSyncMu             sync.RWMutex
+	transientSyncState          *TransientSyncState
+	// Test hook to coordinate root-local provider reload ordering.
+	beforeApplyRootReload func(rootID string, entries []EntryRecord)
 }
 
 type scanRequest struct {
 	Reason  string
 	TraceID string
+}
+
+type rootReloadWorker struct {
+	requests chan rootReloadRequest
+}
+
+type rootReloadRequest struct {
+	traceID  string
+	response chan rootReloadResult
+}
+
+type rootReloadResult struct {
+	rootEntries int
+	err         error
 }
 
 func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
@@ -57,16 +77,18 @@ func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
 	policy := newPolicyState(Policy{})
 
 	return &Scanner{
-		db:               db,
-		localProvider:    localProvider,
-		policy:           policy,
-		stopCh:           make(chan struct{}),
-		requestCh:        make(chan scanRequest, 1),
-		dirtyCh:          make(chan struct{}, 1),
-		changeFeed:       newPlatformChangeFeed(),
-		dirtyQueueConfig: dirtyQueueConfig,
-		dirtyQueue:       NewDirtyQueue(dirtyQueueConfig),
-		reconciler:       NewReconciler(db, policy),
+		db:                          db,
+		localProvider:               localProvider,
+		policy:                      policy,
+		stopCh:                      make(chan struct{}),
+		requestCh:                   make(chan scanRequest, 1),
+		dirtyCh:                     make(chan struct{}, 1),
+		changeFeed:                  newPlatformChangeFeed(),
+		dirtyQueueConfig:            dirtyQueueConfig,
+		dirtyQueue:                  NewDirtyQueue(dirtyQueueConfig),
+		reconciler:                  NewReconciler(db, policy),
+		reloadWorkers:               map[string]*rootReloadWorker{},
+		rootReloadWorkerIdleTimeout: defaultRootReloadWorkerIdleTimeout,
 	}
 }
 
@@ -911,7 +933,7 @@ func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
 		}
 
 		if result.ReloadNeeded {
-			if _, err := s.reloadLocalProviderFromDB(batchCtx); err != nil {
+			if _, err := s.reloadLocalProviderRootFromDB(batchCtx, batch.RootID); err != nil {
 				s.clearTransientSyncState(batch.RootID)
 				s.handleDirtyQueueFailure(batchCtx, root, batch, batches[batchIndex+1:], err)
 				return err
@@ -1236,6 +1258,148 @@ func (s *Scanner) reloadLocalProviderFromDB(ctx context.Context) (int, error) {
 	}
 	s.localProvider.ReplaceEntries(entries)
 	util.GetLogger().Debug(ctx, fmt.Sprintf("filesearch local index reloaded from db: entries=%d", len(entries)))
+	return len(entries), nil
+}
+
+func (s *Scanner) reloadLocalProviderRootFromDB(ctx context.Context, rootID string) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(rootID) == "" {
+		return s.reloadLocalProviderFromDB(ctx)
+	}
+
+	worker := s.ensureRootReloadWorker(rootID)
+	request := rootReloadRequest{
+		traceID:  util.GetContextTraceId(ctx),
+		response: make(chan rootReloadResult, 1),
+	}
+
+	select {
+	case <-s.stopCh:
+		return 0, context.Canceled
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case worker.requests <- request:
+	}
+
+	select {
+	case <-s.stopCh:
+		return 0, context.Canceled
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case result := <-request.response:
+		return result.rootEntries, result.err
+	}
+}
+
+func (s *Scanner) ensureRootReloadWorker(rootID string) *rootReloadWorker {
+	s.reloadWorkersMu.Lock()
+	defer s.reloadWorkersMu.Unlock()
+
+	if worker, ok := s.reloadWorkers[rootID]; ok {
+		return worker
+	}
+
+	worker := &rootReloadWorker{
+		requests: make(chan rootReloadRequest, 16),
+	}
+	s.reloadWorkers[rootID] = worker
+
+	util.Go(context.Background(), "filesearch local provider reload worker", func() {
+		s.runRootReloadWorker(rootID, worker)
+	})
+
+	return worker
+}
+
+func (s *Scanner) runRootReloadWorker(rootID string, worker *rootReloadWorker) {
+	idleTimeout := s.rootReloadWorkerIdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = defaultRootReloadWorkerIdleTimeout
+	}
+	idleTimer := time.NewTimer(idleTimeout)
+	defer idleTimer.Stop()
+
+	for {
+		var request rootReloadRequest
+		select {
+		case <-s.stopCh:
+			s.releaseRootReloadWorker(rootID, worker)
+			return
+		case <-idleTimer.C:
+			s.releaseRootReloadWorker(rootID, worker)
+			return
+		case request = <-worker.requests:
+		}
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+
+		batch := []rootReloadRequest{request}
+	collectPending:
+		for {
+			select {
+			case request = <-worker.requests:
+				batch = append(batch, request)
+			default:
+				break collectPending
+			}
+		}
+
+		traceID := batch[len(batch)-1].traceID
+		reloadCtx := contextWithTraceID(context.Background(), traceID)
+		if len(batch) > 1 {
+			util.GetLogger().Debug(reloadCtx, fmt.Sprintf(
+				"filesearch coalescing local provider root reload requests: root=%s requests=%d",
+				rootID,
+				len(batch),
+			))
+		}
+
+		rootEntries, err := s.reloadLocalProviderRootFromDBOnce(reloadCtx, rootID)
+		result := rootReloadResult{rootEntries: rootEntries, err: err}
+		for _, pending := range batch {
+			pending.response <- result
+		}
+		idleTimer.Reset(idleTimeout)
+	}
+}
+
+func (s *Scanner) releaseRootReloadWorker(rootID string, worker *rootReloadWorker) {
+	s.reloadWorkersMu.Lock()
+	defer s.reloadWorkersMu.Unlock()
+
+	if current, ok := s.reloadWorkers[rootID]; ok && current == worker {
+		delete(s.reloadWorkers, rootID)
+	}
+}
+
+func (s *Scanner) reloadLocalProviderRootFromDBOnce(ctx context.Context, rootID string) (int, error) {
+	currentRootEntries := s.localProvider.SnapshotRootEntries(rootID)
+	entries, err := s.db.ListEntriesByRoot(ctx, rootID)
+	if err != nil {
+		return 0, err
+	}
+	if s.beforeApplyRootReload != nil {
+		s.beforeApplyRootReload(rootID, cloneEntryRecords(entries))
+	}
+
+	delta := diffRootEntries(rootID, currentRootEntries, entries)
+	totalEntries := s.localProvider.ApplyRootEntries(rootID, entries, delta)
+	util.GetLogger().Debug(ctx, fmt.Sprintf(
+		"filesearch local index reloaded from db root: root=%s root_entries=%d total_entries=%d added=%d updated=%d removed=%d rebuild=%t",
+		rootID,
+		len(entries),
+		totalEntries,
+		len(delta.Added),
+		len(delta.Updated),
+		len(delta.Removed),
+		shouldRebuildRootEntries(delta),
+	))
 	return len(entries), nil
 }
 
