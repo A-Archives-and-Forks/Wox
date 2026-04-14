@@ -219,3 +219,108 @@ func TestScannerScanAllRootsLeavesExistingSearchResultsAvailableDuringVerificati
 		t.Fatalf("expected provider reload to include %q, got %#v", filePath, results)
 	}
 }
+
+func TestScannerStartupRestoreLoadsProviderFromDBWithoutFullScanForFreshCursor(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now()
+	rootPath := filepath.Join(t.TempDir(), "root-startup-restore-fresh")
+	staleFilePath := filepath.Join(rootPath, "stale.txt")
+	lastFullScanAt := now.Add(-time.Hour).UnixMilli()
+
+	root := RootRecord{
+		ID:             "root-startup-restore-fresh",
+		Path:           rootPath,
+		Kind:           RootKindUser,
+		Status:         RootStatusIdle,
+		FeedType:       RootFeedTypeFSEvents,
+		FeedCursor:     mustEncodeFeedCursorForTest(t, FeedCursor{FeedType: RootFeedTypeFSEvents, UpdatedAt: now.UnixMilli(), FSEventID: 88}),
+		FeedState:      RootFeedStateReady,
+		LastFullScanAt: lastFullScanAt,
+		CreatedAt:      now.UnixMilli(),
+		UpdatedAt:      now.UnixMilli(),
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	if err := db.ReplaceRootEntries(ctx, root, []EntryRecord{
+		makeTestEntryRecord(root, staleFilePath, false, 42, now),
+	}, nil); err != nil {
+		t.Fatalf("seed root entries for startup restore: %v", err)
+	}
+
+	localProvider := NewLocalIndexProvider()
+	scanner := NewScanner(db, localProvider)
+	scanner.changeFeed = newTestSnapshotChangeFeed(nil)
+
+	scanner.startupRestore(ctx)
+
+	results, err := localProvider.Search(context.Background(), SearchQuery{Raw: "stale"}, 10)
+	if err != nil {
+		t.Fatalf("search local provider after startup restore: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != staleFilePath {
+		t.Fatalf("expected startup restore to load persisted entry %q, got %#v", staleFilePath, results)
+	}
+
+	rootAfter, err := db.FindRootByID(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("find root after startup restore: %v", err)
+	}
+	if rootAfter == nil {
+		t.Fatalf("expected root after startup restore")
+	}
+	if rootAfter.LastFullScanAt != lastFullScanAt {
+		t.Fatalf("expected startup restore to skip full scan and keep LastFullScanAt=%d, got %d", lastFullScanAt, rootAfter.LastFullScanAt)
+	}
+}
+
+func TestScannerStartupRestoreReconcilesFallbackRoots(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now()
+	rootPath := filepath.Join(t.TempDir(), "root-startup-restore-fallback")
+	staleFilePath := filepath.Join(rootPath, "stale.txt")
+	actualFilePath := filepath.Join(rootPath, "actual.txt")
+
+	mustMkdirAll(t, rootPath)
+	mustWriteTestFile(t, actualFilePath, "actual")
+
+	root := RootRecord{
+		ID:             "root-startup-restore-fallback",
+		Path:           rootPath,
+		Kind:           RootKindUser,
+		Status:         RootStatusIdle,
+		FeedType:       RootFeedTypeFallback,
+		FeedState:      RootFeedStateReady,
+		LastFullScanAt: now.Add(-2 * time.Hour).UnixMilli(),
+		CreatedAt:      now.UnixMilli(),
+		UpdatedAt:      now.UnixMilli(),
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	if err := db.ReplaceRootEntries(ctx, root, []EntryRecord{
+		makeTestEntryRecord(root, staleFilePath, false, 12, now.Add(-time.Minute)),
+	}, nil); err != nil {
+		t.Fatalf("seed stale fallback entries: %v", err)
+	}
+
+	localProvider := NewLocalIndexProvider()
+	scanner := NewScanner(db, localProvider)
+	scanner.changeFeed = newTestSnapshotChangeFeed(nil)
+
+	scanner.startupRestore(ctx)
+
+	results, err := localProvider.Search(context.Background(), SearchQuery{Raw: "actual"}, 10)
+	if err != nil {
+		t.Fatalf("search actual file after fallback startup reconcile: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != actualFilePath {
+		t.Fatalf("expected startup restore to reconcile fallback root to %q, got %#v", actualFilePath, results)
+	}
+
+	results, err = localProvider.Search(context.Background(), SearchQuery{Raw: "stale"}, 10)
+	if err != nil {
+		t.Fatalf("search stale file after fallback startup reconcile: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected stale fallback entry %q to be removed after startup reconcile, got %#v", staleFilePath, results)
+	}
+}

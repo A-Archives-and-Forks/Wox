@@ -103,8 +103,7 @@ func (s *Scanner) Start(ctx context.Context) {
 
 	util.Go(ctx, "filesearch scan loop", func() {
 		util.GetLogger().Info(ctx, "filesearch scanner started")
-		s.scanAllRootsWithReason(ctx, "startup")
-		s.refreshChangeFeed(ctx)
+		s.startupRestore(ctx)
 
 		fullScanTimer := time.NewTimer(defaultScanInterval)
 		defer fullScanTimer.Stop()
