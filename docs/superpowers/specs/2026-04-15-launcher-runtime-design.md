@@ -118,7 +118,7 @@ Implications:
 - the `wox` executable owns both core services and launcher UI services
 - launcher-to-core interaction becomes in-process interfaces, channels, and lifecycle hooks
 - Flutter settings remain a separate frontend process in v1
-- legacy WS/HTTP surfaces remain only as a compatibility bridge for rollout and tooling, not as the target launcher path
+- existing WS/HTTP surfaces remain relevant only for the separate settings frontend and for migration reference, not as the target launcher path
 
 ### Thread Model
 Single-process does **not** remove native UI thread constraints.
@@ -500,11 +500,6 @@ Recommended service split:
 
 The current WS/HTTP message list remains useful as a semantic checklist, but the target implementation should not serialize these calls for the integrated launcher path.
 
-### Legacy Bridge
-For rollout and fallback, the process may still expose the existing WS/HTTP launcher bridge when the legacy Flutter launcher is selected.
-
-That bridge is a compatibility layer, not the long-term primary launcher path.
-
 ### Platform Dialog Services
 `PickFiles` remains in scope for the launcher runtime. It should be implemented in `PlatformHost` using native file-selection dialogs on each platform rather than delegated back into Flutter.
 
@@ -512,9 +507,9 @@ That bridge is a compatibility layer, not the long-term primary launcher path.
 
 ### Phase Compatibility Notes
 - Before terminal preview lands, launcher builds using the new runtime must either:
-  - stay behind a launcher-backend feature flag
+  - remain in development-only builds
   - or render a reduced terminal fallback card that makes the missing live terminal behavior explicit
-- Chat-specific inbound methods should remain phase-gated with the `ChatRenderer` work and should not be silently dropped once the new launcher backend is user-selectable
+- Chat-specific inbound methods should remain phase-gated with the `ChatRenderer` work and should not be silently dropped once the integrated launcher is release-ready
 
 ## Preview Runtime
 Preview handling should be moved out of the root view and treated as its own runtime subsystem.
@@ -920,21 +915,16 @@ Exit criteria:
 - the team can compare screenshots and latency traces against the current launcher
 - the render stack is confirmed or rejected before the implementation plan locks in milestone estimates
 
-### Runtime Selection Strategy
-During rollout, both launcher backends should be packaged:
-- `flutter launcher`
+### Startup Failure Strategy
+The packaged product should ship only one launcher path:
 - `integrated native launcher`
 
-Backend selection should be runtime-configurable, not compile-time only.
+If the integrated launcher fails to initialize:
+- surface a clear diagnostic message
+- write startup diagnostics to the existing log location
+- exit cleanly or enter an explicit diagnostic mode
 
-Recommended controls:
-- persisted user setting for launcher backend
-- command-line override for troubleshooting and CI
-- safe fallback to Flutter launcher when the integrated launcher fails to boot
-
-When the Flutter launcher is selected for fallback:
-- the same process may re-enable the legacy WS/HTTP bridge
-- the Flutter launcher remains the only out-of-process launcher path during rollout
+The product should not silently fall back to a second launcher implementation.
 
 ### Phase 1: Freeze Launcher Contract
 - freeze the semantic launcher contract before replacing transport boundaries
@@ -995,15 +985,14 @@ Exit criteria:
 - chat preview methods are wired only once `ChatRenderer` semantics match backend expectations
 - structured preview regressions are covered by launcher smoke scenarios
 
-### Phase 5: Ship Dual Frontends
+### Phase 5: Ship Integrated Launcher
 - launcher uses the integrated native runtime
 - settings continue using Flutter
-- keep a fallback or feature flag during rollout
 
 Exit criteria:
-- runtime backend selection is user-visible and supportable
-- packaged builds can switch launcher backend without reinstall
-- rollback to Flutter launcher is documented and testable
+- packaged builds ship only the integrated launcher path
+- settings remain reachable through the separate Flutter settings frontend
+- integrated launcher startup diagnostics are documented and testable
 
 ## Proof Of Concept Scope
 The first proof of concept should validate behavior, not polish.
