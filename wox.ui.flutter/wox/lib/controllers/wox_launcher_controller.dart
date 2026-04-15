@@ -69,6 +69,8 @@ class WoxLauncherController extends GetxController {
   final currentQuery = PlainQuery.empty().obs;
   // is current query returned results or finished without results
   bool isCurrentQueryReturned = false;
+  // Whether the current query has reached a stable final snapshot.
+  bool isCurrentQuerySettled = true;
   final queryBoxFocusNode = FocusNode();
   final queryBoxTextFieldController = QueryBoxTextEditingController(
     selectedTextStyle: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxTextSelectionColor)),
@@ -140,6 +142,7 @@ class WoxLauncherController extends GetxController {
   PlainQuery? queryBeforeTemporaryQuery;
   String? queryBeforeTemporaryQuerySource;
   double? windowHeightBeforeTemporaryQuery;
+  double? pendingVisibleQueryWindowHeight;
   // After restoring the preserved main query we create a new queryId, so the
   // original temporary-query snapshot above is no longer enough to identify
   // which follow-up ShowApp should reuse the old expanded height. These fields
@@ -226,8 +229,11 @@ class WoxLauncherController extends GetxController {
     queryBeforeTemporaryQuery = null;
     queryBeforeTemporaryQuerySource = null;
     windowHeightBeforeTemporaryQuery = null;
+    pendingVisibleQueryWindowHeight = null;
     pendingRestoredQueryId = null;
     pendingRestoredQueryWindowHeight = null;
+    isCurrentQueryReturned = false;
+    isCurrentQuerySettled = true;
     isGridLayout.value = false;
     clearQueryResultsTimer.cancel();
     quickSelectTimer?.cancel();
@@ -373,16 +379,25 @@ class WoxLauncherController extends GetxController {
   String get moreActionsHotkeyLabel => Platform.isMacOS ? "Cmd+J" : "Alt+J";
 
   /// Triggered when received query results from the server.
-  void onReceivedQueryResults(String traceId, String queryId, List<WoxQueryResult> receivedResults) {
+  void onReceivedQueryResults(String traceId, String queryId, List<WoxQueryResult> receivedResults, {bool isFinal = true}) {
     // Cancel loading timer and hide loading animation when results are received
     if (queryId == currentQuery.value.queryId) {
       isCurrentQueryReturned = true;
+      if (isFinal) {
+        isCurrentQuerySettled = true;
+        pendingVisibleQueryWindowHeight = null;
+      }
       loadingTimer?.cancel();
       isLoading.value = false;
     } else {
       Logger.instance.error(traceId, "query id is not matched, ignore the results");
       return;
     }
+
+    Logger.instance.debug(
+      traceId,
+      "apply query results: queryId=$queryId, count=${receivedResults.length}, isFinal=$isFinal, settled=$isCurrentQuerySettled, preservedHeight=$pendingVisibleQueryWindowHeight",
+    );
 
     if (receivedResults.isEmpty) {
       // Empty responses must clear stale items from the previous query state,
@@ -857,6 +872,7 @@ class WoxLauncherController extends GetxController {
 
     // Handle start page when the current show action does not carry a query into the launcher.
     if (!shouldPreserveQueryOnShow) {
+      pendingVisibleQueryWindowHeight = null;
       pendingRestoredQueryId = null;
       pendingRestoredQueryWindowHeight = null;
       if (lastStartPage == WoxStartPageEnum.WOX_START_PAGE_MRU.code) {
@@ -1041,6 +1057,7 @@ class WoxLauncherController extends GetxController {
     if (currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code || lastLaunchMode == WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code) {
       currentQuery.value = PlainQuery.emptyInput();
       queryBoxTextFieldController.clear();
+      pendingVisibleQueryWindowHeight = null;
       await clearQueryResults(traceId);
     }
 
@@ -1447,7 +1464,11 @@ class WoxLauncherController extends GetxController {
 
     currentQuery.value = query;
     isCurrentQueryReturned = false;
+    isCurrentQuerySettled = query.queryType != WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code || query.queryText.isEmpty;
     isShowActionPanel.value = false;
+    if (query.queryType != WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code) {
+      pendingVisibleQueryWindowHeight = null;
+    }
     if (query.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code) {
       canArrowUpHistory = false;
     }
@@ -1492,6 +1513,8 @@ class WoxLauncherController extends GetxController {
     });
 
     if (query.isEmpty) {
+      isCurrentQuerySettled = true;
+      pendingVisibleQueryWindowHeight = null;
       try {
         await WoxWebsocketMsgUtil.instance.sendMessage(
           WoxWebsocketMsg(
@@ -1523,9 +1546,14 @@ class WoxLauncherController extends GetxController {
     final isVisible = await windowManager.isVisible();
     // If app is hidden (e.g. tray query will trigger change query first then showapp), clear immediately so old results won't flash when shown.
     if (!isVisible) {
+      pendingVisibleQueryWindowHeight = null;
       await clearQueryResults(traceId);
       Logger.instance.debug(traceId, "clear query results immediately because window is hidden");
     } else {
+      final currentWindowHeight = calculateWindowHeight();
+      pendingVisibleQueryWindowHeight = pendingVisibleQueryWindowHeight == null ? currentWindowHeight : math.max(pendingVisibleQueryWindowHeight!, currentWindowHeight);
+      Logger.instance.debug(traceId, "preserve visible query window height while waiting for results: $pendingVisibleQueryWindowHeight");
+
       // delay clear results, otherwise windows height will shrink immediately,
       // and then the query result is received which will expand the windows height. so it will causes window flicker
       // Adaptive: adjust clearQueryResultDelay based on recent resize flicker
@@ -1715,7 +1743,7 @@ class WoxLauncherController extends GetxController {
       Logger.instance.info(msg.traceId, "Received websocket message: ${msg.method}, results count: ${results.length}, isFinal: $isFinal");
 
       // Process results first
-      onReceivedQueryResults(msg.traceId, queryId, results);
+      onReceivedQueryResults(msg.traceId, queryId, results, isFinal: isFinal);
 
       // If this is the final final response, we must stop loading animation explicitly
       // This handles cases where results are empty but the query is finished
@@ -2045,6 +2073,15 @@ class WoxLauncherController extends GetxController {
     final toolbarShowedWithoutResults = showToolbar && !hasItems;
     if (toolbarShowedWithoutResults && isQueryBoxVisible.value) {
       totalHeight -= WoxThemeUtil.instance.currentTheme.value.appPaddingBottom;
+    }
+
+    final shouldPreserveVisibleQueryHeight =
+        pendingVisibleQueryWindowHeight != null &&
+        currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code &&
+        currentQuery.value.queryText.isNotEmpty &&
+        !isCurrentQuerySettled;
+    if (shouldPreserveVisibleQueryHeight) {
+      totalHeight = math.max(totalHeight, pendingVisibleQueryWindowHeight!);
     }
 
     return totalHeight;
