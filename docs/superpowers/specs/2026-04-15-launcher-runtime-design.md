@@ -55,6 +55,11 @@ Relevant current code:
 - current WebView platform bridge: `wox.ui.flutter/wox/lib/utils/webview/wox_webview_util.dart`
 - Windows WebView session model: `wox.ui.flutter/wox/lib/utils/webview/windows/wox_windows_webview_platform.dart`
 
+Additional launcher-facing protocol surfaces already exist in `wox.core`:
+- backend-to-UI methods such as `ChangeQuery`, `RefreshQuery`, `ShowApp`, `HideApp`, `ToggleApp`, `ChangeTheme`, `PickFiles`, `ShowToolbarMsg`, `ClearToolbarMsg`, `UpdateResult`, `PushResults`, `OpenSettingWindow`, and chat-related refresh hooks
+- UI-to-backend websocket methods such as `Query`, `QueryMRU`, `Action`, `FormAction`, `ToolbarMsgAction`, `TerminalSubscribe`, `TerminalUnsubscribe`, `TerminalSearch`, and `Log`
+- HTTP callbacks and endpoints such as `/preview`, `/query/metadata`, `/plugin/detail`, `/on_ui_ready`, `/on_show`, `/on_hide`, `/on_focus_lost`, and `/on_query_box_focus`
+
 ## Why Not Build A Smaller Fyne
 `fyne` is a cross-platform GUI toolkit with general abstractions for windows, canvas objects, widgets, layout, and rendering drivers. That is the right shape for a reusable GUI framework.
 
@@ -72,6 +77,44 @@ The recommended direction is therefore a **Wox Launcher Runtime**, not a general
 
 ## Proposed Architecture
 The new runtime keeps `wox.core` as the backend authority and replaces only the launcher rendering and platform integration layer.
+
+### Technology Selection
+The launcher runtime should use:
+
+- `Go` for the runtime core, state machine, protocol client, layout engine, and preview orchestration
+- a custom retained-mode launcher scene instead of a generic widget toolkit
+- thin platform-native host layers for:
+  - window creation and composition
+  - IME and text input integration
+  - native file dialogs
+  - embedded webview hosting
+
+This document explicitly does **not** recommend `fyne`, `gio`, or another general widget framework as the launcher foundation. Those frameworks solve a broader problem than Wox needs and would reintroduce general widget abstractions the design is trying to avoid.
+
+The chosen implementation shape is therefore:
+- shared launcher logic in Go
+- platform-specific host code in:
+  - C++ on Windows
+  - Objective-C or Objective-C++ on macOS
+  - C with GTK bindings on Linux
+
+### Process Model
+The launcher runtime should remain a **separate process** from `wox.core`.
+
+Reasons:
+- it preserves the current `wox.core <-> UI` contract and rollout model
+- it keeps UI crashes isolated from the backend
+- it avoids embedding WebView thread-affinity constraints into the `wox.core` process
+- it fits platform constraints better:
+  - `WebView2` prefers a UI thread with COM apartment requirements
+  - `WKWebView` must be created and driven on the main thread
+  - `WebKitGTK` ties into the GTK main loop
+
+Implications:
+- `wox.core` remains the backend authority process
+- `launcher runtime` becomes a new standalone frontend process
+- `Flutter settings` remains a separate frontend process in v1
+- frontends continue to communicate with `wox.core` over the existing WS/HTTP transport
 
 ### Top-Level Split
 - `wox.core`
@@ -136,6 +179,71 @@ The launcher runtime should behave as a new UI client of `wox.core`, not as a re
 
 That keeps plugin behavior stable and limits the migration surface.
 
+### Launcher Runtime Message Inventory
+The implementation plan should treat the following launcher-facing surfaces as explicit scope.
+
+Backend to launcher runtime:
+- launcher window control
+  - `ShowApp`
+  - `HideApp`
+  - `ToggleApp`
+  - `ChangeQuery`
+  - `RefreshQuery`
+- result and preview updates
+  - `UpdateResult`
+  - `PushResults`
+  - `ShowToolbarMsg`
+  - `ClearToolbarMsg`
+- theme and dialog operations
+  - `ChangeTheme`
+  - `PickFiles`
+  - `OpenSettingWindow`
+- phase-gated chat operations
+  - `FocusToChatInput`
+  - `SendChatResponse`
+  - `ReloadChatResources`
+- settings-window coordination hooks
+  - `ReloadSettingPlugins`
+  - `ReloadSetting`
+
+Launcher runtime to backend:
+- query and execution
+  - `Query`
+  - `QueryMRU`
+  - `Action`
+  - `FormAction`
+  - `ToolbarMsgAction`
+- terminal preview operations
+  - `TerminalSubscribe`
+  - `TerminalUnsubscribe`
+  - `TerminalSearch`
+- diagnostics
+  - `Log`
+
+Launcher lifecycle HTTP callbacks and fetches:
+- callbacks
+  - `/on_ui_ready`
+  - `/on_show`
+  - `/on_hide`
+  - `/on_focus_lost`
+  - `/on_query_box_focus`
+- fetches
+  - `/preview`
+  - `/query/metadata`
+  - `/plugin/detail`
+  - i18n and theme endpoints already used by launcher startup
+
+### Platform Dialog Services
+`PickFiles` remains in scope for the launcher runtime. It should be implemented in `PlatformHost` using native file-selection dialogs on each platform rather than delegated back into Flutter.
+
+`OpenSettingWindow` should launch or focus the existing Flutter settings frontend instead of being treated as a no-op.
+
+### Phase Compatibility Notes
+- Before terminal preview lands, launcher builds using the new runtime must either:
+  - stay behind a launcher-backend feature flag
+  - or render a reduced terminal fallback card that makes the missing live terminal behavior explicit
+- Chat-specific inbound methods should remain phase-gated with the `ChatRenderer` work and should not be silently dropped once the new launcher backend is user-selectable
+
 ## Preview Runtime
 Preview handling should be moved out of the root view and treated as its own runtime subsystem.
 
@@ -157,17 +265,15 @@ Do not pass raw preview strings directly into the final renderer path. Normalize
 - `FilePreview`
 - `TerminalPreview`
 - `WebViewPreview`
-- `CardPreview`
-
-`CardPreview` is intentionally reserved for structured internal preview types such as:
-- `plugin_detail`
-- `update`
-- `chat`
+- `PluginDetailPreview`
+- `UpdatePreview`
+- `ChatPreview`
 
 Normalization rules:
 - `url` resolves to `WebViewPreview` with default navigation policy and no injected CSS.
 - `webview` resolves to `WebViewPreview` with the explicit embedded-webview payload from `WoxPreviewWebviewData`.
 - `remote` resolves first, then re-enters the same normalization path as the fetched payload.
+- `plugin_detail`, `update`, and `chat` resolve to distinct structured preview models, not one shared opaque card payload.
 
 ### PreviewRenderer Contract
 Each renderer implements a lifecycle contract rather than only `render()`:
@@ -194,8 +300,54 @@ The runtime should ship a fixed renderer set:
   - handles terminal preview and custom scroll behavior
 - `WebViewRenderer`
   - handles native webview session attach and toolbar integration
-- `CardRenderer`
-  - handles `plugin_detail`, `update`, and `chat`
+- `PluginDetailRenderer`
+  - handles plugin metadata cards
+- `UpdateRenderer`
+  - handles update status and progress cards
+- `ChatRenderer`
+  - handles structured chat preview and streaming update semantics
+
+### FileRenderer V1 Support Matrix
+`FileRenderer` should have an explicit v1 support set for effort estimation.
+
+Markdown:
+- `.md`
+
+Images:
+- `.png`
+- `.jpg`
+- `.jpeg`
+- `.gif`
+- `.bmp`
+- `.webp`
+- `.svg`
+
+Documents:
+- `.pdf`
+
+Code and text:
+- `.txt`
+- `.conf`
+- `.json`
+- `.toml`
+- `.ini`
+- `.xml`
+- `.yaml`
+- `.yml`
+- `.js`
+- `.ts`
+- `.py`
+- `.sh`
+- `.go`
+- `.rs`
+- `.c`
+- `.cc`
+- `.cpp`
+- `.h`
+- `.hpp`
+- `.cs`
+
+Other file types fall back to an unsupported-file preview message in v1.
 
 ## WebView Design
 WebView support is the highest-complexity part of the launcher runtime and must be a first-class subsystem.
@@ -206,6 +358,15 @@ WebView support is the highest-complexity part of the launcher runtime and must 
 - Linux: `WebKitGTK`
 
 Linux support assumes the system dependency on `WebKitGTK` is acceptable.
+
+Platform-specific bridge rules:
+- Windows
+  - use the existing `WebView2`-style cached session model as the reference backend
+- macOS
+  - use `WKUserContentController` for script injection, message handlers, escape fallback, and navigation event bridging
+  - use `evaluateJavaScript` only for one-shot imperative commands such as refresh or history navigation
+- Linux
+  - use `WebKitGTK` with GTK-hosted child views and an explicit compositor test matrix for X11 and Wayland
 
 ### Session Model
 WebView should use explicit sessions rather than stateless view recreation.
@@ -234,6 +395,14 @@ Each `WebViewSession` owns:
 - Cache key should be derived from URL, injected CSS, and cache policy.
 - `cacheDisabled=true` always produces a transient session.
 - Cached sessions survive launcher hide/show unless memory pressure or explicit eviction requires cleanup.
+
+### Linux Backend Guardrail
+If embedded `WebKitGTK` proves unstable on a specific Linux compositor or distribution at runtime, the launcher should fail gracefully for that preview instance by:
+- showing a degraded preview state
+- keeping the launcher responsive
+- exposing an explicit "open in browser" path
+
+This is a runtime fallback for unsupported environments, not the preferred steady-state behavior.
 
 ### WebView Interaction Rules
 V1 must support:
@@ -303,6 +472,14 @@ Launcher behavior should be implemented as a strict state machine instead of vie
 - A result-list selection change must immediately invalidate stale preview work.
 - WebView attach and detach must track the same preview token as the selected result.
 
+Token rule:
+- `querySession.revision` is a monotonic counter per query lifecycle
+- `previewSession.token` is a monotonic counter per preview request
+- each preview request also carries a derived `previewIdentity = hash(queryId, resultId, previewType, previewDataHash)`
+- a preview commit is valid only if both:
+  - `previewSession.token` is still current
+  - `previewIdentity` still matches the selected result
+
 ### State Transitions
 - `ShowApp`
   - enter `visible + normal + focus=query`
@@ -320,6 +497,31 @@ Launcher behavior should be implemented as a strict state machine instead of vie
   - enter overlay mode without losing current selection
 - `OpenFormOverlay`
   - freeze background preview updates while overlay is active
+
+### Mode Transition Matrix
+Legal mode transitions:
+- `normal -> action_panel`
+- `action_panel -> normal`
+- `normal -> preview_fullscreen`
+- `preview_fullscreen -> normal`
+- `action_panel -> form_overlay`
+- `form_overlay -> action_panel`
+- `form_overlay -> normal`
+
+Disallowed direct transitions:
+- `preview_fullscreen -> action_panel`
+- `preview_fullscreen -> form_overlay`
+
+These must first return to `normal`.
+
+Visibility transitions:
+- `hidden -> showing` on `ShowApp`
+- `showing -> visible` on native shown or ready callback
+- `visible -> hiding` on `HideApp` or blur-driven hide
+- `hiding -> hidden` on native hidden callback
+- `hiding -> showing` on a new `ShowApp`
+
+When `hiding -> showing` happens, pending hide completion must be canceled and the latest show context must win.
 
 ## Input Routing
 Launcher input must be centrally routed.
@@ -350,6 +552,24 @@ Events should be offered in this order:
 
 ### IME Requirement
 IME behavior must be owned by `QueryEditor` and not depend on incidental platform widget focus behavior.
+
+### QueryEditor Input Strategy
+`QueryEditor` should not reimplement low-level IME protocols from scratch in v1.
+
+Instead:
+- the visible query box is rendered by the launcher runtime
+- composing state is owned by a platform-native text input bridge
+- the native bridge mirrors text, selection, and composition ranges into the rendered query box
+
+Platform bridges:
+- Windows
+  - TSF-capable native text input host on the UI thread
+- macOS
+  - `NSTextInputClient`-compatible host on the main thread
+- Linux
+  - `gtk_im_context`-backed input host integrated with the GTK loop
+
+This keeps candidate windows, composing state, and CJK IME behavior in native input systems while preserving the custom launcher appearance.
 
 ## Result List And Preview Coordination
 Result list and preview need explicit coordination rules to avoid stale or flickering content.
@@ -385,10 +605,27 @@ Theme input should still come from `wox.core`.
 ## Migration Strategy
 Migration should be incremental and protocol-compatible.
 
+### Runtime Selection Strategy
+During rollout, both launcher backends should be packaged:
+- `flutter launcher`
+- `launcher runtime`
+
+Backend selection should be runtime-configurable, not compile-time only.
+
+Recommended controls:
+- persisted user setting for launcher backend
+- command-line override for troubleshooting and CI
+- safe fallback to Flutter launcher when the native runtime fails to boot
+
 ### Phase 1: Freeze Launcher Contract
 - treat the new runtime as another `wox.core` UI client
 - do not redesign plugin contracts
 - do not redesign preview transport
+
+Exit criteria:
+- all launcher-facing protocol surfaces are cataloged
+- all phase ownership decisions are documented
+- runtime bootstraps and connects to `wox.core` as a separate process
 
 ### Phase 2: Build The Minimum Shell
 Implement:
@@ -407,6 +644,8 @@ Success criteria:
 - show and hide are stable
 - incremental result flush is stable
 - selection and preview invalidation are stable
+- `PickFiles` and `OpenSettingWindow` work through `PlatformHost`
+- query-box IME composition works on at least one CJK input method per platform
 
 ### Phase 3: Add WebViewHost
 Implement platform webview backends with one shared session abstraction.
@@ -418,6 +657,11 @@ Recommended implementation order:
 
 This order matches current implementation maturity.
 
+Exit criteria:
+- cached and transient webview sessions both work on Windows and macOS
+- Linux webview backend passes the compositor smoke matrix or enters explicit degraded fallback on unsupported environments
+- focus and `Esc` routing work with embedded webviews
+
 ### Phase 4: Add Structured Preview Types
 Implement:
 - `terminal`
@@ -425,10 +669,20 @@ Implement:
 - `update`
 - `chat`
 
+Exit criteria:
+- terminal subscribe, unsubscribe, search, chunk streaming, and state updates work end to end
+- chat preview methods are wired only once `ChatRenderer` semantics match backend expectations
+- structured preview regressions are covered by launcher smoke scenarios
+
 ### Phase 5: Ship Dual Frontends
 - launcher uses the new runtime
 - settings continue using Flutter
 - keep a fallback or feature flag during rollout
+
+Exit criteria:
+- runtime backend selection is user-visible and supportable
+- packaged builds can switch launcher backend without reinstall
+- rollback to Flutter launcher is documented and testable
 
 ## Proof Of Concept Scope
 The first proof of concept should validate behavior, not polish.
@@ -448,6 +702,20 @@ The first proof of concept should validate behavior, not polish.
 - cached webview sessions survive hide and show cycles
 - `Esc`, `Tab`, arrows, and `Enter` behave consistently
 
+### PoC Performance Baselines
+The PoC should capture concrete UI-side latency targets:
+
+- after a query-result snapshot arrives from `wox.core`, visible list reconciliation should complete within:
+  - `<= 16 ms` median
+  - `<= 33 ms` p95
+- after selection changes to an inline preview, placeholder or loading-state swap should occur within one frame
+- after selection changes to a cached webview preview, attach and first stable paint should complete within:
+  - `<= 100 ms` median on warm cache
+- after selection changes to a non-webview inline preview, final render should complete within:
+  - `<= 50 ms` median
+
+These budgets measure launcher-side work after data is available. They do not include plugin execution or network latency outside the launcher runtime.
+
 ## Validation Plan
 ### Manual Validation
 - repeated fast typing
@@ -461,6 +729,7 @@ The first proof of concept should validate behavior, not polish.
 - Windows with and without `WebView2` runtime available
 - macOS with `WKWebView`
 - Linux distributions with required `WebKitGTK` runtime available
+- Linux on both X11 and Wayland where supported by the target distribution
 
 ### Stress Validation
 - at least 100 consecutive selection changes across mixed preview types
@@ -470,6 +739,7 @@ The first proof of concept should validate behavior, not polish.
 ## Risks
 - Native webview embedding may introduce z-order, clipping, or resize edge cases.
 - IME behavior may regress if focus routing is not owned centrally.
+- Linux embedded `WebKitGTK` is a high-risk area because compositor behavior, child embedding, focus routing, and resize behavior can vary across X11 and Wayland environments.
 - Linux support will carry ongoing runtime dependency support costs because `WebKitGTK` is external.
 - The runtime can accidentally grow into a general toolkit if renderer boundaries are not kept strict.
 - Dual frontend maintenance adds short-term operational cost.
