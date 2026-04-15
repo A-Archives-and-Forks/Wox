@@ -157,6 +157,203 @@ flowchart LR
     WebView --> Platform
 ```
 
+## Rendering Architecture
+The launcher runtime needs an explicit rendering stack. The runtime is not complete if it defines state and layout without defining how pixels reach the screen.
+
+### Rendering Stack Choice
+V1 should use a **shared Skia-based renderer** for launcher chrome and non-webview content.
+
+Reasoning:
+- it gives one cross-platform drawing model for rounded rects, shadows, clipping, images, and text
+- it avoids three divergent native text-and-paint implementations for the fixed launcher UI
+- it keeps list rendering, badges, and theme behavior consistent across platforms
+- it is a better fit than `Cairo + Pango` for Windows packaging and than fully native controls for visual consistency
+- it avoids re-implementing text shaping from scratch, because Skia already integrates paragraph and shaping support
+
+Rejected baseline approaches:
+- fully native view rendering
+  - rejected because Wox launcher visuals and truncation rules would drift across three platforms
+- native list controls plus custom cells
+  - rejected for v1 because they complicate exact theme parity, tail-badge layout, and keyboard behavior consistency
+- full custom GPU renderer with self-managed shaping
+  - rejected because text shaping and rich image support are too expensive for the launcher scope
+
+### Surface And Composition Model
+The runtime should compose two rendering domains:
+
+- `Skia scene`
+  - query box
+  - result list
+  - overlays
+  - toolbars
+  - plain text preview
+  - structured cards such as update or plugin detail
+- `native child surfaces`
+  - embedded website preview
+  - markdown document preview rendered through a lightweight document webview
+
+This yields one consistent renderer for fixed launcher chrome while reserving webview composition for content that is naturally document-like.
+
+### Platform Raster Backends
+- Windows
+  - Skia on `D3D11` with native window composition integration
+- macOS
+  - Skia on `Metal`
+- Linux
+  - Skia on `OpenGL` in the GTK host, with CPU fallback for unsupported GPU environments and CI
+
+The native host remains responsible for the top-level render loop, swap chain or backing layer lifecycle, transparency, and child-webview z-order management.
+
+### Go-To-Renderer Contract
+Go does **not** rasterize pixels directly.
+
+Go owns:
+- launcher state
+- box-level layout
+- scene-tree construction
+- resource identity and invalidation
+- hit-test region ownership
+
+The native renderer owns:
+- Skia surface lifecycle
+- paragraph shaping and final text rasterization
+- image decode and texture upload
+- clip, shadow, and rounded-rect drawing
+- final frame presentation
+
+The contract between them should be a retained scene description, for example `LauncherFrame`, containing:
+- visual nodes
+  - fills
+  - strokes
+  - rounded rectangles
+  - shadows
+  - text blocks
+  - image draws
+  - clips
+- interactive regions
+  - node id
+  - bounds
+  - cursor or focus affordance
+- child-host reservations
+  - preview-pane bounds for active webview sessions
+
+### Text Shaping And Layout Strategy
+The shared renderer should use:
+- `SkParagraph`
+- `HarfBuzz`
+- `ICU`
+
+Responsibilities:
+- CJK shaping and line breaking
+- emoji fallback and mixed-script rendering
+- RTL support
+- ellipsis and multi-line truncation
+- paragraph measurement for title, subtitle, tail badges, and tooltip content
+
+Layout flow:
+- Go requests text measurement from the renderer through a `TextMetricsBridge`
+- Go computes box layout using measured sizes
+- Go emits the final scene description
+- native renderer performs the final paragraph paint within the provided bounds
+
+This keeps layout logic in shared Go code without forcing Go to own glyph shaping.
+
+### Query Editor Rendering Strategy
+The query box should be visually rendered by the Skia scene, but composing text input must still be driven by a platform-native IME bridge.
+
+That means:
+- caret, background, border radius, and selection visuals are part of the launcher scene
+- composition text, candidate windows, and IME focus ownership remain native
+- the native text-input bridge mirrors composed text and ranges back into the query scene
+
+### Markdown Strategy
+V1 markdown should **not** be implemented as a custom rich-text renderer.
+
+Instead, `MarkdownRenderer` should use a **sandboxed document webview** built on `WebViewHost`.
+
+Pipeline:
+- Go converts markdown to HTML using `goldmark`
+- renderer injects HTML into a local document template
+- the document template supplies:
+  - syntax highlighting
+  - table styling
+  - link handling
+  - image layout
+  - optional KaTeX support for parity with current markdown usage
+
+Why this is the preferred v1 trade-off:
+- it avoids building a second rich-text engine beside the launcher renderer
+- it preserves most current markdown capabilities with less custom paint code
+- it reuses the already-required native webview subsystem
+
+Guardrails:
+- markdown document webviews use a distinct local template profile, not a browsing session profile
+- external links open out of process rather than navigating the preview pane away from its template
+- markdown webviews are considered document previews, not general browsing sessions
+
+### Plain Text Strategy
+Plain text preview should use the shared Skia renderer, not a webview.
+
+This keeps simple preview fast, cheap, selectable, and independent from webview startup cost.
+
+### Image Strategy
+The runtime needs an explicit image support matrix because image rendering is part of both result rows and preview content.
+
+V1 launcher-side image support:
+- `url`
+  - supported
+- `absolute`
+  - supported
+- `base64`
+  - supported
+- `svg`
+  - supported through Skia SVG rasterization
+- `emoji`
+  - supported through shared text shaping
+- `theme`
+  - supported by rendering the theme preview icon from parsed theme data in the launcher scene
+
+Normalized before render:
+- `relative`
+  - convert to absolute path before scene creation
+- `fileicon`
+  - resolve to an absolute icon path or raster before scene creation
+
+Deferred or degraded in v1:
+- `lottie`
+  - not required for launcher v1 parity
+  - degrade to a static placeholder or first-frame fallback if encountered
+
+### Result List Rendering Strategy
+The result list should remain a **shared custom virtualized list**, not a platform-native list control.
+
+Reasons:
+- exact theme parity matters for active and inactive states
+- result rows have Wox-specific fixed layout with tails, badges, shortcut hints, and quick-select numbers
+- virtualization behavior needs to stay consistent across platforms
+- keyboard-first interaction is easier to keep identical in one renderer
+
+The fixed row shape reduces complexity enough that custom shared rendering is justified here, unlike markdown.
+
+### Theme Token Strategy
+The runtime should continue to load the current theme JSON from `wox.core`, but it should map raw theme fields into a smaller renderer-facing token set.
+
+Layers:
+- `TransportTheme`
+  - raw theme payload from `wox.core`
+- `PaintTheme`
+  - parsed colors, radii, paddings, and typography metrics used by the renderer
+
+`PaintTheme` must cover launcher-visible theme fields, including:
+- app background
+- query box colors and radii
+- result row spacing, active state, and left border width
+- preview text and divider colors
+- toolbar colors
+- action overlay colors
+
+This keeps theme compatibility while preventing render code from depending on raw JSON keys directly.
+
 ## Protocol Compatibility
 The runtime should remain protocol-compatible with the existing launcher path.
 
@@ -292,14 +489,18 @@ This keeps preview-specific behavior out of the launcher root state machine.
 ### Renderer Set
 The runtime should ship a fixed renderer set:
 
-- `DocumentRenderer`
-  - handles `text` and `markdown`
+- `PlainTextRenderer`
+  - handles `text` through the shared Skia renderer
+- `MarkdownRenderer`
+  - handles markdown through a document-scoped webview template layered on `WebViewHost`
 - `FileRenderer`
   - dispatches by file type to markdown, image, PDF, code, or plain text sub-renderers
 - `TerminalRenderer`
   - handles terminal preview and custom scroll behavior
 - `WebViewRenderer`
   - handles native webview session attach and toolbar integration
+- `PdfRenderer`
+  - handles PDF preview through a native document-preview path where supported
 - `PluginDetailRenderer`
   - handles plugin metadata cards
 - `UpdateRenderer`
@@ -348,6 +549,20 @@ Code and text:
 - `.cs`
 
 Other file types fall back to an unsupported-file preview message in v1.
+
+Dispatch rules:
+- `.md` routes to `MarkdownRenderer`
+- image file types route to `ImagePreview`
+- `.pdf` routes to `PdfRenderer`
+- code and text file types route to a plain-text or code file renderer within the shared Skia scene
+
+PDF rules:
+- use a native document-preview path where the platform webview or document layer supports inline PDF rendering
+- fall back to explicit external-open behavior on unsupported environments rather than blocking the launcher
+
+Code file rules:
+- v1 requires readable text, scrolling, selection, and basic monospaced presentation
+- syntax highlighting for code files is a stretch goal for v1, not a parity requirement
 
 ## WebView Design
 WebView support is the highest-complexity part of the launcher runtime and must be a first-class subsystem.
@@ -605,6 +820,31 @@ Theme input should still come from `wox.core`.
 ## Migration Strategy
 Migration should be incremental and protocol-compatible.
 
+### Phase 0: Rendering Spike
+Before broad implementation work, run a rendering spike on Windows using the chosen render stack.
+
+Required spike outputs:
+- one themed query box
+- one virtualized result list with:
+  - icon
+  - title
+  - subtitle
+  - tail badges
+  - quick-select number
+- one markdown preview rendered through the document-webview pipeline
+- one plain-text preview rendered through the shared Skia pipeline
+
+Questions this spike must answer:
+- is text quality acceptable compared to the current Flutter launcher
+- are CJK and emoji shaping acceptable
+- is theme fidelity acceptable for launcher-critical fields
+- is markdown-via-webview latency acceptable
+- is the Go-to-renderer interface small enough to remain maintainable
+
+Exit criteria:
+- the team can compare screenshots and latency traces against the current launcher
+- the render stack is confirmed or rejected before the implementation plan locks in milestone estimates
+
 ### Runtime Selection Strategy
 During rollout, both launcher backends should be packaged:
 - `flutter launcher`
@@ -715,6 +955,15 @@ The PoC should capture concrete UI-side latency targets:
   - `<= 50 ms` median
 
 These budgets measure launcher-side work after data is available. They do not include plugin execution or network latency outside the launcher runtime.
+
+### PoC Rendering Validation
+In addition to behavior validation, the PoC should verify rendering quality for:
+- CJK query text and result text
+- mixed emoji and text rendering
+- active and inactive result-row theme fidelity
+- rounded corners, shadows, and translucent surfaces
+- markdown code blocks, tables, and link handling through the document-webview path
+- markdown preview latency relative to plain-text preview
 
 ## Validation Plan
 ### Manual Validation
