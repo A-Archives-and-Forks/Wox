@@ -72,6 +72,13 @@ private:
   // Get the DPI scaling factor for the window
   float GetDpiScale(HWND hwnd);
 
+  // Sync the hosted Flutter child window with the root client area.
+  void SyncFlutterChildWindowToClientArea(HWND hwnd, const char *source, bool engine_handled);
+
+  // Helpers for logging native geometry.
+  std::string RectToString(const RECT &rect) const;
+  RECT GetWindowRectSafe(HWND hwnd) const;
+
   // Send window event to Flutter
   void SendWindowEvent(const std::string &eventName);
 

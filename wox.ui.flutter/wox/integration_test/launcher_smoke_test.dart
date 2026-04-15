@@ -6,6 +6,7 @@ import 'launcher_key_functionality_smoke_test.dart';
 import 'launcher_plugin_smoke_test.dart';
 import 'launcher_system_plugin_smoke_test.dart';
 import 'launcher_toolbar_msg_smoke_test.dart';
+import 'launcher_resize_smoke_test.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -17,4 +18,5 @@ void main() {
   registerLauncherPluginSmokeTests();
   registerSystemPluginSmokeTests();
   registerLauncherToolbarMsgSmokeTests();
+  registerLauncherResizeSmokeTests();
 }

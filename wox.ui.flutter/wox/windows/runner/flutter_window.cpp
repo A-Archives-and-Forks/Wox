@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cctype>
 #include <optional>
+#include <sstream>
 #include <thread>
 #include <string>
 #include <flutter/plugin_registrar_windows.h>
@@ -189,6 +190,45 @@ void FlutterWindow::Log(const std::string &message)
   {
     window_manager_channel_->InvokeMethod("log", std::make_unique<flutter::EncodableValue>(message));
   }
+}
+
+std::string FlutterWindow::RectToString(const RECT &rect) const
+{
+  std::ostringstream oss;
+  oss << "(" << rect.left << "," << rect.top << ")-(" << rect.right << "," << rect.bottom << ")";
+  return oss.str();
+}
+
+RECT FlutterWindow::GetWindowRectSafe(HWND hwnd) const
+{
+  RECT rect{};
+  if (hwnd != nullptr && IsWindow(hwnd))
+  {
+    GetWindowRect(hwnd, &rect);
+  }
+  return rect;
+}
+
+void FlutterWindow::SyncFlutterChildWindowToClientArea(HWND hwnd, const char *source, bool engine_handled)
+{
+  if (child_window_ == nullptr || !IsWindow(child_window_))
+  {
+    return;
+  }
+
+  RECT client_rect{};
+  GetClientRect(hwnd, &client_rect);
+  const int width = client_rect.right - client_rect.left;
+  const int height = client_rect.bottom - client_rect.top;
+
+  MoveWindow(child_window_, client_rect.left, client_rect.top, width, height, TRUE);
+
+  const RECT child_rect = GetWindowRectSafe(child_window_);
+  std::ostringstream oss;
+  oss << source << ": engineHandled=" << (engine_handled ? "true" : "false")
+      << ", client=" << RectToString(client_rect)
+      << ", child=" << RectToString(child_rect);
+  Log(oss.str());
 }
 
 void FlutterWindow::TrackChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam)
@@ -699,6 +739,34 @@ void FlutterWindow::OnDestroy()
 LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message, WPARAM const wparam, LPARAM const lparam) noexcept
 {
+  if (message == WM_SIZE)
+  {
+    std::optional<LRESULT> top_level_result;
+
+    if (flutter_controller_)
+    {
+      // Keep the existing dispatch order for instrumentation so we can verify
+      // whether the engine handles WM_SIZE before the base runner resizes the
+      // hosted child window.
+      top_level_result = flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam, lparam);
+    }
+
+    std::ostringstream oss;
+    oss << "WM_SIZE: engineHandled=" << (top_level_result.has_value() ? "true" : "false");
+    Log(oss.str());
+
+    // Keep the hosted Flutter child window in sync even when the engine
+    // handles WM_SIZE before the base runner processes it.
+    SyncFlutterChildWindowToClientArea(hwnd, "WM_SIZE", top_level_result.has_value());
+
+    if (top_level_result)
+    {
+      return *top_level_result;
+    }
+
+    return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_)
   {
@@ -963,6 +1031,19 @@ void FlutterWindow::HandleWindowManagerMethodCall(
           GetWindowRect(hwnd, &rect);
           SetWindowPos(hwnd, nullptr, rect.left, rect.top, scaledWidth, scaledHeight, SWP_NOZORDER | SWP_FRAMECHANGED);
 
+          RECT root_rect{};
+          RECT client_rect{};
+          GetWindowRect(hwnd, &root_rect);
+          GetClientRect(hwnd, &client_rect);
+          const RECT child_rect = GetWindowRectSafe(child_window_);
+          std::ostringstream oss;
+          oss << "setSize: logical=" << width << "x" << height
+              << ", physical=" << scaledWidth << "x" << scaledHeight
+              << ", root=" << RectToString(root_rect)
+              << ", client=" << RectToString(client_rect)
+              << ", child=" << RectToString(child_rect);
+          Log(oss.str());
+
           // Force Flutter to redraw immediately to match the new window size
           if (flutter_controller_)
           {
@@ -1041,6 +1122,21 @@ void FlutterWindow::HandleWindowManagerMethodCall(
           int scaledHeight = static_cast<int>(height * dpiScale);
 
           SetWindowPos(hwnd, nullptr, scaledX, scaledY, scaledWidth, scaledHeight, SWP_NOZORDER | SWP_FRAMECHANGED);
+
+          RECT root_rect{};
+          RECT client_rect{};
+          GetWindowRect(hwnd, &root_rect);
+          GetClientRect(hwnd, &client_rect);
+          const RECT child_rect = GetWindowRectSafe(child_window_);
+          std::ostringstream oss;
+          oss << "setBounds: logicalPos=" << x << "," << y
+              << ", logicalSize=" << width << "x" << height
+              << ", physicalPos=" << scaledX << "," << scaledY
+              << ", physicalSize=" << scaledWidth << "x" << scaledHeight
+              << ", root=" << RectToString(root_rect)
+              << ", client=" << RectToString(client_rect)
+              << ", child=" << RectToString(child_rect);
+          Log(oss.str());
 
           if (flutter_controller_)
           {

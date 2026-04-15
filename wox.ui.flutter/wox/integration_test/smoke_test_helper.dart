@@ -491,6 +491,25 @@ Future<void> waitForNoActiveResults(WidgetTester tester, WoxLauncherController c
   await pumpUntil(tester, () => controller.activeResultViewController.items.isEmpty, timeout: timeout);
 }
 
+Future<void> waitForWindowHeightToMatchController(
+  WidgetTester tester,
+  WoxLauncherController controller, {
+  double tolerance = 2,
+  Duration timeout = const Duration(seconds: 10),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    await tester.pump(const Duration(milliseconds: 200));
+    final actual = await windowManager.getSize();
+    final expected = controller.calculateWindowHeight();
+    if ((actual.height - expected).abs() <= tolerance) {
+      return;
+    }
+  }
+
+  fail('Window height did not match controller.calculateWindowHeight() within $timeout.');
+}
+
 Future<void> pumpUntil(WidgetTester tester, bool Function() condition, {required Duration timeout}) async {
   final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
