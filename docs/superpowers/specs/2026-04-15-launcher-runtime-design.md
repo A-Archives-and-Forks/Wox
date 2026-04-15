@@ -14,6 +14,11 @@ For the launcher window, this is closer to a dedicated runtime than a general-pu
 ## Scope
 This document covers a **new launcher-only runtime** that replaces the Flutter launcher window while keeping the existing Flutter settings window.
 
+The chosen architecture in this revision is:
+- launcher and `wox.core` move into one Go process
+- launcher UI is hosted by platform-native UI layers inside that process
+- Flutter settings remain separate in v1
+
 In scope:
 - query box, result list, preview pane, and launcher overlays
 - existing preview protocol compatibility
@@ -27,7 +32,7 @@ Out of scope:
 - building a generic cross-platform GUI toolkit
 
 ## Goals
-- Keep `wox.core` and plugin behavior stable by preserving the current launcher-facing protocol.
+- Keep `wox.core` and plugin behavior stable by preserving the current launcher-facing semantics.
 - Build a runtime specialized for Wox launcher semantics instead of a generic widget framework.
 - Support the existing preview model, including `webview`, `terminal`, and remote preview loading.
 - Support native embedded webviews on:
@@ -55,10 +60,12 @@ Relevant current code:
 - current WebView platform bridge: `wox.ui.flutter/wox/lib/utils/webview/wox_webview_util.dart`
 - Windows WebView session model: `wox.ui.flutter/wox/lib/utils/webview/windows/wox_windows_webview_platform.dart`
 
-Additional launcher-facing protocol surfaces already exist in `wox.core`:
+Additional launcher-facing UI surfaces already exist in `wox.core`:
 - backend-to-UI methods such as `ChangeQuery`, `RefreshQuery`, `ShowApp`, `HideApp`, `ToggleApp`, `ChangeTheme`, `PickFiles`, `ShowToolbarMsg`, `ClearToolbarMsg`, `UpdateResult`, `PushResults`, `OpenSettingWindow`, and chat-related refresh hooks
 - UI-to-backend websocket methods such as `Query`, `QueryMRU`, `Action`, `FormAction`, `ToolbarMsgAction`, `TerminalSubscribe`, `TerminalUnsubscribe`, `TerminalSearch`, and `Log`
 - HTTP callbacks and endpoints such as `/preview`, `/query/metadata`, `/plugin/detail`, `/on_ui_ready`, `/on_show`, `/on_hide`, `/on_focus_lost`, and `/on_query_box_focus`
+
+These existing WS/HTTP surfaces are important as migration references, but in the target single-process design they become in-process service methods and lifecycle hooks rather than launcher runtime network traffic.
 
 ## Why Not Build A Smaller Fyne
 `fyne` is a cross-platform GUI toolkit with general abstractions for windows, canvas objects, widgets, layout, and rendering drivers. That is the right shape for a reusable GUI framework.
@@ -81,7 +88,7 @@ The new runtime keeps `wox.core` as the backend authority and replaces only the 
 ### Technology Selection
 The launcher runtime should use:
 
-- `Go` for the runtime core, state machine, protocol client, layout engine, and preview orchestration
+- `Go` for the runtime core, state machine, core-integration layer, layout engine, and preview orchestration
 - a custom retained-mode launcher scene instead of a generic widget toolkit
 - thin platform-native host layers for:
   - window creation and composition
@@ -99,28 +106,78 @@ The chosen implementation shape is therefore:
   - C with GTK bindings on Linux
 
 ### Process Model
-The launcher runtime should remain a **separate process** from `wox.core`.
+The launcher and `wox.core` should live inside a **single Go process**.
 
 Reasons:
-- it preserves the current `wox.core <-> UI` contract and rollout model
-- it keeps UI crashes isolated from the backend
-- it avoids embedding WebView thread-affinity constraints into the `wox.core` process
-- it fits platform constraints better:
-  - `WebView2` prefers a UI thread with COM apartment requirements
-  - `WKWebView` must be created and driven on the main thread
-  - `WebKitGTK` ties into the GTK main loop
+- it removes launcher-to-core IPC for the primary UI path
+- it reduces synchronization latency between query execution and launcher state updates
+- it keeps the native window host, webview host, and launcher state machine in one address space
+- it still allows a separate settings process in v1 without forcing the launcher down the same path
 
 Implications:
-- `wox.core` remains the backend authority process
-- `launcher runtime` becomes a new standalone frontend process
-- `Flutter settings` remains a separate frontend process in v1
-- frontends continue to communicate with `wox.core` over the existing WS/HTTP transport
+- the `wox` executable owns both core services and launcher UI services
+- launcher-to-core interaction becomes in-process interfaces, channels, and lifecycle hooks
+- Flutter settings remain a separate frontend process in v1
+- legacy WS/HTTP surfaces remain only as a compatibility bridge for rollout and tooling, not as the target launcher path
+
+### Thread Model
+Single-process does **not** remove native UI thread constraints.
+
+Required thread rules:
+- `main()` locks the initial OS thread with `runtime.LockOSThread()`
+- the native UI host runs on that locked main thread
+- all native UI operations, including:
+  - window creation
+  - text-input host updates
+  - webview creation
+  - webview navigation commands
+  - child-host attach or detach
+  must execute on the UI thread
+- `wox.core` query execution, plugin work, indexing, and I/O continue on background goroutines
+- background goroutines communicate back to the UI thread through a bounded dispatch queue
+
+Platform-specific constraints:
+- Windows
+  - the UI thread must satisfy Win32 message-loop requirements and `WebView2` STA expectations
+- macOS
+  - AppKit and `WKWebView` must stay on the main thread
+- Linux
+  - GTK and `WebKitGTK` stay on the GTK main-loop thread
+
+### In-Process Boundary
+The architectural boundary is no longer process-to-process. It becomes:
+
+- `CoreServices`
+  - query lifecycle
+  - plugin execution
+  - preview payload generation
+  - settings
+  - launcher commands
+- `LauncherHost`
+  - state store
+  - scene construction
+  - focus
+  - input routing
+  - preview lifecycle
+- `PlatformHost`
+  - native windowing
+  - text input bridge
+  - file dialogs
+  - webview hosting
+
+Communication patterns:
+- synchronous service calls for short control operations
+- asynchronous event streams for query results, terminal chunks, and incremental updates
+- explicit marshaling onto the UI thread for any native UI mutation
 
 ### Top-Level Split
-- `wox.core`
-  - owns query lifecycle, plugins, result generation, preview payloads, settings, and launcher commands
-- `launcher runtime`
-  - owns rendering, focus, input routing, preview renderer lifecycle, native window behavior, and native webview embedding
+- single `wox` process
+  - `CoreServices`
+    - owns query lifecycle, plugins, result generation, preview payloads, settings, and launcher commands
+  - `LauncherHost`
+    - owns rendering, focus, input routing, preview renderer lifecycle, native window behavior, and native webview embedding
+  - `PlatformHost`
+    - owns native message loop, IME bridge, webview host, and dialog services
 - `Flutter settings`
   - remains unchanged in v1
 
@@ -145,16 +202,19 @@ Implications:
 ### Architecture Diagram
 ```mermaid
 flowchart LR
-    Core["wox.core"] -->|"WS/HTTP"| Store["LauncherStore"]
-    Store --> Query["QueryEditor"]
-    Store --> List["ResultList"]
-    Store --> Preview["PreviewHost"]
-    Store --> Overlay["OverlayHost"]
-    Store --> Window["WindowShell"]
-    Preview --> Renderers["Preview Renderers"]
-    Renderers --> WebView["WebViewHost"]
-    Window --> Platform["PlatformHost"]
-    WebView --> Platform
+    subgraph Proc["wox single process"]
+        Core["CoreServices"] -->|"in-process services/events"| Store["LauncherStore"]
+        Store --> Query["QueryEditor"]
+        Store --> List["ResultList"]
+        Store --> Preview["PreviewHost"]
+        Store --> Overlay["OverlayHost"]
+        Store --> Window["WindowShell"]
+        Preview --> Renderers["Preview Renderers"]
+        Renderers --> WebView["WebViewHost"]
+        Window --> Platform["PlatformHost"]
+        WebView --> Platform
+    end
+    Settings["Flutter settings (separate in v1)"]
 ```
 
 ## Rendering Architecture
@@ -354,11 +414,11 @@ Layers:
 
 This keeps theme compatibility while preventing render code from depending on raw JSON keys directly.
 
-## Protocol Compatibility
-The runtime should remain protocol-compatible with the existing launcher path.
+## Core/Launcher Interface Compatibility
+The runtime should remain semantically compatible with the existing launcher path even though the primary launcher path is no longer network-based.
 
 ### Protocol Rules
-- Reuse the existing query, action, and preview endpoints.
+- Reuse the existing query, action, and preview semantics.
 - Reuse the existing preview type model, including:
   - `markdown`
   - `text`
@@ -369,17 +429,17 @@ The runtime should remain protocol-compatible with the existing launcher path.
   - `terminal`
   - `webview`
   - internal structured preview types such as `plugin_detail`, `chat`, and `update`
-- Reuse remote preview fetching semantics instead of introducing a second large-payload transport.
+- Reuse remote preview semantics for large payloads, but implement them as in-process deferred resolvers rather than launcher HTTP fetches.
 
 ### Compatibility Principle
-The launcher runtime should behave as a new UI client of `wox.core`, not as a redesign of `wox.core`.
+The launcher host should behave like an in-process client of `wox.core` semantics, not as a redesign of `wox.core`.
 
 That keeps plugin behavior stable and limits the migration surface.
 
-### Launcher Runtime Message Inventory
+### Core/Launcher Interface Inventory
 The implementation plan should treat the following launcher-facing surfaces as explicit scope.
 
-Backend to launcher runtime:
+Core-to-launcher events or callbacks:
 - launcher window control
   - `ShowApp`
   - `HideApp`
@@ -391,9 +451,8 @@ Backend to launcher runtime:
   - `PushResults`
   - `ShowToolbarMsg`
   - `ClearToolbarMsg`
-- theme and dialog operations
+- theme and dialog coordination
   - `ChangeTheme`
-  - `PickFiles`
   - `OpenSettingWindow`
 - phase-gated chat operations
   - `FocusToChatInput`
@@ -403,13 +462,17 @@ Backend to launcher runtime:
   - `ReloadSettingPlugins`
   - `ReloadSetting`
 
-Launcher runtime to backend:
+Launcher-to-core service calls:
 - query and execution
   - `Query`
   - `QueryMRU`
   - `Action`
   - `FormAction`
   - `ToolbarMsgAction`
+- preview and metadata lookup
+  - `ResolvePreview`
+  - `GetQueryMetadata`
+  - `GetPluginDetail`
 - terminal preview operations
   - `TerminalSubscribe`
   - `TerminalUnsubscribe`
@@ -417,18 +480,30 @@ Launcher runtime to backend:
 - diagnostics
   - `Log`
 
-Launcher lifecycle HTTP callbacks and fetches:
-- callbacks
-  - `/on_ui_ready`
-  - `/on_show`
-  - `/on_hide`
-  - `/on_focus_lost`
-  - `/on_query_box_focus`
-- fetches
-  - `/preview`
-  - `/query/metadata`
-  - `/plugin/detail`
-  - i18n and theme endpoints already used by launcher startup
+Launcher lifecycle hooks:
+- `OnUIReady`
+- `OnShow`
+- `OnHide`
+- `OnFocusLost`
+- `OnQueryBoxFocus`
+
+### Internal Interface Shape
+The single-process launcher path should expose coarse-grained Go interfaces, not high-frequency cgo paint calls.
+
+Recommended service split:
+- `LauncherCoreAPI`
+  - synchronous query or action entry points
+- `LauncherEventBus`
+  - async result snapshots, terminal chunks, and incremental preview updates
+- `UIThreadDispatcher`
+  - marshals work from goroutines to the native UI thread
+
+The current WS/HTTP message list remains useful as a semantic checklist, but the target implementation should not serialize these calls for the integrated launcher path.
+
+### Legacy Bridge
+For rollout and fallback, the process may still expose the existing WS/HTTP launcher bridge when the legacy Flutter launcher is selected.
+
+That bridge is a compatibility layer, not the long-term primary launcher path.
 
 ### Platform Dialog Services
 `PickFiles` remains in scope for the launcher runtime. It should be implemented in `PlatformHost` using native file-selection dialogs on each platform rather than delegated back into Flutter.
@@ -818,7 +893,7 @@ V1 should support:
 Theme input should still come from `wox.core`.
 
 ## Migration Strategy
-Migration should be incremental and protocol-compatible.
+Migration should be incremental and semantically compatible with the current launcher behavior.
 
 ### Phase 0: Rendering Spike
 Before broad implementation work, run a rendering spike on Windows using the chosen render stack.
@@ -848,24 +923,29 @@ Exit criteria:
 ### Runtime Selection Strategy
 During rollout, both launcher backends should be packaged:
 - `flutter launcher`
-- `launcher runtime`
+- `integrated native launcher`
 
 Backend selection should be runtime-configurable, not compile-time only.
 
 Recommended controls:
 - persisted user setting for launcher backend
 - command-line override for troubleshooting and CI
-- safe fallback to Flutter launcher when the native runtime fails to boot
+- safe fallback to Flutter launcher when the integrated launcher fails to boot
+
+When the Flutter launcher is selected for fallback:
+- the same process may re-enable the legacy WS/HTTP bridge
+- the Flutter launcher remains the only out-of-process launcher path during rollout
 
 ### Phase 1: Freeze Launcher Contract
-- treat the new runtime as another `wox.core` UI client
+- freeze the semantic launcher contract before replacing transport boundaries
 - do not redesign plugin contracts
-- do not redesign preview transport
+- do not redesign preview payload types
 
 Exit criteria:
 - all launcher-facing protocol surfaces are cataloged
 - all phase ownership decisions are documented
-- runtime bootstraps and connects to `wox.core` as a separate process
+- in-process `LauncherCoreAPI` and `LauncherEventBus` interfaces are defined
+- the UI-thread dispatcher contract is defined
 
 ### Phase 2: Build The Minimum Shell
 Implement:
@@ -886,6 +966,7 @@ Success criteria:
 - selection and preview invalidation are stable
 - `PickFiles` and `OpenSettingWindow` work through `PlatformHost`
 - query-box IME composition works on at least one CJK input method per platform
+- launcher and core communicate without launcher-path WS/HTTP
 
 ### Phase 3: Add WebViewHost
 Implement platform webview backends with one shared session abstraction.
@@ -915,7 +996,7 @@ Exit criteria:
 - structured preview regressions are covered by launcher smoke scenarios
 
 ### Phase 5: Ship Dual Frontends
-- launcher uses the new runtime
+- launcher uses the integrated native runtime
 - settings continue using Flutter
 - keep a fallback or feature flag during rollout
 
@@ -990,6 +1071,9 @@ In addition to behavior validation, the PoC should verify rendering quality for:
 - IME behavior may regress if focus routing is not owned centrally.
 - Linux embedded `WebKitGTK` is a high-risk area because compositor behavior, child embedding, focus routing, and resize behavior can vary across X11 and Wayland environments.
 - Linux support will carry ongoing runtime dependency support costs because `WebKitGTK` is external.
+- Single-process integration removes crash isolation between launcher UI and core services.
+- Single-process integration requires strict UI-thread discipline so plugin or query work never blocks the native host loop.
+- cgo bridge boundaries can become a maintainability problem if scene submission or text measurement calls are too fine-grained.
 - The runtime can accidentally grow into a general toolkit if renderer boundaries are not kept strict.
 - Dual frontend maintenance adds short-term operational cost.
 
@@ -997,12 +1081,13 @@ In addition to behavior validation, the PoC should verify rendering quality for:
 Build a **Wox Launcher Runtime** with these boundaries:
 
 - launcher-only
-- protocol-compatible with `wox.core`
+- single-process with `wox.core`
+- semantic compatibility with existing launcher behavior
 - fixed semantic components instead of generic widgets
 - native webview backends per platform
 - Flutter retained for settings only
 
-This gives Wox a runtime specialized for its launcher behavior without expanding scope into a second general GUI framework.
+This gives Wox a runtime specialized for its launcher behavior without expanding scope into a second general GUI framework or preserving launcher IPC as a permanent requirement.
 
 ## Follow-Up Work
 After this design is approved, the next document should be an implementation plan covering:
