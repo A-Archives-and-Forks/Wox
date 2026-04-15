@@ -63,8 +63,7 @@ func NewEngineWithOptions(ctx context.Context, options EngineOptions) (*Engine, 
 		return nil, err
 	}
 
-	// engine.providers = append([]SearchProvider{localProvider}, NewSystemProviders()...)
-	engine.providers = append([]SearchProvider{localProvider})
+	engine.providers = append([]SearchProvider{localProvider}, NewSystemProviders()...)
 	engine.scanner.Start(util.NewTraceContext())
 	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch engine initialized: providers=%d", len(engine.providers)))
 

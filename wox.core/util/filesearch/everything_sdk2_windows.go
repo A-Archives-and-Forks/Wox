@@ -2,6 +2,7 @@
 package filesearch
 
 import (
+	"fmt"
 	"syscall"
 	"time"
 	"unsafe"
@@ -56,7 +57,7 @@ func initEverything2DLL(dllPath string) {
 
 func walkEverything2(root string, maxCount int, walkFn WalkFunc) error {
 	if everything2SetSearch == nil || everything2Query == nil {
-		return ErrEverythingNotRunning
+		return fmt.Errorf("everything legacy SDK unavailable: %w", ErrEverythingNotRunning)
 	}
 
 	setSearchBool2(everything2SetMatchPath, false)
@@ -69,10 +70,7 @@ func walkEverything2(root string, maxCount int, walkFn WalkFunc) error {
 
 	ok, _, _ := everything2Query.Call(1)
 	if ok == 0 {
-		if getEverything2LastError() == everything2ErrorIPC {
-			return ErrEverythingNotRunning
-		}
-		return ErrEverythingNotRunning
+		return newEverything2QueryError(getEverything2LastError())
 	}
 
 	num := getEverything2NumResults()
@@ -90,6 +88,13 @@ func walkEverything2(root string, maxCount int, walkFn WalkFunc) error {
 		}
 	}
 	return nil
+}
+
+func newEverything2QueryError(lastError int) error {
+	if lastError == everything2ErrorIPC {
+		return fmt.Errorf("everything IPC unavailable (last_error=%d): %w", lastError, ErrEverythingNotRunning)
+	}
+	return fmt.Errorf("everything query failed (last_error=%d)", lastError)
 }
 
 func setSearchBool2(proc *syscall.LazyProc, enabled bool) {

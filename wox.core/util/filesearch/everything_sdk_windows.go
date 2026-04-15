@@ -4,6 +4,7 @@
 package filesearch
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"syscall"
@@ -45,6 +46,8 @@ var Everything3_GetResultDateModified *syscall.LazyProc
 var everything3DLL *syscall.LazyDLL
 var clientMu sync.Mutex
 var cachedClient uintptr
+
+var errEverythingSDK3Unavailable = errors.New("everything sdk3 unavailable")
 
 func initEverythingDLL(dllPath string) {
 	everything3DLL = syscall.NewLazyDLL(dllPath)
@@ -132,14 +135,36 @@ func (fi *FileInfo) IsDir() bool        { return fi.isDir }
 type WalkFunc func(path string, info FileInfo, err error) error
 
 func WalkEverything(root string, maxCount int, walkFn WalkFunc) error {
+	return walkEverythingWithFallback(root, maxCount, walkFn, walkEverything3, walkEverything2)
+}
+
+func walkEverythingWithFallback(root string, maxCount int, walkFn WalkFunc, primary func(string, int, WalkFunc) error, legacy func(string, int, WalkFunc) error) error {
+	primaryErr := primary(root, maxCount, walkFn)
+	if primaryErr == nil || legacy == nil || !shouldFallbackToLegacyEverything(primaryErr) {
+		return primaryErr
+	}
+
+	legacyErr := legacy(root, maxCount, walkFn)
+	if legacyErr == nil {
+		return nil
+	}
+
+	return fmt.Errorf("everything search failed after legacy fallback: primary=%v; legacy=%w", primaryErr, legacyErr)
+}
+
+func shouldFallbackToLegacyEverything(err error) bool {
+	return errors.Is(err, ErrEverythingNotRunning) || errors.Is(err, errEverythingSDK3Unavailable)
+}
+
+func walkEverything3(root string, maxCount int, walkFn WalkFunc) error {
 	client := getCachedClient()
 	if client == 0 {
-		return ErrEverythingNotRunning
+		return newEverything3UnavailableError("connect")
 	}
 
 	searchState := createSearchState()
 	if searchState == 0 {
-		return ErrEverythingNotRunning
+		return newEverything3UnavailableError("create_search_state")
 	}
 	defer destroySearchState(searchState)
 
@@ -157,12 +182,12 @@ func WalkEverything(root string, maxCount int, walkFn WalkFunc) error {
 		resetCachedClient()
 		client = getCachedClient()
 		if client == 0 {
-			return ErrEverythingNotRunning
+			return newEverything3UnavailableError("reconnect")
 		}
 		resultList = search(client, searchState)
 	}
 	if resultList == 0 {
-		return walkEverything2(root, maxCount, walkFn)
+		return newEverything3UnavailableError("search")
 	}
 	defer destroyResultList(resultList)
 
@@ -182,6 +207,10 @@ func WalkEverything(root string, maxCount int, walkFn WalkFunc) error {
 		}
 	}
 	return nil
+}
+
+func newEverything3UnavailableError(stage string) error {
+	return fmt.Errorf("everything sdk3 %s unavailable: %w", stage, errEverythingSDK3Unavailable)
 }
 
 func GetEverythingVersionString() (ver string) {
