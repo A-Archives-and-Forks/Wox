@@ -791,6 +791,20 @@ func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQu
 	windowHeight := m.getTrayQueryInitialWindowHeight(queryCtx, trayQuery)
 	windowAnchorBottom := m.getTrayQueryWindowAnchorBottom(rect, screenRect)
 	position := m.getTrayQueryWindowPosition(queryCtx, rect, screenRect, windowWidth, windowHeight, windowAnchorBottom)
+	var trayAnchor *common.TrayAnchor
+	if util.IsWindows() {
+		trayAnchor = &common.TrayAnchor{
+			WindowX: position.X,
+			Bottom:  windowAnchorBottom,
+			ScreenRect: common.WindowRect{
+				X:      screenRect.X,
+				Y:      screenRect.Y,
+				Width:  screenRect.Width,
+				Height: screenRect.Height,
+			},
+		}
+		logger.Debug(queryCtx, fmt.Sprintf("tray query anchor resolved: windowX=%d bottom=%d screen=(x=%d y=%d w=%d h=%d)", trayAnchor.WindowX, trayAnchor.Bottom, trayAnchor.ScreenRect.X, trayAnchor.ScreenRect.Y, trayAnchor.ScreenRect.Width, trayAnchor.ScreenRect.Height))
+	}
 	m.ui.ChangeQuery(queryCtx, plainQuery)
 	m.ui.ShowApp(queryCtx, common.ShowContext{
 		SelectAll:        false,
@@ -801,6 +815,7 @@ func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQu
 		HideOnBlur:       true,
 		ShowSource:       common.ShowSourceTrayQuery,
 		WindowPosition:   &position,
+		TrayAnchor:       trayAnchor,
 		WindowWidth:      windowWidth,
 		MaxResultCount:   trayQuery.MaxResultCount,
 	})

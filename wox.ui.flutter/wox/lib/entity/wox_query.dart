@@ -413,9 +413,28 @@ class WindowRect {
   }
 }
 
+class TrayAnchor {
+  late int windowX;
+  late int bottom;
+  late WindowRect screenRect;
+
+  TrayAnchor({required this.windowX, required this.bottom, required this.screenRect});
+
+  TrayAnchor.fromJson(Map<String, dynamic> json) {
+    windowX = json['WindowX'] ?? 0;
+    bottom = json['Bottom'] ?? 0;
+    if (json['ScreenRect'] != null) {
+      screenRect = WindowRect.fromJson(json['ScreenRect']);
+    } else {
+      screenRect = WindowRect(x: 0, y: 0, width: 0, height: 0);
+    }
+  }
+}
+
 class ShowAppParams {
   late bool selectAll;
   late Position position;
+  TrayAnchor? trayAnchor;
   late int windowWidth;
   late int maxResultCount;
   late List<QueryHistory> queryHistories;
@@ -448,6 +467,9 @@ class ShowAppParams {
     selectAll = json['SelectAll'];
     if (json['Position'] != null) {
       position = Position.fromJson(json['Position']);
+    }
+    if (json['TrayAnchor'] != null) {
+      trayAnchor = TrayAnchor.fromJson(json['TrayAnchor']);
     }
     windowWidth = json['WindowWidth'] ?? 0;
     maxResultCount = json['MaxResultCount'] ?? 0;

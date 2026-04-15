@@ -882,7 +882,11 @@ class WoxLauncherController extends GetxController {
     }
     final targetHeight = calculateInitialShowWindowHeight(shouldPreserveIncomingQuery);
     final targetWidth = forceWindowWidth != 0 ? forceWindowWidth : WoxSettingUtil.instance.currentSetting.appWidth.toDouble();
-    final targetPosition = Offset(params.position.x.toDouble(), params.position.y.toDouble());
+    final targetPosition = resolveShowAppPosition(params, targetWidth, targetHeight);
+    Logger.instance.debug(
+      traceId,
+      "show app bounds resolved: x=${targetPosition.dx}, y=${targetPosition.dy}, width=$targetWidth, height=$targetHeight, trayAnchorBottom=${params.trayAnchor?.bottom ?? -1}",
+    );
 
     // Apply position+size together before showing to avoid opening with stale width.
     await windowManager.setBounds(targetPosition, Size(targetWidth, targetHeight));
@@ -931,6 +935,26 @@ class WoxLauncherController extends GetxController {
     forceWindowWidth = 0;
     forceMaxResultCount = 0;
     forceHideOnBlur = false;
+  }
+
+  Offset resolveShowAppPosition(ShowAppParams params, double targetWidth, double targetHeight) {
+    final trayAnchor = params.trayAnchor;
+    if (!Platform.isWindows || trayAnchor == null || params.showSource != WoxShowSourceEnum.WOX_SHOW_SOURCE_TRAY_QUERY.code) {
+      return Offset(params.position.x.toDouble(), params.position.y.toDouble());
+    }
+
+    const double margin = 10;
+    final minX = trayAnchor.screenRect.x + margin;
+    final maxX = trayAnchor.screenRect.x + trayAnchor.screenRect.width - targetWidth - margin;
+    final resolvedX = maxX < minX ? minX : (trayAnchor.windowX.toDouble().clamp(minX, maxX) as num).toDouble();
+
+    final minY = trayAnchor.screenRect.y + margin;
+    final rawY = trayAnchor.bottom - targetHeight;
+    final unclampedMaxY = trayAnchor.screenRect.y + trayAnchor.screenRect.height - targetHeight - margin;
+    final maxY = unclampedMaxY < minY ? minY : unclampedMaxY;
+    final resolvedY = (rawY.clamp(minY, maxY) as num).toDouble();
+
+    return Offset(resolvedX, resolvedY);
   }
 
   int getMaxResultCount() {

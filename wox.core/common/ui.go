@@ -101,6 +101,7 @@ type ShowContext struct {
 	ShowSource       ShowSource
 
 	WindowPosition *WindowPosition
+	TrayAnchor     *TrayAnchor
 	WindowWidth    int
 	MaxResultCount int
 }
@@ -108,6 +109,12 @@ type ShowContext struct {
 type WindowPosition struct {
 	X int
 	Y int
+}
+
+type TrayAnchor struct {
+	WindowX    int
+	Bottom     int
+	ScreenRect WindowRect
 }
 
 type WindowRect struct {

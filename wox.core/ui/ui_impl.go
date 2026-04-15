@@ -329,6 +329,7 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 		"QueryBoxAtBottom": showContext.QueryBoxAtBottom,
 		"HideOnBlur":       showContext.HideOnBlur,
 		"Position":         position,
+		"TrayAnchor":       showContext.TrayAnchor,
 		"WindowWidth":      windowWidth,
 		"MaxResultCount":   maxResultCount,
 		"QueryHistories":   setting.GetSettingManager().GetLatestQueryHistory(ctx, 10),
