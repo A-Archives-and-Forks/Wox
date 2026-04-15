@@ -102,3 +102,49 @@ Documented Wox-specific backend and frontend development conventions from the ex
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Fix tray query anchor positioning
+
+**Date**: 2026-04-15
+**Task**: Fix tray query anchor positioning
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Description |
+|------|-------------|
+| Root cause | Confirmed Windows tray queries were positioned from a backend-estimated top-left that drifted when Flutter opened with a larger real initial height, especially with hidden query box and preview-only layout. |
+| Backend | Added tray anchor metadata to the show payload and kept tray monitor/anchor resolution in `wox.core`. |
+| Flutter UI | Resolved tray-query window position from the final `targetHeight` in `showApp`, so the popup stays anchored to the tray icon. |
+| Diagnostics | Added anchor and final bounds logging to simplify future positioning analysis. |
+
+**Updated Files**:
+- `wox.core/common/ui.go`
+- `wox.core/ui/manager.go`
+- `wox.core/ui/ui_impl.go`
+- `wox.ui.flutter/wox/lib/entity/wox_query.dart`
+- `wox.ui.flutter/wox/lib/controllers/wox_launcher_controller.dart`
+- `.trellis/tasks/04-15-fix-tray-query-anchor-positioning/prd.md`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2e38cafb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
