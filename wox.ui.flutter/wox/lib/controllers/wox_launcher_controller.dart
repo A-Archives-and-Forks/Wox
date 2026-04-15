@@ -71,6 +71,7 @@ class WoxLauncherController extends GetxController {
   bool isCurrentQueryReturned = false;
   // Whether the current query has reached a stable final snapshot.
   bool isCurrentQuerySettled = true;
+  static const visibleQueryHeightPreservationDuration = Duration(milliseconds: 500);
   final queryBoxFocusNode = FocusNode();
   final queryBoxTextFieldController = QueryBoxTextEditingController(
     selectedTextStyle: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxTextSelectionColor)),
@@ -113,6 +114,7 @@ class WoxLauncherController extends GetxController {
   /// On every query changed, it will reset the timer and will clear the query results after N ms.
   /// If there is no this delay mechanism, the window will flicker for fast typing.
   Timer clearQueryResultsTimer = Timer(const Duration(), () => {});
+  Timer visibleQueryHeightPreservationTimer = Timer(const Duration(), () => {});
   int clearQueryResultDelay = 100; // adaptive based on flicker detection
   final windowFlickerDetector = WindowFlickerDetector();
   Size? ongoingResizeTargetSize;
@@ -143,6 +145,7 @@ class WoxLauncherController extends GetxController {
   String? queryBeforeTemporaryQuerySource;
   double? windowHeightBeforeTemporaryQuery;
   double? pendingVisibleQueryWindowHeight;
+  String? pendingVisibleQueryWindowHeightQueryId;
   // After restoring the preserved main query we create a new queryId, so the
   // original temporary-query snapshot above is no longer enough to identify
   // which follow-up ShowApp should reuse the old expanded height. These fields
@@ -229,13 +232,14 @@ class WoxLauncherController extends GetxController {
     queryBeforeTemporaryQuery = null;
     queryBeforeTemporaryQuerySource = null;
     windowHeightBeforeTemporaryQuery = null;
-    pendingVisibleQueryWindowHeight = null;
+    clearVisibleQueryHeightPreservation();
     pendingRestoredQueryId = null;
     pendingRestoredQueryWindowHeight = null;
     isCurrentQueryReturned = false;
     isCurrentQuerySettled = true;
     isGridLayout.value = false;
     clearQueryResultsTimer.cancel();
+    visibleQueryHeightPreservationTimer.cancel();
     quickSelectTimer?.cancel();
     isQuickSelectMode.value = false;
     loadingTimer?.cancel();
@@ -333,6 +337,41 @@ class WoxLauncherController extends GetxController {
     );
   }
 
+  void clearVisibleQueryHeightPreservation() {
+    visibleQueryHeightPreservationTimer.cancel();
+    pendingVisibleQueryWindowHeight = null;
+    pendingVisibleQueryWindowHeightQueryId = null;
+  }
+
+  void preserveVisibleQueryWindowHeight(String traceId, String queryId, double currentWindowHeight) {
+    pendingVisibleQueryWindowHeight = pendingVisibleQueryWindowHeight == null ? currentWindowHeight : math.max(pendingVisibleQueryWindowHeight!, currentWindowHeight);
+    pendingVisibleQueryWindowHeightQueryId = queryId;
+    visibleQueryHeightPreservationTimer.cancel();
+    Logger.instance.debug(
+      traceId,
+      "preserve visible query window height for ${visibleQueryHeightPreservationDuration.inMilliseconds} ms while waiting for results: $pendingVisibleQueryWindowHeight",
+    );
+    visibleQueryHeightPreservationTimer = Timer(visibleQueryHeightPreservationDuration, () {
+      if (isClosed) {
+        return;
+      }
+      if (currentQuery.value.queryId != queryId) {
+        return;
+      }
+      if (isCurrentQuerySettled || pendingVisibleQueryWindowHeightQueryId != queryId || pendingVisibleQueryWindowHeight == null) {
+        return;
+      }
+
+      final preservedHeight = pendingVisibleQueryWindowHeight;
+      clearVisibleQueryHeightPreservation();
+      Logger.instance.debug(
+        traceId,
+        "release visible query height preservation after ${visibleQueryHeightPreservationDuration.inMilliseconds} ms: queryId=$queryId, preservedHeight=$preservedHeight",
+      );
+      unawaited(resizeHeight(traceId: traceId, reason: "release visible query height preservation"));
+    });
+  }
+
   bool get isShowDoctorCheckInfo => currentQuery.value.isEmpty && !doctorCheckInfo.value.allPassed;
 
   bool get shouldShowUpdateActionInToolbar {
@@ -385,7 +424,7 @@ class WoxLauncherController extends GetxController {
       isCurrentQueryReturned = true;
       if (isFinal) {
         isCurrentQuerySettled = true;
-        pendingVisibleQueryWindowHeight = null;
+        clearVisibleQueryHeightPreservation();
       }
       loadingTimer?.cancel();
       isLoading.value = false;
@@ -872,7 +911,7 @@ class WoxLauncherController extends GetxController {
 
     // Handle start page when the current show action does not carry a query into the launcher.
     if (!shouldPreserveQueryOnShow) {
-      pendingVisibleQueryWindowHeight = null;
+      clearVisibleQueryHeightPreservation();
       pendingRestoredQueryId = null;
       pendingRestoredQueryWindowHeight = null;
       if (lastStartPage == WoxStartPageEnum.WOX_START_PAGE_MRU.code) {
@@ -1057,7 +1096,7 @@ class WoxLauncherController extends GetxController {
     if (currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code || lastLaunchMode == WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code) {
       currentQuery.value = PlainQuery.emptyInput();
       queryBoxTextFieldController.clear();
-      pendingVisibleQueryWindowHeight = null;
+      clearVisibleQueryHeightPreservation();
       await clearQueryResults(traceId);
     }
 
@@ -1467,7 +1506,7 @@ class WoxLauncherController extends GetxController {
     isCurrentQuerySettled = query.queryType != WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code || query.queryText.isEmpty;
     isShowActionPanel.value = false;
     if (query.queryType != WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code) {
-      pendingVisibleQueryWindowHeight = null;
+      clearVisibleQueryHeightPreservation();
     }
     if (query.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code) {
       canArrowUpHistory = false;
@@ -1514,7 +1553,7 @@ class WoxLauncherController extends GetxController {
 
     if (query.isEmpty) {
       isCurrentQuerySettled = true;
-      pendingVisibleQueryWindowHeight = null;
+      clearVisibleQueryHeightPreservation();
       try {
         await WoxWebsocketMsgUtil.instance.sendMessage(
           WoxWebsocketMsg(
@@ -1546,13 +1585,12 @@ class WoxLauncherController extends GetxController {
     final isVisible = await windowManager.isVisible();
     // If app is hidden (e.g. tray query will trigger change query first then showapp), clear immediately so old results won't flash when shown.
     if (!isVisible) {
-      pendingVisibleQueryWindowHeight = null;
+      clearVisibleQueryHeightPreservation();
       await clearQueryResults(traceId);
       Logger.instance.debug(traceId, "clear query results immediately because window is hidden");
     } else {
       final currentWindowHeight = calculateWindowHeight();
-      pendingVisibleQueryWindowHeight = pendingVisibleQueryWindowHeight == null ? currentWindowHeight : math.max(pendingVisibleQueryWindowHeight!, currentWindowHeight);
-      Logger.instance.debug(traceId, "preserve visible query window height while waiting for results: $pendingVisibleQueryWindowHeight");
+      preserveVisibleQueryWindowHeight(traceId, currentQueryId, currentWindowHeight);
 
       // delay clear results, otherwise windows height will shrink immediately,
       // and then the query result is received which will expand the windows height. so it will causes window flicker
@@ -2077,6 +2115,7 @@ class WoxLauncherController extends GetxController {
 
     final shouldPreserveVisibleQueryHeight =
         pendingVisibleQueryWindowHeight != null &&
+        pendingVisibleQueryWindowHeightQueryId == currentQuery.value.queryId &&
         currentQuery.value.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code &&
         currentQuery.value.queryText.isNotEmpty &&
         !isCurrentQuerySettled;
@@ -2402,6 +2441,7 @@ class WoxLauncherController extends GetxController {
   @override
   void dispose() {
     stopDoctorCheckTimer();
+    visibleQueryHeightPreservationTimer.cancel();
     queryBoxFocusNode.dispose();
     queryBoxTextFieldController.dispose();
     actionListViewController.dispose();

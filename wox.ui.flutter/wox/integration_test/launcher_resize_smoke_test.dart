@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:integration_test/integration_test.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/wox_preview.dart';
 import 'package:wox/entity/wox_query.dart';
@@ -86,7 +87,11 @@ void registerLauncherResizeSmokeTests() {
         );
         controller.isCurrentQueryReturned = false;
         controller.isCurrentQuerySettled = false;
-        controller.pendingVisibleQueryWindowHeight = stableHeight;
+        controller.preserveVisibleQueryWindowHeight(
+          traceId,
+          updatedQueryId,
+          stableHeight,
+        );
         controller.onReceivedQueryResults(
           traceId,
           updatedQueryId,
@@ -94,7 +99,17 @@ void registerLauncherResizeSmokeTests() {
           isFinal: false,
         );
 
-        await waitForWindowHeightToMatchController(tester, controller);
+        final preservationDeadline = DateTime.now().add(
+          WoxLauncherController.visibleQueryHeightPreservationDuration -
+              const Duration(milliseconds: 40),
+        );
+        while (DateTime.now().isBefore(preservationDeadline)) {
+          await tester.pump(const Duration(milliseconds: 20));
+          final actualHeight = (await windowManager.getSize()).height;
+          if ((actualHeight - stableHeight).abs() <= 2) {
+            break;
+          }
+        }
         final heightDuringPartialResults =
             (await windowManager.getSize()).height;
         expect(
@@ -111,6 +126,66 @@ void registerLauncherResizeSmokeTests() {
         await waitForWindowHeightToMatchController(tester, controller);
         final finalHeight = (await windowManager.getSize()).height;
         expect((finalHeight - stableHeight).abs(), lessThanOrEqualTo(2));
+      },
+    );
+
+    testWidgets(
+      'T7-03: partial query updates release preserved window height after the grace window expires',
+      (tester) async {
+        if (!Platform.isWindows) {
+          return;
+        }
+
+        final controller = await launchAndShowLauncher(
+          tester,
+          windowSize: smokeLargeWindowSize,
+        );
+        const traceId = 'resize-smoke-partial-results-timeout';
+        const initialQueryId = 'resize-smoke-timeout-initial-query';
+        const updatedQueryId = 'resize-smoke-timeout-updated-query';
+
+        controller.currentQuery.value = PlainQuery(
+          queryId: initialQueryId,
+          queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code,
+          queryText: 'settin',
+          querySelection: Selection.empty(),
+        );
+        controller.onReceivedQueryResults(
+          traceId,
+          initialQueryId,
+          buildSyntheticResults(initialQueryId, 4),
+        );
+        await waitForWindowHeightToMatchController(tester, controller);
+        final stableHeight = (await windowManager.getSize()).height;
+
+        controller.currentQuery.value = PlainQuery(
+          queryId: updatedQueryId,
+          queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code,
+          queryText: 'setting',
+          querySelection: Selection.empty(),
+        );
+        controller.isCurrentQueryReturned = false;
+        controller.isCurrentQuerySettled = false;
+        controller.preserveVisibleQueryWindowHeight(
+          traceId,
+          updatedQueryId,
+          stableHeight,
+        );
+        controller.onReceivedQueryResults(
+          traceId,
+          updatedQueryId,
+          buildSyntheticResults(updatedQueryId, 1),
+          isFinal: false,
+        );
+
+        await tester.pump(
+          WoxLauncherController.visibleQueryHeightPreservationDuration +
+              const Duration(milliseconds: 250),
+        );
+        await waitForWindowHeightToMatchController(tester, controller);
+        final heightAfterGraceWindow = (await windowManager.getSize()).height;
+
+        expect(heightAfterGraceWindow, lessThan(stableHeight - 2));
       },
     );
   });

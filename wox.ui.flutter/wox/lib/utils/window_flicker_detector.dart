@@ -34,8 +34,8 @@ class WindowFlickerDetector {
     this.flickerMinEvents = 2,
     this.flickerMinDirectionChanges = 1,
     this.stableDecreaseRequired = 10,
-    this.minDelay = 100,
-    this.maxDelay = 300,
+    this.minDelay = 300,
+    this.maxDelay = 700,
     this.step = 25,
   });
 
