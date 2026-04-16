@@ -26,6 +26,33 @@ import (
 // we use 32ms here, which is roughly equivalent to 30fps.
 const resultDebounceIntervalMs = 32
 
+func appendQueryDebugTails(sessionId string, queryId string, snapshot []plugin.QueryResultUI) []plugin.QueryResultUI {
+	if len(snapshot) == 0 {
+		return snapshot
+	}
+
+	annotated := make([]plugin.QueryResultUI, len(snapshot))
+	for i, result := range snapshot {
+		if result.IsGroup {
+			annotated[i] = result
+			continue
+		}
+
+		resultCopy := result
+		resultCopy.Tails = append([]plugin.QueryResultTail{}, result.Tails...)
+		if batch, elapsedMs, ok := plugin.GetPluginManager().GetQueryResultArrival(sessionId, queryId, result.Id); ok {
+			resultCopy.Tails = append(
+				resultCopy.Tails,
+				plugin.NewQueryResultTailText(fmt.Sprintf("P%d", batch)),
+				plugin.NewQueryResultTailText(fmt.Sprintf("%dms", elapsedMs)),
+			)
+		}
+		annotated[i] = resultCopy
+	}
+
+	return annotated
+}
+
 type uiImpl struct {
 	requestMap      *util.HashMap[string, chan WebsocketMsg]
 	isVisible       bool // cached visibility state, updated by PostOnShow/PostOnHide
@@ -512,12 +539,11 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	var totalResultCount int
 	var startTimestamp = util.GetSystemTimestamp()
 	var firstFlushDelayMs = plugin.GetPluginManager().GetQueryFirstFlushDelayMs(query)
+	var resultArrivalBatch int
 	logger.Info(ctx, fmt.Sprintf("query %s: %s, first flush delay: %d ms", query.Type, query.String(), firstFlushDelayMs))
 
 	var resultDebouncer = util.NewDebouncer(firstFlushDelayMs, resultDebounceIntervalMs, func(results []plugin.QueryResultUI, reason string) {
 		isFinal := reason == "done"
-
-		// no results during ticks, skip sending
 		if !isFinal && len(results) == 0 {
 			return
 		}
@@ -527,7 +553,11 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 
 		logger.Info(ctx, fmt.Sprintf("query %s: %s, result flushed (reason: %s, isFinal: %v), current: %d, total results: %d", query.Type, query.String(), reason, isFinal, len(results), totalResultCount))
 		snapshot := plugin.GetPluginManager().BuildQueryResultsSnapshot(sessionId, queryId)
-		responseUIQueryResults(ctx, request, queryId, snapshot, isFinal)
+		responseSnapshot := snapshot
+		if util.IsDev() {
+			responseSnapshot = appendQueryDebugTails(sessionId, queryId, snapshot)
+		}
+		responseUIQueryResults(ctx, request, queryId, responseSnapshot, isFinal)
 	})
 	resultDebouncer.Start(ctx)
 	logger.Info(ctx, fmt.Sprintf("query %s: %s, result flushed (new start)", query.Type, query.String()))
@@ -545,6 +575,8 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 			lo.ForEach(results, func(_ plugin.QueryResultUI, index int) {
 				results[index].QueryId = queryId
 			})
+			resultArrivalBatch++
+			plugin.GetPluginManager().RecordQueryResultArrival(sessionId, queryId, results, resultArrivalBatch, util.GetSystemTimestamp()-startTimestamp)
 			totalResultCount += len(results)
 			resultDebouncer.Add(ctx, results)
 		case <-doneChan:
@@ -561,6 +593,8 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 					lo.ForEach(fallbackResults, func(_ plugin.QueryResultUI, index int) {
 						fallbackResults[index].QueryId = queryId
 					})
+					resultArrivalBatch++
+					plugin.GetPluginManager().RecordQueryResultArrival(sessionId, queryId, fallbackResults, resultArrivalBatch, util.GetSystemTimestamp()-startTimestamp)
 					resultDebouncer.Add(ctx, fallbackResults)
 					logger.Info(ctx, fmt.Sprintf("no result, show %d fallback results", len(fallbackResults)))
 				} else {

@@ -1088,6 +1088,46 @@ func (m *Manager) storeQueryResult(ctx context.Context, pluginInstance *Instance
 
 }
 
+func (m *Manager) RecordQueryResultArrival(sessionId string, queryId string, results []QueryResultUI, batch int, elapsedMs int64) {
+	if sessionId == "" || queryId == "" || len(results) == 0 {
+		return
+	}
+
+	set, found := m.sessionQueryResultCache.Load(sessionId)
+	if !found || set.Query.Id != queryId {
+		return
+	}
+
+	for _, result := range results {
+		if result.Id == "" {
+			continue
+		}
+
+		resultCache, ok := set.Results.Load(result.Id)
+		if !ok {
+			continue
+		}
+		if resultCache.ArrivalBatch > 0 {
+			continue
+		}
+
+		resultCache.ArrivalBatch = batch
+		resultCache.ArrivalElapsed = elapsedMs
+	}
+}
+
+func (m *Manager) GetQueryResultArrival(sessionId string, queryId string, resultId string) (batch int, elapsedMs int64, ok bool) {
+	resultCache, found := m.findResultCacheInSession(sessionId, queryId, resultId)
+	if !found {
+		return 0, 0, false
+	}
+	if resultCache.ArrivalBatch <= 0 {
+		return 0, 0, false
+	}
+
+	return resultCache.ArrivalBatch, resultCache.ArrivalElapsed, true
+}
+
 func (m *Manager) findResultCacheInSession(sessionId string, queryId string, resultId string) (*QueryResultCache, bool) {
 	if resultId == "" {
 		return nil, false

@@ -327,6 +327,8 @@ type QueryResultCache struct {
 	Result         QueryResult // store the full QueryResult including actions with callbacks
 	PluginInstance *Instance
 	Query          Query
+	ArrivalBatch   int
+	ArrivalElapsed int64
 }
 
 func newQueryInputWithPlugins(query string, pluginInstances []*Instance) (Query, *Instance) {
