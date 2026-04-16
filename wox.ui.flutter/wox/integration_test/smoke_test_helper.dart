@@ -709,10 +709,11 @@ Future<void> waitForWindowHeightToMatchController(
   WoxLauncherController controller, {
   double tolerance = 2,
   Duration timeout = const Duration(seconds: 10),
+  Duration step = const Duration(milliseconds: 200),
 }) async {
   final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(step);
     final actual = await windowManager.getSize();
     final expected = controller.calculateWindowHeight();
     if ((actual.height - expected).abs() <= tolerance) {

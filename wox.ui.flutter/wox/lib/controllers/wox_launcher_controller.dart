@@ -111,15 +111,12 @@ class WoxLauncherController extends GetxController {
   /// This avoids immediate clear/fill flashes when the next snapshot arrives quickly.
   Timer clearQueryResultsTimer = Timer(const Duration(), () => {});
   static const staleVisibleResultsDuration = Duration(milliseconds: 80);
-  static const resultShrinkSettleDuration = Duration(milliseconds: 96);
   final windowFlickerDetector = WindowFlickerDetector();
   Size? ongoingResizeTargetSize;
   int resizeRequestToken = 0;
   bool isShowingPendingResultPlaceholder = false;
   double? pendingResultPlaceholderHeight;
   double? committedWindowHeight;
-  double? pendingShrinkHeight;
-  Timer windowShrinkTimer = Timer(const Duration(), () => {});
 
   /// This flag is used to control whether the user can arrow up to show history when the app is first shown.
   var canArrowUpHistory = true;
@@ -395,16 +392,23 @@ class WoxLauncherController extends GetxController {
 
   void cancelPendingResultTransitions() {
     clearQueryResultsTimer.cancel();
-    windowShrinkTimer.cancel();
-    pendingShrinkHeight = null;
     resetPendingResultPlaceholder();
   }
 
+  // Keep a temporary "empty but still tall" transition state while a new query
+  // is waiting for results. We intentionally clear stale items, actions, and
+  // preview immediately so the UI no longer exposes outdated content, but we
+  // preserve the last committed height to avoid a shrink-then-expand flash
+  // during fast typing. This is different from the removed shrink debounce:
+  // once real results arrive, resizeHeightForResultUpdate now applies the new
+  // height immediately instead of waiting for a settle timer.
   void showPendingResultPlaceholder(String traceId) {
     if (isClosed || currentQuery.value.isEmpty || isCurrentQueryReturned) {
       return;
     }
 
+    // Reuse the most recently committed window height so the placeholder keeps
+    // the launcher geometry stable until the next snapshot replaces it.
     pendingResultPlaceholderHeight ??= committedWindowHeight ?? calculateWindowHeight();
     isShowingPendingResultPlaceholder = true;
 
@@ -420,32 +424,13 @@ class WoxLauncherController extends GetxController {
   }
 
   Future<void> resizeHeightForResultUpdate({required String traceId, required String reason}) async {
+    // Bug fix: result updates used to delay shrink while still applying growth
+    // immediately. That made the window height lag behind the current result
+    // snapshot, so result-driven resize now always applies the latest target
+    // height right away. The pending-result placeholder above still handles the
+    // separate cross-query flicker case without reintroducing shrink debounce.
     final targetHeight = calculateWindowHeight();
-    final baselineHeight = committedWindowHeight ?? (await windowManager.getSize()).height;
-
-    if (targetHeight >= baselineHeight - 0.5) {
-      windowShrinkTimer.cancel();
-      pendingShrinkHeight = null;
-      await resizeHeight(traceId: traceId, reason: reason, overrideTargetHeight: targetHeight);
-      return;
-    }
-
-    pendingShrinkHeight = targetHeight;
-    windowShrinkTimer.cancel();
-    Logger.instance.debug(traceId, "defer shrink: reason=$reason, baseline=$baselineHeight, target=$targetHeight");
-    windowShrinkTimer = Timer(resultShrinkSettleDuration, () {
-      if (isClosed) {
-        return;
-      }
-
-      final nextTargetHeight = pendingShrinkHeight;
-      if (nextTargetHeight == null) {
-        return;
-      }
-
-      pendingShrinkHeight = null;
-      unawaited(resizeHeight(traceId: traceId, reason: "$reason (settled)", overrideTargetHeight: nextTargetHeight));
-    });
+    await resizeHeight(traceId: traceId, reason: reason, overrideTargetHeight: targetHeight);
   }
 
   /// Triggered when received query results from the server.
@@ -455,8 +440,6 @@ class WoxLauncherController extends GetxController {
       if (receivedResults.isNotEmpty || isFinal) {
         clearQueryResultsTimer.cancel();
         resetPendingResultPlaceholder();
-        windowShrinkTimer.cancel();
-        pendingShrinkHeight = null;
       }
 
       if (receivedResults.isNotEmpty || isFinal) {
@@ -1548,8 +1531,6 @@ class WoxLauncherController extends GetxController {
     isCurrentQueryReturned = false;
     isShowActionPanel.value = false;
     clearQueryResultsTimer.cancel();
-    windowShrinkTimer.cancel();
-    pendingShrinkHeight = null;
     resetPendingResultPlaceholder();
     if (query.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code) {
       canArrowUpHistory = false;
@@ -1628,6 +1609,11 @@ class WoxLauncherController extends GetxController {
       Logger.instance.debug(traceId, "clear query results immediately because window is hidden");
     } else {
       refreshToolbarActionsForCurrentState(traceId);
+      // Delay the stale-content clear slightly so queries that return almost
+      // immediately can replace the old snapshot without showing an empty gap.
+      // If the backend is still busy after this grace window, switch into the
+      // placeholder state above so old content disappears but the window height
+      // stays stable until the fresh results arrive.
       clearQueryResultsTimer = Timer(staleVisibleResultsDuration, () {
         if (isClosed) return;
         if (currentQuery.value.queryId != currentQueryId) return;

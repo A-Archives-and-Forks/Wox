@@ -18,7 +18,7 @@ void main() {
 void registerLauncherResizeSmokeTests() {
   group('T7: Resize Smoke Tests', () {
     testWidgets(
-      'T7-01: smaller result snapshots shrink the window only after settle',
+      'T7-01: smaller result snapshots shrink the window immediately',
       (tester) async {
         if (!Platform.isWindows) {
           return;
@@ -56,15 +56,12 @@ void registerLauncherResizeSmokeTests() {
           buildSyntheticResults(queryId, 1),
           isFinal: true,
         );
-        await tester.pump();
-        final heightBeforeSettle = (await windowManager.getSize()).height;
-
-        expect(
-          (heightBeforeSettle - expandedHeight).abs(),
-          lessThanOrEqualTo(2),
+        await waitForWindowHeightToMatchController(
+          tester,
+          controller,
+          timeout: const Duration(milliseconds: 80),
+          step: const Duration(milliseconds: 16),
         );
-
-        await waitForWindowHeightToMatchController(tester, controller);
         final shrunkHeight = (await windowManager.getSize()).height;
         expect(shrunkHeight, lessThan(expandedHeight - 2));
       },
@@ -179,7 +176,7 @@ void registerLauncherResizeSmokeTests() {
       },
     );
 
-    testWidgets('T7-04: final empty snapshots shrink after settle', (
+    testWidgets('T7-04: final empty snapshots shrink immediately', (
       tester,
     ) async {
       if (!Platform.isWindows) {
@@ -217,12 +214,13 @@ void registerLauncherResizeSmokeTests() {
         const [],
         isFinal: true,
       );
-      await tester.pump();
-      final heightBeforeSettle = (await windowManager.getSize()).height;
       expect(controller.activeResultViewController.items, isEmpty);
-      expect((heightBeforeSettle - expandedHeight).abs(), lessThanOrEqualTo(2));
-
-      await waitForWindowHeightToMatchController(tester, controller);
+      await waitForWindowHeightToMatchController(
+        tester,
+        controller,
+        timeout: const Duration(milliseconds: 80),
+        step: const Duration(milliseconds: 16),
+      );
       final compactHeight = (await windowManager.getSize()).height;
       expect(compactHeight, lessThan(expandedHeight - 2));
     });
