@@ -43,6 +43,7 @@ const (
 	// ContextData key/value for favorite tail
 	favoriteTailContextDataKey   = "system:favorite"
 	favoriteTailContextDataValue = "true"
+	scoreTailContextDataKey      = "system:score"
 	previewDataMaxSize           = 1024
 )
 
@@ -55,6 +56,25 @@ func serializeContextData(contextData map[string]string) string {
 		return ""
 	}
 	return string(data)
+}
+
+func appendDevScoreTail(tails []QueryResultTail, score int64) []QueryResultTail {
+	if !util.IsDev() {
+		return tails
+	}
+
+	for _, tail := range tails {
+		if tail.ContextData[scoreTailContextDataKey] == "true" {
+			return tails
+		}
+	}
+
+	return append(tails, QueryResultTail{
+		Type:         QueryResultTailTypeText,
+		Text:         fmt.Sprintf("score:%d", score),
+		ContextData:  common.ContextData{scoreTailContextDataKey: "true"},
+		IsSystemTail: true,
+	})
 }
 
 type debounceTimer struct {
@@ -1263,6 +1283,37 @@ func (m *Manager) buildResultUI(resultCache *QueryResultCache, queryId string) Q
 	return resultUI
 }
 
+// Equal scores must still produce a deterministic order because the result cache is backed by a map.
+func compareQueryResultCachesForDisplay(a *QueryResultCache, b *QueryResultCache) int {
+	switch {
+	case a.Result.Score > b.Result.Score:
+		return -1
+	case a.Result.Score < b.Result.Score:
+		return 1
+	}
+
+	if diff := strings.Compare(a.Result.Title, b.Result.Title); diff != 0 {
+		return diff
+	}
+	if diff := strings.Compare(a.Result.SubTitle, b.Result.SubTitle); diff != 0 {
+		return diff
+	}
+
+	pluginIdA := ""
+	if a.PluginInstance != nil {
+		pluginIdA = a.PluginInstance.Metadata.Id
+	}
+	pluginIdB := ""
+	if b.PluginInstance != nil {
+		pluginIdB = b.PluginInstance.Metadata.Id
+	}
+	if diff := strings.Compare(pluginIdA, pluginIdB); diff != 0 {
+		return diff
+	}
+
+	return strings.Compare(a.Result.Id, b.Result.Id)
+}
+
 // BuildQueryResultsSnapshot builds a snapshot of query results for the given session and query id.
 // Results are grouped by their group name, and both groups and results within groups are sorted by score.
 func (m *Manager) BuildQueryResultsSnapshot(sessionId string, queryId string) []QueryResultUI {
@@ -1274,18 +1325,19 @@ func (m *Manager) BuildQueryResultsSnapshot(sessionId string, queryId string) []
 		return []QueryResultUI{}
 	}
 
-	var results []QueryResultUI
+	var resultCaches []*QueryResultCache
 	set.Results.Range(func(_ string, resultCache *QueryResultCache) bool {
-		results = append(results, m.buildResultUI(resultCache, queryId))
+		resultCaches = append(resultCaches, resultCache)
 		return true
 	})
 
-	if len(results) == 0 {
+	if len(resultCaches) == 0 {
 		return []QueryResultUI{}
 	}
 
 	groupScores := map[string]int64{}
-	for _, result := range results {
+	for _, resultCache := range resultCaches {
+		result := resultCache.Result
 		if score, ok := groupScores[result.Group]; !ok || result.GroupScore > score {
 			groupScores[result.Group] = result.GroupScore
 		}
@@ -1304,20 +1356,21 @@ func (m *Manager) BuildQueryResultsSnapshot(sessionId string, queryId string) []
 		return scoreA > scoreB
 	})
 
-	groupedResults := make(map[string][]QueryResultUI)
-	for _, result := range results {
-		groupedResults[result.Group] = append(groupedResults[result.Group], result)
+	groupedResults := make(map[string][]*QueryResultCache)
+	for _, result := range resultCaches {
+		group := result.Result.Group
+		groupedResults[group] = append(groupedResults[group], result)
 	}
 
 	for group := range groupedResults {
 		groupResults := groupedResults[group]
-		sort.SliceStable(groupResults, func(i, j int) bool {
-			return groupResults[i].Score > groupResults[j].Score
+		sort.Slice(groupResults, func(i, j int) bool {
+			return compareQueryResultCachesForDisplay(groupResults[i], groupResults[j]) < 0
 		})
 		groupedResults[group] = groupResults
 	}
 
-	finalResults := make([]QueryResultUI, 0, len(results)+len(groups))
+	finalResults := make([]QueryResultUI, 0, len(resultCaches)+len(groups))
 	for _, group := range groups {
 		groupResults := groupedResults[group]
 		if len(groupResults) == 0 {
@@ -1339,7 +1392,9 @@ func (m *Manager) BuildQueryResultsSnapshot(sessionId string, queryId string) []
 				IsGroup:    true,
 			})
 		}
-		finalResults = append(finalResults, groupResults...)
+		for _, resultCache := range groupResults {
+			finalResults = append(finalResults, m.buildResultUI(resultCache, queryId))
+		}
 	}
 
 	return finalResults
@@ -1515,6 +1570,8 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 		}
 	}
 
+	result.Tails = appendDevScoreTail(result.Tails, result.Score)
+
 	// Create cache at the end
 	resultCopy := result
 	// Because we may have replaced preview with remote preview
@@ -1676,6 +1733,8 @@ func (m *Manager) PolishUpdatableResult(ctx context.Context, pluginInstance *Ins
 				})
 			}
 		}
+
+		tails = appendDevScoreTail(tails, resultCache.Result.Score)
 
 		result.Tails = &tails
 		resultCache.Result.Tails = tails
