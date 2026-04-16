@@ -7,7 +7,10 @@
 
 ## Rules
 
-- **Comments**: English only, concise. Add code comments where appropriate to explain the intent.
+- **Comments**: English only. Add clear intent-level comments where appropriate.
+- **Change Comments Required**: Every optimization, bug fix, and new feature must include comments near the relevant code that explain what changed, why the previous behavior or structure was not enough, and why the chosen implementation is used.
+- **Readability First**: Favor the simplest control flow that keeps behavior correct. Avoid clever abstractions, layered state handling, or indirection that make the execution path harder to follow.
+- **Explain Structures And Logic**: Add necessary comments for structs, state transitions, control-flow branches, and non-obvious logic so readers can understand the intent without reverse-engineering the code.
 - **Refactors**: Scan `AGENTS.md` and `README.md` files first
 - **Build**: Verify with `make build` in wox.core (you can skip UI build for small changes)
 - **Unit Tests**: Do not write unit tests unless the user requests them
@@ -17,8 +20,10 @@
 ## User Coding Style Preferences
 
 - **Favor clarity and maintainability**: Prefer designs that reduce duplication and make intent obvious.
+- **Keep flows easy to read**: Optimize for straightforward execution paths that can be understood quickly during review and debugging.
 - **Prioritize consistency**: Keep implementation style and user-facing behavior coherent across related modules.
 - **Respect boundaries**: Place responsibilities in the most appropriate layer to keep modules cohesive.
 - **Align with existing conventions**: Follow established project patterns unless there is a strong reason to change them.
 - **Preserve existing semantics**: Avoid accidental behavior changes during refactor and optimization.
 - **Prefer extensible abstractions**: Choose approaches that support future evolution with minimal rework.
+- **Document each change point**: Optimization points, bug fixes, and feature additions should carry local comments that explain the reason for the change, the behavior being introduced or corrected, and the rationale behind the chosen solution.

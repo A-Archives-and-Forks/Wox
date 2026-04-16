@@ -573,7 +573,54 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	})
 	resultDebouncer.Start(ctx)
 	logger.Info(ctx, fmt.Sprintf("query %s: %s, result flushed (new start)", query.Type, query.String()))
-	resultChan, doneChan := plugin.GetPluginManager().Query(ctx, query)
+	resultChan, fallbackReadyChan, doneChan := plugin.GetPluginManager().Query(ctx, query)
+	// Once fallback is shown or definitively checked, do not evaluate it again.
+	fallbackHandled := false
+
+	addResults := func(results []plugin.QueryResultUI) {
+		if len(results) == 0 {
+			return
+		}
+		lo.ForEach(results, func(_ plugin.QueryResultUI, index int) {
+			results[index].QueryId = queryId
+		})
+		plugin.GetPluginManager().RecordQueryResultQueryElapsed(sessionId, queryId, results, util.GetSystemTimestamp()-startTimestamp)
+		totalResultCount += len(results)
+		resultDebouncer.Add(ctx, results)
+	}
+	drainPendingResults := func() bool {
+		// Drain queued results first so fallback does not race ahead of already-finished plugins.
+		for {
+			select {
+			case results := <-resultChan:
+				if !plugin.GetPluginManager().IsCurrentQuery(sessionId, queryId) {
+					resultDebouncer.Done(ctx)
+					return false
+				}
+				addResults(results)
+			default:
+				return true
+			}
+		}
+	}
+	showFallbackResults := func() {
+		// fallbackReady only means "all fallback-blocking plugins are done".
+		// Late debounced plugins may still return afterward, so fallback is shown as an
+		// early best-effort option, not as a guarantee that no more real results exist.
+		if fallbackHandled || totalResultCount > 0 {
+			return
+		}
+		fallbackHandled = true
+
+		fallbackResults := plugin.GetPluginManager().QueryFallback(ctx, query, queryPlugin)
+		if len(fallbackResults) > 0 {
+			addResults(fallbackResults)
+			logger.Info(ctx, fmt.Sprintf("no result yet, show %d fallback results", len(fallbackResults)))
+			return
+		}
+
+		logger.Info(ctx, "no result, no fallback results")
+	}
 	for {
 		select {
 		case results := <-resultChan:
@@ -581,37 +628,29 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 				resultDebouncer.Done(ctx)
 				return
 			}
-			if len(results) == 0 {
-				continue
+			addResults(results)
+		case <-fallbackReadyChan:
+			if !plugin.GetPluginManager().IsCurrentQuery(sessionId, queryId) {
+				resultDebouncer.Done(ctx)
+				return
 			}
-			lo.ForEach(results, func(_ plugin.QueryResultUI, index int) {
-				results[index].QueryId = queryId
-			})
-			plugin.GetPluginManager().RecordQueryResultQueryElapsed(sessionId, queryId, results, util.GetSystemTimestamp()-startTimestamp)
-			totalResultCount += len(results)
-			resultDebouncer.Add(ctx, results)
+			// Consume any already-produced results before checking whether fallback is needed.
+			if !drainPendingResults() {
+				return
+			}
+			showFallbackResults()
 		case <-doneChan:
 			if !plugin.GetPluginManager().IsCurrentQuery(sessionId, queryId) {
 				resultDebouncer.Done(ctx)
 				return
 			}
-			logger.Info(ctx, fmt.Sprintf("query done, total results: %d, cost %d ms", totalResultCount, util.GetSystemTimestamp()-startTimestamp))
-
-			// if there is no result, show fallback search
-			if totalResultCount == 0 {
-				fallbackResults := plugin.GetPluginManager().QueryFallback(ctx, query, queryPlugin)
-				if len(fallbackResults) > 0 {
-					lo.ForEach(fallbackResults, func(_ plugin.QueryResultUI, index int) {
-						fallbackResults[index].QueryId = queryId
-					})
-					plugin.GetPluginManager().RecordQueryResultQueryElapsed(sessionId, queryId, fallbackResults, util.GetSystemTimestamp()-startTimestamp)
-					resultDebouncer.Add(ctx, fallbackResults)
-					logger.Info(ctx, fmt.Sprintf("no result, show %d fallback results", len(fallbackResults)))
-				} else {
-					logger.Info(ctx, "no result, no fallback results")
-				}
+			// Run the same fallback check at final completion so queries without any
+			// fallback-blocking plugins still get a fallback result when appropriate.
+			if !drainPendingResults() {
+				return
 			}
-
+			showFallbackResults()
+			logger.Info(ctx, fmt.Sprintf("query done, total results: %d, cost %d ms", totalResultCount, util.GetSystemTimestamp()-startTimestamp))
 			resultDebouncer.Done(ctx)
 			return
 		case <-time.After(time.Minute):

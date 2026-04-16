@@ -82,6 +82,20 @@ type debounceTimer struct {
 	onStop func()
 }
 
+// queryTracker splits query completion into two phases:
+// 1. fallbackReady: all plugins that are allowed to block fallback have finished.
+// 2. done: every plugin has finished, including debounced plugins that may return later.
+//
+// Debounced plugins are counted only in remaining. This lets the UI show fallback
+// once the immediate plugins are done, while still keeping the query open for late
+// debounced results to arrive.
+type queryTracker struct {
+	remaining         *atomic.Int32
+	fallbackRemaining *atomic.Int32
+	fallbackReady     chan bool
+	done              chan bool
+}
+
 type QueryResultSet struct {
 	Query   Query
 	Results *util.HashMap[string, *QueryResultCache]
@@ -1826,27 +1840,27 @@ func (m *Manager) GetUpdatableResult(ctx context.Context, resultId string) *Upda
 	}
 }
 
-func (m *Manager) Query(ctx context.Context, query Query) (resultsChan chan []QueryResultUI, doneChan chan bool) {
+func (m *Manager) Query(ctx context.Context, query Query) (resultsChan chan []QueryResultUI, fallbackReadyChan chan bool, doneChan chan bool) {
 	resultsChan = make(chan []QueryResultUI, 10)
-	doneChan = make(chan bool)
+	fallbackReadyChan = make(chan bool, 1)
+	doneChan = make(chan bool, 1)
 
 	m.startSessionQueryCache(query)
 
-	counter := &atomic.Int32{}
-	counter.Store(int32(len(m.instances)))
+	tracker := newQueryTracker(fallbackReadyChan, doneChan)
 
 	for _, pluginInstance := range m.instances {
 		if !m.canOperateQuery(ctx, pluginInstance, query) {
-			counter.Add(-1)
-			if counter.Load() == 0 {
-				doneChan <- true
-			}
 			continue
 		}
 
+		// Debounced plugins are treated as late work: they still participate in the
+		// final query completion, but they do not delay fallback.
+		blocksFallback := !pluginInstance.Metadata.IsSupportFeature(MetadataFeatureDebounce)
 		if pluginInstance.Metadata.IsSupportFeature(MetadataFeatureDebounce) {
 			debounceParams, err := pluginInstance.Metadata.GetFeatureParamsForDebounce()
 			if err == nil {
+				tracker.start(blocksFallback)
 				logger.Debug(ctx, fmt.Sprintf("[%s] debounce query, will execute in %d ms", pluginInstance.GetName(ctx), debounceParams.IntervalMs))
 				if v, ok := m.debounceQueryTimer.Load(pluginInstance.Metadata.Id); ok {
 					if v.timer.Stop() {
@@ -1855,14 +1869,13 @@ func (m *Manager) Query(ctx context.Context, query Query) (resultsChan chan []Qu
 				}
 
 				timer := time.AfterFunc(time.Duration(debounceParams.IntervalMs)*time.Millisecond, func() {
-					m.queryParallel(ctx, pluginInstance, query, resultsChan, doneChan, counter)
+					m.queryParallel(ctx, pluginInstance, query, resultsChan, tracker, blocksFallback)
 				})
 				onStop := func() {
+					// A newer query replaced this debounced run before it started. Mark this
+					// plugin as finished for the current query lifecycle so counters do not hang.
 					logger.Debug(ctx, fmt.Sprintf("[%s] previous debounced query cancelled", pluginInstance.GetName(ctx)))
-					counter.Add(-1)
-					if counter.Load() == 0 {
-						doneChan <- true
-					}
+					tracker.finish(blocksFallback)
 				}
 				m.debounceQueryTimer.Store(pluginInstance.Metadata.Id, &debounceTimer{
 					timer:  timer,
@@ -1874,8 +1887,12 @@ func (m *Manager) Query(ctx context.Context, query Query) (resultsChan chan []Qu
 			}
 		}
 
-		m.queryParallel(ctx, pluginInstance, query, resultsChan, doneChan, counter)
+		tracker.start(blocksFallback)
+		m.queryParallel(ctx, pluginInstance, query, resultsChan, tracker, blocksFallback)
 	}
+
+	// Queries with no runnable plugins should still notify both phases immediately.
+	tracker.notifyIfEmpty()
 
 	return
 }
@@ -1883,7 +1900,7 @@ func (m *Manager) Query(ctx context.Context, query Query) (resultsChan chan []Qu
 func (m *Manager) QuerySilent(ctx context.Context, query Query) bool {
 	var startTimestamp = util.GetSystemTimestamp()
 	var results []QueryResultUI
-	resultChan, doneChan := m.Query(ctx, query)
+	resultChan, _, doneChan := m.Query(ctx, query)
 	for {
 		select {
 		case r := <-resultChan:
@@ -1973,21 +1990,52 @@ func (m *Manager) QueryFallback(ctx context.Context, query Query, queryPlugin *I
 	return results
 }
 
-func (m *Manager) queryParallel(ctx context.Context, pluginInstance *Instance, query Query, results chan []QueryResultUI, done chan bool, counter *atomic.Int32) {
+func newQueryTracker(fallbackReady chan bool, done chan bool) *queryTracker {
+	return &queryTracker{
+		remaining:         &atomic.Int32{},
+		fallbackRemaining: &atomic.Int32{},
+		fallbackReady:     fallbackReady,
+		done:              done,
+	}
+}
+
+func (t *queryTracker) start(blocksFallback bool) {
+	t.remaining.Add(1)
+	if blocksFallback {
+		t.fallbackRemaining.Add(1)
+	}
+}
+
+func (t *queryTracker) finish(blocksFallback bool) {
+	// fallbackReady fires once the last fallback-blocking plugin completes.
+	if blocksFallback && t.fallbackRemaining.Add(-1) == 0 {
+		t.fallbackReady <- true
+	}
+	// done fires only after every plugin completes, including debounced ones.
+	if t.remaining.Add(-1) == 0 {
+		t.done <- true
+	}
+}
+
+func (t *queryTracker) notifyIfEmpty() {
+	// When nothing was scheduled, both phases are already complete.
+	if t.fallbackRemaining.Load() == 0 {
+		t.fallbackReady <- true
+	}
+	if t.remaining.Load() == 0 {
+		t.done <- true
+	}
+}
+
+func (m *Manager) queryParallel(ctx context.Context, pluginInstance *Instance, query Query, results chan []QueryResultUI, tracker *queryTracker, blocksFallback bool) {
 	util.Go(ctx, fmt.Sprintf("[%s] parallel query", pluginInstance.GetName(ctx)), func() {
 		queryResults := m.queryForPlugin(ctx, pluginInstance, query)
 		results <- lo.Map(queryResults, func(item QueryResult, index int) QueryResultUI {
 			return item.ToUI()
 		})
-		counter.Add(-1)
-		if counter.Load() == 0 {
-			done <- true
-		}
+		tracker.finish(blocksFallback)
 	}, func() {
-		counter.Add(-1)
-		if counter.Load() == 0 {
-			done <- true
-		}
+		tracker.finish(blocksFallback)
 	})
 }
 

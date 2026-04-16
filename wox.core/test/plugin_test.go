@@ -422,7 +422,7 @@ func runQueryWithSession(ctx context.Context, sessionID string, rawQuery string)
 	}
 
 	plugin.GetPluginManager().HandleQueryLifecycle(ctx, query, queryPlugin)
-	resultChan, doneChan := plugin.GetPluginManager().Query(ctx, query)
+	resultChan, _, doneChan := plugin.GetPluginManager().Query(ctx, query)
 	var allResults []plugin.QueryResultUI
 
 collect:
