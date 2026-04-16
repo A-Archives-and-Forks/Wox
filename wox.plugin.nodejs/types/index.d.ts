@@ -485,6 +485,8 @@ export interface Result {
  * { Type: "image", Image: { ImageType: "emoji", ImageData: "🔥" }, ImageWidth: 24, ImageHeight: 24 }
  * ```
  */
+export type ResultTailTextCategory = "default" | "danger" | "warning" | "success"
+
 export interface ResultTail {
   /**
    * The type of tail content.
@@ -500,6 +502,13 @@ export interface ResultTail {
    * Only used when Type is "text".
    */
   Text?: string
+
+  /**
+   * Semantic color category for text tails.
+   *
+   * Only used when Type is "text". If omitted, Wox uses the default text-tail style.
+   */
+  TextCategory?: ResultTailTextCategory
 
   /**
    * Image content for image tails.

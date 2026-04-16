@@ -49,6 +49,19 @@ class ResultTailType(str, Enum):
     """
 
 
+class ResultTailTextCategory(str, Enum):
+    """
+    Semantic color category for text tails.
+
+    Use these categories to render text tails with consistent status colors.
+    """
+
+    DEFAULT = "default"
+    DANGER = "danger"
+    WARNING = "warning"
+    SUCCESS = "success"
+
+
 class ResultActionType(str, Enum):
     """
     Enumeration of result action types.
@@ -112,6 +125,7 @@ class ResultTail:
     Attributes:
         type: The type of tail (TEXT or IMAGE)
         text: Text content (for TEXT type)
+        text_category: Semantic color category for TEXT type tails
         image: Image to display (for IMAGE type)
         image_width: Optional width for IMAGE type tails
         image_height: Optional height for IMAGE type tails
@@ -123,6 +137,7 @@ class ResultTail:
         tail = ResultTail(
             type=ResultTailType.TEXT,
             text="Size: 1.2 MB",
+            text_category=ResultTailTextCategory.DEFAULT,
             id="size_info"
         )
 
@@ -154,6 +169,13 @@ class ResultTail:
 
     Displayed as plain text next to the result.
     Only used when type is TEXT.
+    """
+
+    text_category: ResultTailTextCategory = field(default=ResultTailTextCategory.DEFAULT)
+    """
+    Semantic color category for TEXT type tails.
+
+    Use this to render status-like tails with consistent colors.
     """
 
     image: WoxImage = field(default_factory=WoxImage)
@@ -223,6 +245,7 @@ class ResultTail:
             {
                 "Type": self.type,
                 "Text": self.text,
+                "TextCategory": self.text_category,
                 "Image": json.loads(self.image.to_json()),
                 "ImageWidth": self.image_width,
                 "ImageHeight": self.image_height,
@@ -245,12 +268,15 @@ class ResultTail:
         data = json.loads(json_str)
         if not data.get("Type"):
             data["Type"] = ResultTailType.TEXT
+        if not data.get("TextCategory"):
+            data["TextCategory"] = ResultTailTextCategory.DEFAULT
         if not data.get("Image"):
             data["Image"] = {}
 
         return cls(
             type=ResultTailType(data.get("Type")),
             text=data.get("Text", ""),
+            text_category=ResultTailTextCategory(data.get("TextCategory")),
             image=WoxImage.from_json(json.dumps(data["Image"])),
             image_width=data.get("ImageWidth"),
             image_height=data.get("ImageHeight"),

@@ -14,6 +14,7 @@ type QueryResultActionType = string
 type QueryType = string
 type QueryVariable = string
 type QueryResultTailType = string
+type QueryResultTailTextCategory = string
 
 const (
 	QueryTypeInput     QueryType = "input"     // user input query
@@ -34,6 +35,13 @@ const (
 const (
 	QueryResultTailTypeText  QueryResultTailType = "text"  // string type
 	QueryResultTailTypeImage QueryResultTailType = "image" // WoxImage type
+)
+
+const (
+	QueryResultTailTextCategoryDefault QueryResultTailTextCategory = "default"
+	QueryResultTailTextCategoryDanger  QueryResultTailTextCategory = "danger"
+	QueryResultTailTextCategoryWarning QueryResultTailTextCategory = "warning"
+	QueryResultTailTextCategorySuccess QueryResultTailTextCategory = "success"
 )
 
 // Query from Wox. See "Doc/Query.md" for details.
@@ -136,12 +144,13 @@ type QueryResult struct {
 
 type QueryResultTail struct {
 	// Tail id, should be unique. It's optional, if you don't set it, Wox will assign a random id for you
-	Id          string
-	Type        QueryResultTailType
-	Text        string          // only available when type is QueryResultTailTypeText
-	Image       common.WoxImage // only available when type is QueryResultTailTypeImage
-	ImageWidth  *float64        // optional width for image tails
-	ImageHeight *float64        // optional height for image tails
+	Id           string
+	Type         QueryResultTailType
+	Text         string                      // only available when type is QueryResultTailTypeText
+	TextCategory QueryResultTailTextCategory // optional semantic category when type is QueryResultTailTypeText
+	Image        common.WoxImage             // only available when type is QueryResultTailTypeImage
+	ImageWidth   *float64                    // optional width for image tails
+	ImageHeight  *float64                    // optional height for image tails
 	// Additional data associate with this tail, can be retrieved later
 	ContextData map[string]string
 
@@ -150,9 +159,18 @@ type QueryResultTail struct {
 }
 
 func NewQueryResultTailText(text string) QueryResultTail {
+	return NewQueryResultTailTextWithCategory(text, QueryResultTailTextCategoryDefault)
+}
+
+func NewQueryResultTailTextWithCategory(text string, category QueryResultTailTextCategory) QueryResultTail {
+	if category == "" {
+		category = QueryResultTailTextCategoryDefault
+	}
+
 	return QueryResultTail{
-		Type: QueryResultTailTypeText,
-		Text: text,
+		Type:         QueryResultTailTypeText,
+		Text:         text,
+		TextCategory: category,
 	}
 }
 
@@ -324,11 +342,11 @@ type UpdatableResult struct {
 
 // store latest result value after query/refresh, so we can retrieve data later in action/refresh
 type QueryResultCache struct {
-	Result         QueryResult // store the full QueryResult including actions with callbacks
-	PluginInstance *Instance
-	Query          Query
-	FlushBatch     int
-	QueryElapsed   int64
+	Result          QueryResult // store the full QueryResult including actions with callbacks
+	PluginInstance  *Instance
+	Query           Query
+	FlushBatch      int
+	QueryElapsed    int64
 	QueryElapsedSet bool
 }
 

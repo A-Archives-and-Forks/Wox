@@ -41,10 +41,18 @@ func appendQueryDebugTails(sessionId string, queryId string, snapshot []plugin.Q
 		resultCopy := result
 		resultCopy.Tails = append([]plugin.QueryResultTail{}, result.Tails...)
 		if batch, queryElapsed, ok := plugin.GetPluginManager().GetQueryResultDebugInfo(sessionId, queryId, result.Id); ok {
+			category := plugin.QueryResultTailTextCategoryDefault
+			if queryElapsed > 10 {
+				category = plugin.QueryResultTailTextCategoryWarning
+			}
+			if queryElapsed > 20 {
+				category = plugin.QueryResultTailTextCategoryDanger
+			}
+
 			resultCopy.Tails = append(
 				resultCopy.Tails,
 				plugin.NewQueryResultTailText(fmt.Sprintf("P%d", batch)),
-				plugin.NewQueryResultTailText(fmt.Sprintf("%dms", queryElapsed)),
+				plugin.NewQueryResultTailTextWithCategory(fmt.Sprintf("%dms", queryElapsed), category),
 			)
 		}
 		annotated[i] = resultCopy

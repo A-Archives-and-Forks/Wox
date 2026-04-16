@@ -6,6 +6,7 @@ import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/entity/wox_list_item.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/enums/wox_list_view_type_enum.dart';
+import 'package:wox/enums/wox_result_tail_text_category_enum.dart';
 import 'package:wox/enums/wox_result_tail_type_enum.dart';
 import 'package:wox/utils/log.dart';
 import 'package:wox/utils/wox_setting_util.dart';
@@ -31,6 +32,9 @@ class WoxListItemView extends StatelessWidget {
   static const _tailImageSize = 20.0;
   static const _textTailPadding = EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0);
   static const _textTailBorderRadius = BorderRadius.all(Radius.circular(999));
+  static const _dangerTailColor = Color(0xFFD92D20);
+  static const _warningTailColor = Color(0xFFF79009);
+  static const _successTailColor = Color(0xFF12B76A);
 
   const WoxListItemView({super.key, required this.item, required this.woxTheme, required this.isActive, required this.isHovered, required this.listViewType});
 
@@ -64,7 +68,7 @@ class WoxListItemView extends StatelessWidget {
             children: [
               for (final tail in item.tails)
                 if (tail.type == WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_TEXT.code && tail.text != null)
-                  Padding(padding: _tailItemPadding, child: buildTextTailTag(tail.text!, tailTextColor))
+                  Padding(padding: _tailItemPadding, child: buildTextTailTag(tail.text!, tail.textCategory, tailTextColor))
                 else if (tail.type == WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_HOTKEY.code && tail.hotkey != null)
                   Padding(
                     padding: _tailItemPadding,
@@ -82,15 +86,37 @@ class WoxListItemView extends StatelessWidget {
     );
   }
 
-  Widget buildTextTailTag(String text, Color tailTextColor) {
-    final tailBackgroundColor = tailTextColor.withValues(alpha: isActive ? 0.16 : 0.08);
-    final tailBorderColor = tailTextColor.withValues(alpha: isActive ? 0.42 : 0.24);
+  _TextTailStyle _getTextTailStyle(String textCategory, Color defaultTextColor) {
+    final normalizedCategory = WoxListItemTailTextCategoryEnum.ensureCode(textCategory);
+
+    switch (normalizedCategory) {
+      case woxListItemTailTextCategoryDanger:
+        return _buildSemanticTextTailStyle(_dangerTailColor);
+      case woxListItemTailTextCategoryWarning:
+        return _buildSemanticTextTailStyle(_warningTailColor);
+      case woxListItemTailTextCategorySuccess:
+        return _buildSemanticTextTailStyle(_successTailColor);
+      default:
+        return _TextTailStyle(textColor: defaultTextColor, backgroundColor: Colors.transparent, borderColor: defaultTextColor.withValues(alpha: isActive ? 0.34 : 0.2));
+    }
+  }
+
+  _TextTailStyle _buildSemanticTextTailStyle(Color textColor) {
+    return _TextTailStyle(
+      textColor: textColor,
+      backgroundColor: textColor.withValues(alpha: isActive ? 0.18 : 0.1),
+      borderColor: textColor.withValues(alpha: isActive ? 0.42 : 0.28),
+    );
+  }
+
+  Widget buildTextTailTag(String text, String textCategory, Color defaultTextColor) {
+    final tailStyle = _getTextTailStyle(textCategory, defaultTextColor);
 
     return DecoratedBox(
-      decoration: BoxDecoration(color: tailBackgroundColor, borderRadius: _textTailBorderRadius, border: Border.all(color: tailBorderColor)),
+      decoration: BoxDecoration(color: tailStyle.backgroundColor, borderRadius: _textTailBorderRadius, border: Border.all(color: tailStyle.borderColor)),
       child: Padding(
         padding: _textTailPadding,
-        child: Center(widthFactor: 1, heightFactor: 1, child: Text(text, style: TextStyle(color: tailTextColor, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis)),
+        child: Center(widthFactor: 1, heightFactor: 1, child: Text(text, style: TextStyle(color: tailStyle.textColor, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis)),
       ),
     );
   }
@@ -197,4 +223,12 @@ class WoxListItemView extends StatelessWidget {
 
     return content;
   }
+}
+
+class _TextTailStyle {
+  final Color textColor;
+  final Color backgroundColor;
+  final Color borderColor;
+
+  const _TextTailStyle({required this.textColor, required this.backgroundColor, required this.borderColor});
 }

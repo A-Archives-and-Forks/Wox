@@ -214,6 +214,7 @@ from .models.result import (
     ResultAction,
     ResultActionType,
     ResultTail,
+    ResultTailTextCategory,
     ResultTailType,
     UpdatableResult,
 )
@@ -294,6 +295,7 @@ __all__: List[str] = [
     "WoxPreviewType",
     "WoxPreviewScrollPosition",
     # Result
+    "ResultTailTextCategory",
     "ResultTailType",
     # MRU
     "MRUData",

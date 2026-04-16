@@ -856,10 +856,12 @@ func parseScriptTails(ctx context.Context, metadata plugin.Metadata, itemMap map
 			if text == "" {
 				continue
 			}
+			textCategory := getFirstStringFromMap(tailMap, []string{"textCategory", "TextCategory", "category", "Category"})
 			tails = append(tails, plugin.QueryResultTail{
-				Id:   getFirstStringFromMap(tailMap, []string{"id", "Id"}),
-				Type: plugin.QueryResultTailTypeText,
-				Text: text,
+				Id:           getFirstStringFromMap(tailMap, []string{"id", "Id"}),
+				Type:         plugin.QueryResultTailTypeText,
+				Text:         text,
+				TextCategory: plugin.QueryResultTailTextCategory(textCategory),
 			})
 		}
 
