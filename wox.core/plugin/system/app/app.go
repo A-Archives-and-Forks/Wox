@@ -72,6 +72,23 @@ type appContextData struct {
 	Type string `json:"type"`
 }
 
+// appQueryEntry keeps query-only derived data so typing does not rebuild the same
+// candidate lists for every app on every keystroke.
+type appQueryEntry struct {
+	info             appInfo
+	searchCandidates []string
+	ignoreCandidates []string
+}
+
+// Query results usually shrink as the user extends the same search text.
+// Reusing the previous matched subset avoids rescanning the full app list.
+type appQuerySessionCache struct {
+	generation uint64
+	search     string
+	matches    []int
+	startedAt  int64
+}
+
 func (a *appInfo) GetDisplayPath() string {
 	if a.Type == AppTypeUWP || a.Type == AppTypeWindowsSetting {
 		return ""
@@ -139,6 +156,13 @@ type ApplicationPlugin struct {
 	retriever Retriever
 
 	hotkeyAppCandidates []setting.IgnoredHotkeyApp
+
+	// These caches move stable work out of the query hot path.
+	queryEntries           []appQueryEntry
+	queryEntriesMutex      sync.RWMutex
+	queryEntriesGeneration uint64
+	querySessionCache      *util.HashMap[string, appQuerySessionCache]
+	ignoreMatchers         []appIgnoreMatcher
 
 	// Track results that need periodic refresh (running apps with CPU/memory stats)
 	trackedResults *util.HashMap[string, appInfo] // resultId -> appInfo
@@ -229,11 +253,14 @@ func (a *ApplicationPlugin) Init(ctx context.Context, initParams plugin.InitPara
 	a.retriever = a.getRetriever(ctx)
 	a.retriever.UpdateAPI(a.api)
 	a.trackedResults = util.NewHashMap[string, appInfo]()
+	a.querySessionCache = util.NewHashMap[string, appQuerySessionCache]()
+	a.rebuildIgnoreRuleMatchers(ctx)
 
 	appCache, cacheErr := a.loadAppCache(ctx)
 	if cacheErr == nil {
 		a.apps = appCache
 		a.rebuildHotkeyAppCandidates(ctx)
+		a.rebuildQueryEntries(ctx)
 	}
 
 	util.Go(ctx, "index apps", func() {
@@ -253,6 +280,11 @@ func (a *ApplicationPlugin) Init(ctx context.Context, initParams plugin.InitPara
 	a.api.OnSettingChanged(ctx, func(callbackCtx context.Context, key string, value string) {
 		if key == "AppDirectories" {
 			a.indexApps(callbackCtx)
+			return
+		}
+		if key == "IgnoreRules" {
+			a.rebuildIgnoreRuleMatchers(callbackCtx)
+			a.rebuildQueryEntries(callbackCtx)
 		}
 	})
 
@@ -339,6 +371,7 @@ func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plu
 								}
 								imageCache := util.GetLocation().GetImageCacheDirectory()
 								if err := os.RemoveAll(imageCache); err == nil {
+									common.ClearConvertIconPathExistenceCache()
 									a.api.Log(ctx, plugin.LogLevelInfo, "image cache directory removed")
 								}
 								// clear in-memory app list
@@ -355,22 +388,25 @@ func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plu
 		}
 	}
 
-	var results []plugin.QueryResult
-	ignoreMatchers := a.getIgnoreRuleMatchers(ctx)
-	for _, info := range a.apps {
-		displayName := info.Name
-		if strings.HasPrefix(displayName, "i18n:") {
-			displayName = a.api.GetTranslation(ctx, displayName)
-		}
+	// Query against a stable snapshot so reindexing or settings changes do not
+	// force extra work in the middle of a keystroke.
+	entries, generation := a.getQueryEntriesSnapshot()
+	startedAt := time.Now().UnixNano()
 
-		if matchedPattern, ignored := a.matchIgnoreRule(ctx, info, ignoreMatchers); ignored {
-			a.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("skip query result %s due to ignore rule %q", info.Path, matchedPattern))
-			continue
-		}
+	// When the user grows the same search prefix, the next match set must be a
+	// subset of the previous one.
+	cachedMatches, canReuseCachedMatches := a.getReusableQueryMatches(query, generation)
+
+	results := make([]plugin.QueryResult, 0, len(entries))
+	matchedIndexes := make([]int, 0, len(entries))
+
+	matchEntry := func(entryIndex int) {
+		entry := entries[entryIndex]
+		displayName, displayPath, searchCandidates := a.resolveQueryEntryDisplay(ctx, entry)
 
 		isMatch := false
 		bestScore := int64(0)
-		for _, candidate := range info.GetSearchCandidates(displayName) {
+		for _, candidate := range searchCandidates {
 			matched, score := plugin.IsStringMatchScore(ctx, candidate, query.Search)
 			if !matched {
 				continue
@@ -382,33 +418,52 @@ func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plu
 			}
 		}
 
-		if isMatch {
-			displayPath := info.GetDisplayPath()
-			if info.Type == AppTypeWindowsSetting {
-				displayPath = a.api.GetTranslation(ctx, "i18n:plugin_app_windows_settings_subtitle")
-			} else if isMacSystemSettingsPath(info.Path) {
-				displayPath = a.api.GetTranslation(ctx, "i18n:plugin_app_macos_system_settings_subtitle")
+		if !isMatch {
+			return
+		}
+
+		resultID := uuid.NewString()
+		contextData := common.ContextData{
+			"name": entry.info.Name,
+			"path": entry.info.Path,
+			"type": entry.info.Type,
+		}
+		actions := a.buildAppActions(entry.info, displayName, contextData)
+		result := plugin.QueryResult{
+			Id:       resultID,
+			Title:    displayName,
+			SubTitle: displayPath,
+			Icon:     entry.info.Icon,
+			Score:    bestScore,
+			Actions:  actions,
+		}
+
+		// Track this result for periodic refresh (refreshRunningApps will handle running state)
+		a.trackedResults.Store(result.Id, entry.info)
+
+		results = append(results, result)
+		matchedIndexes = append(matchedIndexes, entryIndex)
+	}
+
+	if canReuseCachedMatches {
+		for _, entryIndex := range cachedMatches {
+			if entryIndex < 0 || entryIndex >= len(entries) {
+				continue
 			}
-
-			result := plugin.QueryResult{
-				Id:       uuid.NewString(),
-				Title:    displayName,
-				SubTitle: displayPath,
-				Icon:     info.Icon,
-				Score:    bestScore,
-				Actions: a.buildAppActions(info, displayName, common.ContextData{
-					"name": info.Name,
-					"path": info.Path,
-					"type": info.Type,
-				}),
-			}
-
-			// Track this result for periodic refresh (refreshRunningApps will handle running state)
-			a.trackedResults.Store(result.Id, info)
-
-			results = append(results, result)
+			matchEntry(entryIndex)
+		}
+	} else {
+		for entryIndex := range entries {
+			matchEntry(entryIndex)
 		}
 	}
+
+	a.storeQueryMatches(query, appQuerySessionCache{
+		generation: generation,
+		search:     query.Search,
+		matches:    matchedIndexes,
+		startedAt:  startedAt,
+	})
 
 	return results
 }
@@ -625,6 +680,7 @@ func (a *ApplicationPlugin) indexApps(ctx context.Context) {
 
 	a.apps = appInfos
 	a.rebuildHotkeyAppCandidates(ctx)
+	a.rebuildQueryEntries(ctx)
 	a.saveAppToCache(ctx)
 
 	a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("indexed %d apps, cost %d ms", len(a.apps), util.GetSystemTimestamp()-startTimestamp))
@@ -755,6 +811,121 @@ func (a *ApplicationPlugin) indexExtraApps(ctx context.Context) []appInfo {
 	}
 
 	return apps
+}
+
+func (a *ApplicationPlugin) rebuildQueryEntries(ctx context.Context) {
+	// Ignore rules depend on app metadata and current settings, not on the user's
+	// search text, so filter them once here instead of on every query.
+	entries := make([]appQueryEntry, 0, len(a.apps))
+	ignoreMatchers := a.getIgnoreRuleMatchersSnapshot()
+	for _, info := range a.apps {
+		entry := a.buildQueryEntry(ctx, info)
+		if _, ignored := a.matchIgnoreRuleCandidates(entry.ignoreCandidates, ignoreMatchers); ignored {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+
+	a.queryEntriesMutex.Lock()
+	a.queryEntries = entries
+	a.queryEntriesGeneration++
+	a.queryEntriesMutex.Unlock()
+	a.clearQuerySessionCache()
+
+}
+
+func (a *ApplicationPlugin) buildQueryEntry(ctx context.Context, info appInfo) appQueryEntry {
+	entry := appQueryEntry{
+		info: info,
+	}
+
+	if strings.HasPrefix(info.Name, "i18n:") {
+		// Translated titles can change with locale, so keep the translated form in
+		// the entry used by matching and ignore rules.
+		displayName := a.api.GetTranslation(ctx, info.Name)
+		entry.searchCandidates = info.GetSearchCandidates(displayName)
+		entry.ignoreCandidates = buildIgnoreRuleCandidates(info, displayName)
+		return entry
+	}
+
+	entry.searchCandidates = info.GetSearchCandidates(info.Name)
+	entry.ignoreCandidates = buildIgnoreRuleCandidates(info, info.Name)
+	return entry
+}
+
+func (a *ApplicationPlugin) getQueryEntriesSnapshot() ([]appQueryEntry, uint64) {
+	a.queryEntriesMutex.RLock()
+	entries := a.queryEntries
+	generation := a.queryEntriesGeneration
+	a.queryEntriesMutex.RUnlock()
+	return entries, generation
+}
+
+func (a *ApplicationPlugin) resolveQueryEntryDisplay(ctx context.Context, entry appQueryEntry) (displayName string, displayPath string, searchCandidates []string) {
+	displayName = entry.info.Name
+	if strings.HasPrefix(displayName, "i18n:") {
+		displayName = a.api.GetTranslation(ctx, displayName)
+		searchCandidates = entry.info.GetSearchCandidates(displayName)
+	} else {
+		searchCandidates = entry.searchCandidates
+	}
+
+	displayPath = entry.info.GetDisplayPath()
+	if entry.info.Type == AppTypeWindowsSetting {
+		displayPath = a.api.GetTranslation(ctx, "i18n:plugin_app_windows_settings_subtitle")
+	} else if isMacSystemSettingsPath(entry.info.Path) {
+		displayPath = a.api.GetTranslation(ctx, "i18n:plugin_app_macos_system_settings_subtitle")
+	}
+
+	return displayName, displayPath, searchCandidates
+}
+
+func normalizeQueryCacheKey(search string) string {
+	return strings.ToLower(strings.TrimSpace(search))
+}
+
+func (a *ApplicationPlugin) getReusableQueryMatches(query plugin.Query, generation uint64) ([]int, bool) {
+	if query.SessionId == "" {
+		return nil, false
+	}
+
+	cached, ok := a.querySessionCache.Load(query.SessionId)
+	if !ok || cached.generation != generation {
+		return nil, false
+	}
+
+	currentSearch := normalizeQueryCacheKey(query.Search)
+	previousSearch := normalizeQueryCacheKey(cached.search)
+	if previousSearch == "" {
+		return nil, false
+	}
+	// Reuse only when the current query keeps growing from the same prefix and
+	// still points at the same entry snapshot.
+	if currentSearch == previousSearch || strings.HasPrefix(currentSearch, previousSearch) {
+		return cached.matches, true
+	}
+
+	return nil, false
+}
+
+func (a *ApplicationPlugin) storeQueryMatches(query plugin.Query, cache appQuerySessionCache) {
+	if query.SessionId == "" {
+		return
+	}
+
+	existing, ok := a.querySessionCache.Load(query.SessionId)
+	if ok && existing.startedAt > cache.startedAt {
+		return
+	}
+
+	a.querySessionCache.Store(query.SessionId, cache)
+}
+
+func (a *ApplicationPlugin) clearQuerySessionCache() {
+	if a.querySessionCache == nil {
+		return
+	}
+	a.querySessionCache.Clear()
 }
 
 func (a *ApplicationPlugin) getAppPaths(ctx context.Context, appDirectories []appDirectory) (appPaths []string) {
@@ -969,6 +1140,12 @@ func (a *ApplicationPlugin) refreshRunningApps(ctx context.Context) {
 		return
 	}
 
+	// Copy tracked results first so query writes are not blocked by the refresh walk.
+	trackedResultsSnapshot := a.trackedResults.ToMap()
+	if len(trackedResultsSnapshot) == 0 {
+		return
+	}
+
 	type updateItem struct {
 		resultId string
 		app      appInfo
@@ -977,13 +1154,13 @@ func (a *ApplicationPlugin) refreshRunningApps(ctx context.Context) {
 	var toRemove []string
 	var toUpdate []updateItem
 
-	a.trackedResults.Range(func(resultId string, appInfo appInfo) bool {
+	for resultId, appInfo := range trackedResultsSnapshot {
 		// Try to get the result, if it returns nil, the result is no longer visible
 		updatableResult := a.api.GetUpdatableResult(ctx, resultId)
 		if updatableResult == nil {
 			// Mark for removal from tracking queue
 			toRemove = append(toRemove, resultId)
-			return true
+			continue
 		}
 
 		// Update Pid first (app may have been restarted with a new Pid, or started for the first time)
@@ -1070,10 +1247,10 @@ func (a *ApplicationPlugin) refreshRunningApps(ctx context.Context) {
 				toRemove = append(toRemove, resultId)
 			}
 		}
-		return true
-	})
+	}
 
-	// Update tracked results with new Pid (after Range to avoid deadlock)
+	// Write back after the snapshot walk so query-time stores are not blocked by
+	// refresh work.
 	for _, item := range toUpdate {
 		a.trackedResults.Store(item.resultId, item.app)
 	}

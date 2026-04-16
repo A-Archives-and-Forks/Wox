@@ -845,13 +845,9 @@ func (m *Manager) queryForPlugin(ctx context.Context, pluginInstance *Instance, 
 	results = pluginInstance.Plugin.Query(ctx, query)
 	pluginQueryCost := util.GetSystemTimestamp() - start
 
+	// Keep the plugin latency EWMA scoped to Plugin.Query itself.
+	// Manager-side polishing is shared overhead layered on top of plugin execution.
 	m.updatePluginQueryLatency(pluginInstance.Metadata.Id, float64(pluginQueryCost))
-
-	if pluginQueryCost >= 10 {
-		logger.Debug(ctx, fmt.Sprintf("<%s> finish query, result count: %d, cost: %dms, query is slow", pluginInstance.GetName(ctx), len(results), pluginQueryCost))
-	} else {
-		logger.Debug(ctx, fmt.Sprintf("<%s> finish query, result count: %d, cost: %dms", pluginInstance.GetName(ctx), len(results), pluginQueryCost))
-	}
 
 	for i := range results {
 		defaultActions := m.getDefaultActions(ctx, pluginInstance, query, results[i].Title, results[i].SubTitle)
@@ -863,6 +859,12 @@ func (m *Manager) queryForPlugin(ctx context.Context, pluginInstance *Instance, 
 		results = lo.Filter(results, func(item QueryResult, _ int) bool {
 			return IsStringMatch(ctx, item.Title, query.Search)
 		})
+	}
+
+	if pluginQueryCost >= 10 {
+		logger.Debug(ctx, fmt.Sprintf("<%s> finish query, result count: %d, cost: %dms, query is slow", pluginInstance.GetName(ctx), len(results), pluginQueryCost))
+	} else {
+		logger.Debug(ctx, fmt.Sprintf("<%s> finish query, result count: %d, cost: %dms", pluginInstance.GetName(ctx), len(results), pluginQueryCost))
 	}
 
 	return results
@@ -1355,8 +1357,6 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 		if result.Actions[actionIndex].Icon.IsEmpty() {
 			// set default action icon if not present
 			result.Actions[actionIndex].Icon = common.ExecuteRunIcon
-		} else {
-			result.Actions[actionIndex].Icon = common.ConvertIcon(ctx, result.Actions[actionIndex].Icon, pluginInstance.PluginDirectory)
 		}
 		if result.Actions[actionIndex].Type == "" {
 			if len(result.Actions[actionIndex].Form) > 0 || result.Actions[actionIndex].OnSubmit != nil {
@@ -1364,6 +1364,11 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 			} else {
 				result.Actions[actionIndex].Type = QueryResultActionTypeExecute
 			}
+		}
+	}
+	for actionIndex := range result.Actions {
+		if !result.Actions[actionIndex].Icon.IsEmpty() {
+			result.Actions[actionIndex].Icon = common.ConvertIcon(ctx, result.Actions[actionIndex].Icon, pluginInstance.PluginDirectory)
 		}
 	}
 	m.attachExternalActionCallbacks(pluginInstance, result.Actions)
@@ -1949,8 +1954,8 @@ func (m *Manager) updatePluginQueryLatency(pluginId string, costMs float64) {
 }
 
 func (m *Manager) GetQueryFirstFlushDelayMs(query Query) int64 {
-	const minDelay int64 = 6
-	const maxDelay int64 = 54
+	const minDelay int64 = 11 // most plugins can return results within 10ms, so we set min delay to 11ms to avoid unnecessary flush
+	const maxDelay int64 = 54 //
 	const defaultDelay int64 = 32
 
 	var totalAvg float64

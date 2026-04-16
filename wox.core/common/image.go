@@ -40,6 +40,8 @@ var fastPngEncoder = &png.Encoder{
 	BufferPool:       &pngBufferPool{},
 }
 
+var derivedImagePathExistenceCache = util.NewHashMap[string, struct{}]()
+
 type pngBufferPool struct{}
 
 func (p *pngBufferPool) Get() *png.EncoderBuffer {
@@ -57,6 +59,28 @@ func savePngFast(img image.Image, filename string) error {
 	}
 	defer f.Close()
 	return fastPngEncoder.Encode(f, img)
+}
+
+func rememberDerivedImagePathExists(path string) {
+	if path == "" {
+		return
+	}
+
+	derivedImagePathExistenceCache.Store(path, struct{}{})
+}
+
+func isKnownExistingDerivedImagePath(path string) bool {
+	if path == "" {
+		return false
+	}
+
+	return derivedImagePathExistenceCache.Exist(path)
+}
+
+// ClearConvertIconPathExistenceCache clears the in-memory positive cache for derived icon files.
+// Callers should invoke this after removing the image cache directory to avoid stale absolute paths.
+func ClearConvertIconPathExistenceCache() {
+	derivedImagePathExistenceCache.Clear()
 }
 
 const (
@@ -417,6 +441,7 @@ func ConvertIcon(ctx context.Context, image WoxImage, pluginDirectory string) (n
 }
 
 func resizeImage(ctx context.Context, image WoxImage, size int) (newImage WoxImage) {
+
 	// skip emoji images
 	if image.ImageType == WoxImageTypeEmoji {
 		return image
@@ -429,7 +454,11 @@ func resizeImage(ctx context.Context, image WoxImage, size int) (newImage WoxIma
 
 	imgHash := image.Hash()
 	resizeImgPath := path.Join(util.GetLocation().GetImageCacheDirectory(), fmt.Sprintf("resize_%d_%s.png", size, imgHash))
+	if isKnownExistingDerivedImagePath(resizeImgPath) {
+		return NewWoxImageAbsolutePath(resizeImgPath)
+	}
 	if _, err := os.Stat(resizeImgPath); err == nil {
+		rememberDerivedImagePathExists(resizeImgPath)
 		return NewWoxImageAbsolutePath(resizeImgPath)
 	}
 
@@ -447,16 +476,14 @@ func resizeImage(ctx context.Context, image WoxImage, size int) (newImage WoxIma
 		width = 0
 	}
 
-	start := util.GetSystemTimestamp()
 	resizeImg := imaging.Resize(img, width, height, imaging.Lanczos)
 	saveErr := savePngFast(resizeImg, resizeImgPath)
 	if saveErr != nil {
 		util.GetLogger().Error(ctx, fmt.Sprintf("failed to save resize image: %s", saveErr.Error()))
 		return image
-	} else {
-		util.GetLogger().Info(ctx, fmt.Sprintf("saved resize image: %s, cost %d ms", resizeImgPath, util.GetSystemTimestamp()-start))
 	}
 
+	rememberDerivedImagePathExists(resizeImgPath)
 	return NewWoxImageAbsolutePath(resizeImgPath)
 }
 
@@ -472,7 +499,11 @@ func cropPngTransparentPaddings(ctx context.Context, woxImage WoxImage) (newImag
 	//try load from cache first
 	imgHash := woxImage.Hash()
 	cropImgPath := path.Join(util.GetLocation().GetImageCacheDirectory(), fmt.Sprintf("crop_padding_%s.png", imgHash))
+	if isKnownExistingDerivedImagePath(cropImgPath) {
+		return NewWoxImageAbsolutePath(cropImgPath)
+	}
 	if _, err := os.Stat(cropImgPath); err == nil {
+		rememberDerivedImagePathExists(cropImgPath)
 		return NewWoxImageAbsolutePath(cropImgPath)
 	}
 
@@ -484,16 +515,14 @@ func cropPngTransparentPaddings(ctx context.Context, woxImage WoxImage) (newImag
 		return woxImage
 	}
 
-	start := util.GetSystemTimestamp()
 	cropImg := cropTransparentPaddings(pngImg)
 	saveErr := savePngFast(cropImg, cropImgPath)
 	if saveErr != nil {
 		util.GetLogger().Error(ctx, fmt.Sprintf("failed to save crop image: %s", saveErr.Error()))
 		return woxImage
-	} else {
-		util.GetLogger().Info(ctx, fmt.Sprintf("saved crop image: %s, cost %d ms", cropImgPath, util.GetSystemTimestamp()-start))
 	}
 
+	rememberDerivedImagePathExists(cropImgPath)
 	return NewWoxImageAbsolutePath(cropImgPath)
 }
 

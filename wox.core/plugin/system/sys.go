@@ -293,6 +293,7 @@ func (r *SysPlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 
 				// Recreate the cache directory structure
 				os.MkdirAll(location.GetImageCacheDirectory(), 0755)
+				common.ClearConvertIconPathExistenceCache()
 
 				r.api.Log(ctx, plugin.LogLevelInfo, "cache directory cleared successfully")
 				r.api.Notify(ctx, "i18n:plugin_sys_clear_cache_success")
