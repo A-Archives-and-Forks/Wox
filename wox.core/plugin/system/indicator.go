@@ -64,15 +64,11 @@ func (i *IndicatorPlugin) Query(ctx context.Context, query plugin.Query) []plugi
 	}
 
 	pluginInstances := plugin.GetPluginManager().GetPluginInstances()
-	storePluginManifests := plugin.GetStoreManager().GetStorePluginManifests(ctx)
-	storePluginManifestByID := make(map[string]plugin.StorePluginManifest, len(storePluginManifests))
-	for _, manifest := range storePluginManifests {
-		storePluginManifestByID[manifest.Id] = manifest
-	}
 
 	var results []plugin.QueryResult
 	for _, pluginInstance := range pluginInstances {
-		storePlugin, hasStorePlugin := storePluginManifestByID[pluginInstance.Metadata.Id]
+		storePlugin, storeErr := plugin.GetStoreManager().GetStorePluginManifestById(ctx, pluginInstance.Metadata.Id)
+		hasStorePlugin := storeErr == nil
 		upgradeTails := i.buildIndicatorUpgradeTails(pluginInstance.Metadata.Version, storePlugin.Version, hasStorePlugin)
 
 		primaryTriggerKeyword := lo.FindOrElse(pluginInstance.GetTriggerKeywords(), "", func(triggerKeyword string) bool {
