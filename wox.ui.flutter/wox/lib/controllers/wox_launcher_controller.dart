@@ -53,6 +53,7 @@ import 'package:wox/utils/webview/wox_webview_util.dart';
 import 'package:wox/utils/wox_websocket_msg_util.dart';
 import 'package:wox/enums/wox_preview_type_enum.dart';
 import 'package:wox/enums/wox_preview_scroll_position_enum.dart';
+import 'package:wox/utils/window_flicker_detector.dart';
 import 'package:wox/utils/color_util.dart';
 
 class WoxLauncherController extends GetxController {
@@ -106,6 +107,12 @@ class WoxLauncherController extends GetxController {
   final activeFormResultId = "".obs;
   final formActionValues = <String, String>{}.obs;
 
+  /// The timer to clear query results.
+  /// On every query changed, it will reset the timer and will clear the query results after N ms.
+  /// If there is no this delay mechanism, the window will flicker for fast typing.
+  Timer clearQueryResultsTimer = Timer(const Duration(), () => {});
+  int clearQueryResultDelay = 100; // adaptive based on flicker detection
+  final windowFlickerDetector = WindowFlickerDetector();
   Size? ongoingResizeTargetSize;
   int resizeRequestToken = 0;
 
@@ -132,6 +139,14 @@ class WoxLauncherController extends GetxController {
   // overwrites it, so that we can restore the main query after hiding.
   PlainQuery? queryBeforeTemporaryQuery;
   String? queryBeforeTemporaryQuerySource;
+  double? windowHeightBeforeTemporaryQuery;
+  // After restoring the preserved main query we create a new queryId, so the
+  // original temporary-query snapshot above is no longer enough to identify
+  // which follow-up ShowApp should reuse the old expanded height. These fields
+  // keep that one-shot "restored query is still waiting for results" context
+  // until the matching query results arrive.
+  String? pendingRestoredQueryId;
+  double? pendingRestoredQueryWindowHeight;
 
   var positionBeforeOpenSetting = const Offset(0, 0);
   // Whether settings was opened when window was hidden (e.g., from tray)
@@ -210,8 +225,11 @@ class WoxLauncherController extends GetxController {
     onQueryBoxTextChanged('');
     queryBeforeTemporaryQuery = null;
     queryBeforeTemporaryQuerySource = null;
-    isCurrentQueryReturned = false;
+    windowHeightBeforeTemporaryQuery = null;
+    pendingRestoredQueryId = null;
+    pendingRestoredQueryWindowHeight = null;
     isGridLayout.value = false;
+    clearQueryResultsTimer.cancel();
     quickSelectTimer?.cancel();
     isQuickSelectMode.value = false;
     loadingTimer?.cancel();
@@ -321,10 +339,6 @@ class WoxLauncherController extends GetxController {
 
   bool get hasVisibleToolbarMsg => toolbarMsg.value.isPersistent;
 
-  bool get isCompactBlankLauncherState => isQueryBoxVisible.value && currentQuery.value.isEmpty && !isShowToolbar && lastStartPage != WoxStartPageEnum.WOX_START_PAGE_MRU.code;
-
-  bool get shouldUseFixedQueryWindowHeight => isQueryBoxVisible.value;
-
   bool get isShowToolbar => activeResultViewController.items.isNotEmpty || isShowDoctorCheckInfo || hasVisibleToolbarMsg;
 
   bool get isToolbarShowedWithoutResults => isShowToolbar && activeResultViewController.items.isEmpty;
@@ -359,7 +373,7 @@ class WoxLauncherController extends GetxController {
   String get moreActionsHotkeyLabel => Platform.isMacOS ? "Cmd+J" : "Alt+J";
 
   /// Triggered when received query results from the server.
-  void onReceivedQueryResults(String traceId, String queryId, List<WoxQueryResult> receivedResults, {bool isFinal = true}) {
+  void onReceivedQueryResults(String traceId, String queryId, List<WoxQueryResult> receivedResults) {
     // Cancel loading timer and hide loading animation when results are received
     if (queryId == currentQuery.value.queryId) {
       isCurrentQueryReturned = true;
@@ -369,8 +383,6 @@ class WoxLauncherController extends GetxController {
       Logger.instance.error(traceId, "query id is not matched, ignore the results");
       return;
     }
-
-    Logger.instance.debug(traceId, "apply query results: queryId=$queryId, count=${receivedResults.length}, isFinal=$isFinal");
 
     if (receivedResults.isEmpty) {
       // Empty responses must clear stale items from the previous query state,
@@ -382,13 +394,14 @@ class WoxLauncherController extends GetxController {
       isShowActionPanel.value = false;
       syncPreviewFullscreenState();
       refreshToolbarActionsForCurrentState(traceId);
-      if (!shouldUseFixedQueryWindowHeight) {
-        SchedulerBinding.instance.addPostFrameCallback((_) {
-          resizeHeight(traceId: traceId, reason: "empty query results received");
-        });
-      }
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        resizeHeight(traceId: traceId, reason: "empty query results received");
+      });
       return;
     }
+
+    //cancel clear results timer
+    clearQueryResultsTimer.cancel();
 
     // 1. Use silent mode to avoid triggering onItemActive callback during updateItems (which may cause a little performance issue)
     //    Following resetActiveResult in updateActiveResultIndex will trigger the callback
@@ -404,11 +417,9 @@ class WoxLauncherController extends GetxController {
     // Schedule resize to post-frame to avoid blocking the main thread during result updates.
     // This prevents input lag by allowing key events to be processed between the list rebuild
     // and the window resize platform channel calls.
-    if (!shouldUseFixedQueryWindowHeight) {
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        resizeHeight(traceId: traceId, reason: "query results updated");
-      });
-    }
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      resizeHeight(traceId: traceId, reason: "query results updated");
+    });
   }
 
   void updateActiveResultIndex(String traceId) {
@@ -846,6 +857,8 @@ class WoxLauncherController extends GetxController {
 
     // Handle start page when the current show action does not carry a query into the launcher.
     if (!shouldPreserveQueryOnShow) {
+      pendingRestoredQueryId = null;
+      pendingRestoredQueryWindowHeight = null;
       if (lastStartPage == WoxStartPageEnum.WOX_START_PAGE_MRU.code) {
         queryMRU(traceId);
       } else {
@@ -965,14 +978,6 @@ class WoxLauncherController extends GetxController {
         WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingBottom;
   }
 
-  double getFixedQueryBoxHeight() {
-    if (!isQueryBoxVisible.value) {
-      return 0;
-    }
-
-    return WoxThemeUtil.instance.getQueryBoxHeight();
-  }
-
   PlainQuery cloneQuery(PlainQuery query, {String? queryId}) {
     return PlainQuery(
       queryId: queryId ?? query.queryId,
@@ -1000,6 +1005,7 @@ class WoxLauncherController extends GetxController {
       queryBeforeTemporaryQuery = cloneQuery(query);
     }
     queryBeforeTemporaryQuerySource = showSource;
+    windowHeightBeforeTemporaryQuery = calculateWindowHeight();
 
     Logger.instance.debug(traceId, "preserve current query before temporary query($showSource): ${queryBeforeTemporaryQuery!.queryText}");
   }
@@ -1007,14 +1013,21 @@ class WoxLauncherController extends GetxController {
   Future<void> restoreQueryAfterTemporaryQuery(String traceId) async {
     final preservedQuery = queryBeforeTemporaryQuery;
     final preservedSource = queryBeforeTemporaryQuerySource;
+    final preservedWindowHeight = windowHeightBeforeTemporaryQuery;
     queryBeforeTemporaryQuery = null;
     queryBeforeTemporaryQuerySource = null;
+    windowHeightBeforeTemporaryQuery = null;
     if (preservedQuery == null) {
       return;
     }
 
     final restoredQuery = cloneQuery(preservedQuery, queryId: const UuidV4().generate());
-    Logger.instance.debug(traceId, "restore preserved query after temporary query(${preservedSource ?? "unknown"}): ${restoredQuery.queryText}");
+    pendingRestoredQueryId = restoredQuery.queryId;
+    pendingRestoredQueryWindowHeight = preservedWindowHeight;
+    Logger.instance.debug(
+      traceId,
+      "restore preserved query after temporary query(${preservedSource ?? "unknown"}): ${restoredQuery.queryText}, preservedWindowHeight=$preservedWindowHeight",
+    );
     await onQueryChanged(traceId, restoredQuery, "restore query after temporary query");
   }
 
@@ -1094,7 +1107,7 @@ class WoxLauncherController extends GetxController {
     isShowActionPanel.value = false;
     actionListViewController.clearFilter(traceId);
     focusQueryBox();
-    if (wasShowActionPanel && !shouldUseFixedQueryWindowHeight) {
+    if (wasShowActionPanel) {
       resizeHeight(traceId: traceId, reason: "hide action panel");
     }
   }
@@ -1113,9 +1126,7 @@ class WoxLauncherController extends GetxController {
     }
     isShowFormActionPanel.value = true;
     isShowActionPanel.value = false;
-    if (!shouldUseFixedQueryWindowHeight) {
-      resizeHeight(traceId: traceId, reason: "show form action panel");
-    }
+    resizeHeight(traceId: traceId, reason: "show form action panel");
   }
 
   void hideFormActionPanel(String traceId, {String reason = "unspecified"}) {
@@ -1129,7 +1140,7 @@ class WoxLauncherController extends GetxController {
     formActionValues.clear();
     isShowFormActionPanel.value = false;
     focusQueryBox();
-    if (wasShowFormActionPanel && !shouldUseFixedQueryWindowHeight) {
+    if (wasShowFormActionPanel) {
       resizeHeight(traceId: traceId, reason: "hide form action panel: $reason");
     }
   }
@@ -1167,9 +1178,7 @@ class WoxLauncherController extends GetxController {
     SchedulerBinding.instance.addPostFrameCallback((_) {
       actionListViewController.requestFocus();
     });
-    if (!shouldUseFixedQueryWindowHeight) {
-      resizeHeight(traceId: traceId, reason: "show action panel");
-    }
+    resizeHeight(traceId: traceId, reason: "show action panel");
   }
 
   void openActionPanelForActiveResult(String traceId) {
@@ -1366,11 +1375,9 @@ class WoxLauncherController extends GetxController {
       // do local filter if query type is selection
       resultListViewController.filterItems(traceId, value);
       resultGridViewController.filterItems(traceId, value);
-      if (!shouldUseFixedQueryWindowHeight) {
-        // there maybe no results after filtering, we need to resize height to hide the action panel
-        // or show the preview panel
-        resizeHeight(traceId: traceId, reason: "selection query text changed");
-      }
+      // there maybe no results after filtering, we need to resize height to hide the action panel
+      // or show the preview panel
+      resizeHeight(traceId: traceId, reason: "selection query text changed");
     } else {
       onQueryChanged(
         traceId,
@@ -1507,10 +1514,39 @@ class WoxLauncherController extends GetxController {
       }
       return;
     }
+
+    // delay clear results, otherwise windows height will shrink immediately,
+    // and then the query result is received which will expand the windows height. so it will causes window flicker
+    clearQueryResultsTimer.cancel();
+
+    final currentQueryId = query.queryId;
     final isVisible = await windowManager.isVisible();
-    await clearQueryResults(traceId);
+    // If app is hidden (e.g. tray query will trigger change query first then showapp), clear immediately so old results won't flash when shown.
     if (!isVisible) {
+      await clearQueryResults(traceId);
       Logger.instance.debug(traceId, "clear query results immediately because window is hidden");
+    } else {
+      // delay clear results, otherwise windows height will shrink immediately,
+      // and then the query result is received which will expand the windows height. so it will causes window flicker
+      // Adaptive: adjust clearQueryResultDelay based on recent resize flicker
+      // Note: clearQueryResultDelay may have been set by onRefreshQuery for longer delay
+      if (changeReason != "refresh query") {
+        final adjust = windowFlickerDetector.adjustClearDelay(clearQueryResultDelay);
+        clearQueryResultDelay = adjust.newDelay;
+        Logger.instance.debug(
+          const UuidV4().generate(),
+          "Adaptive clear delay: $clearQueryResultDelay ms (flicker=${adjust.status.flicker}, reason=${adjust.status.reason}, events=${adjust.status.events})",
+        );
+      }
+
+      clearQueryResultsTimer = Timer(Duration(milliseconds: clearQueryResultDelay), () {
+        if (currentQuery.value.queryId != currentQueryId) return;
+
+        final hasResultsNow = activeResultViewController.items.isNotEmpty && activeResultViewController.items.first.value.data.queryId == currentQueryId;
+        if (hasResultsNow) return;
+
+        clearQueryResults(traceId);
+      });
     }
 
     // Record query start time for performance metrics
@@ -1536,6 +1572,10 @@ class WoxLauncherController extends GetxController {
       pendingPreservedIndex = savedActiveIndex;
       Logger.instance.debug(traceId, "preserving selected index: $savedActiveIndex");
     }
+
+    // Set longer delay for clearing results to avoid flicker
+    // since refresh query usually returns similar results
+    clearQueryResultDelay = 400;
 
     // Get current query and create a new query with the same content but new ID
     final currentQueryValue = currentQuery.value;
@@ -1675,7 +1715,7 @@ class WoxLauncherController extends GetxController {
       Logger.instance.info(msg.traceId, "Received websocket message: ${msg.method}, results count: ${results.length}, isFinal: $isFinal");
 
       // Process results first
-      onReceivedQueryResults(msg.traceId, queryId, results, isFinal: isFinal);
+      onReceivedQueryResults(msg.traceId, queryId, results);
 
       // If this is the final final response, we must stop loading animation explicitly
       // This handles cases where results are empty but the query is finished
@@ -1946,37 +1986,13 @@ class WoxLauncherController extends GetxController {
     await resizeHeight(traceId: traceId, reason: "clear query results");
   }
 
-  double applyPlatformWindowHeightAdjustment(double totalHeight) {
-    // On Windows with high DPI, add one pixel to avoid fractional cut-off.
-    if (Platform.isWindows) {
-      if (PlatformDispatcher.instance.views.first.devicePixelRatio > 1) {
-        totalHeight = totalHeight + 1;
-      }
-    }
-
-    return totalHeight;
-  }
-
-  double calculateCompactWindowHeight() {
-    return applyPlatformWindowHeightAdjustment(getFixedQueryBoxHeight());
-  }
-
-  double calculateExpandedWindowHeight() {
-    var totalHeight = getFixedQueryBoxHeight() + getMaxResultContainerHeight();
-    if (!isToolbarHiddenForce.value) {
-      totalHeight += WoxThemeUtil.instance.getToolbarHeight();
-    }
-
-    return applyPlatformWindowHeightAdjustment(totalHeight);
-  }
-
   /// Calculate the window height based on the current result count.
   ///
   /// [overrideItemCount] allows callers to specify a virtual item count instead
   /// of reading the actual items in the active result view controller. This is
   /// used by the initial-show path to compute height with 0 results when a new
   /// query is about to be issued and old results should be ignored.
-  double calculateDynamicWindowHeight({int? overrideItemCount}) {
+  double calculateWindowHeight({int? overrideItemCount}) {
     final maxResultCount = getMaxResultCount();
     final maxHeight = WoxThemeUtil.instance.getResultListViewHeightByCount(maxResultCount);
     final itemCount = overrideItemCount ?? activeResultViewController.items.length;
@@ -2018,40 +2034,35 @@ class WoxLauncherController extends GetxController {
     final queryBoxHeight = isQueryBoxVisible.value ? getQueryBoxTotalHeight() : 0.0;
     var totalHeight = queryBoxHeight + resultHeight;
 
+    // On Windows with high DPI, add one pixel to avoid fractional cut-off.
+    if (Platform.isWindows) {
+      if (PlatformDispatcher.instance.views.first.devicePixelRatio > 1) {
+        totalHeight = totalHeight + 1;
+      }
+    }
+
     // If toolbar is shown without results, remove bottom padding to blend with query box.
     final toolbarShowedWithoutResults = showToolbar && !hasItems;
     if (toolbarShowedWithoutResults && isQueryBoxVisible.value) {
       totalHeight -= WoxThemeUtil.instance.currentTheme.value.appPaddingBottom;
     }
 
-    return applyPlatformWindowHeightAdjustment(totalHeight);
-  }
-
-  double calculateWindowHeight({int? overrideItemCount}) {
-    if (shouldUseFixedQueryWindowHeight) {
-      if (isCompactBlankLauncherState) {
-        return calculateCompactWindowHeight();
-      }
-
-      return calculateExpandedWindowHeight();
-    }
-
-    return calculateDynamicWindowHeight(overrideItemCount: overrideItemCount);
+    return totalHeight;
   }
 
   /// Calculate the initial window height when showing the app.
   ///
-  /// Query-box sessions now use fixed heights, so the initial show path can use
-  /// the same height calculation directly. Dynamic sizing is only kept for
-  /// layouts without a query box, where we still need to ignore stale items
-  /// before the new data arrives.
+  /// In continue mode (no incoming query injected), results from the previous
+  /// session are preserved, so we use the real item count. Otherwise, a new
+  /// query is about to be issued and old results should be ignored, so we
+  /// compute the height as if there are 0 results.
   double calculateInitialShowWindowHeight(bool isIncomingQueryInjected) {
-    if (shouldUseFixedQueryWindowHeight) {
+    if (!isIncomingQueryInjected && activeResultViewController.items.isNotEmpty) {
       return calculateWindowHeight();
     }
 
-    if (!isIncomingQueryInjected && activeResultViewController.items.isNotEmpty) {
-      return calculateWindowHeight();
+    if (!isIncomingQueryInjected && pendingRestoredQueryId == currentQuery.value.queryId && pendingRestoredQueryWindowHeight != null) {
+      return math.max(calculateWindowHeight(overrideItemCount: 0), pendingRestoredQueryWindowHeight!);
     }
 
     return calculateWindowHeight(overrideItemCount: 0);
@@ -2145,6 +2156,8 @@ class WoxLauncherController extends GetxController {
             traceId,
             "resize applied: reason=$reason, before=${formatWindowSize(currentSize)}, target=${formatWindowSize(targetSize)}, after=${formatWindowSize(resizedSize)}, mode=setBounds, growUpward=true",
           );
+
+          windowFlickerDetector.recordResize(totalHeight.toInt());
           return;
         }
       }
@@ -2155,6 +2168,7 @@ class WoxLauncherController extends GetxController {
         traceId,
         "resize applied: reason=$reason, before=${formatWindowSize(currentSize)}, target=${formatWindowSize(targetSize)}, after=${formatWindowSize(resizedSize)}, mode=setSize, growUpward=false",
       );
+      windowFlickerDetector.recordResize(totalHeight.toInt());
     } finally {
       if (resizeRequestToken == currentResizeToken) {
         ongoingResizeTargetSize = null;
@@ -2170,9 +2184,7 @@ class WoxLauncherController extends GetxController {
       return;
     }
     queryBoxLineCount.value = clampedLineCount;
-    if (!shouldUseFixedQueryWindowHeight) {
-      resizeHeight(traceId: traceId, reason: "query box line count changed");
-    }
+    resizeHeight(traceId: traceId, reason: "query box line count changed");
   }
 
   double getQueryBoxInputHeight() {
@@ -2249,7 +2261,7 @@ class WoxLauncherController extends GetxController {
             syncPreviewFullscreenState();
 
             // If preview panel visibility changed, resize window height
-            if (oldShowPreview != isShowPreviewPanel.value && !shouldUseFixedQueryWindowHeight) {
+            if (oldShowPreview != isShowPreviewPanel.value) {
               resizeHeight(traceId: traceId, reason: "active result preview visibility changed");
             }
           }
@@ -2287,6 +2299,11 @@ class WoxLauncherController extends GetxController {
 
     if (results.isEmpty) {
       return true;
+    }
+
+    if (pendingRestoredQueryId == queryId) {
+      pendingRestoredQueryId = null;
+      pendingRestoredQueryWindowHeight = null;
     }
 
     for (var result in results) {
@@ -2792,7 +2809,7 @@ class WoxLauncherController extends GetxController {
     if (query.isEmpty) {
       isGridLayout.value = false;
       gridLayoutParams.value = GridLayoutParams.empty();
-      if (wasGridLayout && !shouldUseFixedQueryWindowHeight) {
+      if (wasGridLayout) {
         resizeHeight(traceId: traceId, reason: "exit grid layout for empty query");
       }
       return;
@@ -2801,7 +2818,7 @@ class WoxLauncherController extends GetxController {
     if (!query.queryText.contains(" ")) {
       isGridLayout.value = false;
       gridLayoutParams.value = GridLayoutParams.empty();
-      if (wasGridLayout && !shouldUseFixedQueryWindowHeight) {
+      if (wasGridLayout) {
         resizeHeight(traceId: traceId, reason: "exit grid layout for global query");
       }
       return;
@@ -2818,7 +2835,7 @@ class WoxLauncherController extends GetxController {
 
     Logger.instance.debug(traceId, "update grid layout params: columns=${queryMetadata.gridLayoutParams.columns}");
 
-    if (wasGridLayout != isGridLayout.value && !shouldUseFixedQueryWindowHeight) {
+    if (wasGridLayout != isGridLayout.value) {
       if (!isGridLayout.value) {
         resizeHeight(traceId: traceId, reason: "switch from grid layout to list layout");
       } else if (resultGridViewController.rowHeight > 0) {
