@@ -9,9 +9,13 @@ import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
+// The latency helpers return the concrete tail entity, so this test helper
+// must import the tail model directly instead of relying on wox_query.dart.
+import 'package:wox/entity/wox_list_item.dart';
 import 'package:wox/entity/wox_query.dart';
 import 'package:wox/enums/wox_launch_mode_enum.dart';
 import 'package:wox/enums/wox_position_type_enum.dart';
+import 'package:wox/enums/wox_result_tail_text_category_enum.dart';
 import 'package:wox/enums/wox_start_page_enum.dart';
 import 'package:wox/main.dart' as app;
 import 'package:wox/modules/launcher/views/wox_launcher_view.dart';
@@ -227,6 +231,22 @@ Future<void> updateSettingDirect(String key, String value) async {
     final controller = Get.find<WoxLauncherController>();
     controller.lastLaunchMode = value;
   }
+}
+
+Future<void> updatePluginSettingDirect(
+  String pluginId,
+  String key,
+  String value,
+) async {
+  // Speed smoke tests need deterministic plugin fixtures. Existing helpers only
+  // cover global Wox settings, which was not enough to seed plugin-local data
+  // such as shell aliases or custom app directories before querying.
+  await WoxApi.instance.updatePluginSetting(
+    const UuidV4().generate(),
+    pluginId,
+    key,
+    value,
+  );
 }
 
 Future<void> saveLastWindowPosition(int x, int y) async {
@@ -464,6 +484,56 @@ WoxQueryResult expectActiveResult(WoxLauncherController controller) {
   return controller.activeResultViewController.activeItem.data;
 }
 
+WoxQueryResult? findActiveResultWhere(
+  WoxLauncherController controller,
+  bool Function(WoxQueryResult result) predicate,
+) {
+  for (final result in getActiveResults(controller)) {
+    if (predicate(result)) {
+      return result;
+    }
+  }
+
+  return null;
+}
+
+WoxQueryResult expectActiveResultWhere(
+  WoxLauncherController controller,
+  bool Function(WoxQueryResult result) predicate, {
+  String? description,
+}) {
+  final result = findActiveResultWhere(controller, predicate);
+  expect(
+    result,
+    isNotNull,
+    reason:
+        description ??
+        'Expected at least one visible result matching the provided predicate.',
+  );
+  return result!;
+}
+
+Future<WoxQueryResult> queryAndWaitForResultWhere(
+  WidgetTester tester,
+  WoxLauncherController controller,
+  String query,
+  bool Function(WoxQueryResult result) predicate, {
+  String? description,
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  await queryAndWaitForResults(tester, controller, query, timeout: timeout);
+  await pumpUntil(
+    tester,
+    () => findActiveResultWhere(controller, predicate) != null,
+    timeout: timeout,
+  );
+  return expectActiveResultWhere(
+    controller,
+    predicate,
+    description: description,
+  );
+}
+
 List<WoxResultAction> findResultActionsByName(
   WoxQueryResult result,
   String actionName, {
@@ -495,6 +565,51 @@ WoxResultAction expectResultActionByName(
     reason: 'Expected action "$actionName" in result "${result.title}".',
   );
   return actions.first;
+}
+
+WoxListItemTail expectQueryLatencyTail(
+  WoxQueryResult result, {
+  String? description,
+}) {
+  // These speed smoke tests gate on the same debug latency tail the launcher
+  // renders in development builds. Looking up the tail here keeps every test
+  // aligned with the actual yellow/red indicator shown to users.
+  for (final tail in result.tails) {
+    final text = tail.text;
+    if (text != null && RegExp(r'^\d+ms$').hasMatch(text)) {
+      return tail;
+    }
+  }
+
+  fail(
+    description ??
+        'Expected a query latency tail on result "${result.title}", but none was found.',
+  );
+}
+
+int expectQueryLatencyWithinThreshold(WoxQueryResult result, {int maxMs = 10}) {
+  final latencyTail = expectQueryLatencyTail(result);
+  final latencyMs = int.parse(latencyTail.text!.replaceAll('ms', ''));
+
+  expect(
+    latencyMs,
+    lessThanOrEqualTo(maxMs),
+    reason:
+        'Expected "${result.title}" to return within ${maxMs}ms, got ${latencyMs}ms.',
+  );
+  expect(
+    latencyTail.textCategory,
+    isNot(
+      anyOf([
+        woxListItemTailTextCategoryWarning,
+        woxListItemTailTextCategoryDanger,
+      ]),
+    ),
+    reason:
+        'Expected "${result.title}" to keep the latency tail neutral, got ${latencyTail.textCategory}.',
+  );
+
+  return latencyMs;
 }
 
 Future<void> sendWindowsKeyboardEvent({

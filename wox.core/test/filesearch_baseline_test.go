@@ -32,9 +32,9 @@ type fileSearchBaselineArtifact struct {
 	Queries                []fileSearchBaselineSample `json:"queries"`
 }
 
-func TestCaptureFileSearchMixedProviderBaseline(t *testing.T) {
+func TestCaptureFileSearchIndexedOnlyBaseline(t *testing.T) {
 	if os.Getenv("WOX_CAPTURE_FILESEARCH_BASELINE") != "1" {
-		t.Skip("set WOX_CAPTURE_FILESEARCH_BASELINE=1 to capture mixed-provider baseline")
+		t.Skip("set WOX_CAPTURE_FILESEARCH_BASELINE=1 to capture indexed-only baseline")
 	}
 
 	suite := NewTestSuite(t)
@@ -165,7 +165,7 @@ func TestCaptureFileSearchMixedProviderBaseline(t *testing.T) {
 
 	artifact := fileSearchBaselineArtifact{
 		CapturedAt:             time.Now().UTC().Format(time.RFC3339),
-		BaselineKind:           "mixed-provider",
+		BaselineKind:           "indexed-only",
 		SteadyStateCPUPercent:  steadyStateCPU,
 		SteadyStateMemoryBytes: steadyStateMemory,
 		Queries:                samples,
@@ -178,7 +178,7 @@ func TestCaptureFileSearchMixedProviderBaseline(t *testing.T) {
 
 	outputPath := os.Getenv("WOX_FILESEARCH_BASELINE_PATH")
 	if outputPath == "" {
-		outputPath = filepath.Join("testdata", "filesearch_mixed_provider_baseline.json")
+		outputPath = filepath.Join("testdata", "filesearch_indexed_only_baseline.json")
 	}
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		t.Fatalf("create baseline artifact directory: %v", err)

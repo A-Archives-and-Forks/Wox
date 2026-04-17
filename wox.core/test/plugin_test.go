@@ -137,6 +137,51 @@ func TestFilePlugin_CustomRoots(t *testing.T) {
 	t.Fatalf("expected custom root to be searchable, got %d result(s)", len(results))
 }
 
+func TestFilePlugin_CustomRootsExcludeOutsidePaths(t *testing.T) {
+	suite := NewTestSuite(t)
+	ctx := suite.ctx
+
+	rootPath := newStableFileSearchRoot(t, "filesearch-indexed-only-root")
+	outsideRoot := t.TempDir()
+
+	rootSetting, err := json.Marshal([]map[string]string{
+		{"Path": rootPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal file search roots setting: %v", err)
+	}
+
+	filePlugin := findPluginInstance("979d6363-025a-4f51-88d3-0b04e9dc56bf")
+	if filePlugin == nil {
+		t.Fatal("file plugin instance not found")
+	}
+
+	indexedFileName := fmt.Sprintf("indexed-only-%d.txt", time.Now().UnixNano())
+	indexedFilePath := filepath.Join(rootPath, indexedFileName)
+	if err := os.WriteFile(indexedFilePath, []byte("indexed"), 0644); err != nil {
+		t.Fatalf("failed to create indexed file: %v", err)
+	}
+
+	outsideFileName := fmt.Sprintf("outside-only-%d.txt", time.Now().UnixNano())
+	outsideFilePath := filepath.Join(outsideRoot, outsideFileName)
+	if err := os.WriteFile(outsideFilePath, []byte("outside"), 0644); err != nil {
+		t.Fatalf("failed to create outside file: %v", err)
+	}
+
+	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+
+	if err := waitForFileSearchResult(ctx, "f "+indexedFileName, indexedFileName, indexedFilePath, 30*time.Second); err != nil {
+		t.Fatalf("indexed file did not become searchable: %v", err)
+	}
+
+	// Keep this smoke test close to the plugin boundary because removing the
+	// built-in system providers is only useful if results now stay scoped to the
+	// configured indexed roots instead of leaking in from the wider filesystem.
+	if err := ensureFileSearchResultAbsent(ctx, "f "+outsideFileName, outsideFileName, outsideFilePath, 5*time.Second); err != nil {
+		t.Fatalf("outside file should stay hidden from indexed-only file search: %v", err)
+	}
+}
+
 func TestFilePlugin_CustomRootsIncrementalSync(t *testing.T) {
 	suite := NewTestSuite(t)
 	ctx := suite.ctx

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"wox/util"
 )
@@ -38,6 +39,11 @@ type shardSearchStats struct {
 	PinyinInitialRecall int
 	ExtensionRecall     int
 	Trimmed             bool
+}
+
+type shardSearchOutcome struct {
+	results []SearchResult
+	stats   shardSearchStats
 }
 
 type rootShard struct {
@@ -340,29 +346,62 @@ func (i *queryIndex) searchWithStats(ctx context.Context, query SearchQuery, lim
 		return nil, querySearchStats{}
 	}
 
-	stats := querySearchStats{ShardCount: len(i.shards)}
-	results := make([]SearchResult, 0, limit)
+	shards := make([]*rootShard, 0, len(i.shards))
 	for _, shard := range i.shards {
-		select {
-		case <-ctx.Done():
-			final := sortAndLimitResults(results, limit)
-			stats.ResultCount = len(final)
-			return final, stats
-		default:
+		shards = append(shards, shard)
+	}
+
+	stats := querySearchStats{ShardCount: len(shards)}
+	if len(shards) == 1 {
+		shardResults, shardStats := shards[0].searchWithStats(ctx, query)
+		stats.CandidateCount = shardStats.CandidateCount
+		stats.RerankCount = shardStats.RerankCount
+		stats.NameRecallCount = shardStats.NameRecallCount
+		stats.PathRecallCount = shardStats.PathRecallCount
+		stats.PinyinFullRecall = shardStats.PinyinFullRecall
+		stats.PinyinInitialRecall = shardStats.PinyinInitialRecall
+		stats.ExtensionRecall = shardStats.ExtensionRecall
+		if shardStats.Trimmed {
+			stats.TrimmedShardCount = 1
 		}
 
-		shardResults, shardStats := shard.searchWithStats(ctx, query)
-		stats.CandidateCount += shardStats.CandidateCount
-		stats.RerankCount += shardStats.RerankCount
-		stats.NameRecallCount += shardStats.NameRecallCount
-		stats.PathRecallCount += shardStats.PathRecallCount
-		stats.PinyinFullRecall += shardStats.PinyinFullRecall
-		stats.PinyinInitialRecall += shardStats.PinyinInitialRecall
-		stats.ExtensionRecall += shardStats.ExtensionRecall
-		if shardStats.Trimmed {
+		final := sortAndLimitResults(shardResults, limit)
+		stats.ResultCount = len(final)
+		return final, stats
+	}
+
+	// Search root shards in parallel because short queries such as "se" can fan out
+	// into thousands of candidates. The previous serial loop stacked each shard's
+	// rerank cost linearly even though shard lookups are independent and read-only.
+	outcomes := make(chan shardSearchOutcome, len(shards))
+	var wg sync.WaitGroup
+	for _, shard := range shards {
+		wg.Add(1)
+		go func(shard *rootShard) {
+			defer wg.Done()
+			shardResults, shardStats := shard.searchWithStats(ctx, query)
+			outcomes <- shardSearchOutcome{results: shardResults, stats: shardStats}
+		}(shard)
+	}
+
+	go func() {
+		wg.Wait()
+		close(outcomes)
+	}()
+
+	results := make([]SearchResult, 0, limit)
+	for outcome := range outcomes {
+		stats.CandidateCount += outcome.stats.CandidateCount
+		stats.RerankCount += outcome.stats.RerankCount
+		stats.NameRecallCount += outcome.stats.NameRecallCount
+		stats.PathRecallCount += outcome.stats.PathRecallCount
+		stats.PinyinFullRecall += outcome.stats.PinyinFullRecall
+		stats.PinyinInitialRecall += outcome.stats.PinyinInitialRecall
+		stats.ExtensionRecall += outcome.stats.ExtensionRecall
+		if outcome.stats.Trimmed {
 			stats.TrimmedShardCount++
 		}
-		results = append(results, shardResults...)
+		results = append(results, outcome.results...)
 	}
 
 	final := sortAndLimitResults(results, limit)

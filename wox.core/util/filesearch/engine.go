@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 	"wox/util"
 
@@ -28,7 +27,6 @@ func (h searchHandle) Cancel() {
 type Engine struct {
 	db              *FileSearchDB
 	localProvider   *LocalIndexProvider
-	providers       []SearchProvider
 	scanner         *Scanner
 	policy          *policyState
 	statusListeners *util.HashMap[string, func(StatusSnapshot)]
@@ -63,9 +61,12 @@ func NewEngineWithOptions(ctx context.Context, options EngineOptions) (*Engine, 
 		return nil, err
 	}
 
-	engine.providers = append([]SearchProvider{localProvider}, NewSystemProviders()...)
+	// Keep the built-in file engine focused on the indexed roots managed by the
+	// scanner. The old provider fan-out pulled in platform-wide search backends,
+	// which made file search slower and mixed external responsibilities into the
+	// core indexing pipeline now that those integrations are moving to plugins.
 	engine.scanner.Start(util.NewTraceContext())
-	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch engine initialized: providers=%d", len(engine.providers)))
+	util.GetLogger().Info(ctx, "filesearch engine initialized: indexed_provider=local-index")
 
 	return engine, nil
 }
@@ -450,6 +451,7 @@ func (e *Engine) SearchOnce(ctx context.Context, query SearchQuery, limit int) (
 
 	waitCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer cancel()
+	waitStartedAt := util.GetSystemTimestamp()
 
 	var (
 		lastResults []SearchResult
@@ -466,8 +468,13 @@ func (e *Engine) SearchOnce(ctx context.Context, query SearchQuery, limit int) (
 
 	select {
 	case <-done:
+		logSearchOnceWait(ctx, query, util.GetSystemTimestamp()-waitStartedAt, false, len(lastResults))
 		return lastResults, lastErr
 	case <-waitCtx.Done():
+		// Record when SearchOnce returns partial results because provider fan-out did not
+		// settle in time; the previous logs only showed provider-local cost, not that the
+		// plugin spent its budget waiting for final aggregation.
+		logSearchOnceWait(ctx, query, util.GetSystemTimestamp()-waitStartedAt, true, len(lastResults))
 		return lastResults, lastErr
 	}
 }
@@ -478,64 +485,38 @@ func (e *Engine) runSearch(ctx context.Context, queryID string, query SearchQuer
 		return
 	}
 
+	searchStartedAt := util.GetSystemTimestamp()
 	aggregator := newResultAggregator(limit)
-	type providerResponse struct {
-		name       string
-		candidates []ProviderCandidate
-		err        error
+	// Run the local index directly because built-in file search now has a single
+	// responsibility: return matches from the maintained index. The previous
+	// provider fan-out and platform-specific timeouts only existed to merge in
+	// external backends that are no longer part of this engine.
+	providerStartedAt := util.GetSystemTimestamp()
+	candidates, err := e.localProvider.Search(ctx, query, limit)
+	providerElapsedMs := util.GetSystemTimestamp() - providerStartedAt
+
+	aggregationStartedAt := util.GetSystemTimestamp()
+	results, changed := aggregator.Add(candidates)
+	aggregationElapsedMs := util.GetSystemTimestamp() - aggregationStartedAt
+	logProviderSearchResponse(ctx, query, e.localProvider.Name(), providerElapsedMs, aggregationElapsedMs, len(candidates), len(results), changed, err)
+
+	updateCount := 0
+	if changed {
+		updateCount = 1
+		onUpdate(SearchUpdate{
+			QueryID: queryID,
+			Stage:   SearchStagePartial,
+			Results: results,
+			IsFinal: false,
+		})
 	}
 
-	responses := make(chan providerResponse, len(e.providers))
-	var waitGroup sync.WaitGroup
-	for _, provider := range e.providers {
-		provider := provider
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-
-			providerCtx := ctx
-			if provider.Name() != "local-index" {
-				var cancel context.CancelFunc
-				providerCtx, cancel = context.WithTimeout(ctx, 150*time.Millisecond)
-				defer cancel()
-			}
-
-			candidates, err := provider.Search(providerCtx, query, limit)
-			responses <- providerResponse{name: provider.Name(), candidates: candidates, err: err}
-		}()
-	}
-
-	go func() {
-		waitGroup.Wait()
-		close(responses)
-	}()
-
-	hasUpdate := false
-	for response := range responses {
-		if response.err != nil && !errorsIsCanceled(response.err) {
-			util.GetLogger().Warn(ctx, "filesearch provider "+response.name+" failed: "+response.err.Error())
-		}
-
-		results, changed := aggregator.Add(response.candidates)
-		if changed {
-			stage := SearchStagePartial
-			if hasUpdate {
-				stage = SearchStageUpdated
-			}
-			hasUpdate = true
-			onUpdate(SearchUpdate{
-				QueryID: queryID,
-				Stage:   stage,
-				Results: results,
-				IsFinal: false,
-			})
-		}
-	}
-
+	finalResults := aggregator.snapshot()
+	logEngineSearchCompletion(ctx, query, util.GetSystemTimestamp()-searchStartedAt, 1, updateCount, len(finalResults))
 	onUpdate(SearchUpdate{
 		QueryID: queryID,
 		Stage:   SearchStageFinal,
-		Results: aggregator.snapshot(),
+		Results: finalResults,
 		IsFinal: true,
 	})
 }

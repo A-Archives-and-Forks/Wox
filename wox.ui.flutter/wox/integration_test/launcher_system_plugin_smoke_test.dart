@@ -1,6 +1,42 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:wox/enums/wox_selection_type_enum.dart';
 
 import 'smoke_test_helper.dart';
+
+const String _appPluginId = 'ea2b6859-14bc-4c89-9c88-627da7379141';
+const String _shellPluginId = '8a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d';
+const String _appDirectoriesSettingKey = 'AppDirectories';
+const String _shellCommandsSettingKey = 'shellCommands';
+
+Future<Directory> _ensureGlobalTriggerSmokeFixtureDirectory() async {
+  // The global app plugin normally indexes a large Windows surface area. These
+  // speed smoke tests need one deterministic app candidate that can be queried
+  // without depending on the developer's real Start Menu contents.
+  final userDir = Platform.environment['WOX_TEST_USER_DIR'];
+  if (userDir == null || userDir.isEmpty) {
+    throw StateError('WOX_TEST_USER_DIR is required for smoke fixture setup.');
+  }
+
+  final fixtureDir = Directory('$userDir${Platform.pathSeparator}global-trigger-speed-fixtures');
+  await fixtureDir.create(recursive: true);
+
+  final smokeApp = File('${fixtureDir.path}${Platform.pathSeparator}SmokeApp.exe');
+  if (await smokeApp.exists()) {
+    return fixtureDir;
+  }
+
+  final systemRoot = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+  final sourceApp = File('$systemRoot${Platform.pathSeparator}System32${Platform.pathSeparator}cmd.exe');
+  if (!await sourceApp.exists()) {
+    throw StateError('Failed to find a stable Windows executable for app smoke fixtures.');
+  }
+
+  await sourceApp.copy(smokeApp.path);
+  return fixtureDir;
+}
 
 void registerSystemPluginSmokeTests() {
   group('T6: System Plugin Smoke Tests - Tier 1 (Deterministic)', () {
@@ -11,6 +47,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.title, equals('2'));
       expect(result.isGroup, isFalse);
       expectResultActionByName(result, 'copy');
+      expectQueryLatencyWithinThreshold(result);
     });
 
     testWidgets('T6-02: Calculator plugin sqrt function', (tester) async {
@@ -38,6 +75,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.title, equals('https://githubgithugithub.com'));
       expect(result.isGroup, isFalse);
       expectResultActionByName(result, 'open');
+      expectQueryLatencyWithinThreshold(result);
     });
 
     testWidgets('T6-05: System plugin lock command', (tester) async {
@@ -48,6 +86,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.title.toLowerCase(), contains('lock'));
       expect(result.isGroup, isFalse);
       expect(executeAction.preventHideAfterAction, isFalse);
+      expectQueryLatencyWithinThreshold(result);
     });
 
     testWidgets('T6-06: System plugin settings command', (tester) async {
@@ -58,6 +97,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.title, equals('Open Wox Settings'));
       expect(result.isGroup, isFalse);
       expect(executeAction.preventHideAfterAction, isTrue);
+      expectQueryLatencyWithinThreshold(result);
     });
 
     testWidgets('T6-07: Doctor plugin returns diagnostic info', (tester) async {
@@ -86,6 +126,7 @@ void registerSystemPluginSmokeTests() {
       expect(controller.activeResultViewController.items, isNotEmpty);
       expect(result.title, isNotEmpty);
       expect(result.isGroup, isFalse);
+      expectQueryLatencyWithinThreshold(result);
     });
 
     testWidgets('T6-10: Converter plugin time conversion', (tester) async {
@@ -95,6 +136,7 @@ void registerSystemPluginSmokeTests() {
       expect(result.title, contains('60'));
       expect(result.isGroup, isFalse);
       expectResultActionByName(result, 'copy');
+      expectQueryLatencyWithinThreshold(result);
     });
 
     testWidgets('T6-11: Theme plugin returns theme options', (tester) async {
@@ -135,6 +177,92 @@ void registerSystemPluginSmokeTests() {
       } else {
         expect(controller.isToolbarShowedWithoutResults, isFalse);
       }
+    });
+  });
+
+  group('T6: Global Trigger Plugin Speed Smoke Tests', () {
+    testWidgets('T6-21: Selection global trigger returns within 10ms', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+
+      await triggerTestSelectionHotkey(tester, type: WoxSelectionTypeEnum.WOX_SELECTION_TYPE_TEXT.code, text: 'global selection speed smoke');
+      await waitForActiveResults(tester, controller);
+
+      final result = expectActiveResultWhere(
+        controller,
+        (candidate) => normalizeSmokeText(candidate.title) == 'copy',
+        description: 'Expected the selection plugin copy result to be visible.',
+      );
+
+      expectResultActionByName(result, 'copy');
+      expectQueryLatencyWithinThreshold(result);
+    });
+
+    testWidgets('T6-22: Shell global alias query returns within 10ms', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+
+      // The shell plugin only exposes global results for configured aliases, so
+      // seed one explicit command before querying instead of depending on local user settings.
+      await updatePluginSettingDirect(
+        _shellPluginId,
+        _shellCommandsSettingKey,
+        jsonEncode([
+          {'Alias': 'smokeshell', 'Command': 'echo smoke', 'Enabled': true, 'Silent': false},
+        ]),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final result = await queryAndWaitForResultWhere(
+        tester,
+        controller,
+        'smokeshell',
+        (candidate) => normalizeSmokeText(candidate.title) == 'smokeshell',
+        description: 'Expected the seeded global shell alias result to be visible.',
+      );
+
+      expectResultActionByName(result, 'execute');
+      expectQueryLatencyWithinThreshold(result);
+    });
+
+    testWidgets('T6-23: WebSearch global fallback returns within 10ms', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      const query = 'zzglobalwebsearchspeedsmoke';
+
+      final result = await queryAndWaitForResultWhere(
+        tester,
+        controller,
+        query,
+        (candidate) => candidate.title == 'Search Google for $query',
+        description: 'Expected the WebSearch fallback result to be visible.',
+      );
+
+      expectResultActionByName(result, 'search');
+      expectQueryLatencyWithinThreshold(result);
+    });
+
+    testWidgets('T6-24: App global query returns within 10ms', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final fixtureDir = await _ensureGlobalTriggerSmokeFixtureDirectory();
+
+      await updatePluginSettingDirect(
+        _appPluginId,
+        _appDirectoriesSettingKey,
+        jsonEncode([
+          {'Path': fixtureDir.path},
+        ]),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final result = await queryAndWaitForResultWhere(
+        tester,
+        controller,
+        'smokeapp',
+        (candidate) => candidate.subTitle.toLowerCase().contains('smokeapp.exe'),
+        description: 'Expected the seeded fixture app result to be visible.',
+        timeout: const Duration(seconds: 60),
+      );
+
+      expectResultActionByName(result, 'open');
+      expectQueryLatencyWithinThreshold(result);
     });
   });
 

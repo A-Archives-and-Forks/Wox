@@ -7,7 +7,13 @@ import (
 	"wox/util"
 )
 
-const maxLoggedPaths = 8
+const (
+	maxLoggedPaths                          = 8
+	slowFilesearchProviderQueryThresholdMs  int64 = 40
+	slowFilesearchAggregationThresholdMs    int64 = 10
+	slowFilesearchEngineQueryThresholdMs    int64 = 60
+	slowFilesearchSearchOnceTimeoutMs       int64 = 200
+)
 
 func summarizeLogPath(path string) string {
 	path = strings.TrimSpace(path)
@@ -63,4 +69,80 @@ func contextWithTraceID(ctx context.Context, traceID string) context.Context {
 		return ctx
 	}
 	return util.NewTraceContextWith(traceID)
+}
+
+func logProviderSearchResponse(ctx context.Context, query SearchQuery, providerName string, elapsedMs int64, aggregationElapsedMs int64, candidateCount int, resultCount int, changed bool, err error) {
+	status := "ok"
+	if err != nil {
+		if errorsIsCanceled(err) {
+			status = "canceled"
+		} else {
+			status = "error"
+		}
+	}
+
+	msg := fmt.Sprintf(
+		"filesearch provider query: provider=%s query=%q elapsed=%dms aggregate=%dms candidates=%d results=%d changed=%v status=%s",
+		providerName,
+		query.Raw,
+		elapsedMs,
+		aggregationElapsedMs,
+		candidateCount,
+		resultCount,
+		changed,
+		status,
+	)
+	if err != nil && !errorsIsCanceled(err) {
+		msg += " error=" + err.Error()
+	}
+
+	if err != nil && !errorsIsCanceled(err) {
+		util.GetLogger().Warn(ctx, msg)
+		return
+	}
+
+	if elapsedMs >= slowFilesearchProviderQueryThresholdMs || aggregationElapsedMs >= slowFilesearchAggregationThresholdMs {
+		util.GetLogger().Info(ctx, "filesearch slow provider query: "+msg)
+		return
+	}
+
+	util.GetLogger().Debug(ctx, msg)
+}
+
+func logEngineSearchCompletion(ctx context.Context, query SearchQuery, elapsedMs int64, providerCount int, updateCount int, resultCount int) {
+	msg := fmt.Sprintf(
+		"filesearch engine query complete: query=%q elapsed=%dms providers=%d updates=%d results=%d",
+		query.Raw,
+		elapsedMs,
+		providerCount,
+		updateCount,
+		resultCount,
+	)
+	if elapsedMs >= slowFilesearchEngineQueryThresholdMs {
+		util.GetLogger().Info(ctx, "filesearch slow engine query: "+msg)
+		return
+	}
+
+	util.GetLogger().Debug(ctx, msg)
+}
+
+func logSearchOnceWait(ctx context.Context, query SearchQuery, elapsedMs int64, timedOut bool, resultCount int) {
+	msg := fmt.Sprintf(
+		"filesearch search_once wait: query=%q elapsed=%dms timeout=%v results=%d",
+		query.Raw,
+		elapsedMs,
+		timedOut,
+		resultCount,
+	)
+	if timedOut {
+		util.GetLogger().Info(ctx, "filesearch partial query return: "+msg)
+		return
+	}
+
+	if elapsedMs >= slowFilesearchSearchOnceTimeoutMs {
+		util.GetLogger().Info(ctx, "filesearch slow search_once wait: "+msg)
+		return
+	}
+
+	util.GetLogger().Debug(ctx, msg)
 }

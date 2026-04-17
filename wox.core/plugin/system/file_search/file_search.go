@@ -12,19 +12,23 @@ import (
 	"wox/setting/definition"
 	"wox/setting/validator"
 	"wox/util"
+	"wox/util/fileicon"
 	"wox/util/filesearch"
 	"wox/util/nativecontextmenu"
 	"wox/util/permission"
 	"wox/util/shell"
 	"wox/util/trash"
-
-	"github.com/samber/lo"
 )
 
 var fileIcon = common.PluginFileIcon
 
 const fileRootsSettingKey = "roots"
 const fileSearchToolbarMsgID = "file-search-status"
+
+const (
+	slowFileSearchQueryThresholdMs int64 = 40
+	slowFileSearchStageThresholdMs int64 = 15
+)
 
 type fileRootSetting struct {
 	Path string `json:"Path"`
@@ -38,6 +42,17 @@ type FileSearchPlugin struct {
 	api                     plugin.API
 	engine                  *filesearch.Engine
 	unsubscribeStatusChange func()
+}
+
+type fileSearchQueryDiagnostics struct {
+	toolbarElapsedMs int64
+	searchElapsedMs  int64
+	buildElapsedMs   int64
+	statElapsedMs    int64
+	statCount        int
+	statMissCount    int
+	directoryCount   int
+	thumbnailCount   int
 }
 
 func (c *FileSearchPlugin) GetMetadata() plugin.Metadata {
@@ -103,6 +118,15 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 		c.handleStatusChanged(status)
 	})
 
+	// Sync toolbar state once when the session enters file-search query mode because
+	// the previous per-keystroke refresh forced a synchronous UI round-trip on every
+	// Query() call even though later status changes already arrive through events.
+	// Enter-time sync keeps the initial state correct and lets inactive sessions rely
+	// on manager-side ignore behavior instead of blocking every search.
+	c.api.OnEnterPluginQuery(ctx, func(ctx context.Context) {
+		c.syncToolbarMsg(ctx, false)
+	})
+
 	c.syncUserRoots(ctx)
 
 	c.api.OnSettingChanged(ctx, func(callbackCtx context.Context, key string, value string) {
@@ -124,7 +148,8 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 }
 
 func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
-	c.syncToolbarMsg(ctx, query.Search == "")
+	queryStartedAt := util.GetSystemTimestamp()
+	diagnostics := fileSearchQueryDiagnostics{}
 
 	// if query is empty, return empty result
 	if query.Search == "" {
@@ -135,20 +160,30 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plug
 		return []plugin.QueryResult{}
 	}
 
+	searchStartedAt := util.GetSystemTimestamp()
 	results, err := c.engine.SearchOnce(ctx, filesearch.SearchQuery{Raw: query.Search}, 100)
+	diagnostics.searchElapsedMs = util.GetSystemTimestamp() - searchStartedAt
 	if err != nil {
+		c.logQueryDiagnostics(ctx, query.Search, diagnostics, 0, util.GetSystemTimestamp()-queryStartedAt)
 		c.api.Log(ctx, plugin.LogLevelError, err.Error())
 		c.api.Notify(ctx, err.Error())
 		return []plugin.QueryResult{}
 	}
 
-	queryResults := lo.Map(results, func(item filesearch.SearchResult, _ int) plugin.QueryResult {
-		icon := fileIcon
-		if info, err := os.Stat(item.Path); err == nil {
-			icon = resolveFileSearchResultIcon(item.Path, info)
-		}
+	// Split result-materialization timing out from engine search timing because the
+	// previous logs stopped at SearchOnce and could not show when os.Stat/icon setup
+	// made the plugin itself look slow even though the index lookup was fast.
+	buildStartedAt := util.GetSystemTimestamp()
+	// Cache file-type icons per extension inside one query because the previous
+	// per-result file-icon conversion retried embedded-icon extraction for every
+	// source file path, which turned an 8ms indexed search into a much slower
+	// end-to-end query even though most files only need their shared type icon.
+	fileTypeIcons := map[string]common.WoxImage{}
+	queryResults := make([]plugin.QueryResult, 0, len(results))
+	for _, item := range results {
+		icon := resolveFileSearchResultIcon(ctx, item, fileTypeIcons, &diagnostics)
 
-		return plugin.QueryResult{
+		queryResults = append(queryResults, plugin.QueryResult{
 			Title:    item.Name,
 			SubTitle: item.Path,
 			Icon:     icon,
@@ -195,22 +230,53 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plug
 					PreventHideAfterAction: true,
 				},
 			},
-		}
-	})
+		})
+	}
+	diagnostics.buildElapsedMs = util.GetSystemTimestamp() - buildStartedAt
+	c.logQueryDiagnostics(ctx, query.Search, diagnostics, len(queryResults), util.GetSystemTimestamp()-queryStartedAt)
 
 	return queryResults
 }
 
-func resolveFileSearchResultIcon(filePath string, info os.FileInfo) common.WoxImage {
-	if info.IsDir() {
+func resolveFileSearchResultIcon(ctx context.Context, result filesearch.SearchResult, fileTypeIcons map[string]common.WoxImage, diagnostics *fileSearchQueryDiagnostics) common.WoxImage {
+	if result.IsDir {
+		diagnostics.directoryCount++
 		return common.FolderIcon
 	}
 
-	if shouldUseFileSearchImageThumbnail(filePath) {
-		return common.NewWoxImageAbsolutePath(filePath)
+	if shouldUseFileSearchImageThumbnail(result.Path) {
+		diagnostics.thumbnailCount++
+		// Trust indexed metadata for regular files because the old per-result os.Stat
+		// spent several milliseconds confirming directory state that the scanner had
+		// already stored. Keep a thumbnail existence check only for image paths so UI
+		// does not try to render a deleted file after the index falls briefly behind.
+		statStartedAt := util.GetSystemTimestamp()
+		_, statErr := os.Stat(result.Path)
+		diagnostics.statElapsedMs += util.GetSystemTimestamp() - statStartedAt
+		diagnostics.statCount++
+		if statErr == nil {
+			return common.NewWoxImageAbsolutePath(result.Path)
+		}
+		diagnostics.statMissCount++
 	}
 
-	return common.NewWoxImageFileIcon(filePath)
+	// Resolve regular files to a cached type icon here because letting manager-side
+	// icon conversion inspect every file path forces repeated embedded-icon probes.
+	// That fallback work was the main reason logs showed 30ms+ end-to-end latency
+	// even when file search itself had already finished within the single-digit budget.
+	extension := strings.ToLower(strings.TrimSpace(filepath.Ext(result.Path)))
+	if cachedIcon, ok := fileTypeIcons[extension]; ok {
+		return cachedIcon
+	}
+
+	iconPath, err := fileicon.GetFileTypeIcon(ctx, extension)
+	if err == nil && strings.TrimSpace(iconPath) != "" {
+		icon := common.NewWoxImageAbsolutePath(iconPath)
+		fileTypeIcons[extension] = icon
+		return icon
+	}
+
+	return common.NewWoxImageFileIcon(result.Path)
 }
 
 func shouldUseFileSearchImageThumbnail(filePath string) bool {
@@ -416,6 +482,33 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 
 func (c *FileSearchPlugin) handleStatusChanged(status filesearch.StatusSnapshot) {
 	c.syncToolbarMsgWithStatus(util.NewTraceContext(), status, false)
+}
+
+func (c *FileSearchPlugin) logQueryDiagnostics(ctx context.Context, rawQuery string, diagnostics fileSearchQueryDiagnostics, resultCount int, totalElapsedMs int64) {
+	msg := fmt.Sprintf(
+		"file_search query diagnostics: query=%q total=%dms toolbar=%dms search=%dms build=%dms stat=%dms stat_calls=%d stat_miss=%d results=%d dirs=%d thumbnails=%d",
+		rawQuery,
+		totalElapsedMs,
+		diagnostics.toolbarElapsedMs,
+		diagnostics.searchElapsedMs,
+		diagnostics.buildElapsedMs,
+		diagnostics.statElapsedMs,
+		diagnostics.statCount,
+		diagnostics.statMissCount,
+		resultCount,
+		diagnostics.directoryCount,
+		diagnostics.thumbnailCount,
+	)
+
+	if totalElapsedMs >= slowFileSearchQueryThresholdMs ||
+		diagnostics.searchElapsedMs >= slowFileSearchStageThresholdMs ||
+		diagnostics.buildElapsedMs >= slowFileSearchStageThresholdMs ||
+		diagnostics.statElapsedMs >= slowFileSearchStageThresholdMs {
+		c.api.Log(ctx, plugin.LogLevelInfo, "slow "+msg)
+		return
+	}
+
+	c.api.Log(ctx, plugin.LogLevelDebug, msg)
 }
 
 func (c *FileSearchPlugin) buildPreparingToolbarTitle(ctx context.Context, status filesearch.StatusSnapshot) string {
