@@ -105,7 +105,7 @@ func (ts *TestSuite) RunQueryTest(test QueryTest) (bool, *QueryTestFailure) {
 	}
 	ts.t.Logf("Query created successfully, executing...")
 
-	resultChan, doneChan := plugin.GetPluginManager().Query(ts.ctx, query)
+	resultChan, _, doneChan := plugin.GetPluginManager().Query(ts.ctx, query)
 
 	// Collect all results
 	var allResults []plugin.QueryResultUI
