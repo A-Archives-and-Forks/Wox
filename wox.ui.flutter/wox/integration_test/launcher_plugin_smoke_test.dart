@@ -69,8 +69,11 @@ void registerLauncherPluginSmokeTests() {
       expect(result.preview.previewData, equals('This is a preview'));
       expect(result.preview.previewProperties['Property1'], equals('Hello World'));
       expect(result.preview.previewProperties['Property2'], equals('This is a property'));
-      expect(result.tails, hasLength(1));
-      expect(result.tails.first.text, equals('This is a tail'));
+      // Dev smoke builds now append batch/latency/score tails automatically, so
+      // assert only on the template plugin's own tail payload here.
+      final businessTails = getSmokeBusinessTails(result);
+      expect(businessTails, hasLength(1));
+      expect(businessTails.first.text, equals('This is a tail'));
       final openActions = result.actions.where((action) => action.name == 'Open').toList();
       expect(openActions, isNotEmpty);
       expect(openActions.first.contextData['search'], equals(search));
@@ -108,7 +111,10 @@ void registerLauncherPluginSmokeTests() {
 
       expect(result.title, equals('you typed smoke-check'));
       expect(result.subTitle, equals('this is subsitle'));
-      expect(result.tails, isEmpty);
+      // The Python template intentionally returns no plugin-defined tails. Keep
+      // ignoring the dev-only debug tails so this smoke test still validates the
+      // packaged template payload instead of the environment-specific annotations.
+      expect(getSmokeBusinessTails(result), isEmpty);
 
       final myActions = result.actions.where((action) => action.name == 'My Action').toList();
       expect(myActions, isNotEmpty);
