@@ -2,15 +2,21 @@
 
 #include <cmath>
 #include <cctype>
+#include <cstdint>
 #include <optional>
+#include <mutex>
 #include <sstream>
-#include <thread>
 #include <string>
+#include <thread>
+#include <vector>
 #include <flutter/plugin_registrar_windows.h>
 #include <windows.h>
 #include <dwmapi.h>
+#include <gdiplus.h>
+#include <objidl.h>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "utils.h"
 #include "wox_webview/wox_webview_plugin.h"
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
@@ -25,6 +31,156 @@ static constexpr ULONGLONG kPostShowBlurGraceMs = 300;
 
 // Store window instance for window procedure
 FlutterWindow *g_window_instance = nullptr;
+static std::once_flag g_gdiplus_init_once;
+static ULONG_PTR g_gdiplus_token = 0;
+
+static void EnsureGdiplusInitialized()
+{
+  std::call_once(g_gdiplus_init_once, []() {
+    Gdiplus::GdiplusStartupInput startup_input;
+    Gdiplus::GdiplusStartup(&g_gdiplus_token, &startup_input, nullptr);
+  });
+}
+
+static std::string Base64Encode(const std::vector<uint8_t> &data)
+{
+  static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string encoded;
+  encoded.reserve(((data.size() + 2) / 3) * 4);
+
+  size_t index = 0;
+  while (index + 2 < data.size())
+  {
+    const uint32_t value = (static_cast<uint32_t>(data[index]) << 16) |
+                           (static_cast<uint32_t>(data[index + 1]) << 8) |
+                           static_cast<uint32_t>(data[index + 2]);
+    encoded.push_back(kAlphabet[(value >> 18) & 0x3F]);
+    encoded.push_back(kAlphabet[(value >> 12) & 0x3F]);
+    encoded.push_back(kAlphabet[(value >> 6) & 0x3F]);
+    encoded.push_back(kAlphabet[value & 0x3F]);
+    index += 3;
+  }
+
+  if (index < data.size())
+  {
+    uint32_t value = static_cast<uint32_t>(data[index]) << 16;
+    encoded.push_back(kAlphabet[(value >> 18) & 0x3F]);
+    if (index + 1 < data.size())
+    {
+      value |= static_cast<uint32_t>(data[index + 1]) << 8;
+      encoded.push_back(kAlphabet[(value >> 12) & 0x3F]);
+      encoded.push_back(kAlphabet[(value >> 6) & 0x3F]);
+      encoded.push_back('=');
+    }
+    else
+    {
+      encoded.push_back(kAlphabet[(value >> 12) & 0x3F]);
+      encoded.push_back('=');
+      encoded.push_back('=');
+    }
+  }
+
+  return encoded;
+}
+
+static bool GetPngEncoderClsid(CLSID *out_clsid)
+{
+  EnsureGdiplusInitialized();
+
+  UINT encoder_count = 0;
+  UINT encoder_size = 0;
+  if (Gdiplus::GetImageEncodersSize(&encoder_count, &encoder_size) != Gdiplus::Ok || encoder_size == 0)
+  {
+    return false;
+  }
+
+  std::vector<uint8_t> buffer(encoder_size);
+  auto *encoders = reinterpret_cast<Gdiplus::ImageCodecInfo *>(buffer.data());
+  if (Gdiplus::GetImageEncoders(encoder_count, encoder_size, encoders) != Gdiplus::Ok)
+  {
+    return false;
+  }
+
+  for (UINT i = 0; i < encoder_count; ++i)
+  {
+    if (wcscmp(encoders[i].MimeType, L"image/png") == 0)
+    {
+      *out_clsid = encoders[i].Clsid;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool EncodeBitmapToPngBase64(HBITMAP bitmap, std::string &png_base64, std::string &error)
+{
+  CLSID png_clsid{};
+  if (!GetPngEncoderClsid(&png_clsid))
+  {
+    error = "Failed to find PNG encoder";
+    return false;
+  }
+
+  Gdiplus::Bitmap image(bitmap, nullptr);
+  IStream *stream = nullptr;
+  if (CreateStreamOnHGlobal(nullptr, TRUE, &stream) != S_OK)
+  {
+    error = "Failed to create memory stream";
+    return false;
+  }
+
+  const auto status = image.Save(stream, &png_clsid, nullptr);
+  if (status != Gdiplus::Ok)
+  {
+    error = "Failed to encode monitor image as PNG";
+    stream->Release();
+    return false;
+  }
+
+  HGLOBAL global = nullptr;
+  if (GetHGlobalFromStream(stream, &global) != S_OK || global == nullptr)
+  {
+    error = "Failed to access encoded PNG stream";
+    stream->Release();
+    return false;
+  }
+
+  const SIZE_T size = GlobalSize(global);
+  auto *bytes = static_cast<uint8_t *>(GlobalLock(global));
+  if (bytes == nullptr || size == 0)
+  {
+    error = "Failed to lock encoded PNG bytes";
+    if (bytes != nullptr)
+    {
+      GlobalUnlock(global);
+    }
+    stream->Release();
+    return false;
+  }
+
+  std::vector<uint8_t> copy(bytes, bytes + size);
+  GlobalUnlock(global);
+  stream->Release();
+  png_base64 = Base64Encode(copy);
+  return true;
+}
+
+static flutter::EncodableMap BuildRectValue(double x, double y, double width, double height)
+{
+  flutter::EncodableMap rect;
+  rect[flutter::EncodableValue("x")] = flutter::EncodableValue(x);
+  rect[flutter::EncodableValue("y")] = flutter::EncodableValue(y);
+  rect[flutter::EncodableValue("width")] = flutter::EncodableValue(width);
+  rect[flutter::EncodableValue("height")] = flutter::EncodableValue(height);
+  return rect;
+}
+
+struct MonitorSnapshotCapture
+{
+  std::vector<flutter::EncodableValue> snapshots;
+  std::string error;
+};
 
 static bool IsKeyDownMessage(UINT message)
 {
@@ -1007,6 +1163,148 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       }
 
       result->Success();
+    }
+    else if (method_name == "captureAllDisplays")
+    {
+      MonitorSnapshotCapture monitor_capture;
+
+      EnumDisplayMonitors(
+          nullptr,
+          nullptr,
+          [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL
+          {
+            auto *capture = reinterpret_cast<MonitorSnapshotCapture *>(data);
+            MONITORINFOEXW monitor_info{};
+            monitor_info.cbSize = sizeof(MONITORINFOEXW);
+            if (!GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO *>(&monitor_info)))
+            {
+              capture->error = "Failed to query monitor info";
+              return FALSE;
+            }
+
+            const int width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+            const int height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+            if (width <= 0 || height <= 0)
+            {
+              capture->error = "Monitor has invalid bounds";
+              return FALSE;
+            }
+
+            HDC screen_dc = GetDC(nullptr);
+            if (screen_dc == nullptr)
+            {
+              capture->error = "Failed to access desktop device context";
+              return FALSE;
+            }
+
+            HDC memory_dc = CreateCompatibleDC(screen_dc);
+            HBITMAP bitmap = CreateCompatibleBitmap(screen_dc, width, height);
+            if (memory_dc == nullptr || bitmap == nullptr)
+            {
+              if (bitmap != nullptr)
+              {
+                DeleteObject(bitmap);
+              }
+              if (memory_dc != nullptr)
+              {
+                DeleteDC(memory_dc);
+              }
+              ReleaseDC(nullptr, screen_dc);
+              capture->error = "Failed to allocate monitor bitmap";
+              return FALSE;
+            }
+
+            HGDIOBJ old_bitmap = SelectObject(memory_dc, bitmap);
+            const BOOL copied = BitBlt(
+                memory_dc,
+                0,
+                0,
+                width,
+                height,
+                screen_dc,
+                monitor_info.rcMonitor.left,
+                monitor_info.rcMonitor.top,
+                SRCCOPY | CAPTUREBLT);
+
+            SelectObject(memory_dc, old_bitmap);
+            DeleteDC(memory_dc);
+            ReleaseDC(nullptr, screen_dc);
+
+            if (!copied)
+            {
+              DeleteObject(bitmap);
+              capture->error = "Failed to capture monitor bitmap";
+              return FALSE;
+            }
+
+            std::string png_base64;
+            std::string encode_error;
+            const bool encoded = EncodeBitmapToPngBase64(bitmap, png_base64, encode_error);
+            DeleteObject(bitmap);
+            if (!encoded)
+            {
+              capture->error = encode_error;
+              return FALSE;
+            }
+
+            DEVMODEW dev_mode{};
+            dev_mode.dmSize = sizeof(DEVMODEW);
+            int rotation = 0;
+            if (EnumDisplaySettingsExW(monitor_info.szDevice, ENUM_CURRENT_SETTINGS, &dev_mode, 0))
+            {
+              switch (dev_mode.dmDisplayOrientation)
+              {
+              case DMDO_90:
+                rotation = 90;
+                break;
+              case DMDO_180:
+                rotation = 180;
+                break;
+              case DMDO_270:
+                rotation = 270;
+                break;
+              default:
+                rotation = 0;
+                break;
+              }
+            }
+
+            const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+            const double scale = static_cast<double>(dpi) / 96.0;
+            flutter::EncodableMap snapshot;
+            snapshot[flutter::EncodableValue("displayId")] = flutter::EncodableValue(Utf8FromUtf16(monitor_info.szDevice));
+            snapshot[flutter::EncodableValue("logicalBounds")] = flutter::EncodableValue(
+                BuildRectValue(
+                    static_cast<double>(monitor_info.rcMonitor.left) / scale,
+                    static_cast<double>(monitor_info.rcMonitor.top) / scale,
+                    static_cast<double>(width) / scale,
+                    static_cast<double>(height) / scale));
+            snapshot[flutter::EncodableValue("pixelBounds")] = flutter::EncodableValue(
+                BuildRectValue(
+                    static_cast<double>(monitor_info.rcMonitor.left),
+                    static_cast<double>(monitor_info.rcMonitor.top),
+                    static_cast<double>(width),
+                    static_cast<double>(height)));
+            snapshot[flutter::EncodableValue("scale")] = flutter::EncodableValue(scale);
+            snapshot[flutter::EncodableValue("rotation")] = flutter::EncodableValue(rotation);
+            snapshot[flutter::EncodableValue("imageBytesBase64")] = flutter::EncodableValue(png_base64);
+            capture->snapshots.emplace_back(snapshot);
+            return TRUE;
+          },
+          reinterpret_cast<LPARAM>(&monitor_capture));
+
+      if (!monitor_capture.error.empty())
+      {
+        result->Error("CAPTURE_ERROR", monitor_capture.error);
+        return;
+      }
+
+      flutter::EncodableList snapshots;
+      for (const auto &snapshot : monitor_capture.snapshots)
+      {
+        snapshots.push_back(snapshot);
+      }
+      result->Success(flutter::EncodableValue(snapshots));
     }
     else if (method_name == "setSize")
     {

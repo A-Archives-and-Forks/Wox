@@ -8,11 +8,13 @@ import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_border_drag_move_view.dart';
 import 'package:wox/controllers/wox_ai_chat_controller.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
+import 'package:wox/controllers/wox_screenshot_controller.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/utils/windows/window_manager.dart';
 import 'package:wox/utils/windows/window_manager_interface.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/modules/launcher/views/wox_launcher_view.dart';
+import 'package:wox/modules/screenshot/views/wox_screenshot_view.dart';
 import 'package:wox/modules/setting/views/wox_setting_view.dart';
 import 'package:wox/utils/env.dart';
 import 'package:wox/utils/heartbeat_checker.dart';
@@ -66,11 +68,15 @@ Future<void> initialServices(List<String> arguments) async {
   var launcherController = WoxLauncherController();
   launcherController.startDoctorCheckTimer();
 
-  await WoxWebsocketMsgUtil.instance.initialize(Uri.parse("ws://127.0.0.1:${Env.serverPort}/ws"), onMessageReceived: launcherController.handleWebSocketMessage);
+  await WoxWebsocketMsgUtil.instance.initialize(
+    Uri.parse("ws://127.0.0.1:${Env.serverPort}/ws"),
+    onMessageReceived: launcherController.handleWebSocketMessage,
+  );
   HeartbeatChecker().startChecking();
   Get.put(launcherController);
   var woxSettingController = WoxSettingController();
   Get.put(woxSettingController);
+  Get.put(WoxScreenshotController());
   var woxAIChatController = WoxAIChatController();
   Get.put(woxAIChatController);
 
@@ -115,12 +121,17 @@ class MyApp extends StatelessWidget {
     final settingController = Get.find<WoxSettingController>();
 
     return Obx(() {
-      final appFontFamily = settingController.woxSetting.value.appFontFamily.trim();
+      final appFontFamily =
+          settingController.woxSetting.value.appFontFamily.trim();
       final textTheme = buildAppTextTheme(appFontFamily);
 
       return MaterialApp(
         navigatorKey: Get.key,
-        theme: ThemeData(useMaterial3: true, textTheme: textTheme, fontFamily: appFontFamily.isEmpty ? null : appFontFamily),
+        theme: ThemeData(
+          useMaterial3: true,
+          textTheme: textTheme,
+          fontFamily: appFontFamily.isEmpty ? null : appFontFamily,
+        ),
         debugShowCheckedModeBanner: false,
         home: const WoxApp(),
       );
@@ -137,6 +148,7 @@ class WoxApp extends StatefulWidget {
 
 class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
   final launcherController = Get.find<WoxLauncherController>();
+  final screenshotController = Get.find<WoxScreenshotController>();
   final settingController = Get.find<WoxSettingController>();
 
   @override
@@ -153,7 +165,10 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
     WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
       // Adjust the window height to match the query box height.
       // This is necessary due to dynamic height calculations on Windows caused by DPI scaling issues.
-      launcherController.resizeHeight(traceId: startupTraceId, reason: "initial resize after first frame");
+      launcherController.resizeHeight(
+        traceId: startupTraceId,
+        reason: "initial resize after first frame",
+      );
 
       // Notify the backend that the UI is ready. The server-side will determine whether to display the UI window.
       await WoxApi.instance.onUIReady(startupTraceId);
@@ -187,18 +202,35 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
     // User will not be able to input anything because the focus is lost.
     final isVisible = await windowManager.isVisible();
     if (!isVisible) {
-      Logger.instance.debug(traceId, "onWindowBlur ignored: window is not visible");
+      Logger.instance.debug(
+        traceId,
+        "onWindowBlur ignored: window is not visible",
+      );
+      return;
+    }
+
+    if (screenshotController.isSessionActive.value) {
+      Logger.instance.debug(
+        traceId,
+        "onWindowBlur ignored: screenshot session is active",
+      );
       return;
     }
 
     // if in setting view, return
     if (launcherController.isInSettingView.value) {
-      Logger.instance.debug(traceId, "onWindowBlur ignored: setting view is active");
+      Logger.instance.debug(
+        traceId,
+        "onWindowBlur ignored: setting view is active",
+      );
       return;
     }
 
     if (launcherController.forceHideOnBlur) {
-      Logger.instance.debug(traceId, "onWindowBlur triggers hideApp because forceHideOnBlur is true");
+      Logger.instance.debug(
+        traceId,
+        "onWindowBlur triggers hideApp because forceHideOnBlur is true",
+      );
       launcherController.hideApp(traceId);
       return;
     }
@@ -210,7 +242,8 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
   @override
   Widget build(BuildContext context) {
     return WoxBorderDragMoveArea(
-      borderWidth: WoxThemeUtil.instance.currentTheme.value.appPaddingTop.toDouble(),
+      borderWidth:
+          WoxThemeUtil.instance.currentTheme.value.appPaddingTop.toDouble(),
       onDragEnd: () {
         if (launcherController.isInSettingView.value) {
           return;
@@ -219,7 +252,15 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
         launcherController.focusQueryBox();
         launcherController.saveWindowPositionIfNeeded();
       },
-      child: Obx(() => launcherController.isInSettingView.value ? const WoxSettingView() : const WoxLauncherView()),
+      child: Obx(() {
+        if (screenshotController.isSessionActive.value) {
+          return const WoxScreenshotView();
+        }
+        if (launcherController.isInSettingView.value) {
+          return const WoxSettingView();
+        }
+        return const WoxLauncherView();
+      }),
     );
   }
 }

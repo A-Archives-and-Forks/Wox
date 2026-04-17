@@ -275,6 +275,26 @@ func (u *uiImpl) PickFiles(ctx context.Context, params common.PickFilesParams) [
 	return result
 }
 
+func (u *uiImpl) CaptureScreenshot(ctx context.Context, request common.CaptureScreenshotRequest) (common.CaptureScreenshotResult, error) {
+	if request.SessionId == "" {
+		// The UI request itself needs a stable session identifier so Flutter can correlate this long-lived
+		// screenshot session with the same window instance that owns the current query/action context.
+		request.SessionId = util.GetContextSessionId(ctx)
+	}
+
+	respData, err := u.invokeWebsocketMethod(ctx, "CaptureScreenshot", request)
+	if err != nil {
+		return common.CaptureScreenshotResult{}, err
+	}
+
+	result, mapErr := decodeWebsocketResponse[common.CaptureScreenshotResult](respData)
+	if mapErr != nil {
+		return common.CaptureScreenshotResult{}, mapErr
+	}
+
+	return result, nil
+}
+
 func (u *uiImpl) invokeWebsocketMethod(ctx context.Context, method string, data any) (responseData any, responseErr error) {
 	requestID := uuid.NewString()
 	resultChan := make(chan WebsocketMsg)
@@ -296,11 +316,7 @@ func (u *uiImpl) invokeWebsocketMethod(ctx context.Context, method string, data 
 		return "", err
 	}
 
-	var timeout = time.Second * 2
-	if method == "PickFiles" {
-		// pick files may take a long time
-		timeout = time.Second * 180
-	}
+	timeout := getWebsocketMethodTimeout(method)
 	select {
 	case <-time.NewTimer(timeout).C:
 		logger.Error(ctx, fmt.Sprintf("invoke ui method %s response timeout", method))
@@ -312,6 +328,31 @@ func (u *uiImpl) invokeWebsocketMethod(ctx context.Context, method string, data 
 			return response.Data, nil
 		}
 	}
+}
+
+func getWebsocketMethodTimeout(method string) time.Duration {
+	switch method {
+	case "PickFiles", "CaptureScreenshot":
+		// File pickers and screenshot sessions both wait on direct user interaction,
+		// so the previous fixed 2s request timeout was not enough for these long-lived UI tasks.
+		return 180 * time.Second
+	default:
+		return 2 * time.Second
+	}
+}
+
+func decodeWebsocketResponse[T any](data any) (T, error) {
+	var target T
+
+	jsonBytes, marshalErr := json.Marshal(data)
+	if marshalErr != nil {
+		return target, fmt.Errorf("marshal websocket response failed: %w", marshalErr)
+	}
+	if unmarshalErr := json.Unmarshal(jsonBytes, &target); unmarshalErr != nil {
+		return target, fmt.Errorf("unmarshal websocket response failed: %w", unmarshalErr)
+	}
+
+	return target, nil
 }
 
 func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[string]any {

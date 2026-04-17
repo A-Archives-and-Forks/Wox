@@ -6,6 +6,7 @@
 #include <math.h>
 #include <string>
 #include <stdarg.h>
+#include <vector>
 #ifdef GDK_WINDOWING_X11
 #include <X11/Xatom.h>
 #include <X11/keysym.h>
@@ -263,6 +264,759 @@ static void restore_previous_active_window(MyApplication *self)
 }
 #endif
 
+static FlValue *build_rect_value(double x, double y, double width, double height)
+{
+  FlValue *rect = fl_value_new_map();
+  fl_value_set_string_take(rect, "x", fl_value_new_float(x));
+  fl_value_set_string_take(rect, "y", fl_value_new_float(y));
+  fl_value_set_string_take(rect, "width", fl_value_new_float(width));
+  fl_value_set_string_take(rect, "height", fl_value_new_float(height));
+  return rect;
+}
+
+static gboolean encode_pixbuf_to_png_base64(GdkPixbuf *pixbuf, gchar **base64_out, gchar **error_out)
+{
+  gchar *png_buffer = nullptr;
+  gsize png_size = 0;
+  GError *save_error = nullptr;
+  if (!gdk_pixbuf_save_to_buffer(pixbuf, &png_buffer, &png_size, "png", &save_error, nullptr))
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(save_error != nullptr ? save_error->message : "Failed to encode screenshot PNG");
+    }
+    g_clear_error(&save_error);
+    return FALSE;
+  }
+
+  *base64_out = g_base64_encode(reinterpret_cast<const guchar *>(png_buffer), png_size);
+  g_free(png_buffer);
+  return TRUE;
+}
+
+struct PortalRequestResponse
+{
+  GMainLoop *loop;
+  guint response_code;
+  GVariant *results;
+  gboolean received;
+};
+
+struct PortalMonitorSnapshot
+{
+  std::string id;
+  int x;
+  int y;
+  int width;
+  int height;
+};
+
+static gboolean portal_timeout_cb(gpointer user_data)
+{
+  auto *response = static_cast<PortalRequestResponse *>(user_data);
+  response->response_code = 2;
+  g_main_loop_quit(response->loop);
+  return G_SOURCE_REMOVE;
+}
+
+static void portal_response_cb(
+    GDBusConnection *,
+    const gchar *,
+    const gchar *,
+    const gchar *,
+    const gchar *,
+    GVariant *parameters,
+    gpointer user_data)
+{
+  auto *response = static_cast<PortalRequestResponse *>(user_data);
+  response->received = TRUE;
+  g_variant_get(parameters, "(u@a{sv})", &response->response_code, &response->results);
+  g_main_loop_quit(response->loop);
+}
+
+static gboolean wait_for_portal_response(
+    GDBusConnection *connection,
+    const gchar *request_path,
+    PortalRequestResponse *response,
+    gchar **error_out)
+{
+  response->loop = g_main_loop_new(nullptr, FALSE);
+  response->response_code = 2;
+  response->results = nullptr;
+  response->received = FALSE;
+
+  const guint timeout_source = g_timeout_add_seconds(12, portal_timeout_cb, response);
+  const guint signal_id = g_dbus_connection_signal_subscribe(
+      connection,
+      "org.freedesktop.portal.Desktop",
+      "org.freedesktop.portal.Request",
+      "Response",
+      request_path,
+      nullptr,
+      G_DBUS_SIGNAL_FLAGS_NONE,
+      portal_response_cb,
+      response,
+      nullptr);
+
+  g_main_loop_run(response->loop);
+
+  g_source_remove(timeout_source);
+  g_dbus_connection_signal_unsubscribe(connection, signal_id);
+  g_main_loop_unref(response->loop);
+  response->loop = nullptr;
+
+  if (!response->received)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Timed out waiting for portal response");
+    }
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static void clear_portal_response(PortalRequestResponse *response)
+{
+  if (response->results != nullptr)
+  {
+    g_variant_unref(response->results);
+    response->results = nullptr;
+  }
+}
+
+static gboolean call_portal_screenshot(
+    GDBusConnection *connection,
+    GdkPixbuf **pixbuf_out,
+    gchar **error_out)
+{
+  GError *dbus_error = nullptr;
+  GVariantBuilder options_builder;
+  g_variant_builder_init(&options_builder, G_VARIANT_TYPE("a{sv}"));
+  g_variant_builder_add(&options_builder, "{sv}", "interactive", g_variant_new_boolean(FALSE));
+  gchar *handle_token = g_strdup_printf("wox_capture_%lld", static_cast<long long>(g_get_real_time()));
+  g_variant_builder_add(&options_builder, "{sv}", "handle_token", g_variant_new_string(handle_token));
+
+  GVariant *call_result = g_dbus_connection_call_sync(
+      connection,
+      "org.freedesktop.portal.Desktop",
+      "/org/freedesktop/portal/desktop",
+      "org.freedesktop.portal.Screenshot",
+      "Screenshot",
+      g_variant_new("(sa{sv})", "", &options_builder),
+      G_VARIANT_TYPE("(o)"),
+      G_DBUS_CALL_FLAGS_NONE,
+      -1,
+      nullptr,
+      &dbus_error);
+  g_free(handle_token);
+
+  if (call_result == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(dbus_error != nullptr ? dbus_error->message : "Failed to request portal screenshot");
+    }
+    g_clear_error(&dbus_error);
+    return FALSE;
+  }
+
+  gchar *request_path = nullptr;
+  g_variant_get(call_result, "(o)", &request_path);
+  g_variant_unref(call_result);
+
+  PortalRequestResponse response{};
+  const gboolean response_ok = wait_for_portal_response(connection, request_path, &response, error_out);
+  g_free(request_path);
+  if (!response_ok)
+  {
+    return FALSE;
+  }
+
+  g_autofree gchar *uri = nullptr;
+  if (response.response_code == 0 && response.results != nullptr)
+  {
+    GVariant *uri_value = g_variant_lookup_value(response.results, "uri", G_VARIANT_TYPE_STRING);
+    if (uri_value != nullptr)
+    {
+      uri = g_strdup(g_variant_get_string(uri_value, nullptr));
+      g_variant_unref(uri_value);
+    }
+  }
+
+  if (response.response_code != 0 || uri == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(response.response_code == 1 ? "Portal screenshot was cancelled" : "Portal screenshot request failed");
+    }
+    clear_portal_response(&response);
+    return FALSE;
+  }
+
+  GError *file_error = nullptr;
+  gchar *path = g_filename_from_uri(uri, nullptr, &file_error);
+  if (path == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(file_error != nullptr ? file_error->message : "Failed to read portal screenshot URI");
+    }
+    g_clear_error(&file_error);
+    clear_portal_response(&response);
+    return FALSE;
+  }
+
+  GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file(path, &file_error);
+  g_free(path);
+  clear_portal_response(&response);
+  if (pixbuf == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(file_error != nullptr ? file_error->message : "Failed to load portal screenshot file");
+    }
+    g_clear_error(&file_error);
+    return FALSE;
+  }
+
+  *pixbuf_out = pixbuf;
+  return TRUE;
+}
+
+static void close_portal_session(GDBusConnection *connection, const gchar *session_handle)
+{
+  if (connection == nullptr || session_handle == nullptr)
+  {
+    return;
+  }
+
+  g_autoptr(GError) close_error = nullptr;
+  GVariant *close_result = g_dbus_connection_call_sync(
+      connection,
+      "org.freedesktop.portal.Desktop",
+      session_handle,
+      "org.freedesktop.portal.Session",
+      "Close",
+      nullptr,
+      nullptr,
+      G_DBUS_CALL_FLAGS_NONE,
+      -1,
+      nullptr,
+      &close_error);
+  if (close_result != nullptr)
+  {
+    g_variant_unref(close_result);
+  }
+}
+
+static gboolean lookup_portal_tuple(
+    GVariant *dictionary,
+    const gchar *key,
+    gint *first,
+    gint *second)
+{
+  GVariant *tuple = g_variant_lookup_value(dictionary, key, G_VARIANT_TYPE("(ii)"));
+  if (tuple == nullptr)
+  {
+    return FALSE;
+  }
+
+  g_variant_get(tuple, "(ii)", first, second);
+  g_variant_unref(tuple);
+  return TRUE;
+}
+
+static gboolean capture_portal_monitor_metadata(
+    GDBusConnection *connection,
+    std::vector<PortalMonitorSnapshot> *monitors_out,
+    gchar **error_out)
+{
+  GError *dbus_error = nullptr;
+  gchar *session_handle = nullptr;
+
+  GVariantBuilder create_options_builder;
+  g_variant_builder_init(&create_options_builder, G_VARIANT_TYPE("a{sv}"));
+  gchar *create_handle_token = g_strdup_printf("wox_screencast_create_%lld", static_cast<long long>(g_get_real_time()));
+  gchar *session_handle_token = g_strdup_printf("wox_screencast_session_%lld", static_cast<long long>(g_get_real_time()));
+  g_variant_builder_add(&create_options_builder, "{sv}", "handle_token", g_variant_new_string(create_handle_token));
+  g_variant_builder_add(&create_options_builder, "{sv}", "session_handle_token", g_variant_new_string(session_handle_token));
+
+  GVariant *create_call_result = g_dbus_connection_call_sync(
+      connection,
+      "org.freedesktop.portal.Desktop",
+      "/org/freedesktop/portal/desktop",
+      "org.freedesktop.portal.ScreenCast",
+      "CreateSession",
+      g_variant_new("(a{sv})", &create_options_builder),
+      G_VARIANT_TYPE("(o)"),
+      G_DBUS_CALL_FLAGS_NONE,
+      -1,
+      nullptr,
+      &dbus_error);
+  g_free(create_handle_token);
+  g_free(session_handle_token);
+
+  if (create_call_result == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(dbus_error != nullptr ? dbus_error->message : "Failed to create portal ScreenCast session");
+    }
+    g_clear_error(&dbus_error);
+    return FALSE;
+  }
+
+  gchar *create_request_path = nullptr;
+  g_variant_get(create_call_result, "(o)", &create_request_path);
+  g_variant_unref(create_call_result);
+
+  PortalRequestResponse create_response{};
+  const gboolean create_ok = wait_for_portal_response(connection, create_request_path, &create_response, error_out);
+  g_free(create_request_path);
+  if (!create_ok)
+  {
+    return FALSE;
+  }
+
+  if (create_response.response_code == 0 && create_response.results != nullptr)
+  {
+    GVariant *session_handle_value = g_variant_lookup_value(create_response.results, "session_handle", G_VARIANT_TYPE_STRING);
+    if (session_handle_value != nullptr)
+    {
+      session_handle = g_strdup(g_variant_get_string(session_handle_value, nullptr));
+      g_variant_unref(session_handle_value);
+    }
+  }
+  clear_portal_response(&create_response);
+
+  if (session_handle == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Portal ScreenCast session did not return a session handle");
+    }
+    return FALSE;
+  }
+
+  GVariantBuilder select_options_builder;
+  g_variant_builder_init(&select_options_builder, G_VARIANT_TYPE("a{sv}"));
+  gchar *select_handle_token = g_strdup_printf("wox_screencast_select_%lld", static_cast<long long>(g_get_real_time()));
+  g_variant_builder_add(&select_options_builder, "{sv}", "handle_token", g_variant_new_string(select_handle_token));
+  g_variant_builder_add(&select_options_builder, "{sv}", "types", g_variant_new_uint32(1));
+  g_variant_builder_add(&select_options_builder, "{sv}", "multiple", g_variant_new_boolean(TRUE));
+  g_variant_builder_add(&select_options_builder, "{sv}", "cursor_mode", g_variant_new_uint32(1));
+
+  GVariant *select_call_result = g_dbus_connection_call_sync(
+      connection,
+      "org.freedesktop.portal.Desktop",
+      "/org/freedesktop/portal/desktop",
+      "org.freedesktop.portal.ScreenCast",
+      "SelectSources",
+      g_variant_new("(oa{sv})", session_handle, &select_options_builder),
+      G_VARIANT_TYPE("(o)"),
+      G_DBUS_CALL_FLAGS_NONE,
+      -1,
+      nullptr,
+      &dbus_error);
+  g_free(select_handle_token);
+
+  if (select_call_result == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(dbus_error != nullptr ? dbus_error->message : "Failed to select portal ScreenCast sources");
+    }
+    g_clear_error(&dbus_error);
+    close_portal_session(connection, session_handle);
+    g_free(session_handle);
+    return FALSE;
+  }
+
+  gchar *select_request_path = nullptr;
+  g_variant_get(select_call_result, "(o)", &select_request_path);
+  g_variant_unref(select_call_result);
+
+  PortalRequestResponse select_response{};
+  const gboolean select_ok = wait_for_portal_response(connection, select_request_path, &select_response, error_out);
+  g_free(select_request_path);
+  if (!select_ok)
+  {
+    close_portal_session(connection, session_handle);
+    g_free(session_handle);
+    return FALSE;
+  }
+
+  const gboolean select_succeeded = select_response.response_code == 0;
+  clear_portal_response(&select_response);
+  if (!select_succeeded)
+  {
+    if (error_out != nullptr && *error_out == nullptr)
+    {
+      *error_out = g_strdup("Portal ScreenCast source selection was cancelled");
+    }
+    close_portal_session(connection, session_handle);
+    g_free(session_handle);
+    return FALSE;
+  }
+
+  GVariantBuilder start_options_builder;
+  g_variant_builder_init(&start_options_builder, G_VARIANT_TYPE("a{sv}"));
+  gchar *start_handle_token = g_strdup_printf("wox_screencast_start_%lld", static_cast<long long>(g_get_real_time()));
+  g_variant_builder_add(&start_options_builder, "{sv}", "handle_token", g_variant_new_string(start_handle_token));
+
+  GVariant *start_call_result = g_dbus_connection_call_sync(
+      connection,
+      "org.freedesktop.portal.Desktop",
+      "/org/freedesktop/portal/desktop",
+      "org.freedesktop.portal.ScreenCast",
+      "Start",
+      g_variant_new("(osa{sv})", session_handle, "", &start_options_builder),
+      G_VARIANT_TYPE("(o)"),
+      G_DBUS_CALL_FLAGS_NONE,
+      -1,
+      nullptr,
+      &dbus_error);
+  g_free(start_handle_token);
+
+  if (start_call_result == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(dbus_error != nullptr ? dbus_error->message : "Failed to start portal ScreenCast session");
+    }
+    g_clear_error(&dbus_error);
+    close_portal_session(connection, session_handle);
+    g_free(session_handle);
+    return FALSE;
+  }
+
+  gchar *start_request_path = nullptr;
+  g_variant_get(start_call_result, "(o)", &start_request_path);
+  g_variant_unref(start_call_result);
+
+  PortalRequestResponse start_response{};
+  const gboolean start_ok = wait_for_portal_response(connection, start_request_path, &start_response, error_out);
+  g_free(start_request_path);
+  if (!start_ok)
+  {
+    close_portal_session(connection, session_handle);
+    g_free(session_handle);
+    return FALSE;
+  }
+
+  if (start_response.response_code != 0 || start_response.results == nullptr)
+  {
+    if (error_out != nullptr && *error_out == nullptr)
+    {
+      *error_out = g_strdup(start_response.response_code == 1 ? "Portal ScreenCast session was cancelled" : "Portal ScreenCast session failed");
+    }
+    clear_portal_response(&start_response);
+    close_portal_session(connection, session_handle);
+    g_free(session_handle);
+    return FALSE;
+  }
+
+  GVariant *streams_value = g_variant_lookup_value(start_response.results, "streams", G_VARIANT_TYPE("a(ua{sv})"));
+  if (streams_value == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Portal ScreenCast session did not return monitor streams");
+    }
+    clear_portal_response(&start_response);
+    close_portal_session(connection, session_handle);
+    g_free(session_handle);
+    return FALSE;
+  }
+
+  GVariantIter streams_iter;
+  g_variant_iter_init(&streams_iter, streams_value);
+  GVariant *stream_entry = nullptr;
+  while ((stream_entry = g_variant_iter_next_value(&streams_iter)) != nullptr)
+  {
+    guint32 node_id = 0;
+    GVariant *stream_properties = nullptr;
+    g_variant_get(stream_entry, "(u@a{sv})", &node_id, &stream_properties);
+
+    guint32 source_type = 0;
+    g_variant_lookup(stream_properties, "source_type", "u", &source_type);
+    gint x = 0;
+    gint y = 0;
+    gint width = 0;
+    gint height = 0;
+
+    if (source_type == 1 &&
+        lookup_portal_tuple(stream_properties, "position", &x, &y) &&
+        lookup_portal_tuple(stream_properties, "size", &width, &height) &&
+        width > 0 &&
+        height > 0)
+    {
+      GVariant *id_value = g_variant_lookup_value(stream_properties, "id", G_VARIANT_TYPE_STRING);
+      std::string display_id = id_value != nullptr ? g_variant_get_string(id_value, nullptr) : "";
+      if (id_value != nullptr)
+      {
+        g_variant_unref(id_value);
+      }
+      if (display_id.empty())
+      {
+        display_id = "portal-monitor-" + std::to_string(node_id);
+      }
+
+      monitors_out->push_back(
+          PortalMonitorSnapshot{
+              display_id,
+              x,
+              y,
+              width,
+              height,
+          });
+    }
+
+    if (stream_properties != nullptr)
+    {
+      g_variant_unref(stream_properties);
+    }
+    g_variant_unref(stream_entry);
+  }
+
+  g_variant_unref(streams_value);
+  clear_portal_response(&start_response);
+  close_portal_session(connection, session_handle);
+  g_free(session_handle);
+
+  if (monitors_out->empty())
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Portal ScreenCast session did not expose any monitor streams");
+    }
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean capture_portal_monitor_snapshots(FlValue **snapshots_out, gchar **error_out)
+{
+  GError *dbus_error = nullptr;
+  GDBusConnection *connection = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &dbus_error);
+  if (connection == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(dbus_error != nullptr ? dbus_error->message : "Failed to connect to portal session bus");
+    }
+    g_clear_error(&dbus_error);
+    return FALSE;
+  }
+
+  std::vector<PortalMonitorSnapshot> monitors;
+  const gboolean metadata_ok = capture_portal_monitor_metadata(connection, &monitors, error_out);
+  if (!metadata_ok)
+  {
+    g_object_unref(connection);
+    return FALSE;
+  }
+
+  GdkPixbuf *desktop_pixbuf = nullptr;
+  const gboolean screenshot_ok = call_portal_screenshot(connection, &desktop_pixbuf, error_out);
+  g_object_unref(connection);
+  if (!screenshot_ok)
+  {
+    return FALSE;
+  }
+
+  int union_left = monitors.front().x;
+  int union_top = monitors.front().y;
+  int union_right = monitors.front().x + monitors.front().width;
+  int union_bottom = monitors.front().y + monitors.front().height;
+  for (size_t index = 1; index < monitors.size(); ++index)
+  {
+    const auto &monitor = monitors[index];
+    union_left = MIN(union_left, monitor.x);
+    union_top = MIN(union_top, monitor.y);
+    union_right = MAX(union_right, monitor.x + monitor.width);
+    union_bottom = MAX(union_bottom, monitor.y + monitor.height);
+  }
+
+  const int union_width = union_right - union_left;
+  const int union_height = union_bottom - union_top;
+  const int desktop_pixel_width = gdk_pixbuf_get_width(desktop_pixbuf);
+  const int desktop_pixel_height = gdk_pixbuf_get_height(desktop_pixbuf);
+  const double scale_x = union_width > 0 ? static_cast<double>(desktop_pixel_width) / union_width : 1.0;
+  const double scale_y = union_height > 0 ? static_cast<double>(desktop_pixel_height) / union_height : 1.0;
+
+  g_autoptr(FlValue) snapshots = fl_value_new_list();
+  for (const auto &monitor : monitors)
+  {
+    int crop_x = static_cast<int>(round((monitor.x - union_left) * scale_x));
+    int crop_y = static_cast<int>(round((monitor.y - union_top) * scale_y));
+    int crop_width = static_cast<int>(round(monitor.width * scale_x));
+    int crop_height = static_cast<int>(round(monitor.height * scale_y));
+
+    crop_x = CLAMP(crop_x, 0, MAX(0, desktop_pixel_width - 1));
+    crop_y = CLAMP(crop_y, 0, MAX(0, desktop_pixel_height - 1));
+    crop_width = CLAMP(crop_width, 1, desktop_pixel_width - crop_x);
+    crop_height = CLAMP(crop_height, 1, desktop_pixel_height - crop_y);
+
+    // Wayland does not expose compositor pixels directly to GTK. We use the ScreenCast portal to
+    // obtain monitor-sized compositor coordinates, then slice the portal desktop screenshot into
+    // one image per monitor so Flutter still receives the multi-display surfaces it needs.
+    GdkPixbuf *monitor_pixbuf = gdk_pixbuf_new_subpixbuf(
+        desktop_pixbuf,
+        crop_x,
+        crop_y,
+        crop_width,
+        crop_height);
+    if (monitor_pixbuf == nullptr)
+    {
+      if (error_out != nullptr)
+      {
+        *error_out = g_strdup("Failed to crop portal monitor snapshot");
+      }
+      g_object_unref(desktop_pixbuf);
+      return FALSE;
+    }
+
+    gchar *image_base64 = nullptr;
+    gchar *encode_error = nullptr;
+    if (!encode_pixbuf_to_png_base64(monitor_pixbuf, &image_base64, &encode_error))
+    {
+      if (error_out != nullptr)
+      {
+        *error_out = encode_error != nullptr ? encode_error : g_strdup("Failed to encode portal monitor snapshot");
+      }
+      g_free(encode_error);
+      g_object_unref(monitor_pixbuf);
+      g_object_unref(desktop_pixbuf);
+      return FALSE;
+    }
+
+    FlValue *snapshot = fl_value_new_map();
+    fl_value_set_string_take(snapshot, "displayId", fl_value_new_string(monitor.id.c_str()));
+    fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(monitor.x, monitor.y, monitor.width, monitor.height));
+    fl_value_set_string_take(snapshot, "pixelBounds", build_rect_value(crop_x, crop_y, crop_width, crop_height));
+    fl_value_set_string_take(snapshot, "scale", fl_value_new_float(monitor.width > 0 ? static_cast<double>(crop_width) / monitor.width : scale_x));
+    fl_value_set_string_take(snapshot, "rotation", fl_value_new_int(0));
+    fl_value_set_string_take(snapshot, "imageBytesBase64", fl_value_new_string(image_base64));
+    g_free(image_base64);
+    g_object_unref(monitor_pixbuf);
+    fl_value_append_take(snapshots, snapshot);
+  }
+
+  g_object_unref(desktop_pixbuf);
+  *snapshots_out = g_steal_pointer(&snapshots);
+  return TRUE;
+}
+
+static gboolean capture_portal_desktop_snapshot(FlValue **snapshot_out, gchar **error_out)
+{
+  GError *dbus_error = nullptr;
+  GDBusConnection *connection = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &dbus_error);
+  if (connection == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(dbus_error != nullptr ? dbus_error->message : "Failed to connect to portal session bus");
+    }
+    g_clear_error(&dbus_error);
+    return FALSE;
+  }
+
+  GdkDisplay *display = gdk_display_get_default();
+  if (display == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Failed to access GDK display");
+    }
+    g_object_unref(connection);
+    return FALSE;
+  }
+
+  int monitor_count = gdk_display_get_n_monitors(display);
+  if (monitor_count <= 0)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("No monitors are available for capture");
+    }
+    g_object_unref(connection);
+    return FALSE;
+  }
+
+  GdkRectangle logical_union{};
+  gboolean union_initialized = FALSE;
+  for (int index = 0; index < monitor_count; ++index)
+  {
+    GdkMonitor *monitor = gdk_display_get_monitor(display, index);
+    if (monitor == nullptr)
+    {
+      continue;
+    }
+
+    GdkRectangle geometry{};
+    gdk_monitor_get_geometry(monitor, &geometry);
+    if (!union_initialized)
+    {
+      logical_union = geometry;
+      union_initialized = TRUE;
+      continue;
+    }
+
+    const int left = MIN(logical_union.x, geometry.x);
+    const int top = MIN(logical_union.y, geometry.y);
+    const int right = MAX(logical_union.x + logical_union.width, geometry.x + geometry.width);
+    const int bottom = MAX(logical_union.y + logical_union.height, geometry.y + geometry.height);
+    logical_union.x = left;
+    logical_union.y = top;
+    logical_union.width = right - left;
+    logical_union.height = bottom - top;
+  }
+
+  GdkPixbuf *pixbuf = nullptr;
+  const gboolean screenshot_ok = call_portal_screenshot(connection, &pixbuf, error_out);
+  g_object_unref(connection);
+  if (!screenshot_ok)
+  {
+    return FALSE;
+  }
+
+  gchar *image_base64 = nullptr;
+  gchar *encode_error = nullptr;
+  if (!encode_pixbuf_to_png_base64(pixbuf, &image_base64, &encode_error))
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = encode_error != nullptr ? encode_error : g_strdup("Failed to encode portal screenshot");
+    }
+    g_free(encode_error);
+    g_object_unref(pixbuf);
+    return FALSE;
+  }
+
+  const int pixel_width = gdk_pixbuf_get_width(pixbuf);
+  const int pixel_height = gdk_pixbuf_get_height(pixbuf);
+  g_object_unref(pixbuf);
+
+  const double scale_x = logical_union.width > 0 ? static_cast<double>(pixel_width) / logical_union.width : 1.0;
+  const double scale_y = logical_union.height > 0 ? static_cast<double>(pixel_height) / logical_union.height : 1.0;
+
+  FlValue *snapshot = fl_value_new_map();
+  fl_value_set_string_take(snapshot, "displayId", fl_value_new_string("portal:desktop"));
+  fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(logical_union.x, logical_union.y, logical_union.width, logical_union.height));
+  fl_value_set_string_take(snapshot, "pixelBounds", build_rect_value(logical_union.x * scale_x, logical_union.y * scale_y, pixel_width, pixel_height));
+  fl_value_set_string_take(snapshot, "scale", fl_value_new_float(scale_x));
+  fl_value_set_string_take(snapshot, "rotation", fl_value_new_int(0));
+  fl_value_set_string_take(snapshot, "imageBytesBase64", fl_value_new_string(image_base64));
+  g_free(image_base64);
+
+  *snapshot_out = snapshot;
+  return TRUE;
+}
+
 #ifdef GDK_WINDOWING_X11
 static KeySym parse_x11_key_sym(const std::string &key)
 {
@@ -380,7 +1134,111 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
   FlValue *args = fl_method_call_get_args(method_call);
   g_autoptr(FlMethodResponse) response = nullptr;
 
-  if (strcmp(method, "inputKeyDown") == 0 || strcmp(method, "inputKeyUp") == 0)
+  if (strcmp(method, "captureAllDisplays") == 0)
+  {
+#ifdef GDK_WINDOWING_X11
+    GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(window));
+    if (display != nullptr && GDK_IS_X11_DISPLAY(display))
+    {
+      GdkWindow *root_window = gdk_get_default_root_window();
+      if (root_window == nullptr)
+      {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", "Failed to access X11 root window", nullptr));
+      }
+      else
+      {
+        g_autoptr(FlValue) snapshots = fl_value_new_list();
+        const int monitor_count = gdk_display_get_n_monitors(display);
+        gchar *capture_error = nullptr;
+
+        for (int index = 0; index < monitor_count; ++index)
+        {
+          GdkMonitor *monitor = gdk_display_get_monitor(display, index);
+          if (monitor == nullptr)
+          {
+            continue;
+          }
+
+          GdkRectangle geometry{};
+          gdk_monitor_get_geometry(monitor, &geometry);
+          GdkPixbuf *pixbuf = gdk_pixbuf_get_from_window(root_window, geometry.x, geometry.y, geometry.width, geometry.height);
+          if (pixbuf == nullptr)
+          {
+            capture_error = g_strdup("Failed to capture X11 monitor");
+            break;
+          }
+
+          gchar *image_base64 = nullptr;
+          gchar *encode_error = nullptr;
+          if (!encode_pixbuf_to_png_base64(pixbuf, &image_base64, &encode_error))
+          {
+            capture_error = encode_error != nullptr ? encode_error : g_strdup("Failed to encode X11 monitor image");
+            g_object_unref(pixbuf);
+            break;
+          }
+
+          const int pixel_width = gdk_pixbuf_get_width(pixbuf);
+          const int pixel_height = gdk_pixbuf_get_height(pixbuf);
+          g_object_unref(pixbuf);
+
+          const int scale = gdk_monitor_get_scale_factor(monitor);
+          gchar *display_id = g_strdup_printf("x11-monitor-%d", index);
+          FlValue *snapshot = fl_value_new_map();
+          fl_value_set_string_take(snapshot, "displayId", fl_value_new_string(display_id));
+          fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(geometry.x, geometry.y, geometry.width, geometry.height));
+          fl_value_set_string_take(snapshot, "pixelBounds", build_rect_value(geometry.x * scale, geometry.y * scale, pixel_width, pixel_height));
+          fl_value_set_string_take(snapshot, "scale", fl_value_new_float(scale));
+          fl_value_set_string_take(snapshot, "rotation", fl_value_new_int(0));
+          fl_value_set_string_take(snapshot, "imageBytesBase64", fl_value_new_string(image_base64));
+          g_free(image_base64);
+          g_free(display_id);
+          fl_value_append_take(snapshots, snapshot);
+        }
+
+        if (capture_error != nullptr)
+        {
+          response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", capture_error, nullptr));
+          g_free(capture_error);
+        }
+        else
+        {
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
+        }
+      }
+    }
+    else
+#endif
+    {
+      FlValue *portal_snapshots = nullptr;
+      gchar *capture_error = nullptr;
+      if (capture_portal_monitor_snapshots(&portal_snapshots, &capture_error))
+      {
+        response = FL_METHOD_RESPONSE(fl_method_success_response_new(portal_snapshots));
+      }
+      else
+      {
+        g_free(capture_error);
+
+        // Some desktops do not expose ScreenCast on the active portal backend. Keep the older
+        // single-desktop screenshot fallback so capture remains available even when Wayland cannot
+        // provide per-monitor metadata for the Flutter workspace.
+        FlValue *snapshot = nullptr;
+        gchar *desktop_capture_error = nullptr;
+        if (capture_portal_desktop_snapshot(&snapshot, &desktop_capture_error))
+        {
+          g_autoptr(FlValue) snapshots = fl_value_new_list();
+          fl_value_append_take(snapshots, snapshot);
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
+        }
+        else
+        {
+          response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", desktop_capture_error != nullptr ? desktop_capture_error : "Portal screenshot capture failed", nullptr));
+          g_free(desktop_capture_error);
+        }
+      }
+    }
+  }
+  else if (strcmp(method, "inputKeyDown") == 0 || strcmp(method, "inputKeyUp") == 0)
   {
 #ifdef GDK_WINDOWING_X11
     if (fl_value_get_type(args) == FL_VALUE_TYPE_MAP)

@@ -17,8 +17,10 @@ import 'package:wox/controllers/wox_ai_chat_controller.dart';
 import 'package:wox/controllers/wox_base_list_controller.dart';
 import 'package:wox/controllers/wox_grid_controller.dart';
 import 'package:wox/controllers/wox_list_controller.dart';
+import 'package:wox/controllers/wox_screenshot_controller.dart';
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_list_item.dart';
+import 'package:wox/entity/screenshot_session.dart';
 import 'package:wox/models/doctor_check_result.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/windows/window_manager.dart';
@@ -208,6 +210,7 @@ class WoxLauncherController extends GetxController {
   /// This clears pending timers, hides panels, and resets query state.
   Future<void> resetForIntegrationTest() async {
     stopDoctorCheckTimer();
+    await Get.find<WoxScreenshotController>().resetForIntegrationTest();
 
     // Avoid focus restoration during smoke teardown. The regular hide helpers
     // call focusQueryBox(), which can outlive the test and touch a disposed
@@ -1711,6 +1714,13 @@ class WoxLauncherController extends GetxController {
       final pickFilesParams = FileSelectorParams.fromJson(msg.data);
       final files = await FileSelector.pick(msg.traceId, pickFilesParams);
       responseWoxWebsocketRequest(msg, true, files);
+    } else if (msg.method == "CaptureScreenshot") {
+      final screenshotController = Get.find<WoxScreenshotController>();
+      final result = await screenshotController.startCaptureSession(
+        msg.traceId,
+        CaptureScreenshotRequest.fromJson(msg.data),
+      );
+      responseWoxWebsocketRequest(msg, true, result.toJson());
     } else if (msg.method == "OpenSettingWindow") {
       openSetting(msg.traceId, SettingWindowContext.fromJson(msg.data));
       responseWoxWebsocketRequest(msg, true, null);

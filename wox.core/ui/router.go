@@ -114,6 +114,7 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	"/test/plugin/install_local":     handleTestInstallLocalPlugin,
 	"/test/trigger/open_setting":     handleTestTriggerOpenSetting,
 	"/test/trigger/query_hotkey":     handleTestTriggerQueryHotkey,
+	"/test/trigger/screenshot":       handleTestTriggerScreenshot,
 	"/test/trigger/selection_hotkey": handleTestTriggerSelectionHotkey,
 	"/test/screen/mouse":             handleTestMouseScreen,
 	"/test/trigger/tray_query":       handleTestTriggerTrayQuery,
@@ -1240,6 +1241,23 @@ func handleTestTriggerSelectionHotkey(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeSuccessResponse(w, "")
+}
+
+func handleTestTriggerScreenshot(w http.ResponseWriter, r *http.Request) {
+	if !ensureTestTriggerEnabled(w) {
+		return
+	}
+
+	ctx := getTraceContext(r)
+	// The screenshot smoke path needs a backend-triggered session so integration tests can verify
+	// the same Go -> WebSocket -> Flutter round-trip used by the real system plugin action.
+	result, err := GetUIManager().GetUI(ctx).CaptureScreenshot(ctx, common.DefaultCaptureScreenshotRequest())
+	if err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+
+	writeSuccessResponse(w, result)
 }
 
 func handleTestMouseScreen(w http.ResponseWriter, r *http.Request) {

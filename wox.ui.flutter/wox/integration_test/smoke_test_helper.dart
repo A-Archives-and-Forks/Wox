@@ -620,3 +620,11 @@ Future<void> pumpUntil(WidgetTester tester, bool Function() condition, {required
 
   fail('Condition not met within $timeout.');
 }
+
+Future<Map<String, dynamic>> triggerTestScreenshot() async {
+  return await WoxHttpUtil.instance.postData<Map<String, dynamic>>(
+    const UuidV4().generate(),
+    '/test/trigger/screenshot',
+    {},
+  );
+}

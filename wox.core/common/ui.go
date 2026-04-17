@@ -50,6 +50,7 @@ type UI interface {
 	ToggleApp(ctx context.Context, showContext ShowContext)
 	OpenSettingWindow(ctx context.Context, windowContext SettingWindowContext)
 	PickFiles(ctx context.Context, params PickFilesParams) []string
+	CaptureScreenshot(ctx context.Context, request CaptureScreenshotRequest) (CaptureScreenshotResult, error)
 	GetActiveWindowSnapshot(ctx context.Context) ActiveWindowSnapshot
 	GetServerPort(ctx context.Context) int
 	GetAllThemes(ctx context.Context) []Theme
@@ -126,6 +127,67 @@ type WindowRect struct {
 
 type PickFilesParams struct {
 	IsDirectory bool
+}
+
+type CaptureScreenshotStatus string
+
+const (
+	CaptureScreenshotStatusCompleted CaptureScreenshotStatus = "completed"
+	CaptureScreenshotStatusCancelled CaptureScreenshotStatus = "cancelled"
+	CaptureScreenshotStatusFailed    CaptureScreenshotStatus = "failed"
+)
+
+// ScreenshotRect keeps screenshot geometry in logical desktop coordinates.
+// The Flutter workspace uses this rect shape for selection, display bounds, and export metadata
+// so Go can forward one stable contract without depending on platform-specific geometry types.
+type ScreenshotRect struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+// CaptureScreenshotRequest defines the single v1 screenshot workflow that the system plugin supports.
+// We keep the request explicit instead of inferring defaults in Flutter so both layers stay aligned
+// when tests trigger the flow directly through the UI bridge.
+type CaptureScreenshotRequest struct {
+	SessionId string   `json:"sessionId"`
+	Trigger   string   `json:"trigger"`
+	Scope     string   `json:"scope"`
+	Output    string   `json:"output"`
+	Tools     []string `json:"tools"`
+}
+
+// DisplaySnapshot describes one native capture surface that Flutter can render and crop from.
+// The platform bridge must provide both image bytes and geometry from the same native source
+// so mixed-DPI export does not drift because of mismatched coordinate systems.
+type DisplaySnapshot struct {
+	DisplayId        string         `json:"displayId"`
+	LogicalBounds    ScreenshotRect `json:"logicalBounds"`
+	PixelBounds      ScreenshotRect `json:"pixelBounds"`
+	Scale            float64        `json:"scale"`
+	Rotation         int            `json:"rotation"`
+	ImageBytesBase64 string         `json:"imageBytesBase64"`
+}
+
+// CaptureScreenshotResult carries the final PNG back to Go.
+// Go intentionally only receives the exported image and session outcome so the UI remains the only
+// owner of transient annotation state and platform capture details.
+type CaptureScreenshotResult struct {
+	Status               CaptureScreenshotStatus `json:"status"`
+	PngBase64            string                  `json:"pngBase64,omitempty"`
+	LogicalSelectionRect *ScreenshotRect         `json:"logicalSelectionRect,omitempty"`
+	ErrorCode            string                  `json:"errorCode,omitempty"`
+	ErrorMessage         string                  `json:"errorMessage,omitempty"`
+}
+
+func DefaultCaptureScreenshotRequest() CaptureScreenshotRequest {
+	return CaptureScreenshotRequest{
+		Trigger: "plugin",
+		Scope:   "all_displays",
+		Output:  "clipboard",
+		Tools:   []string{"rect", "ellipse", "arrow", "text"},
+	}
 }
 
 type NotifyMsg struct {

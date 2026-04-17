@@ -1,6 +1,7 @@
 import ApplicationServices
 import Cocoa
 import FlutterMacOS
+import ScreenCaptureKit
 
 @main
 class AppDelegate: FlutterAppDelegate {
@@ -121,6 +122,162 @@ class AppDelegate: FlutterAppDelegate {
 
   private func currentMouseLocation() -> CGPoint {
     return CGEvent(source: nil)?.location ?? NSEvent.mouseLocation
+  }
+
+  private func captureAllDisplaysLegacy() throws -> [[String: Any]] {
+    if !CGPreflightScreenCaptureAccess() {
+      throw FlutterError(code: "permission_denied", message: "Screen recording permission is required", details: nil)
+    }
+
+    let screens = NSScreen.screens
+    if screens.isEmpty {
+      throw FlutterError(code: "capture_failed", message: "No screens are available for capture", details: nil)
+    }
+
+    let globalTop = screens.map { $0.frame.origin.y + $0.frame.height }.max() ?? 0
+    var snapshots: [[String: Any]] = []
+
+    for screen in screens {
+      guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+        throw FlutterError(code: "capture_failed", message: "Failed to resolve macOS display id", details: nil)
+      }
+
+      let displayId = CGDirectDisplayID(screenNumber.uint32Value)
+      guard let cgImage = CGDisplayCreateImage(displayId) else {
+        throw FlutterError(code: "capture_failed", message: "Failed to capture macOS display image", details: nil)
+      }
+
+      let bitmap = NSBitmapImageRep(cgImage: cgImage)
+      guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
+        throw FlutterError(code: "capture_failed", message: "Failed to encode macOS display image", details: nil)
+      }
+
+      let frame = screen.frame
+      let scale = screen.backingScaleFactor
+      let logicalX = frame.origin.x
+      let logicalY = globalTop - frame.origin.y - frame.height
+      let rotation = Int(CGDisplayRotation(displayId).rounded())
+
+      snapshots.append(
+        [
+          "displayId": String(displayId),
+          "logicalBounds": [
+            "x": logicalX,
+            "y": logicalY,
+            "width": frame.width,
+            "height": frame.height,
+          ],
+          "pixelBounds": [
+            "x": logicalX * scale,
+            "y": logicalY * scale,
+            "width": CGFloat(cgImage.width),
+            "height": CGFloat(cgImage.height),
+          ],
+          "scale": scale,
+          "rotation": rotation,
+          "imageBytesBase64": pngData.base64EncodedString(),
+        ])
+    }
+
+    return snapshots
+  }
+
+  @available(macOS 14.0, *)
+  private func captureAllDisplaysWithScreenCaptureKit() async throws -> [[String: Any]] {
+    if !CGPreflightScreenCaptureAccess() {
+      throw FlutterError(code: "permission_denied", message: "Screen recording permission is required", details: nil)
+    }
+
+    let shareableContent = try await SCShareableContent.excludingDesktopWindows(
+      false,
+      onScreenWindowsOnly: true
+    )
+    if shareableContent.displays.isEmpty {
+      throw FlutterError(
+        code: "capture_failed",
+        message: "No displays are available for ScreenCaptureKit capture",
+        details: nil
+      )
+    }
+
+    let globalTop = shareableContent.displays.map { $0.frame.maxY }.max() ?? 0
+    let excludedApplications = shareableContent.applications.filter {
+      $0.bundleIdentifier == Bundle.main.bundleIdentifier
+    }
+    var snapshots: [[String: Any]] = []
+
+    for display in shareableContent.displays {
+      // ScreenCaptureKit replaces CGDisplayCreateImage on modern macOS. We exclude the current
+      // Wox process here so the screenshot workspace does not appear in the captured background
+      // after the launcher window is hidden and resized across the virtual desktop.
+      let contentFilter = SCContentFilter(
+        display: display,
+        excludingApplications: excludedApplications,
+        exceptingWindows: []
+      )
+      let scale = CGFloat(contentFilter.pointPixelScale)
+      let streamConfiguration = SCStreamConfiguration()
+      streamConfiguration.width = Int((display.frame.width * scale).rounded())
+      streamConfiguration.height = Int((display.frame.height * scale).rounded())
+
+      let cgImage = try await SCScreenshotManager.captureImage(
+        contentFilter: contentFilter,
+        configuration: streamConfiguration
+      )
+      let bitmap = NSBitmapImageRep(cgImage: cgImage)
+      guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
+        throw FlutterError(
+          code: "capture_failed",
+          message: "Failed to encode ScreenCaptureKit display image",
+          details: nil
+        )
+      }
+
+      let logicalFrame = display.frame
+      let logicalY = globalTop - logicalFrame.origin.y - logicalFrame.height
+      let rotation = Int(CGDisplayRotation(display.displayID).rounded())
+
+      snapshots.append(
+        [
+          "displayId": String(display.displayID),
+          "logicalBounds": [
+            "x": logicalFrame.origin.x,
+            "y": logicalY,
+            "width": logicalFrame.width,
+            "height": logicalFrame.height,
+          ],
+          "pixelBounds": [
+            "x": logicalFrame.origin.x * scale,
+            "y": logicalY * scale,
+            "width": CGFloat(cgImage.width),
+            "height": CGFloat(cgImage.height),
+          ],
+          "scale": scale,
+          "rotation": rotation,
+          "imageBytesBase64": pngData.base64EncodedString(),
+        ])
+    }
+
+    return snapshots
+  }
+
+  private func captureAllDisplays() async throws -> [[String: Any]] {
+    if #available(macOS 14.0, *) {
+      do {
+        return try await captureAllDisplaysWithScreenCaptureKit()
+      } catch {
+        if let flutterError = error as? FlutterError, flutterError.code == "permission_denied" {
+          throw flutterError
+        }
+
+        // Keep the existing CGDisplay fallback for older runners or partial ScreenCaptureKit
+        // failures so screenshot capture still works on supported macOS builds that haven't
+        // fully transitioned to the newer API surface yet.
+        log("ScreenCaptureKit capture failed, falling back to CGDisplayCreateImage: \(error)")
+      }
+    }
+
+    return try captureAllDisplaysLegacy()
   }
 
   private func postKeyboardEvent(key: String, isDown: Bool) -> FlutterError? {
@@ -250,6 +407,25 @@ class AppDelegate: FlutterAppDelegate {
 
       DispatchQueue.main.async {
         switch call.method {
+        case "captureAllDisplays":
+          Task { @MainActor in
+            do {
+              result(try await self?.captureAllDisplays())
+            } catch {
+              if let flutterError = error as? FlutterError {
+                result(flutterError)
+              } else {
+                result(
+                  FlutterError(
+                    code: "capture_failed",
+                    message: error.localizedDescription,
+                    details: nil
+                  ))
+              }
+            }
+          }
+          return
+
         case "setSize":
           if let args = call.arguments as? [String: Any],
             let width = args["width"] as? Double,

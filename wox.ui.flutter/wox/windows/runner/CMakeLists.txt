@@ -49,6 +49,8 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app flutter_wrapper_plugin)
 target_link_libraries(${BINARY_NAME} PRIVATE "Shell32.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "Ole32.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "gdiplus.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "dxgi.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "d3d11.lib")
