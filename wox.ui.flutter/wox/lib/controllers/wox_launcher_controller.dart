@@ -385,6 +385,10 @@ class WoxLauncherController extends GetxController {
 
   bool get hasVisibleResultsForCurrentQuery => getVisibleResultQueryId() == currentQuery.value.queryId;
 
+  bool get hasVisibleStaleResultsDuringQueryTransition {
+    return activeResultViewController.items.isNotEmpty && !isShowingPendingResultPlaceholder && !hasVisibleResultsForCurrentQuery;
+  }
+
   void resetPendingResultPlaceholder() {
     isShowingPendingResultPlaceholder = false;
     pendingResultPlaceholderHeight = null;
@@ -2736,6 +2740,15 @@ class WoxLauncherController extends GetxController {
   }
 
   void refreshToolbarActionsForCurrentState(String traceId) {
+    // Bug fix: when fast typing keeps the previous result snapshot visible during
+    // the stale-results grace window, clearing toolbar actions immediately makes
+    // only the footer switch to the "no result" state and causes visible flicker.
+    // Keep the current toolbar until the visible results are actually cleared or
+    // replaced so the whole launcher transitions as one snapshot.
+    if (hasVisibleStaleResultsDuringQueryTransition) {
+      return;
+    }
+
     final activeResult = getActiveResult();
     if (activeResult != null && !activeResult.isGroup) {
       updateToolbarWithActions(traceId);

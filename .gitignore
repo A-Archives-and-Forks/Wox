@@ -26,7 +26,6 @@ www/docs/.vitepress/dist
 .github/skills
 .codex/skills
 claude/skills
-placeholder
 crash.log
 release/
 wox.ui.macos/.build/
