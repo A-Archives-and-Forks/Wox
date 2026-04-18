@@ -36,6 +36,31 @@ void main() {
     expect(toolbarRect.top, greaterThan(260));
   });
 
+  testWidgets('selected annotation edit bar falls back to the left side when the selection has no room on the right', (tester) async {
+    final controller = Get.put(WoxScreenshotController());
+    controller.displaySnapshots.assignAll([
+      DisplaySnapshot(
+        displayId: 'display-a',
+        logicalBounds: const ScreenshotRect(x: 0, y: 0, width: 800, height: 600),
+        pixelBounds: const ScreenshotRect(x: 0, y: 0, width: 800, height: 600),
+        scale: 1,
+        rotation: 0,
+        imageBytesBase64: _transparentPixelPngBase64,
+      ),
+    ]);
+    controller.virtualBounds.value = const ScreenshotRect(x: 0, y: 0, width: 800, height: 600);
+    controller.selection.value = const ScreenshotRect(x: 560, y: 120, width: 200, height: 220);
+    controller.annotations.assignAll([ScreenshotAnnotation(id: 'rect-a', type: ScreenshotAnnotationType.rect, rect: const Rect.fromLTWH(600, 180, 80, 60))]);
+    controller.selectAnnotation('rect-a');
+    controller.stage.value = ScreenshotSessionStage.annotating;
+
+    await tester.pumpWidget(const GetMaterialApp(home: Material(child: SizedBox(width: 800, height: 600, child: WoxScreenshotView()))));
+    await tester.pumpAndSettle();
+
+    final editBarRect = tester.getRect(find.byKey(screenshotEditBarKey));
+    expect(editBarRect.right, lessThan(560));
+  });
+
   test('shape annotations render at the pointer position inside the selection', () async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);

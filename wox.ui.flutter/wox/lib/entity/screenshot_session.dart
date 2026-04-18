@@ -182,4 +182,23 @@ class ScreenshotAnnotation {
   final Color color;
   final double strokeWidth;
   final double fontSize;
+
+  static const Object _unset = Object();
+
+  // Screenshot editing now mutates existing annotations in place, so the model needs a local
+  // copy helper instead of rebuilding ad-hoc objects in the view layer. Keeping the update logic
+  // next to the annotation fields avoids duplicated constructor branches for every edit action.
+  ScreenshotAnnotation copyWith({Object? rect = _unset, Object? start = _unset, Object? end = _unset, Object? text = _unset, Color? color, double? strokeWidth, double? fontSize}) {
+    return ScreenshotAnnotation(
+      id: id,
+      type: type,
+      rect: identical(rect, _unset) ? this.rect : rect as Rect?,
+      start: identical(start, _unset) ? this.start : start as Offset?,
+      end: identical(end, _unset) ? this.end : end as Offset?,
+      text: identical(text, _unset) ? this.text : text as String?,
+      color: color ?? this.color,
+      strokeWidth: strokeWidth ?? this.strokeWidth,
+      fontSize: fontSize ?? this.fontSize,
+    );
+  }
 }

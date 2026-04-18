@@ -14,6 +14,10 @@ import 'package:wox/utils/screenshot/screenshot_platform_bridge.dart';
 import 'package:wox/utils/windows/window_manager.dart';
 
 class WoxScreenshotController extends GetxController {
+  static const Color defaultAnnotationColor = Color(0xFFFF5B36);
+  static const double minTextFontSize = 12;
+  static const double maxTextFontSize = 48;
+
   final isSessionActive = false.obs;
   final stage = ScreenshotSessionStage.idle.obs;
   final currentTool = ScreenshotTool.select.obs;
@@ -21,7 +25,12 @@ class WoxScreenshotController extends GetxController {
   final annotations = <ScreenshotAnnotation>[].obs;
   final selection = Rxn<ScreenshotRect>();
   final virtualBounds = Rxn<ScreenshotRect>();
+  final selectedAnnotationId = RxnString();
+  final editingTextAnnotationId = RxnString();
+  final annotationCreationColor = defaultAnnotationColor.obs;
   final textDraftPosition = Rxn<Offset>();
+  final textDraftFontSize = 20.0.obs;
+  final textDraftColor = defaultAnnotationColor.obs;
   final textDraftController = TextEditingController();
 
   final Map<String, ui.Image> _decodedImages = <String, ui.Image>{};
@@ -34,34 +43,39 @@ class WoxScreenshotController extends GetxController {
 
   Rect? get selectionRect => selection.value?.toRect();
 
-  Future<CaptureScreenshotResult> startCaptureSession(
-    String traceId,
-    CaptureScreenshotRequest request,
-  ) async {
+  ScreenshotAnnotation? get selectedAnnotation => annotationById(selectedAnnotationId.value);
+
+  ScreenshotAnnotation? annotationById(String? annotationId) {
+    if (annotationId == null) {
+      return null;
+    }
+
+    for (final annotation in annotations) {
+      if (annotation.id == annotationId) {
+        return annotation;
+      }
+    }
+
+    return null;
+  }
+
+  Future<CaptureScreenshotResult> startCaptureSession(String traceId, CaptureScreenshotRequest request) async {
     if (_sessionCompleter != null && !_sessionCompleter!.isCompleted) {
-      return CaptureScreenshotResult.failed(
-        errorCode: 'busy',
-        errorMessage: 'Screenshot session is already running',
-      );
+      return CaptureScreenshotResult.failed(errorCode: 'busy', errorMessage: 'Screenshot session is already running');
     }
 
     _sessionCompleter = Completer<CaptureScreenshotResult>();
     await _prepareNewSession(traceId);
 
     try {
-      final snapshots =
-          await ScreenshotPlatformBridge.instance.captureAllDisplays();
+      final snapshots = await ScreenshotPlatformBridge.instance.captureAllDisplays();
       if (snapshots.isEmpty) {
         throw StateError('No display snapshots returned');
       }
 
       await _decodeDisplayImages(snapshots);
       displaySnapshots.assignAll(snapshots);
-      virtualBounds.value = ScreenshotRect.fromRect(
-        _calculateUnionRect(
-          snapshots.map((item) => item.logicalBounds.toRect()).toList(),
-        ),
-      );
+      virtualBounds.value = ScreenshotRect.fromRect(_calculateUnionRect(snapshots.map((item) => item.logicalBounds.toRect()).toList()));
 
       final bounds = virtualBoundsRect;
       // We resize the single Wox window to the virtual desktop after the capture completes so the
@@ -74,10 +88,7 @@ class WoxScreenshotController extends GetxController {
       stage.value = ScreenshotSessionStage.selecting;
     } catch (e) {
       Logger.instance.error(traceId, 'Failed to start screenshot session: $e');
-      final failed = CaptureScreenshotResult.failed(
-        errorCode: 'capture_failed',
-        errorMessage: e.toString(),
-      );
+      final failed = CaptureScreenshotResult.failed(errorCode: 'capture_failed', errorMessage: e.toString());
       await _restoreWindowState(traceId);
       _resetSessionState();
       _sessionCompleter = null;
@@ -123,59 +134,30 @@ class WoxScreenshotController extends GetxController {
   }
 
   Future<void> cancelSession(String traceId) async {
-    await _finishSession(
-      traceId,
-      CaptureScreenshotResult.cancelled(),
-      ScreenshotSessionStage.cancelled,
-    );
+    await _finishSession(traceId, CaptureScreenshotResult.cancelled(), ScreenshotSessionStage.cancelled);
   }
 
-  Future<void> failSession(
-    String traceId, {
-    required String errorCode,
-    required String errorMessage,
-  }) async {
-    await _finishSession(
-      traceId,
-      CaptureScreenshotResult.failed(
-        errorCode: errorCode,
-        errorMessage: errorMessage,
-      ),
-      ScreenshotSessionStage.failed,
-    );
+  Future<void> failSession(String traceId, {required String errorCode, required String errorMessage}) async {
+    await _finishSession(traceId, CaptureScreenshotResult.failed(errorCode: errorCode, errorMessage: errorMessage), ScreenshotSessionStage.failed);
   }
 
   Future<void> confirmSelection(String traceId) async {
     final currentSelection = selectionRect;
-    if (currentSelection == null ||
-        currentSelection.width < 1 ||
-        currentSelection.height < 1) {
+    if (currentSelection == null || currentSelection.width < 1 || currentSelection.height < 1) {
       return;
     }
 
     stage.value = ScreenshotSessionStage.exporting;
     try {
       final pngBytes = await exportSelectionPng();
-      await _finishSession(
-        traceId,
-        CaptureScreenshotResult.completed(pngBytes, currentSelection),
-        ScreenshotSessionStage.done,
-      );
+      await _finishSession(traceId, CaptureScreenshotResult.completed(pngBytes, currentSelection), ScreenshotSessionStage.done);
     } catch (e) {
       Logger.instance.error(traceId, 'Failed to export screenshot: $e');
-      await failSession(
-        traceId,
-        errorCode: 'export_failed',
-        errorMessage: e.toString(),
-      );
+      await failSession(traceId, errorCode: 'export_failed', errorMessage: e.toString());
     }
   }
 
-  Future<void> _finishSession(
-    String traceId,
-    CaptureScreenshotResult result,
-    ScreenshotSessionStage finalStage,
-  ) async {
+  Future<void> _finishSession(String traceId, CaptureScreenshotResult result, ScreenshotSessionStage finalStage) async {
     final completer = _sessionCompleter;
     if (completer == null || completer.isCompleted) {
       return;
@@ -217,7 +199,11 @@ class WoxScreenshotController extends GetxController {
 
   void _resetSessionState() {
     _savedWindowState = null;
+    selectedAnnotationId.value = null;
+    editingTextAnnotationId.value = null;
     textDraftPosition.value = null;
+    textDraftFontSize.value = 20;
+    textDraftColor.value = annotationCreationColor.value;
     textDraftController.clear();
     currentTool.value = ScreenshotTool.select;
     selection.value = null;
@@ -232,8 +218,7 @@ class WoxScreenshotController extends GetxController {
   void updateSelection(Rect rect) {
     final clampedRect = _clampRectToBounds(rect, virtualBoundsRect);
     selection.value = ScreenshotRect.fromRect(clampedRect);
-    if (stage.value == ScreenshotSessionStage.selecting ||
-        stage.value == ScreenshotSessionStage.annotating) {
+    if (stage.value == ScreenshotSessionStage.selecting || stage.value == ScreenshotSessionStage.annotating) {
       stage.value = ScreenshotSessionStage.annotating;
     }
   }
@@ -241,19 +226,36 @@ class WoxScreenshotController extends GetxController {
   void setTool(ScreenshotTool tool) {
     currentTool.value = tool;
     if (tool != ScreenshotTool.text) {
-      textDraftPosition.value = null;
-      textDraftController.clear();
+      cancelTextDraft();
     }
   }
 
-  void startTextDraft(Offset position) {
+  void selectAnnotation(String? annotationId) {
+    if (annotationId != null && annotationById(annotationId) == null) {
+      return;
+    }
+
+    selectedAnnotationId.value = annotationId;
+    if (annotationId == null || editingTextAnnotationId.value != annotationId) {
+      editingTextAnnotationId.value = null;
+    }
+  }
+
+  void startTextDraft(Offset position, {String? annotationId, String initialText = '', double fontSize = 20, Color? color}) {
     textDraftPosition.value = position;
-    textDraftController.clear();
+    editingTextAnnotationId.value = annotationId;
+    textDraftFontSize.value = fontSize.clamp(minTextFontSize, maxTextFontSize).toDouble();
+    textDraftColor.value = color ?? annotationCreationColor.value;
+    textDraftController.text = initialText;
+    textDraftController.selection = TextSelection(baseOffset: 0, extentOffset: initialText.length);
   }
 
   void cancelTextDraft() {
     textDraftPosition.value = null;
     textDraftController.clear();
+    editingTextAnnotationId.value = null;
+    textDraftFontSize.value = 20;
+    textDraftColor.value = annotationCreationColor.value;
   }
 
   void commitTextDraft() {
@@ -264,14 +266,21 @@ class WoxScreenshotController extends GetxController {
       return;
     }
 
-    annotations.add(
-      ScreenshotAnnotation(
-        id: const UuidV4().generate(),
-        type: ScreenshotAnnotationType.text,
-        start: position,
-        text: text,
-      ),
-    );
+    final editingAnnotationId = editingTextAnnotationId.value;
+    if (editingAnnotationId != null) {
+      _replaceAnnotationById(editingAnnotationId, (annotation) => annotation.copyWith(text: text, start: position, fontSize: textDraftFontSize.value, color: textDraftColor.value));
+    } else {
+      annotations.add(
+        ScreenshotAnnotation(
+          id: const UuidV4().generate(),
+          type: ScreenshotAnnotationType.text,
+          start: position,
+          text: text,
+          color: textDraftColor.value,
+          fontSize: textDraftFontSize.value,
+        ),
+      );
+    }
     cancelTextDraft();
   }
 
@@ -280,13 +289,7 @@ class WoxScreenshotController extends GetxController {
       return;
     }
 
-    annotations.add(
-      ScreenshotAnnotation(
-        id: const UuidV4().generate(),
-        type: type,
-        rect: rect,
-      ),
-    );
+    annotations.add(ScreenshotAnnotation(id: const UuidV4().generate(), type: type, rect: rect, color: annotationCreationColor.value));
   }
 
   void addArrowAnnotation(Offset start, Offset end) {
@@ -294,21 +297,81 @@ class WoxScreenshotController extends GetxController {
       return;
     }
 
-    annotations.add(
-      ScreenshotAnnotation(
-        id: const UuidV4().generate(),
-        type: ScreenshotAnnotationType.arrow,
-        start: start,
-        end: end,
-      ),
-    );
+    annotations.add(ScreenshotAnnotation(id: const UuidV4().generate(), type: ScreenshotAnnotationType.arrow, start: start, end: end, color: annotationCreationColor.value));
+  }
+
+  // Existing annotations now support editing in place, so controller-level update helpers keep
+  // geometry and color mutations out of the widget tree and make selection-aware edits reusable.
+  void updateSelectedAnnotationColor(Color color) {
+    final annotationId = selectedAnnotationId.value;
+    if (annotationId == null) {
+      annotationCreationColor.value = color;
+      return;
+    }
+
+    _replaceAnnotationById(annotationId, (annotation) => annotation.copyWith(color: color));
+    if (editingTextAnnotationId.value == annotationId) {
+      textDraftColor.value = color;
+    }
+  }
+
+  void updateSelectedTextFontSize(double delta) {
+    final annotation = selectedAnnotation;
+    if (annotation == null || annotation.type != ScreenshotAnnotationType.text) {
+      return;
+    }
+
+    final nextSize = (annotation.fontSize + delta).clamp(minTextFontSize, maxTextFontSize).toDouble();
+    _replaceAnnotationById(annotation.id, (current) => current.copyWith(fontSize: nextSize));
+    if (editingTextAnnotationId.value == annotation.id) {
+      textDraftFontSize.value = nextSize;
+    }
+  }
+
+  void setAnnotationCreationColor(Color color) {
+    annotationCreationColor.value = color;
+  }
+
+  void updateAnnotationRect(String annotationId, Rect rect) {
+    _replaceAnnotationById(annotationId, (annotation) => annotation.copyWith(rect: rect));
+  }
+
+  void updateArrowPoints(String annotationId, {Offset? start, Offset? end}) {
+    _replaceAnnotationById(annotationId, (annotation) => annotation.copyWith(start: start ?? annotation.start, end: end ?? annotation.end));
+  }
+
+  void updateTextPosition(String annotationId, Offset position) {
+    _replaceAnnotationById(annotationId, (annotation) => annotation.copyWith(start: position));
+    if (editingTextAnnotationId.value == annotationId) {
+      textDraftPosition.value = position;
+    }
+  }
+
+  void deleteSelectedAnnotation() {
+    final annotationId = selectedAnnotationId.value;
+    if (annotationId == null) {
+      return;
+    }
+
+    final removedEditingAnnotation = editingTextAnnotationId.value == annotationId;
+    annotations.removeWhere((annotation) => annotation.id == annotationId);
+    selectedAnnotationId.value = null;
+    if (removedEditingAnnotation) {
+      cancelTextDraft();
+    }
   }
 
   void undoAnnotation() {
     if (annotations.isEmpty) {
       return;
     }
-    annotations.removeLast();
+    final removed = annotations.removeLast();
+    if (removed.id == selectedAnnotationId.value) {
+      selectedAnnotationId.value = null;
+    }
+    if (removed.id == editingTextAnnotationId.value) {
+      cancelTextDraft();
+    }
   }
 
   Future<Uint8List> exportSelectionPng() async {
@@ -341,23 +404,14 @@ class WoxScreenshotController extends GetxController {
         intersection.height * sourceScaleY,
       );
       final destRect = Rect.fromLTWH(
-        snapshot.pixelBounds.x +
-            (intersection.left - logicalRect.left) * pixelScaleX,
-        snapshot.pixelBounds.y +
-            (intersection.top - logicalRect.top) * pixelScaleY,
+        snapshot.pixelBounds.x + (intersection.left - logicalRect.left) * pixelScaleX,
+        snapshot.pixelBounds.y + (intersection.top - logicalRect.top) * pixelScaleY,
         intersection.width * pixelScaleX,
         intersection.height * pixelScaleY,
       );
 
       exportSlices.add(
-        _DisplayExportSlice(
-          image: decodedImage,
-          logicalRect: logicalRect,
-          sourceRect: sourceRect,
-          destRect: destRect,
-          pixelScaleX: pixelScaleX,
-          pixelScaleY: pixelScaleY,
-        ),
+        _DisplayExportSlice(image: decodedImage, logicalRect: logicalRect, sourceRect: sourceRect, destRect: destRect, pixelScaleX: pixelScaleX, pixelScaleY: pixelScaleY),
       );
     }
 
@@ -365,20 +419,13 @@ class WoxScreenshotController extends GetxController {
       throw StateError('Selection does not intersect any captured display');
     }
 
-    final pixelUnion = _calculateUnionRect(
-      exportSlices.map((item) => item.destRect).toList(),
-    );
+    final pixelUnion = _calculateUnionRect(exportSlices.map((item) => item.destRect).toList());
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final paint = Paint();
 
     for (final slice in exportSlices) {
-      canvas.drawImageRect(
-        slice.image,
-        slice.sourceRect,
-        slice.destRect.shift(-pixelUnion.topLeft),
-        paint,
-      );
+      canvas.drawImageRect(slice.image, slice.sourceRect, slice.destRect.shift(-pixelUnion.topLeft), paint);
     }
 
     for (final slice in exportSlices) {
@@ -386,11 +433,8 @@ class WoxScreenshotController extends GetxController {
       final localDestRect = slice.destRect.shift(-pixelUnion.topLeft);
       canvas.clipRect(localDestRect);
       canvas.translate(
-        localDestRect.left -
-            (slice.logicalRect.left - currentSelection.left) *
-                slice.pixelScaleX,
-        localDestRect.top -
-            (slice.logicalRect.top - currentSelection.top) * slice.pixelScaleY,
+        localDestRect.left - (slice.logicalRect.left - currentSelection.left) * slice.pixelScaleX,
+        localDestRect.top - (slice.logicalRect.top - currentSelection.top) * slice.pixelScaleY,
       );
       canvas.scale(slice.pixelScaleX, slice.pixelScaleY);
       paintScreenshotAnnotations(canvas, annotations, currentSelection.topLeft);
@@ -398,10 +442,7 @@ class WoxScreenshotController extends GetxController {
     }
 
     final picture = recorder.endRecording();
-    final image = await picture.toImage(
-      pixelUnion.width.ceil(),
-      pixelUnion.height.ceil(),
-    );
+    final image = await picture.toImage(pixelUnion.width.ceil(), pixelUnion.height.ceil());
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
     if (byteData == null) {
       throw StateError('Failed to encode exported screenshot');
@@ -451,6 +492,16 @@ class WoxScreenshotController extends GetxController {
     return Rect.fromLTRB(left, top, right, bottom);
   }
 
+  void _replaceAnnotationById(String annotationId, ScreenshotAnnotation Function(ScreenshotAnnotation annotation) replace) {
+    final index = annotations.indexWhere((annotation) => annotation.id == annotationId);
+    if (index < 0) {
+      return;
+    }
+
+    annotations[index] = replace(annotations[index]);
+    annotations.refresh();
+  }
+
   @override
   void onClose() {
     _disposeDecodedImages();
@@ -470,13 +521,7 @@ class WoxScreenshotController extends GetxController {
 }
 
 class _SavedScreenshotWindowState {
-  const _SavedScreenshotWindowState({
-    required this.wasVisible,
-    required this.wasInSettingView,
-    required this.position,
-    required this.size,
-    required this.forceHideOnBlur,
-  });
+  const _SavedScreenshotWindowState({required this.wasVisible, required this.wasInSettingView, required this.position, required this.size, required this.forceHideOnBlur});
 
   final bool wasVisible;
   final bool wasInSettingView;
@@ -503,20 +548,13 @@ class _DisplayExportSlice {
   final double pixelScaleY;
 }
 
-void paintScreenshotAnnotations(
-  Canvas canvas,
-  List<ScreenshotAnnotation> annotations,
-  Offset selectionOrigin,
-) {
+void paintScreenshotAnnotations(Canvas canvas, List<ScreenshotAnnotation> annotations, Offset selectionOrigin) {
   for (final annotation in annotations) {
     final paint =
         Paint()
           ..color = annotation.color
           ..strokeWidth = annotation.strokeWidth
-          ..style =
-              annotation.type == ScreenshotAnnotationType.text
-                  ? PaintingStyle.fill
-                  : PaintingStyle.stroke
+          ..style = annotation.type == ScreenshotAnnotationType.text ? PaintingStyle.fill : PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round;
 
@@ -543,34 +581,61 @@ void paintScreenshotAnnotations(
         canvas.drawLine(localStart, localEnd, paint);
         final angle = (localEnd - localStart).direction;
         const arrowLength = 16.0;
-        final arrowLeft =
-            localEnd - Offset.fromDirection(angle - 0.5, arrowLength);
-        final arrowRight =
-            localEnd - Offset.fromDirection(angle + 0.5, arrowLength);
+        final arrowLeft = localEnd - Offset.fromDirection(angle - 0.5, arrowLength);
+        final arrowRight = localEnd - Offset.fromDirection(angle + 0.5, arrowLength);
         canvas.drawLine(localEnd, arrowLeft, paint);
         canvas.drawLine(localEnd, arrowRight, paint);
         break;
       case ScreenshotAnnotationType.text:
         final start = annotation.start;
-        final text = annotation.text;
-        if (start == null || text == null || text.isEmpty) {
+        final textPainter = buildScreenshotTextPainter(annotation);
+        if (start == null || textPainter == null) {
           break;
         }
 
-        final textPainter = TextPainter(
-          text: TextSpan(
-            text: text,
-            style: TextStyle(
-              color: annotation.color,
-              fontSize: annotation.fontSize,
-              fontWeight: FontWeight.w600,
-              shadows: const [Shadow(color: Color(0xAA000000), blurRadius: 4)],
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout(maxWidth: 480);
         textPainter.paint(canvas, start - selectionOrigin);
         break;
     }
+  }
+}
+
+// Text annotations now support selection, drag, and inline editing. Centralizing the text layout
+// logic keeps hit testing and painting aligned so editing overlays appear exactly where the text
+// was rendered instead of drifting due to duplicated style calculations.
+TextPainter? buildScreenshotTextPainter(ScreenshotAnnotation annotation) {
+  final start = annotation.start;
+  final text = annotation.text;
+  if (start == null || text == null || text.isEmpty) {
+    return null;
+  }
+
+  return TextPainter(
+    text: TextSpan(
+      text: text,
+      style: TextStyle(color: annotation.color, fontSize: annotation.fontSize, fontWeight: FontWeight.w600, shadows: const [Shadow(color: Color(0xAA000000), blurRadius: 4)]),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout(maxWidth: 480);
+}
+
+Rect? screenshotAnnotationBounds(ScreenshotAnnotation annotation) {
+  switch (annotation.type) {
+    case ScreenshotAnnotationType.rect:
+    case ScreenshotAnnotationType.ellipse:
+      return annotation.rect;
+    case ScreenshotAnnotationType.arrow:
+      final start = annotation.start;
+      final end = annotation.end;
+      if (start == null || end == null) {
+        return null;
+      }
+      return Rect.fromPoints(start, end);
+    case ScreenshotAnnotationType.text:
+      final start = annotation.start;
+      final textPainter = buildScreenshotTextPainter(annotation);
+      if (start == null || textPainter == null) {
+        return null;
+      }
+      return start & textPainter.size;
   }
 }
