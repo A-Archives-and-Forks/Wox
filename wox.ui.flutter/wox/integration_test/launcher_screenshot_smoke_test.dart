@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -14,12 +15,54 @@ import 'package:wox/utils/screenshot/screenshot_platform_bridge.dart';
 import 'smoke_test_helper.dart';
 
 class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
-  _FakeScreenshotBridge(this._capture);
+  _FakeScreenshotBridge(this._capture, {this.nativeSelection, this.presentation, this.debugState, this.delegateNativePresentation = false});
 
   final Future<List<DisplaySnapshot>> Function() _capture;
+  final Future<ScreenshotNativeSelectionResult> Function(ScreenshotRect nativeWorkspaceBounds)? nativeSelection;
+  final Future<ScreenshotWorkspacePresentation> Function(ScreenshotRect nativeWorkspaceBounds)? presentation;
+  final Future<Map<String, dynamic>> Function()? debugState;
+  final bool delegateNativePresentation;
+  final ScreenshotPlatformBridge _delegate = MethodChannelScreenshotPlatformBridge();
 
   @override
   Future<List<DisplaySnapshot>> captureAllDisplays() => _capture();
+
+  @override
+  Future<ScreenshotNativeSelectionResult> selectCaptureRegion(ScreenshotRect nativeWorkspaceBounds) async {
+    if (nativeSelection != null) {
+      return nativeSelection!(nativeWorkspaceBounds);
+    }
+    return const ScreenshotNativeSelectionResult(wasHandled: false);
+  }
+
+  @override
+  Future<ScreenshotWorkspacePresentation> presentCaptureWorkspace(ScreenshotRect nativeWorkspaceBounds) async {
+    if (presentation != null) {
+      return presentation!(nativeWorkspaceBounds);
+    }
+    if (delegateNativePresentation) {
+      return _delegate.presentCaptureWorkspace(nativeWorkspaceBounds);
+    }
+    return ScreenshotWorkspacePresentation(workspaceBounds: nativeWorkspaceBounds, workspaceScale: 1, presentedByPlatform: false);
+  }
+
+  @override
+  Future<void> dismissCaptureWorkspacePresentation() async {
+    if (delegateNativePresentation) {
+      await _delegate.dismissCaptureWorkspacePresentation();
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>> debugCaptureWorkspaceState() async {
+    if (debugState != null) {
+      return debugState!();
+    }
+    if (delegateNativePresentation) {
+      return _delegate.debugCaptureWorkspaceState();
+    }
+    return <String, dynamic>{};
+  }
 }
 
 void main() {
@@ -200,6 +243,72 @@ void registerLauncherScreenshotSmokeTests() {
       final result = (await sessionFuture).toJson();
 
       expect(result['status'], equals('completed'));
+      await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+    });
+
+    testWidgets('T11-05: Screenshot export uses workspaceScale to map the selected area back to native pixels', (tester) async {
+      await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final screenshotController = Get.find<WoxScreenshotController>();
+      ScreenshotPlatformBridge.setInstanceForTest(
+        _FakeScreenshotBridge(
+          () async => [await _buildSnapshot('display-scaled', const Color(0xFF1F6FEB), const ScreenshotRect(x: 0, y: 0, width: 400, height: 200))],
+          presentation: (nativeWorkspaceBounds) async {
+            expect(nativeWorkspaceBounds, const ScreenshotRect(x: 0, y: 0, width: 400, height: 200));
+            return const ScreenshotWorkspacePresentation(workspaceBounds: ScreenshotRect(x: 0, y: 0, width: 200, height: 100), workspaceScale: 2, presentedByPlatform: false);
+          },
+        ),
+      );
+
+      final sessionFuture = screenshotController.startCaptureSession('smoke-scaled-export', _defaultRequest());
+      await pumpUntil(tester, () => find.byKey(screenshotCanvasKey).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+
+      expect(screenshotController.virtualBoundsRect, const Rect.fromLTWH(0, 0, 200, 100));
+
+      screenshotController.updateSelection(const Rect.fromLTWH(20, 10, 150, 80));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(screenshotConfirmKey));
+      await tester.pump(const Duration(milliseconds: 250));
+
+      final result = (await sessionFuture).toJson();
+      final pngBytes = base64Decode(result['pngBase64'] as String);
+      final codec = await ui.instantiateImageCodec(pngBytes);
+      final frame = await codec.getNextFrame();
+
+      expect(result['status'], equals('completed'));
+      expect(frame.image.width, equals(300));
+      expect(frame.image.height, equals(160));
+
+      frame.image.dispose();
+      await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+    });
+
+    testWidgets('T11-06: Native screenshot presentation debug state toggles during the session', (tester) async {
+      if (!Platform.isMacOS && !Platform.isWindows) {
+        return;
+      }
+
+      await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final screenshotController = Get.find<WoxScreenshotController>();
+      final bridge = _FakeScreenshotBridge(
+        () async => [await _buildSnapshot('display-native-debug', const Color(0xFF23395B), const ScreenshotRect(x: 0, y: 0, width: 800, height: 600))],
+        delegateNativePresentation: true,
+      );
+      ScreenshotPlatformBridge.setInstanceForTest(bridge);
+
+      final sessionFuture = screenshotController.startCaptureSession('smoke-native-debug', _defaultRequest());
+      await pumpUntil(tester, () => find.byKey(screenshotCanvasKey).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+
+      final activeDebugState = await bridge.debugCaptureWorkspaceState();
+      expect(activeDebugState['isCapturePresentationActive'], isTrue);
+      expect((activeDebugState['workspaceScale'] as num?)?.toDouble() ?? 0, greaterThan(0));
+
+      await screenshotController.cancelSession('smoke-native-debug-cancel');
+      await tester.pump(const Duration(milliseconds: 250));
+      final result = (await sessionFuture).toJson();
+      final restoredDebugState = await bridge.debugCaptureWorkspaceState();
+
+      expect(result['status'], equals('cancelled'));
+      expect(restoredDebugState['isCapturePresentationActive'], isFalse);
       await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
     });
   });

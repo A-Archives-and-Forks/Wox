@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:typed_data';
 
@@ -25,6 +28,7 @@ class WoxScreenshotController extends GetxController {
   final annotations = <ScreenshotAnnotation>[].obs;
   final selection = Rxn<ScreenshotRect>();
   final virtualBounds = Rxn<ScreenshotRect>();
+  final workspaceScale = 1.0.obs;
   final selectedAnnotationId = RxnString();
   final editingTextAnnotationId = RxnString();
   final annotationCreationColor = defaultAnnotationColor.obs;
@@ -68,22 +72,41 @@ class WoxScreenshotController extends GetxController {
     await _prepareNewSession(traceId);
 
     try {
-      final snapshots = await ScreenshotPlatformBridge.instance.captureAllDisplays();
-      if (snapshots.isEmpty) {
+      final rawSnapshots = await ScreenshotPlatformBridge.instance.captureAllDisplays();
+      if (rawSnapshots.isEmpty) {
         throw StateError('No display snapshots returned');
       }
 
-      await _decodeDisplayImages(snapshots);
-      displaySnapshots.assignAll(snapshots);
-      virtualBounds.value = ScreenshotRect.fromRect(_calculateUnionRect(snapshots.map((item) => item.logicalBounds.toRect()).toList()));
+      final nativeWorkspaceBounds = _calculateUnionRect(rawSnapshots.map((item) => item.logicalBounds.toRect()).toList());
+      final nativeSelectionResult = await _tryStartMacOSNativeSelectionEditor(traceId, rawSnapshots, nativeWorkspaceBounds);
+      if (nativeSelectionResult != null) {
+        return nativeSelectionResult;
+      }
 
-      final bounds = virtualBoundsRect;
-      // We resize the single Wox window to the virtual desktop after the capture completes so the
-      // Flutter workspace can own region selection across monitors without relying on multi-window support.
-      await windowManager.setBounds(bounds.topLeft, bounds.size);
-      await windowManager.setAlwaysOnTop(true);
-      await windowManager.show();
-      await windowManager.focus();
+      final presentation = await ScreenshotPlatformBridge.instance.presentCaptureWorkspace(ScreenshotRect.fromRect(nativeWorkspaceBounds));
+      final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
+        rawSnapshots,
+        nativeWorkspaceBounds: nativeWorkspaceBounds,
+        workspaceBounds: presentation.workspaceBounds.toRect(),
+        workspaceScale: presentation.workspaceScale,
+      );
+
+      await _decodeDisplayImages(normalizedSnapshots);
+      displaySnapshots.assignAll(normalizedSnapshots);
+      virtualBounds.value = ScreenshotRect.fromRect(presentation.workspaceBounds.toRect());
+      workspaceScale.value = presentation.workspaceScale;
+
+      if (!presentation.presentedByPlatform) {
+        final bounds = virtualBoundsRect;
+        // The fallback path still uses one Flutter window, but only platforms without screenshot-
+        // specific native presentation should reach it. macOS and Windows install their own
+        // capture overlay handling so multi-display selection does not inherit launcher assumptions.
+        await windowManager.setBounds(bounds.topLeft, bounds.size);
+        await windowManager.setAlwaysOnTop(true);
+        await windowManager.show();
+        await windowManager.focus();
+      }
+
       await WoxApi.instance.onShow(traceId);
       stage.value = ScreenshotSessionStage.selecting;
     } catch (e) {
@@ -95,6 +118,43 @@ class WoxScreenshotController extends GetxController {
       return failed;
     }
 
+    return _sessionCompleter!.future;
+  }
+
+  Future<CaptureScreenshotResult?> _tryStartMacOSNativeSelectionEditor(String traceId, List<DisplaySnapshot> rawSnapshots, Rect nativeWorkspaceBounds) async {
+    if (!Platform.isMacOS || rawSnapshots.length < 2) {
+      return null;
+    }
+
+    final nativeSelection = await ScreenshotPlatformBridge.instance.selectCaptureRegion(ScreenshotRect.fromRect(nativeWorkspaceBounds));
+    if (!nativeSelection.wasHandled) {
+      return null;
+    }
+
+    if (nativeSelection.selection == null) {
+      final cancelled = CaptureScreenshotResult.cancelled();
+      await _restoreWindowState(traceId);
+      _resetSessionState();
+      _sessionCompleter = null;
+      return cancelled;
+    }
+
+    final editorState = await _prepareMacOSNativeSelectionEditor(rawSnapshots, nativeSelection);
+    displaySnapshots.assignAll([editorState.snapshot]);
+    await _decodeDisplayImages(displaySnapshots.toList());
+    virtualBounds.value = ScreenshotRect.fromRect(editorState.snapshot.logicalBounds.toRect());
+    selection.value = ScreenshotRect.fromRect(editorState.snapshot.logicalBounds.toRect());
+    workspaceScale.value = 1;
+
+    // macOS cannot reliably keep one Flutter window interactive across separate display spaces.
+    // The native selector resolves the cross-display drag first, then we reopen the editor as a
+    // normal single-screen window that still supports the existing annotation and export tools.
+    await windowManager.setBounds(editorState.position, editorState.size);
+    await windowManager.setAlwaysOnTop(true);
+    await windowManager.show();
+    await windowManager.focus();
+    await WoxApi.instance.onShow(traceId);
+    stage.value = ScreenshotSessionStage.annotating;
     return _sessionCompleter!.future;
   }
 
@@ -179,6 +239,7 @@ class WoxScreenshotController extends GetxController {
     final launcherController = Get.find<WoxLauncherController>();
     launcherController.forceHideOnBlur = savedState.forceHideOnBlur;
 
+    await ScreenshotPlatformBridge.instance.dismissCaptureWorkspacePresentation();
     await windowManager.setAlwaysOnTop(!savedState.wasInSettingView);
     await windowManager.setBounds(savedState.position, savedState.size);
 
@@ -210,9 +271,35 @@ class WoxScreenshotController extends GetxController {
     displaySnapshots.clear();
     annotations.clear();
     virtualBounds.value = null;
+    workspaceScale.value = 1;
     stage.value = ScreenshotSessionStage.idle;
     isSessionActive.value = false;
     _disposeDecodedImages();
+  }
+
+  List<DisplaySnapshot> _normalizeSnapshotsForWorkspace(
+    List<DisplaySnapshot> snapshots, {
+    required Rect nativeWorkspaceBounds,
+    required Rect workspaceBounds,
+    required double workspaceScale,
+  }) {
+    final safeWorkspaceScale = workspaceScale <= 0 ? 1.0 : workspaceScale;
+
+    // Windows capture now reports native virtual-desktop coordinates for every monitor snapshot so
+    // one screenshot overlay can span mixed-DPI displays. Normalizing those native coordinates here
+    // keeps the widget tree and export logic on one stable workspace contract regardless of the
+    // platform-specific capture source.
+    return snapshots.map((snapshot) {
+      final nativeBounds = snapshot.logicalBounds.toRect();
+      final normalizedBounds = Rect.fromLTWH(
+        workspaceBounds.left + (nativeBounds.left - nativeWorkspaceBounds.left) / safeWorkspaceScale,
+        workspaceBounds.top + (nativeBounds.top - nativeWorkspaceBounds.top) / safeWorkspaceScale,
+        nativeBounds.width / safeWorkspaceScale,
+        nativeBounds.height / safeWorkspaceScale,
+      );
+
+      return snapshot.copyWith(logicalBounds: ScreenshotRect.fromRect(normalizedBounds));
+    }).toList();
   }
 
   void updateSelection(Rect rect) {
@@ -374,16 +461,58 @@ class WoxScreenshotController extends GetxController {
     }
   }
 
+  Future<_PreparedScreenshotEditorState> _prepareMacOSNativeSelectionEditor(List<DisplaySnapshot> rawSnapshots, ScreenshotNativeSelectionResult nativeSelection) async {
+    final selection = nativeSelection.selection!.toRect();
+    await _decodeDisplayImages(rawSnapshots);
+    final renderedSelection = await _renderSelectionImage(selection: selection, snapshots: rawSnapshots, annotationsToPaint: const <ScreenshotAnnotation>[]);
+
+    final editorVisibleBounds = nativeSelection.editorVisibleBounds?.toRect() ?? selection;
+    final editorRect = _buildPreviewEditorRect(selection, editorVisibleBounds);
+    final editorSnapshot = DisplaySnapshot(
+      displayId: 'macos-native-selection',
+      logicalBounds: ScreenshotRect(x: 0, y: 0, width: editorRect.width, height: editorRect.height),
+      pixelBounds: ScreenshotRect(x: 0, y: 0, width: renderedSelection.pixelWidth.toDouble(), height: renderedSelection.pixelHeight.toDouble()),
+      scale: renderedSelection.pixelWidth / editorRect.width,
+      rotation: 0,
+      imageBytesBase64: base64Encode(renderedSelection.pngBytes),
+    );
+
+    return _PreparedScreenshotEditorState(snapshot: editorSnapshot, position: editorRect.topLeft, size: editorRect.size);
+  }
+
+  Rect _buildPreviewEditorRect(Rect selection, Rect editorVisibleBounds) {
+    final horizontalPadding = math.min(80.0, math.max(24.0, editorVisibleBounds.width * 0.06));
+    final verticalPadding = math.min(120.0, math.max(32.0, editorVisibleBounds.height * 0.08));
+    final maxWidth = math.max(320.0, editorVisibleBounds.width - horizontalPadding * 2);
+    final maxHeight = math.max(220.0, editorVisibleBounds.height - verticalPadding * 2);
+    final fitScale = math.min(maxWidth / selection.width, maxHeight / selection.height);
+    final minReadableScale = math.max(320.0 / selection.width, 220.0 / selection.height);
+    final scale = math.min(fitScale, math.max(1.0, math.min(2.0, minReadableScale)));
+    final size = Size(selection.width * scale, selection.height * scale);
+    final left = editorVisibleBounds.left + (editorVisibleBounds.width - size.width) / 2;
+    final top = editorVisibleBounds.top + (editorVisibleBounds.height - size.height) / 2;
+    return Rect.fromLTWH(left, top, size.width, size.height);
+  }
+
   Future<Uint8List> exportSelectionPng() async {
     final currentSelection = selectionRect;
     if (currentSelection == null) {
       throw StateError('Selection is empty');
     }
 
+    final rendered = await _renderSelectionImage(selection: currentSelection, snapshots: displaySnapshots.toList(), annotationsToPaint: annotations.toList());
+    return rendered.pngBytes;
+  }
+
+  Future<_RenderedSelectionImage> _renderSelectionImage({
+    required Rect selection,
+    required List<DisplaySnapshot> snapshots,
+    required List<ScreenshotAnnotation> annotationsToPaint,
+  }) async {
     final exportSlices = <_DisplayExportSlice>[];
-    for (final snapshot in displaySnapshots) {
+    for (final snapshot in snapshots) {
       final logicalRect = snapshot.logicalBounds.toRect();
-      final intersection = logicalRect.intersect(currentSelection);
+      final intersection = logicalRect.intersect(selection);
       if (intersection.isEmpty) {
         continue;
       }
@@ -433,22 +562,23 @@ class WoxScreenshotController extends GetxController {
       final localDestRect = slice.destRect.shift(-pixelUnion.topLeft);
       canvas.clipRect(localDestRect);
       canvas.translate(
-        localDestRect.left - (slice.logicalRect.left - currentSelection.left) * slice.pixelScaleX,
-        localDestRect.top - (slice.logicalRect.top - currentSelection.top) * slice.pixelScaleY,
+        localDestRect.left - (slice.logicalRect.left - selection.left) * slice.pixelScaleX,
+        localDestRect.top - (slice.logicalRect.top - selection.top) * slice.pixelScaleY,
       );
       canvas.scale(slice.pixelScaleX, slice.pixelScaleY);
-      paintScreenshotAnnotations(canvas, annotations, currentSelection.topLeft);
+      paintScreenshotAnnotations(canvas, annotationsToPaint, selection.topLeft);
       canvas.restore();
     }
 
     final picture = recorder.endRecording();
     final image = await picture.toImage(pixelUnion.width.ceil(), pixelUnion.height.ceil());
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
     if (byteData == null) {
       throw StateError('Failed to encode exported screenshot');
     }
 
-    return byteData.buffer.asUint8List();
+    return _RenderedSelectionImage(pngBytes: byteData.buffer.asUint8List(), pixelWidth: pixelUnion.width.ceil(), pixelHeight: pixelUnion.height.ceil());
   }
 
   Future<void> _decodeDisplayImages(List<DisplaySnapshot> snapshots) async {
@@ -530,6 +660,14 @@ class _SavedScreenshotWindowState {
   final bool forceHideOnBlur;
 }
 
+class _PreparedScreenshotEditorState {
+  const _PreparedScreenshotEditorState({required this.snapshot, required this.position, required this.size});
+
+  final DisplaySnapshot snapshot;
+  final Offset position;
+  final Size size;
+}
+
 class _DisplayExportSlice {
   const _DisplayExportSlice({
     required this.image,
@@ -546,6 +684,14 @@ class _DisplayExportSlice {
   final Rect destRect;
   final double pixelScaleX;
   final double pixelScaleY;
+}
+
+class _RenderedSelectionImage {
+  const _RenderedSelectionImage({required this.pngBytes, required this.pixelWidth, required this.pixelHeight});
+
+  final Uint8List pngBytes;
+  final int pixelWidth;
+  final int pixelHeight;
 }
 
 void paintScreenshotAnnotations(Canvas canvas, List<ScreenshotAnnotation> annotations, Offset selectionOrigin) {

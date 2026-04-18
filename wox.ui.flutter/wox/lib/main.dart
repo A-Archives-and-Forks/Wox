@@ -68,10 +68,7 @@ Future<void> initialServices(List<String> arguments) async {
   var launcherController = WoxLauncherController();
   launcherController.startDoctorCheckTimer();
 
-  await WoxWebsocketMsgUtil.instance.initialize(
-    Uri.parse("ws://127.0.0.1:${Env.serverPort}/ws"),
-    onMessageReceived: launcherController.handleWebSocketMessage,
-  );
+  await WoxWebsocketMsgUtil.instance.initialize(Uri.parse("ws://127.0.0.1:${Env.serverPort}/ws"), onMessageReceived: launcherController.handleWebSocketMessage);
   HeartbeatChecker().startChecking();
   Get.put(launcherController);
   var woxSettingController = WoxSettingController();
@@ -121,17 +118,12 @@ class MyApp extends StatelessWidget {
     final settingController = Get.find<WoxSettingController>();
 
     return Obx(() {
-      final appFontFamily =
-          settingController.woxSetting.value.appFontFamily.trim();
+      final appFontFamily = settingController.woxSetting.value.appFontFamily.trim();
       final textTheme = buildAppTextTheme(appFontFamily);
 
       return MaterialApp(
         navigatorKey: Get.key,
-        theme: ThemeData(
-          useMaterial3: true,
-          textTheme: textTheme,
-          fontFamily: appFontFamily.isEmpty ? null : appFontFamily,
-        ),
+        theme: ThemeData(useMaterial3: true, textTheme: textTheme, fontFamily: appFontFamily.isEmpty ? null : appFontFamily),
         debugShowCheckedModeBanner: false,
         home: const WoxApp(),
       );
@@ -165,10 +157,7 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
     WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
       // Adjust the window height to match the query box height.
       // This is necessary due to dynamic height calculations on Windows caused by DPI scaling issues.
-      launcherController.resizeHeight(
-        traceId: startupTraceId,
-        reason: "initial resize after first frame",
-      );
+      launcherController.resizeHeight(traceId: startupTraceId, reason: "initial resize after first frame");
 
       // Notify the backend that the UI is ready. The server-side will determine whether to display the UI window.
       await WoxApi.instance.onUIReady(startupTraceId);
@@ -202,35 +191,23 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
     // User will not be able to input anything because the focus is lost.
     final isVisible = await windowManager.isVisible();
     if (!isVisible) {
-      Logger.instance.debug(
-        traceId,
-        "onWindowBlur ignored: window is not visible",
-      );
+      Logger.instance.debug(traceId, "onWindowBlur ignored: window is not visible");
       return;
     }
 
     if (screenshotController.isSessionActive.value) {
-      Logger.instance.debug(
-        traceId,
-        "onWindowBlur ignored: screenshot session is active",
-      );
+      Logger.instance.debug(traceId, "onWindowBlur ignored: screenshot session is active");
       return;
     }
 
     // if in setting view, return
     if (launcherController.isInSettingView.value) {
-      Logger.instance.debug(
-        traceId,
-        "onWindowBlur ignored: setting view is active",
-      );
+      Logger.instance.debug(traceId, "onWindowBlur ignored: setting view is active");
       return;
     }
 
     if (launcherController.forceHideOnBlur) {
-      Logger.instance.debug(
-        traceId,
-        "onWindowBlur triggers hideApp because forceHideOnBlur is true",
-      );
+      Logger.instance.debug(traceId, "onWindowBlur triggers hideApp because forceHideOnBlur is true");
       launcherController.hideApp(traceId);
       return;
     }
@@ -241,26 +218,26 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
 
   @override
   Widget build(BuildContext context) {
-    return WoxBorderDragMoveArea(
-      borderWidth:
-          WoxThemeUtil.instance.currentTheme.value.appPaddingTop.toDouble(),
-      onDragEnd: () {
-        if (launcherController.isInSettingView.value) {
-          return;
-        }
+    return Obx(() {
+      if (screenshotController.isSessionActive.value) {
+        // Screenshot capture needs the entire virtual-desktop surface for region selection. The
+        // launcher border drag overlays would steal edge pointer input and make secondary displays
+        // feel "dead", so the capture view bypasses them while the session is active.
+        return const WoxScreenshotView();
+      }
 
-        launcherController.focusQueryBox();
-        launcherController.saveWindowPositionIfNeeded();
-      },
-      child: Obx(() {
-        if (screenshotController.isSessionActive.value) {
-          return const WoxScreenshotView();
-        }
-        if (launcherController.isInSettingView.value) {
-          return const WoxSettingView();
-        }
-        return const WoxLauncherView();
-      }),
-    );
+      return WoxBorderDragMoveArea(
+        borderWidth: WoxThemeUtil.instance.currentTheme.value.appPaddingTop.toDouble(),
+        onDragEnd: () {
+          if (launcherController.isInSettingView.value) {
+            return;
+          }
+
+          launcherController.focusQueryBox();
+          launcherController.saveWindowPositionIfNeeded();
+        },
+        child: launcherController.isInSettingView.value ? const WoxSettingView() : const WoxLauncherView(),
+      );
+    });
   }
 }

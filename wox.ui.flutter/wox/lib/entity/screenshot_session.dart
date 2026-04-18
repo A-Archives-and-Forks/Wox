@@ -71,6 +71,62 @@ class ScreenshotRect {
   Map<String, dynamic> toJson() {
     return {'x': x, 'y': y, 'width': width, 'height': height};
   }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) {
+      return true;
+    }
+    return other is ScreenshotRect && other.x == x && other.y == y && other.width == width && other.height == height;
+  }
+
+  @override
+  int get hashCode => Object.hash(x, y, width, height);
+}
+
+class ScreenshotWorkspacePresentation {
+  const ScreenshotWorkspacePresentation({required this.workspaceBounds, required this.workspaceScale, required this.presentedByPlatform});
+
+  final ScreenshotRect workspaceBounds;
+  final double workspaceScale;
+  final bool presentedByPlatform;
+
+  factory ScreenshotWorkspacePresentation.fromJson(Map<String, dynamic> json) {
+    final workspaceBounds = _normalizeJsonMap(json['workspaceBounds'] ?? json['WorkspaceBounds']);
+
+    return ScreenshotWorkspacePresentation(
+      workspaceBounds: ScreenshotRect.fromJson(workspaceBounds ?? const <String, dynamic>{}),
+      workspaceScale: (json['workspaceScale'] ?? json['WorkspaceScale'] ?? 1).toDouble(),
+      presentedByPlatform: json['presentedByPlatform'] as bool? ?? json['PresentedByPlatform'] as bool? ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {'workspaceBounds': workspaceBounds.toJson(), 'workspaceScale': workspaceScale, 'presentedByPlatform': presentedByPlatform};
+  }
+}
+
+class ScreenshotNativeSelectionResult {
+  const ScreenshotNativeSelectionResult({required this.wasHandled, this.selection, this.editorVisibleBounds});
+
+  final bool wasHandled;
+  final ScreenshotRect? selection;
+  final ScreenshotRect? editorVisibleBounds;
+
+  factory ScreenshotNativeSelectionResult.fromJson(Map<String, dynamic> json) {
+    final selection = _normalizeJsonMap(json['selection'] ?? json['Selection']);
+    final editorVisibleBounds = _normalizeJsonMap(json['editorVisibleBounds'] ?? json['EditorVisibleBounds']);
+
+    return ScreenshotNativeSelectionResult(
+      wasHandled: json['wasHandled'] as bool? ?? json['WasHandled'] as bool? ?? false,
+      selection: selection == null ? null : ScreenshotRect.fromJson(selection),
+      editorVisibleBounds: editorVisibleBounds == null ? null : ScreenshotRect.fromJson(editorVisibleBounds),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {'wasHandled': wasHandled, 'selection': selection?.toJson(), 'editorVisibleBounds': editorVisibleBounds?.toJson()};
+  }
 }
 
 class CaptureScreenshotRequest {
@@ -156,6 +212,17 @@ class DisplaySnapshot {
       scale: (json['scale'] ?? json['Scale'] ?? 1).toDouble(),
       rotation: (json['rotation'] ?? json['Rotation'] ?? 0) as int,
       imageBytesBase64: json['imageBytesBase64'] as String? ?? json['ImageBytesBase64'] as String? ?? '',
+    );
+  }
+
+  DisplaySnapshot copyWith({ScreenshotRect? logicalBounds, ScreenshotRect? pixelBounds, double? scale, int? rotation, String? imageBytesBase64}) {
+    return DisplaySnapshot(
+      displayId: displayId,
+      logicalBounds: logicalBounds ?? this.logicalBounds,
+      pixelBounds: pixelBounds ?? this.pixelBounds,
+      scale: scale ?? this.scale,
+      rotation: rotation ?? this.rotation,
+      imageBytesBase64: imageBytesBase64 ?? this.imageBytesBase64,
     );
   }
 }

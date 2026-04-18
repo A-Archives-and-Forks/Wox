@@ -3,6 +3,23 @@ import Cocoa
 import FlutterMacOS
 import ScreenCaptureKit
 
+// The screenshot workspace and saved window positions both use a top-left logical desktop space
+// that spans every monitor. The previous macOS conversion mixed that global contract with
+// per-screen top edges, which left fullscreen screenshot overlays misaligned as soon as displays
+// had different vertical offsets. Keeping every top-left/AppKit conversion anchored to the virtual
+// desktop top fixes the multi-display capture bug without introducing a second coordinate system.
+private func virtualDesktopTopInAppKit() -> CGFloat {
+  return NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
+}
+
+private func appKitY(fromTopLeftY y: CGFloat, height: CGFloat = 0) -> CGFloat {
+  return virtualDesktopTopInAppKit() - y - height
+}
+
+private func topLeftY(fromAppKitY y: CGFloat, height: CGFloat) -> CGFloat {
+  return virtualDesktopTopInAppKit() - y - height
+}
+
 @main
 class AppDelegate: FlutterAppDelegate {
   // The screenshot capture helpers run inside Swift `throws` / `async throws` contexts. The
@@ -24,6 +41,12 @@ class AppDelegate: FlutterAppDelegate {
     }
   }
 
+  private struct ScreenshotPresentationState {
+    let collectionBehavior: NSWindow.CollectionBehavior
+    let level: NSWindow.Level
+    let hasShadow: Bool
+  }
+
   // Store the previous active application
   private var previousActiveApp: NSRunningApplication?
   // Only restore the previous app when Wox has stayed focused since the last show/focus.
@@ -32,6 +55,10 @@ class AppDelegate: FlutterAppDelegate {
   private var windowEventChannel: FlutterMethodChannel?
   // Current appearance (light/dark)
   private var currentAppearance: String = "light"
+  private var screenshotPresentationState: ScreenshotPresentationState?
+  private var isCapturePresentationActive = false
+  private var captureWorkspaceBounds = NSRect.zero
+  private var captureWorkspaceScale = 1.0
 
   private func savePreviousActiveAppIfNeeded() {
     if let frontApp = NSWorkspace.shared.frontmostApplication,
@@ -129,14 +156,109 @@ class AppDelegate: FlutterAppDelegate {
   }
 
   private func screenPoint(fromTopLeft point: CGPoint) -> CGPoint {
-    let targetScreen =
-      NSScreen.screens.first { screen in
-        let frame = screen.frame
-        return point.x >= frame.origin.x && point.x < frame.origin.x + frame.width
-      } ?? NSScreen.main
-    let frame = targetScreen?.frame ?? .zero
-    let flippedY = (frame.origin.y + frame.height) - point.y
-    return CGPoint(x: point.x, y: flippedY)
+    return CGPoint(x: point.x, y: appKitY(fromTopLeftY: point.y))
+  }
+
+  private func parseRect(arguments: [String: Any]) -> NSRect? {
+    guard
+      let x = arguments["x"] as? Double,
+      let y = arguments["y"] as? Double,
+      let width = arguments["width"] as? Double,
+      let height = arguments["height"] as? Double
+    else {
+      return nil
+    }
+
+    return NSRect(x: x, y: y, width: width, height: height)
+  }
+
+  private func buildRectPayload(_ rect: NSRect) -> [String: Any] {
+    return [
+      "x": rect.origin.x,
+      "y": rect.origin.y,
+      "width": rect.size.width,
+      "height": rect.size.height,
+    ]
+  }
+
+  private func presentCaptureWorkspace(on window: NSWindow, bounds: NSRect) -> [String: Any] {
+    if screenshotPresentationState == nil {
+      screenshotPresentationState = ScreenshotPresentationState(
+        collectionBehavior: window.collectionBehavior,
+        level: window.level,
+        hasShadow: window.hasShadow
+      )
+    }
+
+    let frameRect = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height))
+    let flippedY = appKitY(fromTopLeftY: bounds.origin.y, height: frameRect.height)
+
+    // The launcher window's default collection behavior is tuned for a compact app panel. Screenshot
+    // capture needs a system-overlay style contract instead so one window can stay pinned across the
+    // full virtual desktop without inheriting the main launcher panel's single-display assumptions.
+    var collectionBehavior: NSWindow.CollectionBehavior = [
+      .canJoinAllSpaces,
+      .stationary,
+      .ignoresCycle,
+      .fullScreenNone,
+    ]
+    if #available(macOS 13.0, *) {
+      collectionBehavior.insert(.canJoinAllApplications)
+    }
+    window.collectionBehavior = collectionBehavior
+    window.level = .popUpMenu
+    window.hasShadow = false
+    window.setFrame(NSRect(x: bounds.origin.x, y: flippedY, width: frameRect.width, height: frameRect.height), display: true)
+    window.contentView?.needsLayout = true
+    window.contentView?.layoutSubtreeIfNeeded()
+    window.displayIfNeeded()
+    savePreviousActiveAppIfNeeded()
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+
+    isCapturePresentationActive = true
+    captureWorkspaceBounds = bounds
+    captureWorkspaceScale = 1
+    return [
+      "workspaceBounds": buildRectPayload(bounds),
+      "workspaceScale": 1,
+      "presentedByPlatform": true,
+    ]
+  }
+
+  private func dismissCaptureWorkspacePresentation(on window: NSWindow) {
+    guard let savedState = screenshotPresentationState else {
+      isCapturePresentationActive = false
+      captureWorkspaceBounds = .zero
+      captureWorkspaceScale = 1
+      return
+    }
+
+    window.collectionBehavior = savedState.collectionBehavior
+    window.level = savedState.level
+    window.hasShadow = savedState.hasShadow
+    screenshotPresentationState = nil
+    isCapturePresentationActive = false
+    captureWorkspaceBounds = .zero
+    captureWorkspaceScale = 1
+  }
+
+  private func debugCaptureWorkspaceState(for window: NSWindow) -> [String: Any] {
+    let contentRect = window.contentRect(forFrameRect: window.frame)
+    let windowTopLeftRect = NSRect(
+      x: window.frame.origin.x,
+      y: topLeftY(fromAppKitY: window.frame.origin.y, height: contentRect.height),
+      width: contentRect.width,
+      height: contentRect.height
+    )
+
+    return [
+      "isCapturePresentationActive": isCapturePresentationActive,
+      "workspaceScale": captureWorkspaceScale,
+      "workspaceBounds": buildRectPayload(captureWorkspaceBounds),
+      "windowBounds": buildRectPayload(windowTopLeftRect),
+      "collectionBehavior": window.collectionBehavior.rawValue,
+    ]
   }
 
   private func currentMouseLocation() -> CGPoint {
@@ -449,6 +571,26 @@ class AppDelegate: FlutterAppDelegate {
           }
           return
 
+        case "presentCaptureWorkspace":
+          if let args = call.arguments as? [String: Any], let bounds = self?.parseRect(arguments: args) {
+            result(self?.presentCaptureWorkspace(on: window, bounds: bounds))
+          } else {
+            result(
+              FlutterError(
+                code: "INVALID_ARGS",
+                message: "Invalid arguments for presentCaptureWorkspace",
+                details: nil
+              )
+            )
+          }
+
+        case "dismissCaptureWorkspacePresentation":
+          self?.dismissCaptureWorkspacePresentation(on: window)
+          result(nil)
+
+        case "debugCaptureWorkspaceState":
+          result(self?.debugCaptureWorkspaceState(for: window))
+
         case "setSize":
           if let args = call.arguments as? [String: Any],
             let width = args["width"] as? Double,
@@ -549,15 +691,10 @@ class AppDelegate: FlutterAppDelegate {
             let width = args["width"] as? Double,
             let height = args["height"] as? Double
           {
-            let targetScreen =
-              NSScreen.screens.first { screen in
-                let frame = screen.frame
-                return x >= frame.origin.x && x < frame.origin.x + frame.width
-              } ?? window.screen ?? NSScreen.main
-            let screenFrame = targetScreen?.frame ?? NSRect.zero
             let frameRect = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: width, height: height))
-            let screenTopInAppKit = screenFrame.origin.y + screenFrame.height
-            let flippedY = screenTopInAppKit - y - frameRect.height
+            // Screenshot capture stretches one window across the virtual desktop, so screen-local
+            // Y conversion is not enough once monitors sit at different heights.
+            let flippedY = appKitY(fromTopLeftY: y, height: frameRect.height)
             window.setFrame(NSRect(x: x, y: flippedY, width: frameRect.width, height: frameRect.height), display: true)
             result(nil)
           } else {
@@ -569,10 +706,10 @@ class AppDelegate: FlutterAppDelegate {
 
         case "getPosition":
           let frame = window.frame
-          let screenFrame = window.screen?.frame ?? NSScreen.main?.frame ?? NSRect.zero
-          // Convert to global bottom-left origin coordinate system; include screen origin.y for multi-monitor
+          // Return the shared virtual-desktop top-left position so saved window locations round-trip
+          // correctly even after the window temporarily spans multiple displays for screenshot capture.
           let x = frame.origin.x
-          let y = (screenFrame.origin.y + screenFrame.height) - frame.origin.y - frame.height
+          let y = topLeftY(fromAppKitY: frame.origin.y, height: frame.height)
           result(["x": x, "y": y])
 
         case "getSize":
@@ -589,45 +726,10 @@ class AppDelegate: FlutterAppDelegate {
             let x = args["x"] as? Double,
             let y = args["y"] as? Double
           {
-            // Find the target screen based on X coordinate
-            // Note: We use X coordinate only because Y coordinate from Go (top-left origin)
-            // is incompatible with AppKit's frame.contains() which expects bottom-left origin
-            let targetScreen =
-              NSScreen.screens.first { screen in
-                let frame = screen.frame
-                return x >= frame.origin.x && x < frame.origin.x + frame.width
-              } ?? window.screen ?? NSScreen.main
-
-            let frame = targetScreen?.frame ?? NSRect.zero
-
-            // COORDINATE SYSTEM CONVERSION: Top-left (Go) -> Bottom-left (AppKit)
-            //
-            // Go backend returns (x, y) in top-left origin coordinate system:
-            // - X: distance from left edge of virtual desktop
-            // - Y: distance from top edge of physical screen
-            //
-            // AppKit uses bottom-left origin with Y-axis pointing up
-            //
-            // Conversion steps:
-            // 1. Calculate screen top position in AppKit coordinates
-            //    screenTopInAppKit = frame.origin.y + frame.height
-            //    (e.g., for Dell at offset (2048, 72): 72 + 1080 = 1152)
-            //
-            // 2. Calculate window top position in AppKit coordinates
-            //    windowTopInAppKit = screenTopInAppKit - y
-            //    (e.g., if y=200 from screen top: 1152 - 200 = 952)
-            //
-            // 3. Convert to window origin (bottom-left corner of window)
-            //    flippedY = windowTopInAppKit - window.frame.height
-            //    (e.g., if window height=705: 952 - 705 = 247)
-            //
-            // This ensures the window appears at the correct position regardless of:
-            // - Multi-monitor setup with different offsets
-            // - Different screen resolutions
-            // - Menu bar height (already accounted for in Go's Y calculation)
-            let screenTopInAppKit = frame.origin.y + frame.height
-            let windowTopInAppKit = screenTopInAppKit - y
-            let flippedY = windowTopInAppKit - window.frame.height
+            // Keep launcher positioning on the same virtual-desktop contract as screenshot capture.
+            // The previous screen-relative conversion restored windows to the wrong Y whenever the
+            // saved position belonged to a display that was vertically offset from the main screen.
+            let flippedY = appKitY(fromTopLeftY: y, height: window.frame.height)
 
             window.setFrameOrigin(NSPoint(x: x, y: flippedY))
             result(nil)

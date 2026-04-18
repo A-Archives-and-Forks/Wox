@@ -63,6 +63,13 @@ private:
   // short-lived foreground steals from other apps. see issue #4346
   ULONGLONG blur_guard_until_tick_ = 0;
 
+  struct ScreenshotPresentationState
+  {
+    bool active = false;
+    double workspace_scale = 1.0;
+    RECT native_workspace_bounds{0, 0, 0, 0};
+  } screenshot_presentation_state_;
+
   // Save/restore the previously focused window (Windows focus rules require explicit restore)
   void SavePreviousActiveWindow(HWND selfHwnd);
   void RestorePreviousActiveWindow(HWND selfHwnd);

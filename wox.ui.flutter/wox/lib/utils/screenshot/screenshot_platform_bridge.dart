@@ -4,8 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:wox/entity/screenshot_session.dart';
 
 abstract class ScreenshotPlatformBridge {
-  static ScreenshotPlatformBridge _instance =
-      MethodChannelScreenshotPlatformBridge();
+  static ScreenshotPlatformBridge _instance = MethodChannelScreenshotPlatformBridge();
 
   static ScreenshotPlatformBridge get instance => _instance;
 
@@ -18,10 +17,17 @@ abstract class ScreenshotPlatformBridge {
   }
 
   Future<List<DisplaySnapshot>> captureAllDisplays();
+
+  Future<ScreenshotNativeSelectionResult> selectCaptureRegion(ScreenshotRect nativeWorkspaceBounds);
+
+  Future<ScreenshotWorkspacePresentation> presentCaptureWorkspace(ScreenshotRect nativeWorkspaceBounds);
+
+  Future<void> dismissCaptureWorkspacePresentation();
+
+  Future<Map<String, dynamic>> debugCaptureWorkspaceState();
 }
 
-class MethodChannelScreenshotPlatformBridge
-    implements ScreenshotPlatformBridge {
+class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge {
   static const String _windowsChannelName = 'com.wox.windows_window_manager';
   static const String _macosChannelName = 'com.wox.macos_window_manager';
   static const String _linuxChannelName = 'com.wox.linux_window_manager';
@@ -43,16 +49,66 @@ class MethodChannelScreenshotPlatformBridge
 
   @override
   Future<List<DisplaySnapshot>> captureAllDisplays() async {
-    final response = await _channel.invokeMethod<List<dynamic>>(
-      'captureAllDisplays',
-    );
+    final response = await _channel.invokeMethod<List<dynamic>>('captureAllDisplays');
     final snapshots = response ?? const <dynamic>[];
 
     // The native bridge returns JSON-like maps so Flutter can keep the screenshot session platform-agnostic.
     return snapshots.whereType<Map<dynamic, dynamic>>().map((item) {
-      return DisplaySnapshot.fromJson(
-        item.map((key, value) => MapEntry(key.toString(), value)),
-      );
+      return DisplaySnapshot.fromJson(item.map((key, value) => MapEntry(key.toString(), value)));
     }).toList();
+  }
+
+  @override
+  Future<ScreenshotNativeSelectionResult> selectCaptureRegion(ScreenshotRect nativeWorkspaceBounds) async {
+    try {
+      final response = await _channel.invokeMethod<Map<dynamic, dynamic>>('selectCaptureRegion', nativeWorkspaceBounds.toJson());
+      if (response == null) {
+        return const ScreenshotNativeSelectionResult(wasHandled: false);
+      }
+
+      return ScreenshotNativeSelectionResult.fromJson(response.map((key, value) => MapEntry(key.toString(), value)));
+    } on MissingPluginException {
+      // Only the macOS runner currently installs the native region selector. Returning an
+      // unhandled response keeps the existing Flutter workspace path active everywhere else.
+      return const ScreenshotNativeSelectionResult(wasHandled: false);
+    }
+  }
+
+  @override
+  Future<ScreenshotWorkspacePresentation> presentCaptureWorkspace(ScreenshotRect nativeWorkspaceBounds) async {
+    try {
+      final response = await _channel.invokeMethod<Map<dynamic, dynamic>>('presentCaptureWorkspace', nativeWorkspaceBounds.toJson());
+      if (response == null) {
+        return ScreenshotWorkspacePresentation(workspaceBounds: nativeWorkspaceBounds, workspaceScale: 1, presentedByPlatform: false);
+      }
+
+      return ScreenshotWorkspacePresentation.fromJson(response.map((key, value) => MapEntry(key.toString(), value)));
+    } on MissingPluginException {
+      // Linux and older runners do not implement screenshot-only presentation. Falling back to the
+      // generic window-manager path keeps the existing single-window workflow available there.
+      return ScreenshotWorkspacePresentation(workspaceBounds: nativeWorkspaceBounds, workspaceScale: 1, presentedByPlatform: false);
+    }
+  }
+
+  @override
+  Future<void> dismissCaptureWorkspacePresentation() async {
+    try {
+      await _channel.invokeMethod<void>('dismissCaptureWorkspacePresentation');
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>> debugCaptureWorkspaceState() async {
+    try {
+      final response = await _channel.invokeMethod<Map<dynamic, dynamic>>('debugCaptureWorkspaceState');
+      if (response == null) {
+        return const <String, dynamic>{};
+      }
+      return response.map((key, value) => MapEntry(key.toString(), value));
+    } on MissingPluginException {
+      return const <String, dynamic>{};
+    }
   }
 }

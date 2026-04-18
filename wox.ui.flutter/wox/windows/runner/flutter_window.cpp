@@ -176,6 +176,25 @@ static flutter::EncodableMap BuildRectValue(double x, double y, double width, do
   return rect;
 }
 
+static flutter::EncodableMap BuildRectValue(const RECT &rect)
+{
+  return BuildRectValue(
+      static_cast<double>(rect.left),
+      static_cast<double>(rect.top),
+      static_cast<double>(rect.right - rect.left),
+      static_cast<double>(rect.bottom - rect.top));
+}
+
+static flutter::EncodableMap BuildScaledRectValue(const RECT &rect, double scale)
+{
+  const double safe_scale = scale <= 0 ? 1.0 : scale;
+  return BuildRectValue(
+      static_cast<double>(rect.left) / safe_scale,
+      static_cast<double>(rect.top) / safe_scale,
+      static_cast<double>(rect.right - rect.left) / safe_scale,
+      static_cast<double>(rect.bottom - rect.top) / safe_scale);
+}
+
 struct MonitorSnapshotCapture
 {
   std::vector<flutter::EncodableValue> snapshots;
@@ -1273,12 +1292,17 @@ void FlutterWindow::HandleWindowManagerMethodCall(
             const double scale = static_cast<double>(dpi) / 96.0;
             flutter::EncodableMap snapshot;
             snapshot[flutter::EncodableValue("displayId")] = flutter::EncodableValue(Utf8FromUtf16(monitor_info.szDevice));
+            // Windows screenshot presentation now sizes one overlay window in native virtual-
+            // desktop pixels. Mixed-DPI monitor layouts cannot be represented by dividing each
+            // monitor rect by its own scale because the combined workspace would no longer share
+            // one coordinate system. Flutter normalizes these native bounds after the platform
+            // reports the final overlay window scale.
             snapshot[flutter::EncodableValue("logicalBounds")] = flutter::EncodableValue(
                 BuildRectValue(
-                    static_cast<double>(monitor_info.rcMonitor.left) / scale,
-                    static_cast<double>(monitor_info.rcMonitor.top) / scale,
-                    static_cast<double>(width) / scale,
-                    static_cast<double>(height) / scale));
+                    static_cast<double>(monitor_info.rcMonitor.left),
+                    static_cast<double>(monitor_info.rcMonitor.top),
+                    static_cast<double>(width),
+                    static_cast<double>(height)));
             snapshot[flutter::EncodableValue("pixelBounds")] = flutter::EncodableValue(
                 BuildRectValue(
                     static_cast<double>(monitor_info.rcMonitor.left),
@@ -1305,6 +1329,103 @@ void FlutterWindow::HandleWindowManagerMethodCall(
         snapshots.push_back(snapshot);
       }
       result->Success(flutter::EncodableValue(snapshots));
+    }
+    else if (method_name == "presentCaptureWorkspace")
+    {
+      const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
+      if (arguments == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Invalid arguments for presentCaptureWorkspace");
+        return;
+      }
+
+      auto x_it = arguments->find(flutter::EncodableValue("x"));
+      auto y_it = arguments->find(flutter::EncodableValue("y"));
+      auto width_it = arguments->find(flutter::EncodableValue("width"));
+      auto height_it = arguments->find(flutter::EncodableValue("height"));
+      if (x_it == arguments->end() || y_it == arguments->end() || width_it == arguments->end() || height_it == arguments->end())
+      {
+        result->Error("INVALID_ARGUMENTS", "Invalid arguments for presentCaptureWorkspace");
+        return;
+      }
+
+      const double x = std::get<double>(x_it->second);
+      const double y = std::get<double>(y_it->second);
+      const double width = std::get<double>(width_it->second);
+      const double height = std::get<double>(height_it->second);
+      const RECT native_workspace_bounds{
+          static_cast<LONG>(std::lround(x)),
+          static_cast<LONG>(std::lround(y)),
+          static_cast<LONG>(std::lround(x + width)),
+          static_cast<LONG>(std::lround(y + height))};
+
+      SavePreviousActiveWindow(hwnd);
+      FlushPendingChildKeyUps();
+      blur_guard_active_ = true;
+      blur_guard_until_tick_ = GetTickCount64() + kPostShowBlurGraceMs;
+
+      SetWindowPos(
+          hwnd,
+          HWND_TOPMOST,
+          native_workspace_bounds.left,
+          native_workspace_bounds.top,
+          native_workspace_bounds.right - native_workspace_bounds.left,
+          native_workspace_bounds.bottom - native_workspace_bounds.top,
+          SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+
+      if (flutter_controller_)
+      {
+        flutter_controller_->ForceRedraw();
+      }
+      SyncFlutterChildWindowToClientArea(hwnd, "presentCaptureWorkspace", false);
+
+      // Screenshot capture replaces the standard show() -> focus() sequence on Windows because the
+      // generic window-manager path assumes one monitor/DPI. Reapplying the focus restore steps
+      // here keeps the capture overlay interactive without reusing the single-monitor geometry path.
+      DismissStartMenuIfOpen();
+      SavePreviousActiveWindow(hwnd);
+      if (!SetForegroundWindow(hwnd))
+      {
+        AllowSetForegroundWindow(ASFW_ANY);
+        SetForegroundWindow(hwnd);
+      }
+      SetFocus(hwnd);
+      BringWindowToTop(hwnd);
+      blur_guard_active_ = false;
+
+      const double workspace_scale = static_cast<double>(GetDpiScale(hwnd));
+      screenshot_presentation_state_.active = true;
+      screenshot_presentation_state_.workspace_scale = workspace_scale;
+      screenshot_presentation_state_.native_workspace_bounds = native_workspace_bounds;
+
+      flutter::EncodableMap response;
+      response[flutter::EncodableValue("workspaceBounds")] = flutter::EncodableValue(BuildScaledRectValue(native_workspace_bounds, workspace_scale));
+      response[flutter::EncodableValue("workspaceScale")] = flutter::EncodableValue(workspace_scale);
+      response[flutter::EncodableValue("presentedByPlatform")] = flutter::EncodableValue(true);
+      result->Success(flutter::EncodableValue(response));
+    }
+    else if (method_name == "dismissCaptureWorkspacePresentation")
+    {
+      screenshot_presentation_state_.active = false;
+      screenshot_presentation_state_.workspace_scale = 1.0;
+      screenshot_presentation_state_.native_workspace_bounds = {0, 0, 0, 0};
+      SyncFlutterChildWindowToClientArea(hwnd, "dismissCaptureWorkspacePresentation", false);
+      result->Success();
+    }
+    else if (method_name == "debugCaptureWorkspaceState")
+    {
+      RECT root_rect{};
+      GetWindowRect(hwnd, &root_rect);
+      const double current_scale = static_cast<double>(GetDpiScale(hwnd));
+
+      flutter::EncodableMap response;
+      response[flutter::EncodableValue("isCapturePresentationActive")] = flutter::EncodableValue(screenshot_presentation_state_.active);
+      response[flutter::EncodableValue("workspaceScale")] = flutter::EncodableValue(screenshot_presentation_state_.workspace_scale);
+      response[flutter::EncodableValue("workspaceBounds")] = flutter::EncodableValue(
+          BuildScaledRectValue(screenshot_presentation_state_.native_workspace_bounds, screenshot_presentation_state_.workspace_scale));
+      response[flutter::EncodableValue("windowBounds")] = flutter::EncodableValue(BuildScaledRectValue(root_rect, current_scale));
+      response[flutter::EncodableValue("nativeWorkspaceBounds")] = flutter::EncodableValue(BuildRectValue(screenshot_presentation_state_.native_workspace_bounds));
+      result->Success(flutter::EncodableValue(response));
     }
     else if (method_name == "setSize")
     {
