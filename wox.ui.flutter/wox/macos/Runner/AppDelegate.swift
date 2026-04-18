@@ -5,6 +5,25 @@ import ScreenCaptureKit
 
 @main
 class AppDelegate: FlutterAppDelegate {
+  // The screenshot capture helpers run inside Swift `throws` / `async throws` contexts. The
+  // previous implementation threw `FlutterError` directly, but the macOS Flutter SDK exposes it
+  // as an Objective-C channel payload rather than a Swift `Error`, which now fails compilation.
+  // Keep a Swift-native error for internal control flow and convert it back at the channel
+  // boundary so Dart still receives the same error codes and messages as before.
+  private struct DisplayCaptureError: LocalizedError {
+    let code: String
+    let message: String
+    let details: Any?
+
+    var errorDescription: String? {
+      return message
+    }
+
+    func asFlutterError() -> FlutterError {
+      return FlutterError(code: code, message: message, details: details)
+    }
+  }
+
   // Store the previous active application
   private var previousActiveApp: NSRunningApplication?
   // Only restore the previous app when Wox has stayed focused since the last show/focus.
@@ -126,12 +145,12 @@ class AppDelegate: FlutterAppDelegate {
 
   private func captureAllDisplaysLegacy() throws -> [[String: Any]] {
     if !CGPreflightScreenCaptureAccess() {
-      throw FlutterError(code: "permission_denied", message: "Screen recording permission is required", details: nil)
+      throw DisplayCaptureError(code: "permission_denied", message: "Screen recording permission is required", details: nil)
     }
 
     let screens = NSScreen.screens
     if screens.isEmpty {
-      throw FlutterError(code: "capture_failed", message: "No screens are available for capture", details: nil)
+      throw DisplayCaptureError(code: "capture_failed", message: "No screens are available for capture", details: nil)
     }
 
     let globalTop = screens.map { $0.frame.origin.y + $0.frame.height }.max() ?? 0
@@ -139,17 +158,17 @@ class AppDelegate: FlutterAppDelegate {
 
     for screen in screens {
       guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
-        throw FlutterError(code: "capture_failed", message: "Failed to resolve macOS display id", details: nil)
+        throw DisplayCaptureError(code: "capture_failed", message: "Failed to resolve macOS display id", details: nil)
       }
 
       let displayId = CGDirectDisplayID(screenNumber.uint32Value)
       guard let cgImage = CGDisplayCreateImage(displayId) else {
-        throw FlutterError(code: "capture_failed", message: "Failed to capture macOS display image", details: nil)
+        throw DisplayCaptureError(code: "capture_failed", message: "Failed to capture macOS display image", details: nil)
       }
 
       let bitmap = NSBitmapImageRep(cgImage: cgImage)
       guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
-        throw FlutterError(code: "capture_failed", message: "Failed to encode macOS display image", details: nil)
+        throw DisplayCaptureError(code: "capture_failed", message: "Failed to encode macOS display image", details: nil)
       }
 
       let frame = screen.frame
@@ -185,7 +204,7 @@ class AppDelegate: FlutterAppDelegate {
   @available(macOS 14.0, *)
   private func captureAllDisplaysWithScreenCaptureKit() async throws -> [[String: Any]] {
     if !CGPreflightScreenCaptureAccess() {
-      throw FlutterError(code: "permission_denied", message: "Screen recording permission is required", details: nil)
+      throw DisplayCaptureError(code: "permission_denied", message: "Screen recording permission is required", details: nil)
     }
 
     let shareableContent = try await SCShareableContent.excludingDesktopWindows(
@@ -193,7 +212,7 @@ class AppDelegate: FlutterAppDelegate {
       onScreenWindowsOnly: true
     )
     if shareableContent.displays.isEmpty {
-      throw FlutterError(
+      throw DisplayCaptureError(
         code: "capture_failed",
         message: "No displays are available for ScreenCaptureKit capture",
         details: nil
@@ -226,7 +245,7 @@ class AppDelegate: FlutterAppDelegate {
       )
       let bitmap = NSBitmapImageRep(cgImage: cgImage)
       guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
-        throw FlutterError(
+        throw DisplayCaptureError(
           code: "capture_failed",
           message: "Failed to encode ScreenCaptureKit display image",
           details: nil
@@ -265,15 +284,19 @@ class AppDelegate: FlutterAppDelegate {
     if #available(macOS 14.0, *) {
       do {
         return try await captureAllDisplaysWithScreenCaptureKit()
-      } catch {
-        if let flutterError = error as? FlutterError, flutterError.code == "permission_denied" {
-          throw flutterError
+      } catch let error as DisplayCaptureError {
+        if error.code == "permission_denied" {
+          throw error
         }
 
         // Keep the existing CGDisplay fallback for older runners or partial ScreenCaptureKit
         // failures so screenshot capture still works on supported macOS builds that haven't
         // fully transitioned to the newer API surface yet.
-        log("ScreenCaptureKit capture failed, falling back to CGDisplayCreateImage: \(error)")
+        log("ScreenCaptureKit capture failed, falling back to CGDisplayCreateImage: \(error.message)")
+      } catch {
+        // Surface unexpected native failures in the fallback log as well so we still capture
+        // evidence when the newer API fails before the legacy path is attempted.
+        log("ScreenCaptureKit capture failed, falling back to CGDisplayCreateImage: \(error.localizedDescription)")
       }
     }
 
@@ -411,17 +434,17 @@ class AppDelegate: FlutterAppDelegate {
           Task { @MainActor in
             do {
               result(try await self?.captureAllDisplays())
+            } catch let error as DisplayCaptureError {
+              // Convert the Swift-native capture error back to `FlutterError` only when returning
+              // through the method channel so the Dart side keeps the existing error contract.
+              result(error.asFlutterError())
             } catch {
-              if let flutterError = error as? FlutterError {
-                result(flutterError)
-              } else {
-                result(
-                  FlutterError(
-                    code: "capture_failed",
-                    message: error.localizedDescription,
-                    details: nil
-                  ))
-              }
+              result(
+                FlutterError(
+                  code: "capture_failed",
+                  message: error.localizedDescription,
+                  details: nil
+                ))
             }
           }
           return
