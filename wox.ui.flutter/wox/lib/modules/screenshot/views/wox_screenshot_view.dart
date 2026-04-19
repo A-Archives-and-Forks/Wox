@@ -1035,7 +1035,10 @@ class _WorkspaceBackground extends StatelessWidget {
     return Stack(
       children: [
         for (final snapshot in snapshots)
-          Positioned.fromRect(rect: snapshot.logicalBounds.toRect().shift(-virtualBounds.topLeft), child: Image.memory(snapshot.imageBytes, fit: BoxFit.fill)),
+          Positioned.fromRect(
+            rect: snapshot.logicalBounds.toRect().shift(-virtualBounds.topLeft),
+            child: Image(image: snapshot.imageProvider, fit: BoxFit.fill, gaplessPlayback: true),
+          ),
       ],
     );
   }

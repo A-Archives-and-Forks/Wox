@@ -576,7 +576,15 @@ class WoxScreenshotController extends GetxController {
       );
 
       exportSlices.add(
-        _DisplayExportSlice(image: decodedImage, logicalRect: logicalRect, sourceRect: sourceRect, destRect: destRect, pixelScaleX: pixelScaleX, pixelScaleY: pixelScaleY),
+        _DisplayExportSlice(
+          image: decodedImage,
+          logicalRect: logicalRect,
+          intersectionRect: intersection,
+          sourceRect: sourceRect,
+          destRect: destRect,
+          pixelScaleX: pixelScaleX,
+          pixelScaleY: pixelScaleY,
+        ),
       );
     }
 
@@ -597,9 +605,14 @@ class WoxScreenshotController extends GetxController {
       canvas.save();
       final localDestRect = slice.destRect.shift(-pixelUnion.topLeft);
       canvas.clipRect(localDestRect);
+      // Exported annotations are painted in selection-local logical coordinates. The previous
+      // translation anchored them to the full display origin, which pushed shapes/text outside the
+      // exported crop whenever the selection started away from the monitor's top-left corner.
+      // Align each slice to the slice/selection intersection instead so mixed-DPI exports keep the
+      // same annotation positions the user saw in the editor and clipboard output.
       canvas.translate(
-        localDestRect.left - (slice.logicalRect.left - selection.left) * slice.pixelScaleX,
-        localDestRect.top - (slice.logicalRect.top - selection.top) * slice.pixelScaleY,
+        localDestRect.left - (slice.intersectionRect.left - selection.left) * slice.pixelScaleX,
+        localDestRect.top - (slice.intersectionRect.top - selection.top) * slice.pixelScaleY,
       );
       canvas.scale(slice.pixelScaleX, slice.pixelScaleY);
       paintScreenshotAnnotations(canvas, annotationsToPaint, selection.topLeft);
@@ -700,6 +713,7 @@ class _DisplayExportSlice {
   const _DisplayExportSlice({
     required this.image,
     required this.logicalRect,
+    required this.intersectionRect,
     required this.sourceRect,
     required this.destRect,
     required this.pixelScaleX,
@@ -708,6 +722,7 @@ class _DisplayExportSlice {
 
   final ui.Image image;
   final Rect logicalRect;
+  final Rect intersectionRect;
   final Rect sourceRect;
   final Rect destRect;
   final double pixelScaleX;

@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -198,8 +197,12 @@ class DisplaySnapshot {
   final double scale;
   final int rotation;
   final String imageBytesBase64;
-
-  Uint8List get imageBytes => base64Decode(imageBytesBase64);
+  // Screenshot annotation drags rebuild the workspace frequently. Decoding base64 on every build
+  // created a fresh MemoryImage each frame, which made the captured backdrop briefly restart and
+  // visually flicker while drawing. Cache both the bytes and image provider per snapshot so the
+  // background stays stable across rebuilds and export still reuses the same decoded payload.
+  late final Uint8List imageBytes = base64Decode(imageBytesBase64);
+  late final MemoryImage imageProvider = MemoryImage(imageBytes);
 
   factory DisplaySnapshot.fromJson(Map<String, dynamic> json) {
     final logicalBounds = _normalizeJsonMap(json['logicalBounds'] ?? json['LogicalBounds']);
