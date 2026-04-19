@@ -144,10 +144,12 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         onDoubleTapDown: (details) => _handleDoubleTap(details.localPosition),
         child: Stack(
           children: [
-            // Dragging annotations used to visually disturb the captured background because the
-            // entire workspace repainted on every pointer update. Keeping the snapshots isolated in
-            // their own repaint boundary limits redraws to overlays that actually changed.
-            RepaintBoundary(child: _WorkspaceBackground(snapshots: controller.displaySnapshots.toList(), virtualBounds: virtualBounds)),
+            RepaintBoundary(
+              // Dragging annotations used to visually disturb the captured background because the
+              // entire workspace repainted on every pointer update. Keeping the snapshots isolated in
+              // their own repaint boundary limits redraws to overlays that actually changed.
+              child: _WorkspaceBackground(snapshots: controller.displaySnapshots.toList(), virtualBounds: virtualBounds),
+            ),
             Obx(() {
               final selectionRect = controller.selectionRect;
               final selectionLocalRect = selectionRect?.shift(-virtualBounds.topLeft);

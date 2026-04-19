@@ -15,12 +15,20 @@ import 'package:wox/utils/screenshot/screenshot_platform_bridge.dart';
 import 'smoke_test_helper.dart';
 
 class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
-  _FakeScreenshotBridge(this._capture, {this.nativeSelection, this.presentation, this.debugState, this.delegateNativePresentation = false});
+  _FakeScreenshotBridge(
+    this._capture, {
+    this.nativeSelection,
+    this.presentation,
+    this.debugState,
+    this.dismissNativeOverlays,
+    this.delegateNativePresentation = false,
+  });
 
   final Future<List<DisplaySnapshot>> Function() _capture;
   final Future<ScreenshotNativeSelectionResult> Function(ScreenshotRect nativeWorkspaceBounds)? nativeSelection;
   final Future<ScreenshotWorkspacePresentation> Function(ScreenshotRect nativeWorkspaceBounds)? presentation;
   final Future<Map<String, dynamic>> Function()? debugState;
+  final Future<void> Function()? dismissNativeOverlays;
   final bool delegateNativePresentation;
   final ScreenshotPlatformBridge _delegate = MethodChannelScreenshotPlatformBridge();
 
@@ -50,6 +58,17 @@ class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
   Future<void> dismissCaptureWorkspacePresentation() async {
     if (delegateNativePresentation) {
       await _delegate.dismissCaptureWorkspacePresentation();
+    }
+  }
+
+  @override
+  Future<void> dismissNativeSelectionOverlays() async {
+    if (dismissNativeOverlays != null) {
+      await dismissNativeOverlays!();
+      return;
+    }
+    if (delegateNativePresentation) {
+      await _delegate.dismissNativeSelectionOverlays();
     }
   }
 
@@ -309,6 +328,112 @@ void registerLauncherScreenshotSmokeTests() {
 
       expect(result['status'], equals('cancelled'));
       expect(restoredDebugState['isCapturePresentationActive'], isFalse);
+      await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+    });
+
+    testWidgets('T11-07: Native macOS multi-display selection keeps shaded context around the selected area', (tester) async {
+      if (!Platform.isMacOS) {
+        return;
+      }
+
+      await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final screenshotController = Get.find<WoxScreenshotController>();
+      ScreenshotPlatformBridge.setInstanceForTest(
+        _FakeScreenshotBridge(
+          () async => [
+            await _buildSnapshot('display-left', const Color(0xFF0B7285), const ScreenshotRect(x: 0, y: 0, width: 200, height: 120)),
+            await _buildSnapshot('display-right', const Color(0xFFE8590C), const ScreenshotRect(x: 200, y: 0, width: 200, height: 120)),
+          ],
+          nativeSelection: (nativeWorkspaceBounds) async {
+            expect(nativeWorkspaceBounds, const ScreenshotRect(x: 0, y: 0, width: 400, height: 120));
+            return const ScreenshotNativeSelectionResult(
+              wasHandled: true,
+              selection: ScreenshotRect(x: 120, y: 20, width: 180, height: 70),
+              editorVisibleBounds: ScreenshotRect(x: 40, y: 0, width: 320, height: 220),
+            );
+          },
+          presentation: (nativeWorkspaceBounds) async {
+            expect(nativeWorkspaceBounds, const ScreenshotRect(x: 0, y: 0, width: 400, height: 120));
+            return const ScreenshotWorkspacePresentation(workspaceBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120), workspaceScale: 1, presentedByPlatform: false);
+          },
+        ),
+      );
+
+      final sessionFuture = screenshotController.startCaptureSession('smoke-native-multi-display', _defaultRequest());
+      await pumpUntil(tester, () => find.byKey(screenshotCanvasKey).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+
+      expect(screenshotController.stage.value, ScreenshotSessionStage.annotating);
+      expect(screenshotController.displaySnapshots, hasLength(2));
+      expect(screenshotController.virtualBoundsRect, const Rect.fromLTWH(0, 0, 400, 120));
+      expect(screenshotController.selectionRect, const Rect.fromLTWH(120, 20, 180, 70));
+      expect(screenshotController.virtualBoundsRect.width, greaterThan(screenshotController.selectionRect!.width));
+      expect(screenshotController.virtualBoundsRect.height, greaterThan(screenshotController.selectionRect!.height));
+
+      await tester.tap(find.byKey(screenshotConfirmKey));
+      await tester.pump(const Duration(milliseconds: 250));
+
+      final result = (await sessionFuture).toJson();
+      final pngBytes = base64Decode(result['pngBase64'] as String);
+      final codec = await ui.instantiateImageCodec(pngBytes);
+      final frame = await codec.getNextFrame();
+
+      expect(result['status'], equals('completed'));
+      expect(frame.image.width, equals(180));
+      expect(frame.image.height, equals(70));
+
+      frame.image.dispose();
+      await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+    });
+
+    testWidgets('T11-08: Native selection overlays are dismissed after Flutter renders its first frame', (tester) async {
+      if (!Platform.isMacOS) {
+        return;
+      }
+
+      await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final screenshotController = Get.find<WoxScreenshotController>();
+      var dismissCalls = 0;
+
+      ScreenshotPlatformBridge.setInstanceForTest(
+        _FakeScreenshotBridge(
+          () async => [
+            await _buildSnapshot('display-left', const Color(0xFF135D66), const ScreenshotRect(x: 0, y: 0, width: 200, height: 120)),
+            await _buildSnapshot('display-right', const Color(0xFF6A4C93), const ScreenshotRect(x: 200, y: 0, width: 200, height: 120)),
+          ],
+          nativeSelection:
+              (_) async => const ScreenshotNativeSelectionResult(
+                wasHandled: true,
+                selection: ScreenshotRect(x: 80, y: 16, width: 140, height: 72),
+                editorVisibleBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120),
+              ),
+          presentation:
+              (nativeWorkspaceBounds) async =>
+                  const ScreenshotWorkspacePresentation(workspaceBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120), workspaceScale: 1, presentedByPlatform: false),
+          dismissNativeOverlays: () async {
+            dismissCalls += 1;
+          },
+        ),
+      );
+
+      // The native overlays should be dismissed automatically after Flutter paints
+      // its first frame, not kept alive as a passive backdrop.
+      final sessionFuture = screenshotController.startCaptureSession('smoke-native-dismiss-order', _defaultRequest());
+      await pumpUntil(
+        tester,
+        () => screenshotController.stage.value == ScreenshotSessionStage.annotating,
+        timeout: const Duration(seconds: 15),
+      );
+
+      // Native overlays should have been dismissed during the handoff after the first frame.
+      expect(dismissCalls, equals(1));
+
+      await screenshotController.cancelSession('smoke-native-dismiss-order-cancel');
+      await tester.pump(const Duration(milliseconds: 250));
+      final result = (await sessionFuture).toJson();
+
+      expect(result['status'], equals('cancelled'));
+      // dismissNativeSelectionOverlays is also called in _restoreWindowState, so total is 2.
+      expect(dismissCalls, equals(2));
       await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
     });
   });

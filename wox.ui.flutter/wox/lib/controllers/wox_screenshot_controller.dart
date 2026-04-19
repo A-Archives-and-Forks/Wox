@@ -1,7 +1,5 @@
-import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:typed_data';
 
@@ -139,22 +137,50 @@ class WoxScreenshotController extends GetxController {
       return cancelled;
     }
 
-    final editorState = await _prepareMacOSNativeSelectionEditor(rawSnapshots, nativeSelection);
-    displaySnapshots.assignAll([editorState.snapshot]);
-    await _decodeDisplayImages(displaySnapshots.toList());
-    virtualBounds.value = ScreenshotRect.fromRect(editorState.snapshot.logicalBounds.toRect());
-    selection.value = ScreenshotRect.fromRect(editorState.snapshot.logicalBounds.toRect());
-    workspaceScale.value = 1;
+    // A single Flutter window cannot reliably render across multiple macOS displays, so the
+    // annotation editor is confined to the monitor where the user drew the selection. This avoids
+    // cross-display rendering artifacts while keeping the transition seamless on that monitor.
+    final selectedDisplayBounds = _findDisplayBoundsForSelection(nativeSelection.selection!.toRect(), rawSnapshots);
 
-    // macOS cannot reliably keep one Flutter window interactive across separate display spaces.
-    // The native selector resolves the cross-display drag first, then we reopen the editor as a
-    // normal single-screen window that still supports the existing annotation and export tools.
-    await windowManager.setBounds(editorState.position, editorState.size);
-    await windowManager.setAlwaysOnTop(true);
-    await windowManager.show();
-    await windowManager.focus();
+    final presentation = await ScreenshotPlatformBridge.instance.presentCaptureWorkspace(ScreenshotRect.fromRect(selectedDisplayBounds));
+    final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
+      rawSnapshots,
+      nativeWorkspaceBounds: selectedDisplayBounds,
+      workspaceBounds: presentation.workspaceBounds.toRect(),
+      workspaceScale: presentation.workspaceScale,
+    );
+    final normalizedSelection = _normalizeNativeRectForWorkspace(
+      nativeSelection.selection!.toRect(),
+      nativeWorkspaceBounds: selectedDisplayBounds,
+      workspaceBounds: presentation.workspaceBounds.toRect(),
+      workspaceScale: presentation.workspaceScale,
+    );
+
+    await _decodeDisplayImages(normalizedSnapshots);
+    displaySnapshots.assignAll(normalizedSnapshots);
+    virtualBounds.value = ScreenshotRect.fromRect(presentation.workspaceBounds.toRect());
+    // Native selection should only replace the drag phase. Annotation still happens on the full
+    // Flutter screenshot workspace so the user keeps the original all-screen shade and toolbar flow.
+    selection.value = ScreenshotRect.fromRect(normalizedSelection);
+    workspaceScale.value = presentation.workspaceScale;
+
+    if (!presentation.presentedByPlatform) {
+      final bounds = virtualBoundsRect;
+      await windowManager.setBounds(bounds.topLeft, bounds.size);
+      await windowManager.setAlwaysOnTop(true);
+      await windowManager.show();
+      await windowManager.focus();
+    }
+
     await WoxApi.instance.onShow(traceId);
     stage.value = ScreenshotSessionStage.annotating;
+    // Flutter now renders its own background and shade identically to the native overlay. Wait for
+    // the first frame so the two surfaces overlap perfectly, then dismiss the native windows. The
+    // user sees one continuous surface instead of a flash to the desktop between the two layers.
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 16));
+    await WidgetsBinding.instance.endOfFrame;
+    await ScreenshotPlatformBridge.instance.dismissNativeSelectionOverlays();
     return _sessionCompleter!.future;
   }
 
@@ -190,7 +216,10 @@ class WoxScreenshotController extends GetxController {
     // Hiding the current window before native capture prevents the launcher itself from ending up in
     // the captured background, which is a hard requirement for the single-window screenshot workflow.
     await windowManager.hide();
-    await Future.delayed(const Duration(milliseconds: 120));
+    // ScreenCaptureKit can still sample the desktop for a short moment after Wox hides, especially
+    // when another fullscreen space becomes active. Waiting a bit longer gives the compositor time
+    // to promote the previous app before the native multi-display snapshots are captured.
+    await Future.delayed(const Duration(milliseconds: 220));
   }
 
   Future<void> cancelSession(String traceId) async {
@@ -239,6 +268,10 @@ class WoxScreenshotController extends GetxController {
     final launcherController = Get.find<WoxLauncherController>();
     launcherController.forceHideOnBlur = savedState.forceHideOnBlur;
 
+    // The native multi-display selector can stay alive until Flutter confirms its workspace is
+    // visible. Closing it here as part of the generic restore path prevents a stuck topmost shade
+    // when the screenshot session aborts before that handoff completes.
+    await ScreenshotPlatformBridge.instance.dismissNativeSelectionOverlays();
     await ScreenshotPlatformBridge.instance.dismissCaptureWorkspacePresentation();
     await windowManager.setAlwaysOnTop(!savedState.wasInSettingView);
     await windowManager.setBounds(savedState.position, savedState.size);
@@ -461,37 +494,40 @@ class WoxScreenshotController extends GetxController {
     }
   }
 
-  Future<_PreparedScreenshotEditorState> _prepareMacOSNativeSelectionEditor(List<DisplaySnapshot> rawSnapshots, ScreenshotNativeSelectionResult nativeSelection) async {
-    final selection = nativeSelection.selection!.toRect();
-    await _decodeDisplayImages(rawSnapshots);
-    final renderedSelection = await _renderSelectionImage(selection: selection, snapshots: rawSnapshots, annotationsToPaint: const <ScreenshotAnnotation>[]);
-
-    final editorVisibleBounds = nativeSelection.editorVisibleBounds?.toRect() ?? selection;
-    final editorRect = _buildPreviewEditorRect(selection, editorVisibleBounds);
-    final editorSnapshot = DisplaySnapshot(
-      displayId: 'macos-native-selection',
-      logicalBounds: ScreenshotRect(x: 0, y: 0, width: editorRect.width, height: editorRect.height),
-      pixelBounds: ScreenshotRect(x: 0, y: 0, width: renderedSelection.pixelWidth.toDouble(), height: renderedSelection.pixelHeight.toDouble()),
-      scale: renderedSelection.pixelWidth / editorRect.width,
-      rotation: 0,
-      imageBytesBase64: base64Encode(renderedSelection.pngBytes),
+  Rect _normalizeNativeRectForWorkspace(Rect nativeRect, {required Rect nativeWorkspaceBounds, required Rect workspaceBounds, required double workspaceScale}) {
+    final safeWorkspaceScale = workspaceScale <= 0 ? 1.0 : workspaceScale;
+    return Rect.fromLTWH(
+      workspaceBounds.left + (nativeRect.left - nativeWorkspaceBounds.left) / safeWorkspaceScale,
+      workspaceBounds.top + (nativeRect.top - nativeWorkspaceBounds.top) / safeWorkspaceScale,
+      nativeRect.width / safeWorkspaceScale,
+      nativeRect.height / safeWorkspaceScale,
     );
-
-    return _PreparedScreenshotEditorState(snapshot: editorSnapshot, position: editorRect.topLeft, size: editorRect.size);
   }
 
-  Rect _buildPreviewEditorRect(Rect selection, Rect editorVisibleBounds) {
-    final horizontalPadding = math.min(80.0, math.max(24.0, editorVisibleBounds.width * 0.06));
-    final verticalPadding = math.min(120.0, math.max(32.0, editorVisibleBounds.height * 0.08));
-    final maxWidth = math.max(320.0, editorVisibleBounds.width - horizontalPadding * 2);
-    final maxHeight = math.max(220.0, editorVisibleBounds.height - verticalPadding * 2);
-    final fitScale = math.min(maxWidth / selection.width, maxHeight / selection.height);
-    final minReadableScale = math.max(320.0 / selection.width, 220.0 / selection.height);
-    final scale = math.min(fitScale, math.max(1.0, math.min(2.0, minReadableScale)));
-    final size = Size(selection.width * scale, selection.height * scale);
-    final left = editorVisibleBounds.left + (editorVisibleBounds.width - size.width) / 2;
-    final top = editorVisibleBounds.top + (editorVisibleBounds.height - size.height) / 2;
-    return Rect.fromLTWH(left, top, size.width, size.height);
+  /// Finds the display whose bounds best contain the given selection rect. Used to confine the
+  /// Flutter annotation editor to a single monitor after the native multi-display selector finishes,
+  /// since a single Flutter window cannot reliably render across multiple macOS displays.
+  Rect _findDisplayBoundsForSelection(Rect selection, List<DisplaySnapshot> snapshots) {
+    final center = selection.center;
+    for (final snapshot in snapshots) {
+      if (snapshot.logicalBounds.toRect().contains(center)) {
+        return snapshot.logicalBounds.toRect();
+      }
+    }
+
+    DisplaySnapshot? best;
+    double bestArea = 0;
+    for (final snapshot in snapshots) {
+      final intersection = snapshot.logicalBounds.toRect().intersect(selection);
+      if (!intersection.isEmpty) {
+        final area = intersection.width * intersection.height;
+        if (area > bestArea) {
+          bestArea = area;
+          best = snapshot;
+        }
+      }
+    }
+    return best?.logicalBounds.toRect() ?? snapshots.first.logicalBounds.toRect();
   }
 
   Future<Uint8List> exportSelectionPng() async {
@@ -658,14 +694,6 @@ class _SavedScreenshotWindowState {
   final Offset position;
   final Size size;
   final bool forceHideOnBlur;
-}
-
-class _PreparedScreenshotEditorState {
-  const _PreparedScreenshotEditorState({required this.snapshot, required this.position, required this.size});
-
-  final DisplaySnapshot snapshot;
-  final Offset position;
-  final Size size;
 }
 
 class _DisplayExportSlice {

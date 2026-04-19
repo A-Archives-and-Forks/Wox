@@ -20,6 +20,430 @@ private func topLeftY(fromAppKitY y: CGFloat, height: CGFloat) -> CGFloat {
   return virtualDesktopTopInAppKit() - y - height
 }
 
+private func topLeftPoint(fromAppKit point: CGPoint) -> CGPoint {
+  return CGPoint(x: point.x, y: topLeftY(fromAppKitY: point.y, height: 0))
+}
+
+private func topLeftRect(fromAppKitRect rect: NSRect) -> NSRect {
+  return NSRect(
+    x: rect.origin.x,
+    y: topLeftY(fromAppKitY: rect.origin.y, height: rect.height),
+    width: rect.width,
+    height: rect.height
+  )
+}
+
+private func appKitRect(fromTopLeftRect rect: NSRect) -> NSRect {
+  return NSRect(
+    x: rect.origin.x,
+    y: appKitY(fromTopLeftY: rect.origin.y, height: rect.height),
+    width: rect.width,
+    height: rect.height
+  )
+}
+
+private func clampPoint(_ point: CGPoint, to bounds: NSRect) -> CGPoint {
+  return CGPoint(
+    x: min(max(point.x, bounds.minX), bounds.maxX),
+    y: min(max(point.y, bounds.minY), bounds.maxY)
+  )
+}
+
+private func rectFromPoints(_ start: CGPoint, _ end: CGPoint) -> NSRect {
+  return NSRect(
+    x: min(start.x, end.x),
+    y: min(start.y, end.y),
+    width: abs(end.x - start.x),
+    height: abs(end.y - start.y)
+  )
+}
+
+private func intersectionArea(_ lhs: NSRect, _ rhs: NSRect) -> CGFloat {
+  let intersection = lhs.intersection(rhs)
+  if intersection.isEmpty {
+    return 0
+  }
+
+  return intersection.width * intersection.height
+}
+
+private struct CachedDisplayCapture {
+  let displayId: String
+  let logicalBounds: NSRect
+  let visibleBounds: NSRect
+  let scale: CGFloat
+  let rotation: Int
+  let image: CGImage
+}
+
+private struct NativeSelectionOverlayResult {
+  let selection: NSRect?
+  let editorVisibleBounds: NSRect?
+}
+
+private final class ScreenshotOverlayView: NSView {
+  private static let selectionBorderColor = NSColor(red: 41 / 255, green: 1, blue: 114 / 255, alpha: 1)
+  private static let overlayColor = NSColor(calibratedWhite: 0, alpha: 0.46)
+  private static let labelBackgroundColor = NSColor(calibratedWhite: 0.09, alpha: 0.9)
+  private static let selectionShadowColor = NSColor(calibratedWhite: 0, alpha: 0.2)
+
+  let capture: CachedDisplayCapture
+
+  var globalSelection: NSRect? {
+    didSet {
+      needsDisplay = true
+    }
+  }
+
+  var shouldDrawSizeLabel = false {
+    didSet {
+      needsDisplay = true
+    }
+  }
+
+  override var isFlipped: Bool {
+    return true
+  }
+
+  init(capture: CachedDisplayCapture) {
+    self.capture = capture
+    super.init(frame: NSRect(origin: .zero, size: capture.logicalBounds.size))
+    wantsLayer = true
+    layer?.backgroundColor = NSColor.clear.cgColor
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+    return true
+  }
+
+  override func resetCursorRects() {
+    discardCursorRects()
+    addCursorRect(bounds, cursor: .crosshair)
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    super.draw(dirtyRect)
+
+    guard let context = NSGraphicsContext.current?.cgContext else {
+      return
+    }
+
+    context.saveGState()
+    context.interpolationQuality = .high
+    // `CGContext.draw` still uses a bottom-left image coordinate system even when the NSView is
+    // flipped. Drawing without an explicit Y flip makes every monitor preview appear upside down.
+    context.translateBy(x: 0, y: bounds.height)
+    context.scaleBy(x: 1, y: -1)
+    context.draw(capture.image, in: NSRect(origin: .zero, size: bounds.size))
+    context.scaleBy(x: 1, y: -1)
+    context.translateBy(x: 0, y: -bounds.height)
+
+    let overlayPath = NSBezierPath(rect: bounds)
+    if let localSelection = localSelectionRect() {
+      overlayPath.appendRect(localSelection)
+      overlayPath.windingRule = .evenOdd
+    }
+    ScreenshotOverlayView.overlayColor.setFill()
+    overlayPath.fill()
+
+    if let localSelection = localSelectionRect() {
+      drawSelectionBorder(in: localSelection)
+      if shouldDrawSizeLabel, let globalSelection = globalSelection {
+        drawSelectionSizeLabel(for: globalSelection)
+      }
+    }
+
+    context.restoreGState()
+  }
+
+  private func localSelectionRect() -> NSRect? {
+    guard let globalSelection = globalSelection, !globalSelection.isEmpty else {
+      return nil
+    }
+
+    let intersection = capture.logicalBounds.intersection(globalSelection)
+    if intersection.isEmpty {
+      return nil
+    }
+
+    return NSRect(
+      x: intersection.minX - capture.logicalBounds.minX,
+      y: intersection.minY - capture.logicalBounds.minY,
+      width: intersection.width,
+      height: intersection.height
+    )
+  }
+
+  private func drawSelectionBorder(in localSelection: NSRect) {
+    let borderRect = localSelection.insetBy(dx: 1, dy: 1)
+    let shadow = NSShadow()
+    shadow.shadowBlurRadius = 18
+    shadow.shadowOffset = NSSize(width: 0, height: 0)
+    shadow.shadowColor = ScreenshotOverlayView.selectionShadowColor
+    shadow.set()
+
+    let borderPath = NSBezierPath(rect: borderRect)
+    borderPath.lineWidth = 2
+    ScreenshotOverlayView.selectionBorderColor.setStroke()
+    borderPath.stroke()
+  }
+
+  private func drawSelectionSizeLabel(for globalSelection: NSRect) {
+    let label = "\(Int(globalSelection.width.rounded())) x \(Int(globalSelection.height.rounded()))"
+    let attributes: [NSAttributedString.Key: Any] = [
+      .font: NSFont.systemFont(ofSize: 14, weight: .bold),
+      .foregroundColor: NSColor.white,
+    ]
+    let labelSize = label.size(withAttributes: attributes)
+    let labelWidth = labelSize.width + 16
+    let labelHeight = labelSize.height + 8
+    let preferredAboveY = globalSelection.minY - labelHeight - 10
+    let labelY =
+      preferredAboveY >= capture.logicalBounds.minY + 8
+      ? preferredAboveY
+      : min(globalSelection.maxY + 10, capture.logicalBounds.maxY - labelHeight - 8)
+    let labelX = min(
+      max(globalSelection.minX + 12, capture.logicalBounds.minX + 8),
+      capture.logicalBounds.maxX - labelWidth - 8
+    )
+    let localRect = NSRect(
+      x: labelX - capture.logicalBounds.minX,
+      y: labelY - capture.logicalBounds.minY,
+      width: labelWidth,
+      height: labelHeight
+    )
+
+    let backgroundPath = NSBezierPath(roundedRect: localRect, xRadius: 10, yRadius: 10)
+    ScreenshotOverlayView.labelBackgroundColor.setFill()
+    backgroundPath.fill()
+    label.draw(
+      at: CGPoint(x: localRect.minX + 8, y: localRect.minY + 4),
+      withAttributes: attributes
+    )
+  }
+}
+
+private final class ScreenshotOverlayWindow: NSWindow {
+  let overlayView: ScreenshotOverlayView
+
+  override var canBecomeKey: Bool {
+    return true
+  }
+
+  override var canBecomeMain: Bool {
+    return true
+  }
+
+  init(capture: CachedDisplayCapture) {
+    overlayView = ScreenshotOverlayView(capture: capture)
+    super.init(
+      contentRect: appKitRect(fromTopLeftRect: capture.logicalBounds),
+      styleMask: .borderless,
+      backing: .buffered,
+      defer: false
+    )
+
+    isOpaque = false
+    backgroundColor = .clear
+    hasShadow = false
+    // The overlay session owns these windows explicitly. Releasing them as a side effect of close()
+    // makes lifetime depend on AppKit event timing and was the most likely source of the drag-time crash.
+    isReleasedWhenClosed = false
+    level = .popUpMenu
+    ignoresMouseEvents = false
+    acceptsMouseMovedEvents = true
+    titleVisibility = .hidden
+    titlebarAppearsTransparent = true
+    animationBehavior = .none
+    collectionBehavior = [
+      .canJoinAllSpaces,
+      .fullScreenAuxiliary,
+      .stationary,
+      .ignoresCycle,
+    ]
+    if #available(macOS 13.0, *) {
+      collectionBehavior.insert(.canJoinAllApplications)
+    }
+
+    contentView = overlayView
+  }
+}
+
+private final class ScreenshotOverlaySession {
+  private let workspaceBounds: NSRect
+  private let captures: [CachedDisplayCapture]
+  private let windows: [ScreenshotOverlayWindow]
+  private let onComplete: (NativeSelectionOverlayResult) -> Void
+  private var localEventMonitor: Any?
+  private var dragStart: CGPoint?
+  private var isCompleting = false
+  private var overlaysDismissed = false
+
+  init(
+    workspaceBounds: NSRect,
+    captures: [CachedDisplayCapture],
+    onComplete: @escaping (NativeSelectionOverlayResult) -> Void
+  ) {
+    self.workspaceBounds = workspaceBounds
+    self.captures = captures
+    self.windows = captures.map(ScreenshotOverlayWindow.init)
+    self.onComplete = onComplete
+  }
+
+  func begin() {
+    installEventMonitor()
+    for window in windows {
+      window.orderFrontRegardless()
+    }
+    windows.first?.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  func cancel() {
+    complete(with: NativeSelectionOverlayResult(selection: nil, editorVisibleBounds: nil))
+  }
+
+  func dismissOverlays() {
+    if overlaysDismissed {
+      return
+    }
+
+    overlaysDismissed = true
+    let windowsToDismiss = windows
+    DispatchQueue.main.async {
+      for window in windowsToDismiss {
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+      }
+    }
+  }
+
+  private func installEventMonitor() {
+    localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown]) { [weak self] event in
+      return self?.handle(event: event) ?? event
+    }
+  }
+
+  private func handle(event: NSEvent) -> NSEvent? {
+    if isCompleting {
+      return nil
+    }
+
+    switch event.type {
+    case .keyDown:
+      if event.keyCode == 53 {
+        cancel()
+        return nil
+      }
+
+      return nil
+
+    case .leftMouseDown:
+      let point = clampPoint(topLeftPoint(fromAppKit: NSEvent.mouseLocation), to: workspaceBounds)
+      dragStart = point
+      updateSelection(rectFromPoints(point, point))
+      return nil
+
+    case .leftMouseDragged:
+      guard let dragStart else {
+        return nil
+      }
+
+      let point = clampPoint(topLeftPoint(fromAppKit: NSEvent.mouseLocation), to: workspaceBounds)
+      updateSelection(rectFromPoints(dragStart, point))
+      return nil
+
+    case .leftMouseUp:
+      guard let dragStart else {
+        return nil
+      }
+
+      let point = clampPoint(topLeftPoint(fromAppKit: NSEvent.mouseLocation), to: workspaceBounds)
+      let selection = rectFromPoints(dragStart, point)
+      completeSelection(selection)
+      return nil
+
+    default:
+      return event
+    }
+  }
+
+  private func updateSelection(_ selection: NSRect?) {
+    let labelDisplayId = selection.flatMap(selectionLabelDisplayId(for:))
+    for window in windows {
+      window.overlayView.globalSelection = selection
+      window.overlayView.shouldDrawSizeLabel = window.overlayView.capture.displayId == labelDisplayId
+    }
+  }
+
+  private func completeSelection(_ selection: NSRect) {
+    if selection.width < 1 || selection.height < 1 {
+      cancel()
+      return
+    }
+
+    let editorVisibleBounds = preferredEditorVisibleBounds(for: selection)
+    complete(with: NativeSelectionOverlayResult(selection: selection, editorVisibleBounds: editorVisibleBounds))
+  }
+
+  private func complete(with result: NativeSelectionOverlayResult) {
+    if isCompleting {
+      return
+    }
+
+    isCompleting = true
+    dragStart = nil
+    if let localEventMonitor {
+      NSEvent.removeMonitor(localEventMonitor)
+      self.localEventMonitor = nil
+    }
+
+    // The drag phase ends here, but successful handoff keeps the overlay windows alive so Flutter
+    // can reuse the exact same captured backdrop underneath its annotation controls. Cancel still
+    // closes immediately because there is no follow-up editor that needs the native background.
+    if result.selection == nil {
+      dismissOverlays()
+    }
+
+    let onComplete = self.onComplete
+    DispatchQueue.main.async {
+      onComplete(result)
+    }
+  }
+
+  private func selectionLabelDisplayId(for selection: NSRect) -> String? {
+    let anchorPoint = CGPoint(x: selection.minX + 12, y: selection.minY + 12)
+    if let containingCapture = captures.first(where: { $0.logicalBounds.contains(anchorPoint) }) {
+      return containingCapture.displayId
+    }
+
+    if let originCapture = captures.first(where: { $0.logicalBounds.contains(selection.origin) }) {
+      return originCapture.displayId
+    }
+
+    return preferredCapture(for: selection)?.displayId
+  }
+
+  private func preferredEditorVisibleBounds(for selection: NSRect) -> NSRect? {
+    return preferredCapture(for: selection)?.visibleBounds
+  }
+
+  private func preferredCapture(for selection: NSRect) -> CachedDisplayCapture? {
+    let selectionCenter = CGPoint(x: selection.midX, y: selection.midY)
+    if let centeredCapture = captures.first(where: { $0.logicalBounds.contains(selectionCenter) }) {
+      return centeredCapture
+    }
+
+    return captures.max(by: { intersectionArea($0.logicalBounds, selection) < intersectionArea($1.logicalBounds, selection) })
+  }
+}
+
 @main
 class AppDelegate: FlutterAppDelegate {
   // The screenshot capture helpers run inside Swift `throws` / `async throws` contexts. The
@@ -45,6 +469,7 @@ class AppDelegate: FlutterAppDelegate {
     let collectionBehavior: NSWindow.CollectionBehavior
     let level: NSWindow.Level
     let hasShadow: Bool
+    let styleMask: NSWindow.StyleMask
   }
 
   // Store the previous active application
@@ -59,6 +484,11 @@ class AppDelegate: FlutterAppDelegate {
   private var isCapturePresentationActive = false
   private var captureWorkspaceBounds = NSRect.zero
   private var captureWorkspaceScale = 1.0
+  // Native multi-display selection reuses the already captured CGImages so the selector can draw
+  // one full-resolution background per monitor without sending large image payloads back to Swift.
+  private var cachedDisplayCaptures: [CachedDisplayCapture] = []
+  private var activeOverlaySession: ScreenshotOverlaySession?
+  private var nativeOverlayDismissTimeoutWorkItem: DispatchWorkItem?
 
   private func savePreviousActiveAppIfNeeded() {
     if let frontApp = NSWorkspace.shared.frontmostApplication,
@@ -159,6 +589,16 @@ class AppDelegate: FlutterAppDelegate {
     return CGPoint(x: point.x, y: appKitY(fromTopLeftY: point.y))
   }
 
+  private func screen(for displayId: CGDirectDisplayID) -> NSScreen? {
+    return NSScreen.screens.first { screen in
+      guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+        return false
+      }
+
+      return CGDirectDisplayID(screenNumber.uint32Value) == displayId
+    }
+  }
+
   private func parseRect(arguments: [String: Any]) -> NSRect? {
     guard
       let x = arguments["x"] as? Double,
@@ -181,17 +621,109 @@ class AppDelegate: FlutterAppDelegate {
     ]
   }
 
+  private func cancelNativeOverlayDismissTimeout() {
+    nativeOverlayDismissTimeoutWorkItem?.cancel()
+    nativeOverlayDismissTimeoutWorkItem = nil
+  }
+
+  private func dismissNativeSelectionOverlays() {
+    cancelNativeOverlayDismissTimeout()
+    guard let activeOverlaySession else {
+      return
+    }
+
+    self.activeOverlaySession = nil
+    activeOverlaySession.dismissOverlays()
+  }
+
+  private func scheduleNativeOverlayDismissTimeout() {
+    cancelNativeOverlayDismissTimeout()
+    guard activeOverlaySession != nil else {
+      return
+    }
+
+    let workItem = DispatchWorkItem { [weak self] in
+      // Flutter should acknowledge the handoff quickly by converting the selector into a passive
+      // backdrop. This timeout only exists to prevent a leaked topmost drag overlay if that
+      // handoff fails before Flutter starts driving the session.
+      self?.log("Native selection overlay timed out while waiting for Flutter to activate the backdrop handoff; dismissing overlays")
+      self?.dismissNativeSelectionOverlays()
+    }
+    nativeOverlayDismissTimeoutWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: workItem)
+  }
+
+  private func selectCaptureRegion(
+    workspaceBounds: NSRect,
+    completion: @escaping (Result<[String: Any], DisplayCaptureError>) -> Void
+  ) {
+    guard activeOverlaySession == nil else {
+      completion(
+        .failure(
+          DisplayCaptureError(
+            code: "busy",
+            message: "A screenshot selection session is already active",
+            details: nil
+          )
+        )
+      )
+      return
+    }
+
+    let captures = cachedDisplayCaptures.filter { !$0.logicalBounds.intersection(workspaceBounds).isEmpty }
+    guard captures.count >= 2 else {
+      completion(.success(["wasHandled": false]))
+      return
+    }
+
+    // The native selector uses one borderless window per display because the single Flutter window
+    // path only renders reliably on the primary monitor. Matching Apple's per-screen overlay model
+    // keeps the drag interaction stable across mixed-resolution and fullscreen spaces.
+    let overlaySession = ScreenshotOverlaySession(workspaceBounds: workspaceBounds, captures: captures) { [weak self] result in
+      guard let self else {
+        completion(.success(["wasHandled": false]))
+        return
+      }
+
+      if result.selection == nil {
+        self.cancelNativeOverlayDismissTimeout()
+        self.activeOverlaySession = nil
+      } else {
+        self.scheduleNativeOverlayDismissTimeout()
+      }
+      let payload: [String: Any] = [
+        "wasHandled": true,
+        "selection": result.selection.map { self.buildRectPayload($0) } ?? NSNull(),
+        "editorVisibleBounds": result.editorVisibleBounds.map { self.buildRectPayload($0) } ?? NSNull(),
+      ]
+      completion(
+        .success(payload)
+      )
+    }
+
+    activeOverlaySession = overlaySession
+    // Native selection activates Wox again after the launcher window hid itself. Saving the current
+    // frontmost app here preserves the same focus-restore behavior that the regular window show/hide
+    // path already has when the screenshot session later cancels or finishes from a hidden state.
+    savePreviousActiveAppIfNeeded()
+    overlaySession.begin()
+  }
+
   private func presentCaptureWorkspace(on window: NSWindow, bounds: NSRect) -> [String: Any] {
     if screenshotPresentationState == nil {
       screenshotPresentationState = ScreenshotPresentationState(
         collectionBehavior: window.collectionBehavior,
         level: window.level,
-        hasShadow: window.hasShadow
+        hasShadow: window.hasShadow,
+        styleMask: window.styleMask
       )
     }
 
-    let frameRect = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height))
-    let flippedY = appKitY(fromTopLeftY: bounds.origin.y, height: frameRect.height)
+    // Making the window borderless ensures the content rect equals the frame rect, so the
+    // captured background fills the entire monitor area without a title bar offset pushing
+    // the content down and exposing the macOS menubar underneath.
+    window.styleMask = .borderless
+    let flippedY = appKitY(fromTopLeftY: bounds.origin.y, height: bounds.height)
 
     // The launcher window's default collection behavior is tuned for a compact app panel. Screenshot
     // capture needs a system-overlay style contract instead so one window can stay pinned across the
@@ -208,7 +740,7 @@ class AppDelegate: FlutterAppDelegate {
     window.collectionBehavior = collectionBehavior
     window.level = .popUpMenu
     window.hasShadow = false
-    window.setFrame(NSRect(x: bounds.origin.x, y: flippedY, width: frameRect.width, height: frameRect.height), display: true)
+    window.setFrame(NSRect(x: bounds.origin.x, y: flippedY, width: bounds.width, height: bounds.height), display: true)
     window.contentView?.needsLayout = true
     window.contentView?.layoutSubtreeIfNeeded()
     window.displayIfNeeded()
@@ -237,6 +769,7 @@ class AppDelegate: FlutterAppDelegate {
     window.collectionBehavior = savedState.collectionBehavior
     window.level = savedState.level
     window.hasShadow = savedState.hasShadow
+    window.styleMask = savedState.styleMask
     screenshotPresentationState = nil
     isCapturePresentationActive = false
     captureWorkspaceBounds = .zero
@@ -275,8 +808,8 @@ class AppDelegate: FlutterAppDelegate {
       throw DisplayCaptureError(code: "capture_failed", message: "No screens are available for capture", details: nil)
     }
 
-    let globalTop = screens.map { $0.frame.origin.y + $0.frame.height }.max() ?? 0
     var snapshots: [[String: Any]] = []
+    var cachedCaptures: [CachedDisplayCapture] = []
 
     for screen in screens {
       guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
@@ -293,24 +826,33 @@ class AppDelegate: FlutterAppDelegate {
         throw DisplayCaptureError(code: "capture_failed", message: "Failed to encode macOS display image", details: nil)
       }
 
-      let frame = screen.frame
+      let frame = topLeftRect(fromAppKitRect: screen.frame)
+      let visibleFrame = topLeftRect(fromAppKitRect: screen.visibleFrame)
       let scale = screen.backingScaleFactor
-      let logicalX = frame.origin.x
-      let logicalY = globalTop - frame.origin.y - frame.height
       let rotation = Int(CGDisplayRotation(displayId).rounded())
 
+      cachedCaptures.append(
+        CachedDisplayCapture(
+          displayId: String(displayId),
+          logicalBounds: frame,
+          visibleBounds: visibleFrame,
+          scale: scale,
+          rotation: rotation,
+          image: cgImage
+        )
+      )
       snapshots.append(
         [
           "displayId": String(displayId),
           "logicalBounds": [
-            "x": logicalX,
-            "y": logicalY,
+            "x": frame.origin.x,
+            "y": frame.origin.y,
             "width": frame.width,
             "height": frame.height,
           ],
           "pixelBounds": [
-            "x": logicalX * scale,
-            "y": logicalY * scale,
+            "x": frame.origin.x * scale,
+            "y": frame.origin.y * scale,
             "width": CGFloat(cgImage.width),
             "height": CGFloat(cgImage.height),
           ],
@@ -320,6 +862,7 @@ class AppDelegate: FlutterAppDelegate {
         ])
     }
 
+    cachedDisplayCaptures = cachedCaptures
     return snapshots
   }
 
@@ -341,11 +884,11 @@ class AppDelegate: FlutterAppDelegate {
       )
     }
 
-    let globalTop = shareableContent.displays.map { $0.frame.maxY }.max() ?? 0
     let excludedApplications = shareableContent.applications.filter {
       $0.bundleIdentifier == Bundle.main.bundleIdentifier
     }
     var snapshots: [[String: Any]] = []
+    var cachedCaptures: [CachedDisplayCapture] = []
 
     for display in shareableContent.displays {
       // ScreenCaptureKit replaces CGDisplayCreateImage on modern macOS. We exclude the current
@@ -374,22 +917,37 @@ class AppDelegate: FlutterAppDelegate {
         )
       }
 
-      let logicalFrame = display.frame
-      let logicalY = globalTop - logicalFrame.origin.y - logicalFrame.height
+      let matchedScreen = screen(for: display.displayID)
+      // Mixed-resolution desktops exposed that ScreenCaptureKit's display frame can drift from the
+      // AppKit window server layout that actually decides where NSWindow overlays appear. Basing the
+      // overlay geometry on the matching NSScreen frame keeps the shaded window aligned with the
+      // real monitor bounds even when one display uses a different native resolution or scale.
+      let logicalFrame = matchedScreen.map { topLeftRect(fromAppKitRect: $0.frame) } ?? topLeftRect(fromAppKitRect: display.frame)
+      let visibleFrame = matchedScreen.map { topLeftRect(fromAppKitRect: $0.visibleFrame) } ?? logicalFrame
       let rotation = Int(CGDisplayRotation(display.displayID).rounded())
 
+      cachedCaptures.append(
+        CachedDisplayCapture(
+          displayId: String(display.displayID),
+          logicalBounds: logicalFrame,
+          visibleBounds: visibleFrame,
+          scale: scale,
+          rotation: rotation,
+          image: cgImage
+        )
+      )
       snapshots.append(
         [
           "displayId": String(display.displayID),
           "logicalBounds": [
             "x": logicalFrame.origin.x,
-            "y": logicalY,
+            "y": logicalFrame.origin.y,
             "width": logicalFrame.width,
             "height": logicalFrame.height,
           ],
           "pixelBounds": [
             "x": logicalFrame.origin.x * scale,
-            "y": logicalY * scale,
+            "y": logicalFrame.origin.y * scale,
             "width": CGFloat(cgImage.width),
             "height": CGFloat(cgImage.height),
           ],
@@ -399,10 +957,12 @@ class AppDelegate: FlutterAppDelegate {
         ])
     }
 
+    cachedDisplayCaptures = cachedCaptures
     return snapshots
   }
 
   private func captureAllDisplays() async throws -> [[String: Any]] {
+    cachedDisplayCaptures = []
     if #available(macOS 14.0, *) {
       do {
         return try await captureAllDisplaysWithScreenCaptureKit()
@@ -571,6 +1131,26 @@ class AppDelegate: FlutterAppDelegate {
           }
           return
 
+        case "selectCaptureRegion":
+          if let args = call.arguments as? [String: Any], let bounds = self?.parseRect(arguments: args) {
+            self?.selectCaptureRegion(workspaceBounds: bounds) { selectionResult in
+              switch selectionResult {
+              case .success(let payload):
+                result(payload)
+              case .failure(let error):
+                result(error.asFlutterError())
+              }
+            }
+          } else {
+            result(
+              FlutterError(
+                code: "INVALID_ARGS",
+                message: "Invalid arguments for selectCaptureRegion",
+                details: nil
+              )
+            )
+          }
+
         case "presentCaptureWorkspace":
           if let args = call.arguments as? [String: Any], let bounds = self?.parseRect(arguments: args) {
             result(self?.presentCaptureWorkspace(on: window, bounds: bounds))
@@ -586,6 +1166,10 @@ class AppDelegate: FlutterAppDelegate {
 
         case "dismissCaptureWorkspacePresentation":
           self?.dismissCaptureWorkspacePresentation(on: window)
+          result(nil)
+
+        case "dismissNativeSelectionOverlays":
+          self?.dismissNativeSelectionOverlays()
           result(nil)
 
         case "debugCaptureWorkspaceState":

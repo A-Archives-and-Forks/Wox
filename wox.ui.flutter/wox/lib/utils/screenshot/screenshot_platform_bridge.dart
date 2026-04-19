@@ -24,6 +24,8 @@ abstract class ScreenshotPlatformBridge {
 
   Future<void> dismissCaptureWorkspacePresentation();
 
+  Future<void> dismissNativeSelectionOverlays();
+
   Future<Map<String, dynamic>> debugCaptureWorkspaceState();
 }
 
@@ -94,6 +96,15 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
   Future<void> dismissCaptureWorkspacePresentation() async {
     try {
       await _channel.invokeMethod<void>('dismissCaptureWorkspacePresentation');
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  @override
+  Future<void> dismissNativeSelectionOverlays() async {
+    try {
+      await _channel.invokeMethod<void>('dismissNativeSelectionOverlays');
     } on MissingPluginException {
       return;
     }
