@@ -49,6 +49,7 @@ class _AnnotationHitTarget {
 class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   final controller = Get.find<WoxScreenshotController>();
   final focusNode = FocusNode(debugLabel: 'screenshot-workspace');
+  bool _isCancellingSession = false;
 
   _InteractionMode? _interactionMode;
   _ResizeHandle? _resizeHandle;
@@ -65,6 +66,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleGlobalScreenshotKeyEvent);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         focusNode.requestFocus();
@@ -74,8 +76,36 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleGlobalScreenshotKeyEvent);
     focusNode.dispose();
     super.dispose();
+  }
+
+  bool _handleGlobalScreenshotKeyEvent(KeyEvent event) {
+    if ((event is! KeyDownEvent && event is! KeyRepeatEvent) || event.logicalKey != LogicalKeyboardKey.escape) {
+      return false;
+    }
+
+    // The screenshot workflow used to rely on the workspace Focus node receiving Escape. That was
+    // not reliable once annotation text fields took focus or a toolbar click left the page without a
+    // stable primary focus, so Escape stopped dismissing the active screenshot session. A dedicated
+    // screenshot-level HardwareKeyboard handler keeps the cancel shortcut working anywhere inside the
+    // annotation UI without changing the rest of the keyboard flow.
+    _cancelSessionFromKeyboard();
+    return true;
+  }
+
+  void _cancelSessionFromKeyboard() {
+    if (_isCancellingSession || !controller.isSessionActive.value) {
+      return;
+    }
+
+    _isCancellingSession = true;
+    controller.cancelSession(const UuidV4().generate()).whenComplete(() {
+      if (mounted) {
+        _isCancellingSession = false;
+      }
+    });
   }
 
   @override
@@ -102,11 +132,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     }
 
     if (event.logicalKey == LogicalKeyboardKey.escape) {
-      // The screenshot editor now handles Escape at the Focus tree level instead of relying on a
-      // standalone KeyboardListener. Text fields take focus while editing annotations, and the old
-      // listener stopped receiving Escape there, which made the screenshot UI impossible to dismiss
-      // from the active editing state.
-      controller.cancelSession(const UuidV4().generate());
+      _cancelSessionFromKeyboard();
       return KeyEventResult.handled;
     }
 
@@ -231,30 +257,35 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                   key: screenshotToolSelectKey,
                   icon: Icons.select_all,
                   selected: currentTool == ScreenshotTool.select,
+                  activateOnTapDown: true,
                   onPressed: () => controller.setTool(ScreenshotTool.select),
                 ),
                 _ToolButton(
                   key: screenshotToolRectKey,
                   icon: Icons.crop_square,
                   selected: currentTool == ScreenshotTool.rect,
+                  activateOnTapDown: true,
                   onPressed: () => controller.setTool(ScreenshotTool.rect),
                 ),
                 _ToolButton(
                   key: screenshotToolEllipseKey,
                   icon: Icons.circle_outlined,
                   selected: currentTool == ScreenshotTool.ellipse,
+                  activateOnTapDown: true,
                   onPressed: () => controller.setTool(ScreenshotTool.ellipse),
                 ),
                 _ToolButton(
                   key: screenshotToolTextKey,
                   icon: Icons.text_fields,
                   selected: currentTool == ScreenshotTool.text,
+                  activateOnTapDown: true,
                   onPressed: () => controller.setTool(ScreenshotTool.text),
                 ),
                 _ToolButton(
                   key: screenshotToolArrowKey,
                   icon: Icons.north_east,
                   selected: currentTool == ScreenshotTool.arrow,
+                  activateOnTapDown: true,
                   onPressed: () => controller.setTool(ScreenshotTool.arrow),
                 ),
                 const SizedBox(width: 10),
@@ -1154,22 +1185,37 @@ class _LoadingView extends StatelessWidget {
 }
 
 class _ToolButton extends StatelessWidget {
-  const _ToolButton({super.key, required this.icon, required this.onPressed, this.selected = false, this.enabled = true, this.color = Colors.white});
+  const _ToolButton({
+    super.key,
+    required this.icon,
+    required this.onPressed,
+    this.selected = false,
+    this.enabled = true,
+    this.color = Colors.white,
+    this.activateOnTapDown = false,
+  });
 
   final IconData icon;
   final VoidCallback? onPressed;
   final bool selected;
   final bool enabled;
   final Color color;
+  final bool activateOnTapDown;
 
   @override
   Widget build(BuildContext context) {
     final foreground = enabled ? (selected ? const Color(0xFF29FF72) : color) : Colors.white38;
+    final enabledAction = enabled ? onPressed : null;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: InkWell(
-        onTap: enabled ? onPressed : null,
+        // Tool switching on desktop felt delayed because InkWell.onTap waits for pointer-up and also
+        // competes with the toolbar scroll view's gesture arena. Triggering the low-risk tool-change
+        // actions on tap-down makes the active icon respond immediately while leaving confirm/cancel
+        // style actions on the safer pointer-up path.
+        onTapDown: activateOnTapDown && enabledAction != null ? (_) => enabledAction() : null,
+        onTap: activateOnTapDown ? null : enabledAction,
         borderRadius: BorderRadius.circular(10),
         child: Container(
           width: 40,
