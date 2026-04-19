@@ -84,49 +84,54 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
       final stage = controller.stage.value;
       final virtualBounds = controller.virtualBoundsRect;
 
-      return KeyboardListener(
+      return Focus(
         focusNode: focusNode,
         autofocus: true,
-        onKeyEvent: (event) {
-          if (event is! KeyDownEvent) {
-            return;
-          }
-
-          if (event.logicalKey == LogicalKeyboardKey.escape) {
-            if (controller.textDraftPosition.value != null) {
-              controller.cancelTextDraft();
-              return;
-            }
-            controller.cancelSession(const UuidV4().generate());
-            return;
-          }
-
-          if (event.logicalKey == LogicalKeyboardKey.enter) {
-            if (controller.textDraftPosition.value != null) {
-              controller.commitTextDraft();
-              return;
-            }
-            if (controller.selectionRect != null) {
-              controller.confirmSelection(const UuidV4().generate());
-            }
-            return;
-          }
-
-          if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {
-            controller.deleteSelectedAnnotation();
-            return;
-          }
-
-          if ((HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed) && event.logicalKey == LogicalKeyboardKey.keyZ) {
-            controller.undoAnnotation();
-          }
-        },
+        onKeyEvent: _handleWorkspaceKeyEvent,
         child: Material(
           color: Colors.transparent,
           child: stage == ScreenshotSessionStage.loading ? _LoadingView(label: controller.tr('plugin_screenshot_capture_title')) : _buildWorkspace(context, virtualBounds),
         ),
       );
     });
+  }
+
+  KeyEventResult _handleWorkspaceKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      // The screenshot editor now handles Escape at the Focus tree level instead of relying on a
+      // standalone KeyboardListener. Text fields take focus while editing annotations, and the old
+      // listener stopped receiving Escape there, which made the screenshot UI impossible to dismiss
+      // from the active editing state.
+      controller.cancelSession(const UuidV4().generate());
+      return KeyEventResult.handled;
+    }
+
+    if (controller.textDraftPosition.value != null) {
+      return KeyEventResult.ignored;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.enter) {
+      if (controller.selectionRect != null) {
+        controller.confirmSelection(const UuidV4().generate());
+      }
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {
+      controller.deleteSelectedAnnotation();
+      return KeyEventResult.handled;
+    }
+
+    if ((HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed) && event.logicalKey == LogicalKeyboardKey.keyZ) {
+      controller.undoAnnotation();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
   }
 
   Widget _buildWorkspace(BuildContext context, Rect virtualBounds) {
@@ -358,7 +363,10 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         Positioned.fromRect(
           rect: selectionLocalRect,
           child: IgnorePointer(
-            child: Container(decoration: BoxDecoration(border: Border.all(color: borderColor, width: 2), boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 18)])),
+            // The previous frame decoration used a full-rect box shadow, which visually bled into
+            // the selected area and made the "transparent" capture region look slightly grey. Keep
+            // the frame to a pure stroke so the user sees the raw screenshot pixels inside the crop.
+            child: Container(decoration: BoxDecoration(border: Border.all(color: borderColor, width: 2))),
           ),
         ),
         ...handles,
@@ -1227,12 +1235,26 @@ class _WorkspaceShadePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final overlayPaint = Paint()..color = const Color(0x77000000);
-    final path = Path()..addRect(Offset.zero & size);
     if (selectionRect != null) {
-      path.addRect(selectionRect!);
-      path.fillType = PathFillType.evenOdd;
+      final clampedSelection = selectionRect!.intersect(Offset.zero & size);
+      // The even-odd path version was logically correct, but anti-aliased path filling plus the
+      // selection-frame shadow still made the crop interior look slightly tinted. Painting the four
+      // outside bands directly guarantees the selected pixels remain fully untouched.
+      if (clampedSelection.top > 0) {
+        canvas.drawRect(Rect.fromLTWH(0, 0, size.width, clampedSelection.top), overlayPaint);
+      }
+      if (clampedSelection.bottom < size.height) {
+        canvas.drawRect(Rect.fromLTWH(0, clampedSelection.bottom, size.width, size.height - clampedSelection.bottom), overlayPaint);
+      }
+      if (clampedSelection.left > 0) {
+        canvas.drawRect(Rect.fromLTWH(0, clampedSelection.top, clampedSelection.left, clampedSelection.height), overlayPaint);
+      }
+      if (clampedSelection.right < size.width) {
+        canvas.drawRect(Rect.fromLTWH(clampedSelection.right, clampedSelection.top, size.width - clampedSelection.right, clampedSelection.height), overlayPaint);
+      }
+    } else {
+      canvas.drawRect(Offset.zero & size, overlayPaint);
     }
-    canvas.drawPath(path, overlayPaint);
 
     if (selectionRect != null && selectionSizeLabel != null) {
       final backgroundPaint = Paint()..color = const Color(0xE6171717);

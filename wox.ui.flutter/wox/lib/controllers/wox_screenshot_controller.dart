@@ -262,28 +262,41 @@ class WoxScreenshotController extends GetxController {
 
     stage.value = ScreenshotSessionStage.exporting;
     try {
+      await _hideCompletedScreenshotWindow(traceId);
       final pngBytes = await exportSelectionPng();
-      await _finishSession(traceId, CaptureScreenshotResult.completed(pngBytes, currentSelection), ScreenshotSessionStage.done);
+      await _finishSession(
+        traceId,
+        CaptureScreenshotResult.completed(pngBytes, currentSelection),
+        ScreenshotSessionStage.done,
+        restoreVisibility: false,
+        windowAlreadyHidden: true,
+      );
     } catch (e) {
       Logger.instance.error(traceId, 'Failed to export screenshot: $e');
       await failSession(traceId, errorCode: 'export_failed', errorMessage: e.toString());
     }
   }
 
-  Future<void> _finishSession(String traceId, CaptureScreenshotResult result, ScreenshotSessionStage finalStage) async {
+  Future<void> _finishSession(
+    String traceId,
+    CaptureScreenshotResult result,
+    ScreenshotSessionStage finalStage, {
+    bool restoreVisibility = true,
+    bool windowAlreadyHidden = false,
+  }) async {
     final completer = _sessionCompleter;
     if (completer == null || completer.isCompleted) {
       return;
     }
 
     stage.value = finalStage;
-    await _restoreWindowState(traceId);
+    await _restoreWindowState(traceId, restoreVisibility: restoreVisibility, windowAlreadyHidden: windowAlreadyHidden);
     _resetSessionState();
     completer.complete(result);
     _sessionCompleter = null;
   }
 
-  Future<void> _restoreWindowState(String traceId) async {
+  Future<void> _restoreWindowState(String traceId, {bool restoreVisibility = true, bool windowAlreadyHidden = false}) async {
     final savedState = _savedWindowState;
     if (savedState == null) {
       return;
@@ -300,7 +313,7 @@ class WoxScreenshotController extends GetxController {
     await windowManager.setAlwaysOnTop(!savedState.wasInSettingView);
     await windowManager.setBounds(savedState.position, savedState.size);
 
-    if (savedState.wasVisible) {
+    if (savedState.wasVisible && restoreVisibility) {
       await windowManager.show();
       await windowManager.focus();
       await WoxApi.instance.onShow(traceId);
@@ -310,9 +323,27 @@ class WoxScreenshotController extends GetxController {
         launcherController.focusQueryBox(selectAll: true);
       }
     } else {
-      await windowManager.hide();
-      await WoxApi.instance.onHide(traceId);
+      if (!windowAlreadyHidden) {
+        // Screenshot completion should leave Wox hidden. The previous restore path always tried to
+        // show the launcher again before the session reset, which made the finished capture linger
+        // on-screen and briefly re-opened Wox after the user had already confirmed the export.
+        await windowManager.hide();
+        await WoxApi.instance.onHide(traceId);
+      }
     }
+  }
+
+  Future<void> _hideCompletedScreenshotWindow(String traceId) async {
+    // Confirmed captures no longer need to keep the editor visible while PNG export and restore
+    // bookkeeping finish. Hiding the window up front removes the perceived lag between clicking
+    // confirm and the screenshot UI disappearing, while the export still runs against in-memory data.
+    final isVisible = await windowManager.isVisible();
+    if (!isVisible) {
+      return;
+    }
+
+    await windowManager.hide();
+    await WoxApi.instance.onHide(traceId);
   }
 
   void _resetSessionState() {
