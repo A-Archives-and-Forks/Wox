@@ -470,6 +470,11 @@ class AppDelegate: FlutterAppDelegate {
     let level: NSWindow.Level
     let hasShadow: Bool
     let styleMask: NSWindow.StyleMask
+    let titleVisibility: NSWindow.TitleVisibility
+    let titlebarAppearsTransparent: Bool
+    let closeButtonHidden: Bool
+    let miniaturizeButtonHidden: Bool
+    let zoomButtonHidden: Bool
   }
 
   // Store the previous active application
@@ -621,6 +626,24 @@ class AppDelegate: FlutterAppDelegate {
     ]
   }
 
+  private func isStandardWindowButtonHidden(_ buttonType: NSWindow.ButtonType, on window: NSWindow) -> Bool {
+    return window.standardWindowButton(buttonType)?.isHidden ?? false
+  }
+
+  private func applyStandardWindowButtonVisibility(
+    on window: NSWindow,
+    closeHidden: Bool,
+    miniaturizeHidden: Bool,
+    zoomHidden: Bool
+  ) {
+    // Screenshot presentation temporarily swaps the launcher into a borderless panel. Restoring the
+    // style mask alone was not enough because AppKit can recreate the traffic-light buttons with
+    // default visibility, so the launcher must explicitly reapply its hidden-button contract.
+    window.standardWindowButton(.closeButton)?.isHidden = closeHidden
+    window.standardWindowButton(.miniaturizeButton)?.isHidden = miniaturizeHidden
+    window.standardWindowButton(.zoomButton)?.isHidden = zoomHidden
+  }
+
   private func cancelNativeOverlayDismissTimeout() {
     nativeOverlayDismissTimeoutWorkItem?.cancel()
     nativeOverlayDismissTimeoutWorkItem = nil
@@ -715,7 +738,12 @@ class AppDelegate: FlutterAppDelegate {
         collectionBehavior: window.collectionBehavior,
         level: window.level,
         hasShadow: window.hasShadow,
-        styleMask: window.styleMask
+        styleMask: window.styleMask,
+        titleVisibility: window.titleVisibility,
+        titlebarAppearsTransparent: window.titlebarAppearsTransparent,
+        closeButtonHidden: isStandardWindowButtonHidden(.closeButton, on: window),
+        miniaturizeButtonHidden: isStandardWindowButtonHidden(.miniaturizeButton, on: window),
+        zoomButtonHidden: isStandardWindowButtonHidden(.zoomButton, on: window)
       )
     }
 
@@ -770,6 +798,17 @@ class AppDelegate: FlutterAppDelegate {
     window.level = savedState.level
     window.hasShadow = savedState.hasShadow
     window.styleMask = savedState.styleMask
+    // The screenshot selector only needs a temporary borderless shell. Once it exits, restore the
+    // original title-bar appearance as well so Wox returns to the exact launcher chrome instead of
+    // leaving the default macOS window controls visible in the top-left corner.
+    window.titleVisibility = savedState.titleVisibility
+    window.titlebarAppearsTransparent = savedState.titlebarAppearsTransparent
+    applyStandardWindowButtonVisibility(
+      on: window,
+      closeHidden: savedState.closeButtonHidden,
+      miniaturizeHidden: savedState.miniaturizeButtonHidden,
+      zoomHidden: savedState.zoomButtonHidden
+    )
     screenshotPresentationState = nil
     isCapturePresentationActive = false
     captureWorkspaceBounds = .zero
@@ -791,6 +830,12 @@ class AppDelegate: FlutterAppDelegate {
       "workspaceBounds": buildRectPayload(captureWorkspaceBounds),
       "windowBounds": buildRectPayload(windowTopLeftRect),
       "collectionBehavior": window.collectionBehavior.rawValue,
+      "styleMask": Int(window.styleMask.rawValue),
+      "titleVisibility": window.titleVisibility.rawValue,
+      "titlebarAppearsTransparent": window.titlebarAppearsTransparent,
+      "closeButtonHidden": isStandardWindowButtonHidden(.closeButton, on: window),
+      "miniaturizeButtonHidden": isStandardWindowButtonHidden(.miniaturizeButton, on: window),
+      "zoomButtonHidden": isStandardWindowButtonHidden(.zoomButton, on: window),
     ]
   }
 

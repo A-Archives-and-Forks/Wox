@@ -15,14 +15,7 @@ import 'package:wox/utils/screenshot/screenshot_platform_bridge.dart';
 import 'smoke_test_helper.dart';
 
 class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
-  _FakeScreenshotBridge(
-    this._capture, {
-    this.nativeSelection,
-    this.presentation,
-    this.debugState,
-    this.dismissNativeOverlays,
-    this.delegateNativePresentation = false,
-  });
+  _FakeScreenshotBridge(this._capture, {this.nativeSelection, this.presentation, this.debugState, this.dismissNativeOverlays, this.delegateNativePresentation = false});
 
   final Future<List<DisplaySnapshot>> Function() _capture;
   final Future<ScreenshotNativeSelectionResult> Function(ScreenshotRect nativeWorkspaceBounds)? nativeSelection;
@@ -418,11 +411,7 @@ void registerLauncherScreenshotSmokeTests() {
       // The native overlays should be dismissed automatically after Flutter paints
       // its first frame, not kept alive as a passive backdrop.
       final sessionFuture = screenshotController.startCaptureSession('smoke-native-dismiss-order', _defaultRequest());
-      await pumpUntil(
-        tester,
-        () => screenshotController.stage.value == ScreenshotSessionStage.annotating,
-        timeout: const Duration(seconds: 15),
-      );
+      await pumpUntil(tester, () => screenshotController.stage.value == ScreenshotSessionStage.annotating, timeout: const Duration(seconds: 15));
 
       // Native overlays should have been dismissed during the handoff after the first frame.
       expect(dismissCalls, equals(1));
