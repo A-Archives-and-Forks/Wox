@@ -161,70 +161,78 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   }
 
   Widget _buildWorkspace(BuildContext context, Rect virtualBounds) {
-    return MouseRegion(
-      cursor: _hoverCursor,
-      onHover: (event) => _handleHover(event.localPosition),
-      onExit: (_) => _setHoverCursor(SystemMouseCursors.basic),
-      child: GestureDetector(
-        key: screenshotCanvasKey,
-        behavior: HitTestBehavior.translucent,
-        onPanStart: (details) => _handlePanStart(details.localPosition),
-        onPanUpdate: (details) => _handlePanUpdate(details.localPosition),
-        onPanEnd: (_) => _handlePanEnd(),
-        onTapDown: (details) => _handleTap(details.localPosition),
-        onDoubleTapDown: (details) => _handleDoubleTap(details.localPosition),
-        child: Stack(
-          children: [
-            RepaintBoundary(
-              // Dragging annotations used to visually disturb the captured background because the
-              // entire workspace repainted on every pointer update. Keeping the snapshots isolated in
-              // their own repaint boundary limits redraws to overlays that actually changed.
-              child: _WorkspaceBackground(snapshots: controller.displaySnapshots.toList(), virtualBounds: virtualBounds),
-            ),
-            Obx(() {
-              final selectionRect = controller.selectionRect;
-              final selectionLocalRect = selectionRect?.shift(-virtualBounds.topLeft);
-              final textDraftPosition = controller.textDraftPosition.value;
-              final selectedAnnotationId = controller.selectedAnnotationId.value;
+    return Stack(
+      children: [
+        MouseRegion(
+          cursor: _hoverCursor,
+          onHover: (event) => _handleHover(event.localPosition),
+          onExit: (_) => _setHoverCursor(SystemMouseCursors.basic),
+          child: GestureDetector(
+            key: screenshotCanvasKey,
+            behavior: HitTestBehavior.translucent,
+            onPanStart: (details) => _handlePanStart(details.localPosition),
+            onPanUpdate: (details) => _handlePanUpdate(details.localPosition),
+            onPanEnd: (_) => _handlePanEnd(),
+            onTapDown: (details) => _handleTap(details.localPosition),
+            onDoubleTapDown: (details) => _handleDoubleTap(details.localPosition),
+            child: Stack(
+              children: [
+                RepaintBoundary(
+                  // Dragging annotations used to visually disturb the captured background because the
+                  // entire workspace repainted on every pointer update. Keeping the snapshots isolated in
+                  // their own repaint boundary limits redraws to overlays that actually changed.
+                  child: _WorkspaceBackground(snapshots: controller.displaySnapshots.toList(), virtualBounds: virtualBounds),
+                ),
+                Obx(() {
+                  final selectionRect = controller.selectionRect;
+                  final selectionLocalRect = selectionRect?.shift(-virtualBounds.topLeft);
+                  final textDraftPosition = controller.textDraftPosition.value;
+                  final selectedAnnotationId = controller.selectedAnnotationId.value;
 
-              return Stack(
-                children: [
-                  Positioned.fill(
-                    child: CustomPaint(
-                      painter: _WorkspaceShadePainter(
-                        selectionRect: selectionLocalRect,
-                        selectionSizeLabel: selectionRect == null ? null : '${selectionRect.width.round()} x ${selectionRect.height.round()}',
-                      ),
-                    ),
-                  ),
-                  if (selectionRect != null)
-                    Positioned.fill(
-                      child: RepaintBoundary(
+                  return Stack(
+                    children: [
+                      Positioned.fill(
                         child: CustomPaint(
-                          painter: _AnnotationPainter(
-                            annotations: controller.annotations.toList(),
-                            canvasOrigin: virtualBounds.topLeft,
-                            selectionClipRect: selectionLocalRect,
-                            draftRect: _annotationDraftRect,
-                            draftStart: _annotationStart,
-                            draftEnd: _annotationEnd,
-                            draftType: _currentDraftType(),
-                            previewColor: controller.annotationCreationColor.value,
-                            selectedAnnotationId: selectedAnnotationId,
+                          painter: _WorkspaceShadePainter(
+                            selectionRect: selectionLocalRect,
+                            selectionSizeLabel: selectionRect == null ? null : '${selectionRect.width.round()} x ${selectionRect.height.round()}',
                           ),
                         ),
                       ),
-                    ),
-                  if (selectionLocalRect != null) _buildSelectionFrame(selectionLocalRect),
-                  if (textDraftPosition != null && selectionRect != null) _buildTextDraftField(textDraftPosition - virtualBounds.topLeft),
-                ],
-              );
-            }),
-            Obx(() => _buildToolbar(context, controller.selectionRect, virtualBounds)),
-            Obx(() => _buildEditBar(virtualBounds)),
-          ],
+                      if (selectionRect != null)
+                        Positioned.fill(
+                          child: RepaintBoundary(
+                            child: CustomPaint(
+                              painter: _AnnotationPainter(
+                                annotations: controller.annotations.toList(),
+                                canvasOrigin: virtualBounds.topLeft,
+                                selectionClipRect: selectionLocalRect,
+                                draftRect: _annotationDraftRect,
+                                draftStart: _annotationStart,
+                                draftEnd: _annotationEnd,
+                                draftType: _currentDraftType(),
+                                previewColor: controller.annotationCreationColor.value,
+                                selectedAnnotationId: selectedAnnotationId,
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (selectionLocalRect != null) _buildSelectionFrame(selectionLocalRect),
+                      if (textDraftPosition != null && selectionRect != null) _buildTextDraftField(textDraftPosition - virtualBounds.topLeft),
+                    ],
+                  );
+                }),
+              ],
+            ),
+          ),
         ),
-      ),
+        // The toolbar and edit bar used to live inside the canvas GestureDetector, so clicking a
+        // swatch or action button also triggered the workspace tap handler and cleared the current
+        // annotation selection first. Lifting those overlays above the gesture layer keeps their
+        // controls interactive without letting canvas hit-testing cancel the active edit target.
+        Obx(() => _buildToolbar(context, controller.selectionRect, virtualBounds)),
+        Obx(() => _buildEditBar(virtualBounds)),
+      ],
     );
   }
 
@@ -453,21 +461,34 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     }
 
     final globalPosition = _toGlobalPosition(localPosition);
-    if (controller.currentTool.value == ScreenshotTool.select) {
-      final annotation = _hitTestAnnotationBody(globalPosition);
-      controller.selectAnnotation(annotation?.id);
+    final annotation = _hitTestAnnotationBody(globalPosition);
+    if (annotation != null) {
+      // Selection is now an explicit tap on an existing annotation instead of an automatic
+      // post-draw side effect. That keeps new marks idle by default while still letting users pick
+      // any annotation for editing without first switching tools.
+      controller.selectAnnotation(annotation.id);
       return;
     }
 
-    if (controller.currentTool.value == ScreenshotTool.text) {
-      final selectionRect = controller.selectionRect;
-      if (selectionRect == null || !selectionRect.contains(globalPosition)) {
+    switch (controller.currentTool.value) {
+      case ScreenshotTool.select:
         controller.selectAnnotation(null);
         return;
-      }
+      case ScreenshotTool.rect:
+      case ScreenshotTool.ellipse:
+      case ScreenshotTool.arrow:
+        controller.selectAnnotation(null);
+        return;
+      case ScreenshotTool.text:
+        final selectionRect = controller.selectionRect;
+        if (selectionRect == null || !selectionRect.contains(globalPosition)) {
+          controller.selectAnnotation(null);
+          return;
+        }
 
-      controller.selectAnnotation(null);
-      controller.startTextDraft(globalPosition, fontSize: controller.textDraftFontSize.value, color: controller.annotationCreationColor.value);
+        controller.selectAnnotation(null);
+        controller.startTextDraft(globalPosition, fontSize: controller.textDraftFontSize.value, color: controller.annotationCreationColor.value);
+        return;
     }
   }
 
@@ -491,22 +512,33 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     final globalPosition = _toGlobalPosition(localPosition);
     _dragStartGlobal = globalPosition;
 
+    // Annotation editing now depends on an explicit tap-based selection instead of whichever tool
+    // drew the mark. Once something is selected, keep its handles interactive even if the toolbar
+    // still shows a creation tool so follow-up edits do not require a separate mode switch.
+    final selectedHandleHit = _hitTestSelectedAnnotationHandle(globalPosition);
+    if (selectedHandleHit != null) {
+      _dragAnnotationId = selectedHandleHit.annotation.id;
+      _annotationAtDragStart = selectedHandleHit.annotation;
+      _annotationHandle = selectedHandleHit.handle;
+      _interactionMode =
+          selectedHandleHit.handle == _AnnotationHandle.arrowStart
+              ? _InteractionMode.moveArrowStart
+              : selectedHandleHit.handle == _AnnotationHandle.arrowEnd
+              ? _InteractionMode.moveArrowEnd
+              : _InteractionMode.resizeShapeAnnotation;
+      return;
+    }
+
+    final selectedAnnotation = controller.selectedAnnotation;
+    if (selectedAnnotation != null && _annotationContainsPoint(selectedAnnotation, globalPosition)) {
+      _dragAnnotationId = selectedAnnotation.id;
+      _annotationAtDragStart = selectedAnnotation;
+      _interactionMode = selectedAnnotation.type == ScreenshotAnnotationType.text ? _InteractionMode.moveText : _InteractionMode.moveAnnotation;
+      return;
+    }
+
     switch (controller.currentTool.value) {
       case ScreenshotTool.select:
-        final selectedHandleHit = _hitTestSelectedAnnotationHandle(globalPosition);
-        if (selectedHandleHit != null) {
-          _dragAnnotationId = selectedHandleHit.annotation.id;
-          _annotationAtDragStart = selectedHandleHit.annotation;
-          _annotationHandle = selectedHandleHit.handle;
-          _interactionMode =
-              selectedHandleHit.handle == _AnnotationHandle.arrowStart
-                  ? _InteractionMode.moveArrowStart
-                  : selectedHandleHit.handle == _AnnotationHandle.arrowEnd
-                  ? _InteractionMode.moveArrowEnd
-                  : _InteractionMode.resizeShapeAnnotation;
-          return;
-        }
-
         final annotationBodyHit = _hitTestAnnotationBody(globalPosition);
         if (annotationBodyHit != null) {
           controller.selectAnnotation(annotationBodyHit.id);
@@ -612,6 +644,9 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     final needsOverlayRefresh = interactionMode == _InteractionMode.createAnnotation;
 
     if (interactionMode == _InteractionMode.createAnnotation && _annotationStart != null && _annotationEnd != null) {
+      // Freshly drawn annotations now stay unselected by default. Auto-selecting every new mark
+      // made the next pointer gesture look like an unwanted edit, so selection is left to explicit
+      // taps on existing annotations and blank taps already clear the current selection.
       switch (controller.currentTool.value) {
         case ScreenshotTool.rect:
           controller.addShapeAnnotation(ScreenshotAnnotationType.rect, _annotationDraftRect!);
@@ -1373,11 +1408,6 @@ class _AnnotationPainter extends CustomPainter {
   }
 
   void _paintSelectedAnnotationControls(Canvas canvas, ScreenshotAnnotation annotation, Offset origin) {
-    final outlinePaint =
-        Paint()
-          ..color = Colors.white.withValues(alpha: 0.9)
-          ..strokeWidth = 1.5
-          ..style = PaintingStyle.stroke;
     final handleFill = Paint()..color = Colors.white;
     final handleStroke =
         Paint()
@@ -1392,7 +1422,10 @@ class _AnnotationPainter extends CustomPainter {
         if (rect == null) {
           return;
         }
-        canvas.drawRect(rect, outlinePaint);
+        // The previous selected-state outline wrapped the whole annotation in a bright white frame.
+        // That made edits feel noisy and partially obscured the mark itself even though the drag
+        // handles already communicate editability. Keep only the handles so selection stays clear
+        // without repainting an extra border over the user's annotation.
         for (final handle in _shapeAnnotationHandles) {
           final handleCenter = _annotationHandleOffsetForSelection(rect, handle);
           final handleRect = Rect.fromCenter(center: handleCenter, width: _annotationHandleSize, height: _annotationHandleSize);
@@ -1406,7 +1439,6 @@ class _AnnotationPainter extends CustomPainter {
         if (start == null || end == null) {
           return;
         }
-        canvas.drawLine(start - origin, end - origin, outlinePaint);
         for (final handleCenter in <Offset>[start - origin, end - origin]) {
           canvas.drawCircle(handleCenter, _annotationHandleSize / 2, handleFill);
           canvas.drawCircle(handleCenter, _annotationHandleSize / 2, handleStroke);
