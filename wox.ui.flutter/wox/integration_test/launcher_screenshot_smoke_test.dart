@@ -15,11 +15,24 @@ import 'package:wox/utils/screenshot/screenshot_platform_bridge.dart';
 import 'smoke_test_helper.dart';
 
 class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
-  _FakeScreenshotBridge(this._capture, {this.nativeSelection, this.presentation, this.debugState, this.dismissNativeOverlays, this.delegateNativePresentation = false});
+  _FakeScreenshotBridge(
+    this._capture, {
+    this.nativeSelection,
+    this.presentation,
+    this.preparePresentation,
+    this.revealPreparedWorkspace,
+    this.selectionDisplayHintStream,
+    this.debugState,
+    this.dismissNativeOverlays,
+    this.delegateNativePresentation = false,
+  });
 
   final Future<List<DisplaySnapshot>> Function() _capture;
   final Future<ScreenshotNativeSelectionResult> Function(ScreenshotRect nativeWorkspaceBounds)? nativeSelection;
   final Future<ScreenshotWorkspacePresentation> Function(ScreenshotRect nativeWorkspaceBounds)? presentation;
+  final Future<ScreenshotWorkspacePresentation> Function(ScreenshotRect nativeWorkspaceBounds)? preparePresentation;
+  final Future<void> Function()? revealPreparedWorkspace;
+  final Stream<ScreenshotSelectionDisplayHint> Function()? selectionDisplayHintStream;
   final Future<Map<String, dynamic>> Function()? debugState;
   final Future<void> Function()? dismissNativeOverlays;
   final bool delegateNativePresentation;
@@ -45,6 +58,42 @@ class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
       return _delegate.presentCaptureWorkspace(nativeWorkspaceBounds);
     }
     return ScreenshotWorkspacePresentation(workspaceBounds: nativeWorkspaceBounds, workspaceScale: 1, presentedByPlatform: false);
+  }
+
+  @override
+  Future<ScreenshotWorkspacePresentation> prepareCaptureWorkspace(ScreenshotRect nativeWorkspaceBounds) async {
+    if (preparePresentation != null) {
+      return preparePresentation!(nativeWorkspaceBounds);
+    }
+    if (presentation != null) {
+      return presentation!(nativeWorkspaceBounds);
+    }
+    if (delegateNativePresentation) {
+      return _delegate.prepareCaptureWorkspace(nativeWorkspaceBounds);
+    }
+    return ScreenshotWorkspacePresentation(workspaceBounds: nativeWorkspaceBounds, workspaceScale: 1, presentedByPlatform: false);
+  }
+
+  @override
+  Future<void> revealPreparedCaptureWorkspace() async {
+    if (revealPreparedWorkspace != null) {
+      await revealPreparedWorkspace!();
+      return;
+    }
+    if (delegateNativePresentation) {
+      await _delegate.revealPreparedCaptureWorkspace();
+    }
+  }
+
+  @override
+  Stream<ScreenshotSelectionDisplayHint> selectionDisplayHints() {
+    if (selectionDisplayHintStream != null) {
+      return selectionDisplayHintStream!();
+    }
+    if (delegateNativePresentation) {
+      return _delegate.selectionDisplayHints();
+    }
+    return const Stream<ScreenshotSelectionDisplayHint>.empty();
   }
 
   @override
@@ -393,15 +442,13 @@ void registerLauncherScreenshotSmokeTests() {
             await _buildSnapshot('display-left', const Color(0xFF135D66), const ScreenshotRect(x: 0, y: 0, width: 200, height: 120)),
             await _buildSnapshot('display-right', const Color(0xFF6A4C93), const ScreenshotRect(x: 200, y: 0, width: 200, height: 120)),
           ],
-          nativeSelection:
-              (_) async => const ScreenshotNativeSelectionResult(
-                wasHandled: true,
-                selection: ScreenshotRect(x: 80, y: 16, width: 140, height: 72),
-                editorVisibleBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120),
-              ),
-          presentation:
-              (nativeWorkspaceBounds) async =>
-                  const ScreenshotWorkspacePresentation(workspaceBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120), workspaceScale: 1, presentedByPlatform: false),
+          nativeSelection: (_) async => const ScreenshotNativeSelectionResult(
+            wasHandled: true,
+            selection: ScreenshotRect(x: 80, y: 16, width: 140, height: 72),
+            editorVisibleBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120),
+          ),
+          presentation: (nativeWorkspaceBounds) async =>
+              const ScreenshotWorkspacePresentation(workspaceBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120), workspaceScale: 1, presentedByPlatform: false),
           dismissNativeOverlays: () async {
             dismissCalls += 1;
           },

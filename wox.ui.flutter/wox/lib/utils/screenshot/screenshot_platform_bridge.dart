@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -22,6 +23,14 @@ abstract class ScreenshotPlatformBridge {
 
   Future<ScreenshotWorkspacePresentation> presentCaptureWorkspace(ScreenshotRect nativeWorkspaceBounds);
 
+  Future<ScreenshotWorkspacePresentation> prepareCaptureWorkspace(ScreenshotRect nativeWorkspaceBounds) {
+    return presentCaptureWorkspace(nativeWorkspaceBounds);
+  }
+
+  Future<void> revealPreparedCaptureWorkspace() async {}
+
+  Stream<ScreenshotSelectionDisplayHint> selectionDisplayHints() => const Stream<ScreenshotSelectionDisplayHint>.empty();
+
   Future<void> dismissCaptureWorkspacePresentation();
 
   Future<void> dismissNativeSelectionOverlays();
@@ -32,9 +41,17 @@ abstract class ScreenshotPlatformBridge {
 class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge {
   static const String _windowsChannelName = 'com.wox.windows_window_manager';
   static const String _macosChannelName = 'com.wox.macos_window_manager';
+  static const String _macosScreenshotEventChannelName = 'com.wox.macos_screenshot_events';
   static const String _linuxChannelName = 'com.wox.linux_window_manager';
 
   late final MethodChannel _channel = MethodChannel(_resolveChannelName());
+  late final StreamController<ScreenshotSelectionDisplayHint> _selectionDisplayHintController = StreamController<ScreenshotSelectionDisplayHint>.broadcast();
+
+  MethodChannelScreenshotPlatformBridge() {
+    if (Platform.isMacOS) {
+      const MethodChannel(_macosScreenshotEventChannelName).setMethodCallHandler(_handleMacOSScreenshotEvent);
+    }
+  }
 
   String _resolveChannelName() {
     if (Platform.isWindows) {
@@ -93,6 +110,34 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
   }
 
   @override
+  Future<ScreenshotWorkspacePresentation> prepareCaptureWorkspace(ScreenshotRect nativeWorkspaceBounds) async {
+    try {
+      final response = await _channel.invokeMethod<Map<dynamic, dynamic>>('prepareCaptureWorkspace', nativeWorkspaceBounds.toJson());
+      if (response == null) {
+        return ScreenshotWorkspacePresentation(workspaceBounds: nativeWorkspaceBounds, workspaceScale: 1, presentedByPlatform: false);
+      }
+
+      return ScreenshotWorkspacePresentation.fromJson(response.map((key, value) => MapEntry(key.toString(), value)));
+    } on MissingPluginException {
+      // Only macOS currently separates screenshot preparation from reveal. Older/native-simple
+      // runners can still satisfy the contract through the original present call.
+      return presentCaptureWorkspace(nativeWorkspaceBounds);
+    }
+  }
+
+  @override
+  Future<void> revealPreparedCaptureWorkspace() async {
+    try {
+      await _channel.invokeMethod<void>('revealPreparedCaptureWorkspace');
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  @override
+  Stream<ScreenshotSelectionDisplayHint> selectionDisplayHints() => _selectionDisplayHintController.stream;
+
+  @override
   Future<void> dismissCaptureWorkspacePresentation() async {
     try {
       await _channel.invokeMethod<void>('dismissCaptureWorkspacePresentation');
@@ -121,5 +166,21 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
     } on MissingPluginException {
       return const <String, dynamic>{};
     }
+  }
+
+  Future<void> _handleMacOSScreenshotEvent(MethodCall call) async {
+    if (call.method != 'onSelectionDisplayHint') {
+      return;
+    }
+
+    final arguments = call.arguments;
+    if (arguments is! Map) {
+      return;
+    }
+
+    // Native drag-time hints arrive as loosely typed method-channel maps. Parsing them here keeps
+    // the controller focused on prewarm orchestration instead of transport-specific null checks.
+    final normalized = arguments.map<String, dynamic>((key, value) => MapEntry(key.toString(), value));
+    _selectionDisplayHintController.add(ScreenshotSelectionDisplayHint.fromJson(normalized));
   }
 }

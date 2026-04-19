@@ -278,20 +278,24 @@ private final class ScreenshotOverlaySession {
   private let workspaceBounds: NSRect
   private let captures: [CachedDisplayCapture]
   private let windows: [ScreenshotOverlayWindow]
+  private let onPreferredDisplayChanged: (CachedDisplayCapture) -> Void
   private let onComplete: (NativeSelectionOverlayResult) -> Void
   private var localEventMonitor: Any?
   private var dragStart: CGPoint?
   private var isCompleting = false
   private var overlaysDismissed = false
+  private var lastPreferredDisplayId: String?
 
   init(
     workspaceBounds: NSRect,
     captures: [CachedDisplayCapture],
+    onPreferredDisplayChanged: @escaping (CachedDisplayCapture) -> Void,
     onComplete: @escaping (NativeSelectionOverlayResult) -> Void
   ) {
     self.workspaceBounds = workspaceBounds
     self.captures = captures
     self.windows = captures.map(ScreenshotOverlayWindow.init)
+    self.onPreferredDisplayChanged = onPreferredDisplayChanged
     self.onComplete = onComplete
   }
 
@@ -347,7 +351,9 @@ private final class ScreenshotOverlaySession {
     case .leftMouseDown:
       let point = clampPoint(topLeftPoint(fromAppKit: NSEvent.mouseLocation), to: workspaceBounds)
       dragStart = point
-      updateSelection(rectFromPoints(point, point))
+      let selection = rectFromPoints(point, point)
+      updateSelection(selection)
+      updatePreferredDisplayHint(for: selection)
       return nil
 
     case .leftMouseDragged:
@@ -356,7 +362,12 @@ private final class ScreenshotOverlaySession {
       }
 
       let point = clampPoint(topLeftPoint(fromAppKit: NSEvent.mouseLocation), to: workspaceBounds)
-      updateSelection(rectFromPoints(dragStart, point))
+      let selection = rectFromPoints(dragStart, point)
+      // Mouse-up used to be the first moment Flutter learned which monitor would host annotation,
+      // so the visible handoff still had to prepare the new backdrop. Emitting drag-time hints here
+      // gives Flutter the whole drag gesture to prewarm the hidden editor on the likely target screen.
+      updateSelection(selection)
+      updatePreferredDisplayHint(for: selection)
       return nil
 
     case .leftMouseUp:
@@ -380,6 +391,19 @@ private final class ScreenshotOverlaySession {
       window.overlayView.globalSelection = selection
       window.overlayView.shouldDrawSizeLabel = window.overlayView.capture.displayId == labelDisplayId
     }
+  }
+
+  private func updatePreferredDisplayHint(for selection: NSRect) {
+    guard let preferredCapture = preferredCapture(for: selection) else {
+      return
+    }
+
+    if preferredCapture.displayId == lastPreferredDisplayId {
+      return
+    }
+
+    lastPreferredDisplayId = preferredCapture.displayId
+    onPreferredDisplayChanged(preferredCapture)
   }
 
   private func completeSelection(_ selection: NSRect) {
@@ -483,6 +507,9 @@ class AppDelegate: FlutterAppDelegate {
   private var shouldRestorePreviousAppOnHide = false
   // Flutter method channel for window events
   private var windowEventChannel: FlutterMethodChannel?
+  // Screenshot prewarm events use their own channel so drag-time hints do not interfere with the
+  // main window manager handler that already owns blur and debug traffic.
+  private var screenshotEventChannel: FlutterMethodChannel?
   // Current appearance (light/dark)
   private var currentAppearance: String = "light"
   private var screenshotPresentationState: ScreenshotPresentationState?
@@ -513,6 +540,17 @@ class AppDelegate: FlutterAppDelegate {
   private func log(_ message: String) {
     DispatchQueue.main.async { [weak self] in
       self?.windowEventChannel?.invokeMethod("log", arguments: message)
+    }
+  }
+
+  private func emitSelectionDisplayHint(_ capture: CachedDisplayCapture) {
+    let payload: [String: Any] = [
+      "displayId": capture.displayId,
+      "displayBounds": buildRectPayload(capture.logicalBounds),
+    ]
+
+    DispatchQueue.main.async { [weak self] in
+      self?.screenshotEventChannel?.invokeMethod("onSelectionDisplayHint", arguments: payload)
     }
   }
 
@@ -702,7 +740,13 @@ class AppDelegate: FlutterAppDelegate {
     // The native selector uses one borderless window per display because the single Flutter window
     // path only renders reliably on the primary monitor. Matching Apple's per-screen overlay model
     // keeps the drag interaction stable across mixed-resolution and fullscreen spaces.
-    let overlaySession = ScreenshotOverlaySession(workspaceBounds: workspaceBounds, captures: captures) { [weak self] result in
+    let overlaySession = ScreenshotOverlaySession(
+      workspaceBounds: workspaceBounds,
+      captures: captures,
+      onPreferredDisplayChanged: { [weak self] capture in
+        self?.emitSelectionDisplayHint(capture)
+      }
+    ) { [weak self] result in
       guard let self else {
         completion(.success(["wasHandled": false]))
         return
@@ -732,7 +776,7 @@ class AppDelegate: FlutterAppDelegate {
     overlaySession.begin()
   }
 
-  private func presentCaptureWorkspace(on window: NSWindow, bounds: NSRect) -> [String: Any] {
+  private func prepareCaptureWorkspace(on window: NSWindow, bounds: NSRect) -> [String: Any] {
     if screenshotPresentationState == nil {
       screenshotPresentationState = ScreenshotPresentationState(
         collectionBehavior: window.collectionBehavior,
@@ -772,9 +816,6 @@ class AppDelegate: FlutterAppDelegate {
     window.contentView?.needsLayout = true
     window.contentView?.layoutSubtreeIfNeeded()
     window.displayIfNeeded()
-    savePreviousActiveAppIfNeeded()
-    window.makeKeyAndOrderFront(nil)
-    NSApp.activate(ignoringOtherApps: true)
 
     isCapturePresentationActive = true
     captureWorkspaceBounds = bounds
@@ -784,6 +825,25 @@ class AppDelegate: FlutterAppDelegate {
       "workspaceScale": 1,
       "presentedByPlatform": true,
     ]
+  }
+
+  private func revealPreparedCaptureWorkspace(on window: NSWindow) {
+    guard screenshotPresentationState != nil else {
+      return
+    }
+
+    // Preparing the borderless screenshot shell while the native overlay is still on-screen keeps
+    // all geometry/layout work off the visible path. Reveal only happens once Flutter has already
+    // produced the annotation frame that will immediately replace the native selector.
+    savePreviousActiveAppIfNeeded()
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  private func presentCaptureWorkspace(on window: NSWindow, bounds: NSRect) -> [String: Any] {
+    let payload = prepareCaptureWorkspace(on: window, bounds: bounds)
+    revealPreparedCaptureWorkspace(on: window)
+    return payload
   }
 
   private func dismissCaptureWorkspacePresentation(on window: NSWindow) {
@@ -1142,9 +1202,14 @@ class AppDelegate: FlutterAppDelegate {
       name: "com.wox.macos_window_manager",
       binaryMessenger: controller.engine.binaryMessenger
     )
+    let screenshotChannel = FlutterMethodChannel(
+      name: "com.wox.macos_screenshot_events",
+      binaryMessenger: controller.engine.binaryMessenger
+    )
 
     // Store window event channel for use in window events
     windowEventChannel = channel
+    screenshotEventChannel = screenshotChannel
 
     // Setup window blur notification
     setupWindowBlurNotification()
@@ -1208,6 +1273,23 @@ class AppDelegate: FlutterAppDelegate {
               )
             )
           }
+
+        case "prepareCaptureWorkspace":
+          if let args = call.arguments as? [String: Any], let bounds = self?.parseRect(arguments: args) {
+            result(self?.prepareCaptureWorkspace(on: window, bounds: bounds))
+          } else {
+            result(
+              FlutterError(
+                code: "INVALID_ARGS",
+                message: "Invalid arguments for prepareCaptureWorkspace",
+                details: nil
+              )
+            )
+          }
+
+        case "revealPreparedCaptureWorkspace":
+          self?.revealPreparedCaptureWorkspace(on: window)
+          result(nil)
 
         case "dismissCaptureWorkspacePresentation":
           self?.dismissCaptureWorkspacePresentation(on: window)

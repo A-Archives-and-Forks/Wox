@@ -128,6 +128,26 @@ class ScreenshotNativeSelectionResult {
   }
 }
 
+class ScreenshotSelectionDisplayHint {
+  const ScreenshotSelectionDisplayHint({required this.displayId, required this.displayBounds});
+
+  final String displayId;
+  final ScreenshotRect displayBounds;
+
+  factory ScreenshotSelectionDisplayHint.fromJson(Map<String, dynamic> json) {
+    final displayBounds = _normalizeJsonMap(json['displayBounds'] ?? json['DisplayBounds']);
+
+    return ScreenshotSelectionDisplayHint(
+      displayId: json['displayId'] as String? ?? json['DisplayId'] as String? ?? '',
+      displayBounds: ScreenshotRect.fromJson(displayBounds ?? const <String, dynamic>{}),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {'displayId': displayId, 'displayBounds': displayBounds.toJson()};
+  }
+}
+
 class CaptureScreenshotRequest {
   const CaptureScreenshotRequest({required this.sessionId, required this.trigger, required this.scope, required this.output, required this.tools});
 
