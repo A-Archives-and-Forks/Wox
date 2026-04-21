@@ -1069,7 +1069,52 @@ class AppDelegate: FlutterAppDelegate {
     return CGEvent(source: nil)?.location ?? NSEvent.mouseLocation
   }
 
-  private func captureAllDisplaysLegacy() throws -> [[String: Any]] {
+  private func buildDisplaySnapshotPayload(
+    capture: CachedDisplayCapture,
+    includeImageBytes: Bool
+  ) throws -> [String: Any] {
+    var payload: [String: Any] = [
+      "displayId": capture.displayId,
+      "logicalBounds": [
+        "x": capture.logicalBounds.origin.x,
+        "y": capture.logicalBounds.origin.y,
+        "width": capture.logicalBounds.width,
+        "height": capture.logicalBounds.height,
+      ],
+      "pixelBounds": [
+        "x": capture.logicalBounds.origin.x * capture.scale,
+        "y": capture.logicalBounds.origin.y * capture.scale,
+        "width": CGFloat(capture.image.width),
+        "height": CGFloat(capture.image.height),
+      ],
+      "scale": capture.scale,
+      "rotation": capture.rotation,
+    ]
+
+    if includeImageBytes {
+      let bitmap = NSBitmapImageRep(cgImage: capture.image)
+      guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
+        throw DisplayCaptureError(code: "capture_failed", message: "Failed to encode macOS display image", details: nil)
+      }
+      payload["imageBytesBase64"] = pngData.base64EncodedString()
+    }
+
+    return payload
+  }
+
+  private func buildDisplaySnapshotPayloads(
+    captures: [CachedDisplayCapture],
+    includeImageBytes: Bool
+  ) throws -> [[String: Any]] {
+    return try captures.map { capture in
+      // The native overlay consumes cached CGImages directly, but Flutter only needs PNG/base64
+      // once it is about to reveal an annotation frame or export pixels. Building payloads on
+      // demand keeps the overlay path off the slow serialization step that made screenshot startup lag.
+      try buildDisplaySnapshotPayload(capture: capture, includeImageBytes: includeImageBytes)
+    }
+  }
+
+  private func captureAllDisplaysLegacy() throws -> [CachedDisplayCapture] {
     if !CGPreflightScreenCaptureAccess() {
       throw DisplayCaptureError(code: "permission_denied", message: "Screen recording permission is required", details: nil)
     }
@@ -1079,7 +1124,6 @@ class AppDelegate: FlutterAppDelegate {
       throw DisplayCaptureError(code: "capture_failed", message: "No screens are available for capture", details: nil)
     }
 
-    var snapshots: [[String: Any]] = []
     var cachedCaptures: [CachedDisplayCapture] = []
 
     for screen in screens {
@@ -1090,11 +1134,6 @@ class AppDelegate: FlutterAppDelegate {
       let displayId = CGDirectDisplayID(screenNumber.uint32Value)
       guard let cgImage = CGDisplayCreateImage(displayId) else {
         throw DisplayCaptureError(code: "capture_failed", message: "Failed to capture macOS display image", details: nil)
-      }
-
-      let bitmap = NSBitmapImageRep(cgImage: cgImage)
-      guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
-        throw DisplayCaptureError(code: "capture_failed", message: "Failed to encode macOS display image", details: nil)
       }
 
       let frame = topLeftRect(fromAppKitRect: screen.frame)
@@ -1112,33 +1151,13 @@ class AppDelegate: FlutterAppDelegate {
           image: cgImage
         )
       )
-      snapshots.append(
-        [
-          "displayId": String(displayId),
-          "logicalBounds": [
-            "x": frame.origin.x,
-            "y": frame.origin.y,
-            "width": frame.width,
-            "height": frame.height,
-          ],
-          "pixelBounds": [
-            "x": frame.origin.x * scale,
-            "y": frame.origin.y * scale,
-            "width": CGFloat(cgImage.width),
-            "height": CGFloat(cgImage.height),
-          ],
-          "scale": scale,
-          "rotation": rotation,
-          "imageBytesBase64": pngData.base64EncodedString(),
-        ])
     }
 
-    cachedDisplayCaptures = cachedCaptures
-    return snapshots
+    return cachedCaptures
   }
 
   @available(macOS 14.0, *)
-  private func captureAllDisplaysWithScreenCaptureKit() async throws -> [[String: Any]] {
+  private func captureAllDisplaysWithScreenCaptureKit() async throws -> [CachedDisplayCapture] {
     if !CGPreflightScreenCaptureAccess() {
       throw DisplayCaptureError(code: "permission_denied", message: "Screen recording permission is required", details: nil)
     }
@@ -1158,7 +1177,6 @@ class AppDelegate: FlutterAppDelegate {
     let excludedApplications = shareableContent.applications.filter {
       $0.bundleIdentifier == Bundle.main.bundleIdentifier
     }
-    var snapshots: [[String: Any]] = []
     var cachedCaptures: [CachedDisplayCapture] = []
 
     for display in shareableContent.displays {
@@ -1179,15 +1197,6 @@ class AppDelegate: FlutterAppDelegate {
         contentFilter: contentFilter,
         configuration: streamConfiguration
       )
-      let bitmap = NSBitmapImageRep(cgImage: cgImage)
-      guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
-        throw DisplayCaptureError(
-          code: "capture_failed",
-          message: "Failed to encode ScreenCaptureKit display image",
-          details: nil
-        )
-      }
-
       let matchedScreen = screen(for: display.displayID)
       // Mixed-resolution desktops exposed that ScreenCaptureKit's display frame can drift from the
       // AppKit window server layout that actually decides where NSWindow overlays appear. Basing the
@@ -1207,33 +1216,12 @@ class AppDelegate: FlutterAppDelegate {
           image: cgImage
         )
       )
-      snapshots.append(
-        [
-          "displayId": String(display.displayID),
-          "logicalBounds": [
-            "x": logicalFrame.origin.x,
-            "y": logicalFrame.origin.y,
-            "width": logicalFrame.width,
-            "height": logicalFrame.height,
-          ],
-          "pixelBounds": [
-            "x": logicalFrame.origin.x * scale,
-            "y": logicalFrame.origin.y * scale,
-            "width": CGFloat(cgImage.width),
-            "height": CGFloat(cgImage.height),
-          ],
-          "scale": scale,
-          "rotation": rotation,
-          "imageBytesBase64": pngData.base64EncodedString(),
-        ])
     }
 
-    cachedDisplayCaptures = cachedCaptures
-    return snapshots
+    return cachedCaptures
   }
 
-  private func captureAllDisplays() async throws -> [[String: Any]] {
-    cachedDisplayCaptures = []
+  private func captureDisplayCaptures() async throws -> [CachedDisplayCapture] {
     if #available(macOS 14.0, *) {
       do {
         return try await captureAllDisplaysWithScreenCaptureKit()
@@ -1254,6 +1242,47 @@ class AppDelegate: FlutterAppDelegate {
     }
 
     return try captureAllDisplaysLegacy()
+  }
+
+  private func captureDisplayMetadata() async throws -> [[String: Any]] {
+    let captures = try await captureDisplayCaptures()
+    cachedDisplayCaptures = captures
+    return try buildDisplaySnapshotPayloads(captures: captures, includeImageBytes: false)
+  }
+
+  private func loadDisplaySnapshots(displayIds: [String]) async throws -> [[String: Any]] {
+    if displayIds.isEmpty {
+      return []
+    }
+
+    let requestedDisplayIds = Set(displayIds)
+    let cacheAlreadyMatches = !cachedDisplayCaptures.isEmpty && requestedDisplayIds.allSatisfy { displayId in
+      cachedDisplayCaptures.contains(where: { $0.displayId == displayId })
+    }
+
+    // Native multi-display selection already captured one CGImage per screen for the overlay. Reuse
+    // that cache here so Flutter can hydrate only the displays it truly needs instead of forcing
+    // the overlay startup path to PNG-encode every monitor up front.
+    if !cacheAlreadyMatches {
+      cachedDisplayCaptures = try await captureDisplayCaptures()
+    }
+
+    let filteredCaptures = cachedDisplayCaptures.filter { requestedDisplayIds.contains($0.displayId) }
+    if filteredCaptures.count != requestedDisplayIds.count {
+      throw DisplayCaptureError(
+        code: "capture_failed",
+        message: "Failed to locate cached macOS display image",
+        details: ["requestedDisplayIds": Array(requestedDisplayIds), "availableDisplayIds": cachedDisplayCaptures.map(\.displayId)]
+      )
+    }
+
+    return try buildDisplaySnapshotPayloads(captures: filteredCaptures, includeImageBytes: true)
+  }
+
+  private func captureAllDisplays() async throws -> [[String: Any]] {
+    let captures = try await captureDisplayCaptures()
+    cachedDisplayCaptures = captures
+    return try buildDisplaySnapshotPayloads(captures: captures, includeImageBytes: true)
   }
 
   private func postKeyboardEvent(key: String, isDown: Bool) -> FlutterError? {
@@ -1395,6 +1424,47 @@ class AppDelegate: FlutterAppDelegate {
             } catch let error as DisplayCaptureError {
               // Convert the Swift-native capture error back to `FlutterError` only when returning
               // through the method channel so the Dart side keeps the existing error contract.
+              result(error.asFlutterError())
+            } catch {
+              result(
+                FlutterError(
+                  code: "capture_failed",
+                  message: error.localizedDescription,
+                  details: nil
+                ))
+            }
+          }
+          return
+
+        case "captureDisplayMetadata":
+          Task { @MainActor in
+            do {
+              result(try await self?.captureDisplayMetadata())
+            } catch let error as DisplayCaptureError {
+              result(error.asFlutterError())
+            } catch {
+              result(
+                FlutterError(
+                  code: "capture_failed",
+                  message: error.localizedDescription,
+                  details: nil
+                ))
+            }
+          }
+          return
+
+        case "loadDisplaySnapshots":
+          Task { @MainActor in
+            do {
+              guard
+                let args = call.arguments as? [String: Any],
+                let displayIds = args["displayIds"] as? [String]
+              else {
+                throw DisplayCaptureError(code: "INVALID_ARGS", message: "Invalid arguments for loadDisplaySnapshots", details: nil)
+              }
+
+              result(try await self?.loadDisplaySnapshots(displayIds: displayIds))
+            } catch let error as DisplayCaptureError {
               result(error.asFlutterError())
             } catch {
               result(

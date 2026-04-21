@@ -38,6 +38,8 @@ class WoxScreenshotController extends GetxController {
   final Map<String, ui.Image> _decodedImages = <String, ui.Image>{};
   final Map<String, Future<void>> _displayDecodeTasks = <String, Future<void>>{};
   List<DisplaySnapshot> _pendingRawSnapshots = const <DisplaySnapshot>[];
+  final Map<String, DisplaySnapshot> _hydratedRawSnapshots = <String, DisplaySnapshot>{};
+  final Map<String, Future<DisplaySnapshot>> _rawSnapshotHydrationTasks = <String, Future<DisplaySnapshot>>{};
   Rect? _nativeWorkspaceBounds;
   String? _preparedDisplayId;
   Rect? _preparedDisplayBounds;
@@ -46,6 +48,7 @@ class WoxScreenshotController extends GetxController {
   StreamSubscription<ScreenshotSelectionDisplayHint>? _selectionDisplayHintSubscription;
   bool _acceptSelectionDisplayHints = false;
   int _preparedDisplayRevision = 0;
+  int _captureSessionRevision = 0;
   Completer<CaptureScreenshotResult>? _sessionCompleter;
   _SavedScreenshotWindowState? _savedWindowState;
 
@@ -80,43 +83,34 @@ class WoxScreenshotController extends GetxController {
     await _prepareNewSession(traceId);
 
     try {
+      if (Platform.isMacOS) {
+        // macOS native selection now starts from cached display metadata so the topmost overlay can
+        // appear before Flutter receives PNG/base64 payloads for every monitor. That keeps the
+        // screenshot startup path focused on the native selector, then hydrates pixels only when
+        // the annotation/export pipeline truly needs them.
+        final metadataSnapshots = await ScreenshotPlatformBridge.instance.captureDisplayMetadata();
+        if (metadataSnapshots.isEmpty) {
+          throw StateError('No display snapshots returned');
+        }
+
+        final nativeWorkspaceBounds = _calculateUnionRect(metadataSnapshots.map((item) => item.logicalBounds.toRect()).toList());
+        final nativeSelectionResult = await _tryStartMacOSNativeSelectionEditor(traceId, metadataSnapshots, nativeWorkspaceBounds);
+        if (nativeSelectionResult != null) {
+          return nativeSelectionResult;
+        }
+
+        final rawSnapshots = await _hydrateRawSnapshots(metadataSnapshots);
+        await _presentFlutterCaptureWorkspace(traceId, rawSnapshots, nativeWorkspaceBounds);
+        return _sessionFutureOrCancelled();
+      }
+
       final rawSnapshots = await ScreenshotPlatformBridge.instance.captureAllDisplays();
       if (rawSnapshots.isEmpty) {
         throw StateError('No display snapshots returned');
       }
 
       final nativeWorkspaceBounds = _calculateUnionRect(rawSnapshots.map((item) => item.logicalBounds.toRect()).toList());
-      final nativeSelectionResult = await _tryStartMacOSNativeSelectionEditor(traceId, rawSnapshots, nativeWorkspaceBounds);
-      if (nativeSelectionResult != null) {
-        return nativeSelectionResult;
-      }
-
-      final presentation = await ScreenshotPlatformBridge.instance.presentCaptureWorkspace(ScreenshotRect.fromRect(nativeWorkspaceBounds));
-      final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
-        rawSnapshots,
-        nativeWorkspaceBounds: nativeWorkspaceBounds,
-        workspaceBounds: presentation.workspaceBounds.toRect(),
-        workspaceScale: presentation.workspaceScale,
-      );
-
-      await _decodeDisplayImages(normalizedSnapshots);
-      displaySnapshots.assignAll(normalizedSnapshots);
-      virtualBounds.value = ScreenshotRect.fromRect(presentation.workspaceBounds.toRect());
-      workspaceScale.value = presentation.workspaceScale;
-
-      if (!presentation.presentedByPlatform) {
-        final bounds = virtualBoundsRect;
-        // The fallback path still uses one Flutter window, but only platforms without screenshot-
-        // specific native presentation should reach it. macOS and Windows install their own
-        // capture overlay handling so multi-display selection does not inherit launcher assumptions.
-        await windowManager.setBounds(bounds.topLeft, bounds.size);
-        await windowManager.setAlwaysOnTop(true);
-        await windowManager.show();
-        await windowManager.focus();
-      }
-
-      await WoxApi.instance.onShow(traceId);
-      stage.value = ScreenshotSessionStage.selecting;
+      await _presentFlutterCaptureWorkspace(traceId, rawSnapshots, nativeWorkspaceBounds);
     } catch (e) {
       Logger.instance.error(traceId, 'Failed to start screenshot session: $e');
       final failed = CaptureScreenshotResult.failed(errorCode: 'capture_failed', errorMessage: e.toString());
@@ -126,7 +120,48 @@ class WoxScreenshotController extends GetxController {
       return failed;
     }
 
-    return _sessionCompleter!.future;
+    return _sessionFutureOrCancelled();
+  }
+
+  Future<CaptureScreenshotResult> _sessionFutureOrCancelled() {
+    final completer = _sessionCompleter;
+    if (completer == null || completer.isCompleted) {
+      // Window show/focus recovery can cancel a screenshot session while the startup coroutine is
+      // still unwinding. Returning a cancelled result here keeps that race user-visible but avoids
+      // turning a legitimate cancellation into a null-completer crash.
+      return Future<CaptureScreenshotResult>.value(CaptureScreenshotResult.cancelled());
+    }
+
+    return completer.future;
+  }
+
+  Future<void> _presentFlutterCaptureWorkspace(String traceId, List<DisplaySnapshot> rawSnapshots, Rect nativeWorkspaceBounds) async {
+    final presentation = await ScreenshotPlatformBridge.instance.presentCaptureWorkspace(ScreenshotRect.fromRect(nativeWorkspaceBounds));
+    final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
+      rawSnapshots,
+      nativeWorkspaceBounds: nativeWorkspaceBounds,
+      workspaceBounds: presentation.workspaceBounds.toRect(),
+      workspaceScale: presentation.workspaceScale,
+    );
+
+    await _decodeDisplayImages(normalizedSnapshots);
+    displaySnapshots.assignAll(normalizedSnapshots);
+    virtualBounds.value = ScreenshotRect.fromRect(presentation.workspaceBounds.toRect());
+    workspaceScale.value = presentation.workspaceScale;
+
+    if (!presentation.presentedByPlatform) {
+      final bounds = virtualBoundsRect;
+      // The fallback path still uses one Flutter window, but only platforms without screenshot-
+      // specific native presentation should reach it. macOS and Windows install their own
+      // capture overlay handling so multi-display selection does not inherit launcher assumptions.
+      await windowManager.setBounds(bounds.topLeft, bounds.size);
+      await windowManager.setAlwaysOnTop(true);
+      await windowManager.show();
+      await windowManager.focus();
+    }
+
+    await WoxApi.instance.onShow(traceId);
+    stage.value = ScreenshotSessionStage.selecting;
   }
 
   Future<CaptureScreenshotResult?> _tryStartMacOSNativeSelectionEditor(String traceId, List<DisplaySnapshot> rawSnapshots, Rect nativeWorkspaceBounds) async {
@@ -187,6 +222,10 @@ class WoxScreenshotController extends GetxController {
     selection.value = ScreenshotRect.fromRect(normalizedSelection);
     workspaceScale.value = presentation.workspaceScale;
     stage.value = ScreenshotSessionStage.annotating;
+    // Native selection now hands Flutter one prepared display immediately, then hydrates any other
+    // displays intersecting the chosen rect in the background. That keeps the reveal path fast
+    // without regressing multi-display exports that still need the remaining pixels later.
+    unawaited(_ensureSelectionSnapshotsReady(normalizedSelection));
     await WidgetsBinding.instance.endOfFrame;
     await WoxApi.instance.onShow(traceId);
 
@@ -204,12 +243,13 @@ class WoxScreenshotController extends GetxController {
     // That removes the visible "loading / resize / repaint" gap that used to appear after mouse-up.
     await WidgetsBinding.instance.endOfFrame;
     await ScreenshotPlatformBridge.instance.dismissNativeSelectionOverlays();
-    return _sessionCompleter!.future;
+    return _sessionFutureOrCancelled();
   }
 
   Future<void> _prepareNewSession(String traceId) async {
     _clearMacOSPreparationState();
     _disposeDecodedImages();
+    _captureSessionRevision += 1;
     displaySnapshots.clear();
     annotations.clear();
     selection.value = null;
@@ -246,10 +286,6 @@ class WoxScreenshotController extends GetxController {
     // Hiding the current window before native capture prevents the launcher itself from ending up in
     // the captured background, which is a hard requirement for the single-window screenshot workflow.
     await windowManager.hide();
-    // ScreenCaptureKit can still sample the desktop for a short moment after Wox hides, especially
-    // when another fullscreen space becomes active. Waiting a bit longer gives the compositor time
-    // to promote the previous app before the native multi-display snapshots are captured.
-    await Future.delayed(const Duration(milliseconds: 220));
   }
 
   Future<void> cancelSession(String traceId, {String reason = 'unspecified'}) async {
@@ -269,6 +305,7 @@ class WoxScreenshotController extends GetxController {
     stage.value = ScreenshotSessionStage.exporting;
     try {
       await _hideCompletedScreenshotWindow(traceId);
+      await _ensureSelectionSnapshotsReady(currentSelection);
 
       CaptureScreenshotResult result;
       var outputHandled = false;
@@ -451,6 +488,119 @@ class WoxScreenshotController extends GetxController {
     }).toList();
   }
 
+  List<DisplaySnapshot> _mergeHydratedSnapshotBytes(List<DisplaySnapshot> snapshots) {
+    return snapshots.map((snapshot) {
+      final hydrated = _hydratedRawSnapshots[snapshot.displayId];
+      if (hydrated == null || !hydrated.hasImageBytes || snapshot.imageBytesBase64 == hydrated.imageBytesBase64) {
+        return snapshot;
+      }
+
+      // macOS native selection now prewarms only the displays that are likely to be shown next.
+      // Merge hydrated bytes back into the normalized snapshot list by display id so the visible
+      // workspace and later export both reuse the deferred payloads without rebuilding geometry.
+      return snapshot.copyWith(imageBytesBase64: hydrated.imageBytesBase64);
+    }).toList();
+  }
+
+  DisplaySnapshot _rawSnapshotForDisplayId(String displayId) {
+    for (final snapshot in _pendingRawSnapshots) {
+      if (snapshot.displayId == displayId) {
+        return snapshot;
+      }
+    }
+
+    throw StateError('Display snapshot $displayId is not available');
+  }
+
+  Future<DisplaySnapshot> _ensureRawSnapshotHydrated(String displayId) {
+    final hydrated = _hydratedRawSnapshots[displayId];
+    if (hydrated != null && hydrated.hasImageBytes) {
+      return Future<DisplaySnapshot>.value(hydrated);
+    }
+
+    final existingTask = _rawSnapshotHydrationTasks[displayId];
+    if (existingTask != null) {
+      return existingTask;
+    }
+
+    final sessionRevision = _captureSessionRevision;
+    final rawSnapshot = _rawSnapshotForDisplayId(displayId);
+    late final Future<DisplaySnapshot> hydrationTask;
+    hydrationTask = () async {
+      final loadedSnapshots = await ScreenshotPlatformBridge.instance.loadDisplaySnapshots([displayId]);
+      if (loadedSnapshots.isEmpty) {
+        throw StateError('Display snapshot $displayId could not be hydrated');
+      }
+
+      final loadedSnapshot = loadedSnapshots.first;
+      final hydratedSnapshot = rawSnapshot.copyWith(
+        logicalBounds: loadedSnapshot.logicalBounds,
+        pixelBounds: loadedSnapshot.pixelBounds,
+        scale: loadedSnapshot.scale,
+        rotation: loadedSnapshot.rotation,
+        imageBytesBase64: loadedSnapshot.imageBytesBase64,
+      );
+
+      if (sessionRevision == _captureSessionRevision && _sessionCompleter != null && !_sessionCompleter!.isCompleted) {
+        _hydratedRawSnapshots[displayId] = hydratedSnapshot;
+      }
+      return hydratedSnapshot;
+    }().whenComplete(() {
+      if (_rawSnapshotHydrationTasks[displayId] == hydrationTask) {
+        _rawSnapshotHydrationTasks.remove(displayId);
+      }
+    });
+
+    _rawSnapshotHydrationTasks[displayId] = hydrationTask;
+    return hydrationTask;
+  }
+
+  Future<List<DisplaySnapshot>> _hydrateRawSnapshots(List<DisplaySnapshot> rawSnapshots) async {
+    if (rawSnapshots.isEmpty) {
+      return rawSnapshots;
+    }
+
+    _pendingRawSnapshots = rawSnapshots;
+    final hydratedSnapshots = await Future.wait(rawSnapshots.map((snapshot) => _ensureRawSnapshotHydrated(snapshot.displayId)));
+    return rawSnapshots.map((snapshot) => _hydratedRawSnapshots[snapshot.displayId] ?? hydratedSnapshots.firstWhere((item) => item.displayId == snapshot.displayId)).toList();
+  }
+
+  Future<void> _ensureSelectionSnapshotsReady(Rect selection) async {
+    final snapshotsNeedingHydration =
+        displaySnapshots.where((snapshot) {
+          return !snapshot.hasImageBytes && !snapshot.logicalBounds.toRect().intersect(selection).isEmpty;
+        }).toList();
+    if (snapshotsNeedingHydration.isEmpty) {
+      return;
+    }
+
+    final hydratedSnapshots = await Future.wait(snapshotsNeedingHydration.map((snapshot) => _ensureRawSnapshotHydrated(snapshot.displayId)));
+    for (final hydratedSnapshot in hydratedSnapshots) {
+      DisplaySnapshot? currentSnapshot;
+      for (final snapshot in displaySnapshots) {
+        if (snapshot.displayId == hydratedSnapshot.displayId) {
+          currentSnapshot = snapshot;
+          break;
+        }
+      }
+      if (currentSnapshot == null) {
+        continue;
+      }
+
+      await _ensureDisplayDecoded(currentSnapshot.copyWith(imageBytesBase64: hydratedSnapshot.imageBytesBase64));
+    }
+
+    if (_sessionCompleter == null || _sessionCompleter!.isCompleted) {
+      return;
+    }
+
+    final mergedSnapshots = _mergeHydratedSnapshotBytes(displaySnapshots.toList());
+    displaySnapshots.assignAll(mergedSnapshots);
+    if (_preparedSnapshots != null) {
+      _preparedSnapshots = _mergeHydratedSnapshotBytes(_preparedSnapshots!);
+    }
+  }
+
   Future<void> _handleMacOSSelectionDisplayHint(String traceId, ScreenshotSelectionDisplayHint hint) async {
     if (!_acceptSelectionDisplayHints || _pendingRawSnapshots.isEmpty) {
       return;
@@ -492,13 +642,27 @@ class WoxScreenshotController extends GetxController {
 
     final revision = ++_preparedDisplayRevision;
     final presentation = await ScreenshotPlatformBridge.instance.prepareCaptureWorkspace(ScreenshotRect.fromRect(targetBounds));
-    final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
+    await _ensureRawSnapshotHydrated(targetDisplay.displayId);
+    var normalizedSnapshots = _normalizeSnapshotsForWorkspace(
       _pendingRawSnapshots,
       nativeWorkspaceBounds: targetBounds,
       workspaceBounds: presentation.workspaceBounds.toRect(),
       workspaceScale: presentation.workspaceScale,
     );
-    await _ensureDisplayDecoded(targetDisplay);
+    normalizedSnapshots = _mergeHydratedSnapshotBytes(normalizedSnapshots);
+
+    DisplaySnapshot? preparedTargetSnapshot;
+    for (final snapshot in normalizedSnapshots) {
+      if (snapshot.displayId == targetDisplay.displayId) {
+        preparedTargetSnapshot = snapshot;
+        break;
+      }
+    }
+    if (preparedTargetSnapshot == null) {
+      throw StateError('Prepared macOS display snapshot is missing for ${targetDisplay.displayId}');
+    }
+
+    await _ensureDisplayDecoded(preparedTargetSnapshot);
 
     if (revision != _preparedDisplayRevision || _sessionCompleter == null || _sessionCompleter!.isCompleted) {
       return;
@@ -522,6 +686,8 @@ class WoxScreenshotController extends GetxController {
     _selectionDisplayHintSubscription?.cancel();
     _selectionDisplayHintSubscription = null;
     _pendingRawSnapshots = const <DisplaySnapshot>[];
+    _hydratedRawSnapshots.clear();
+    _rawSnapshotHydrationTasks.clear();
     _nativeWorkspaceBounds = null;
     _preparedDisplayId = null;
     _preparedDisplayBounds = null;
@@ -844,11 +1010,18 @@ class WoxScreenshotController extends GetxController {
   Future<void> _decodeDisplayImages(List<DisplaySnapshot> snapshots) async {
     _disposeDecodedImages();
     for (final snapshot in snapshots) {
+      if (!snapshot.hasImageBytes) {
+        continue;
+      }
       await _ensureDisplayDecoded(snapshot);
     }
   }
 
   Future<void> _ensureDisplayDecoded(DisplaySnapshot snapshot) {
+    if (!snapshot.hasImageBytes) {
+      return Future<void>.value();
+    }
+
     final decodedImage = _decodedImages[snapshot.displayId];
     if (decodedImage != null) {
       return Future<void>.value();

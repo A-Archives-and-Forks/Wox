@@ -1114,10 +1114,14 @@ class _WorkspaceBackground extends StatelessWidget {
     return Stack(
       children: [
         for (final snapshot in snapshots)
-          Positioned.fromRect(
-            rect: snapshot.logicalBounds.toRect().shift(-virtualBounds.topLeft),
-            child: Image(image: snapshot.imageProvider, fit: BoxFit.fill, gaplessPlayback: true),
-          ),
+          if (snapshot.hasImageBytes)
+            Positioned.fromRect(
+              rect: snapshot.logicalBounds.toRect().shift(-virtualBounds.topLeft),
+              // macOS now reveals the native selection overlay before every display payload is
+              // serialized for Flutter. Skip metadata-only snapshots here so the first annotation
+              // frame can show the displays that are ready instead of crashing on deferred bytes.
+              child: Image(image: snapshot.imageProvider, fit: BoxFit.fill, gaplessPlayback: true),
+            ),
       ],
     );
   }

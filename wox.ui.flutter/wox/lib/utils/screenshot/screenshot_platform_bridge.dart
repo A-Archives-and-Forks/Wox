@@ -19,6 +19,20 @@ abstract class ScreenshotPlatformBridge {
 
   Future<List<DisplaySnapshot>> captureAllDisplays();
 
+  Future<List<DisplaySnapshot>> captureDisplayMetadata() {
+    return captureAllDisplays();
+  }
+
+  Future<List<DisplaySnapshot>> loadDisplaySnapshots(List<String> displayIds) async {
+    final snapshots = await captureAllDisplays();
+    if (displayIds.isEmpty) {
+      return snapshots;
+    }
+
+    final displayIdSet = displayIds.toSet();
+    return snapshots.where((snapshot) => displayIdSet.contains(snapshot.displayId)).toList();
+  }
+
   Future<ScreenshotNativeSelectionResult> selectCaptureRegion(ScreenshotRect nativeWorkspaceBounds);
 
   Future<ScreenshotWorkspacePresentation> presentCaptureWorkspace(ScreenshotRect nativeWorkspaceBounds);
@@ -71,12 +85,33 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
   @override
   Future<List<DisplaySnapshot>> captureAllDisplays() async {
     final response = await _channel.invokeMethod<List<dynamic>>('captureAllDisplays');
-    final snapshots = response ?? const <dynamic>[];
+    return _decodeSnapshotResponse(response);
+  }
 
-    // The native bridge returns JSON-like maps so Flutter can keep the screenshot session platform-agnostic.
-    return snapshots.whereType<Map<dynamic, dynamic>>().map((item) {
-      return DisplaySnapshot.fromJson(item.map((key, value) => MapEntry(key.toString(), value)));
-    }).toList();
+  @override
+  Future<List<DisplaySnapshot>> captureDisplayMetadata() async {
+    try {
+      final response = await _channel.invokeMethod<List<dynamic>>('captureDisplayMetadata');
+      return _decodeSnapshotResponse(response);
+    } on MissingPluginException {
+      return captureAllDisplays();
+    }
+  }
+
+  @override
+  Future<List<DisplaySnapshot>> loadDisplaySnapshots(List<String> displayIds) async {
+    try {
+      final response = await _channel.invokeMethod<List<dynamic>>('loadDisplaySnapshots', {'displayIds': displayIds});
+      return _decodeSnapshotResponse(response);
+    } on MissingPluginException {
+      final snapshots = await captureAllDisplays();
+      if (displayIds.isEmpty) {
+        return snapshots;
+      }
+
+      final displayIdSet = displayIds.toSet();
+      return snapshots.where((snapshot) => displayIdSet.contains(snapshot.displayId)).toList();
+    }
   }
 
   @override
@@ -193,5 +228,14 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
     // the controller focused on prewarm orchestration instead of transport-specific null checks.
     final normalized = arguments.map<String, dynamic>((key, value) => MapEntry(key.toString(), value));
     _selectionDisplayHintController.add(ScreenshotSelectionDisplayHint.fromJson(normalized));
+  }
+
+  List<DisplaySnapshot> _decodeSnapshotResponse(List<dynamic>? response) {
+    final snapshots = response ?? const <dynamic>[];
+
+    // The native bridge returns JSON-like maps so Flutter can keep the screenshot session platform-agnostic.
+    return snapshots.whereType<Map<dynamic, dynamic>>().map((item) {
+      return DisplaySnapshot.fromJson(item.map((key, value) => MapEntry(key.toString(), value)));
+    }).toList();
   }
 }

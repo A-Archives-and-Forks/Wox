@@ -223,7 +223,7 @@ class CaptureScreenshotResult {
 }
 
 class DisplaySnapshot {
-  DisplaySnapshot({required this.displayId, required this.logicalBounds, required this.pixelBounds, required this.scale, required this.rotation, required this.imageBytesBase64});
+  DisplaySnapshot({required this.displayId, required this.logicalBounds, required this.pixelBounds, required this.scale, required this.rotation, this.imageBytesBase64 = ''});
 
   final String displayId;
   final ScreenshotRect logicalBounds;
@@ -231,12 +231,34 @@ class DisplaySnapshot {
   final double scale;
   final int rotation;
   final String imageBytesBase64;
+  // The macOS screenshot flow now starts from metadata plus native CGImage overlays, then hydrates
+  // PNG/base64 bytes only for displays that Flutter actually needs to render or export. Snapshot
+  // models therefore need to represent "geometry ready, pixels deferred" instead of assuming every
+  // bridge response already includes image payloads.
+  bool get hasImageBytes => imageBytesBase64.isNotEmpty;
+
+  Uint8List? _cachedImageBytes;
+  MemoryImage? _cachedImageProvider;
+
   // Screenshot annotation drags rebuild the workspace frequently. Decoding base64 on every build
   // created a fresh MemoryImage each frame, which made the captured backdrop briefly restart and
   // visually flicker while drawing. Cache both the bytes and image provider per snapshot so the
   // background stays stable across rebuilds and export still reuses the same decoded payload.
-  late final Uint8List imageBytes = base64Decode(imageBytesBase64);
-  late final MemoryImage imageProvider = MemoryImage(imageBytes);
+  Uint8List get imageBytes {
+    if (!hasImageBytes) {
+      throw StateError('Display snapshot $displayId does not have image bytes yet');
+    }
+
+    return _cachedImageBytes ??= base64Decode(imageBytesBase64);
+  }
+
+  MemoryImage get imageProvider {
+    if (!hasImageBytes) {
+      throw StateError('Display snapshot $displayId does not have image bytes yet');
+    }
+
+    return _cachedImageProvider ??= MemoryImage(imageBytes);
+  }
 
   factory DisplaySnapshot.fromJson(Map<String, dynamic> json) {
     final logicalBounds = _normalizeJsonMap(json['logicalBounds'] ?? json['LogicalBounds']);
