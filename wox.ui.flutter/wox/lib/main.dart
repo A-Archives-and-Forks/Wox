@@ -142,6 +142,7 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
   final launcherController = Get.find<WoxLauncherController>();
   final screenshotController = Get.find<WoxScreenshotController>();
   final settingController = Get.find<WoxSettingController>();
+  bool _isRecoveringScreenshotWindowFocus = false;
 
   @override
   void initState() {
@@ -196,7 +197,10 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
     }
 
     if (screenshotController.isSessionActive.value) {
-      Logger.instance.debug(traceId, "onWindowBlur ignored: screenshot session is active");
+      // Ignoring blur used to leave the screenshot session alive but unfocused after the native
+      // selection overlay handed control back to Flutter. Reclaim focus here so the annotation
+      // workspace stays interactive even if macOS briefly moves key-window ownership elsewhere.
+      await _recoverScreenshotWindowFocus(traceId);
       return;
     }
 
@@ -214,6 +218,21 @@ class _WoxAppState extends State<WoxApp> with WindowListener, ProtocolListener {
 
     Logger.instance.debug(traceId, "onWindowBlur notify backend focus lost");
     WoxApi.instance.onFocusLost(traceId);
+  }
+
+  Future<void> _recoverScreenshotWindowFocus(String traceId) async {
+    if (_isRecoveringScreenshotWindowFocus) {
+      return;
+    }
+
+    _isRecoveringScreenshotWindowFocus = true;
+    try {
+      await windowManager.focus();
+    } catch (e) {
+      Logger.instance.error(traceId, "onWindowBlur failed screenshot focus recovery: $e");
+    } finally {
+      _isRecoveringScreenshotWindowFocus = false;
+    }
   }
 
   @override

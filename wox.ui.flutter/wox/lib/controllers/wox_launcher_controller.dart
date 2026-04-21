@@ -297,6 +297,16 @@ class WoxLauncherController extends GetxController {
       updateQueryBoxSelectedTextStyle();
       if (queryBoxFocusNode.hasFocus) {
         var traceId = const UuidV4().generate();
+        final screenshotController = Get.find<WoxScreenshotController>();
+        if (screenshotController.isSessionActive.value) {
+          // Screenshot annotation reuses the same top-level window as the launcher. Letting the
+          // hidden query box reclaim focus during an active screenshot session reroutes keyboard and
+          // IME side effects back into launcher code, which can make the screenshot editor dismiss
+          // itself before the user finishes annotating. Drop that stale focus immediately instead of
+          // treating it like a real launcher activation.
+          queryBoxFocusNode.unfocus();
+          return;
+        }
         if (isShowFormActionPanel.value) {
           Logger.instance.debug(traceId, "query box gained focus while form action panel is visible, ignore auto hide");
           return;
@@ -877,6 +887,23 @@ class WoxLauncherController extends GetxController {
   }
 
   Future<void> toggleApp(String traceId, ShowAppParams params) async {
+    final screenshotController = Get.find<WoxScreenshotController>();
+    if (screenshotController.isSessionActive.value) {
+      final wasVisible = await windowManager.isVisible();
+      // Screenshot capture owns the shared Wox window. Running the normal launcher toggle while
+      // that session is active can hide the screenshot workspace without finishing the pending
+      // CaptureScreenshot request, leaving the UI invisible until the backend times out. Treat the
+      // hotkey as "cancel screenshot first" so the session-specific restore path can recover safely.
+      await screenshotController.cancelSession(traceId, reason: 'launcher_toggle_app');
+      if (!wasVisible) {
+        final isVisibleAfterCancel = await windowManager.isVisible();
+        if (!isVisibleAfterCancel) {
+          await showApp(traceId, params);
+        }
+      }
+      return;
+    }
+
     var isVisible = await windowManager.isVisible();
     if (isVisible) {
       if (isInSettingView.value) {
@@ -890,6 +917,19 @@ class WoxLauncherController extends GetxController {
   }
 
   Future<void> showApp(String traceId, ShowAppParams params) async {
+    final screenshotController = Get.find<WoxScreenshotController>();
+    if (screenshotController.isSessionActive.value) {
+      // Screenshot completion/cancel restore decides whether the shared window should stay visible.
+      // Showing the launcher before that cleanup finishes mixes launcher focus/layout state into the
+      // screenshot editor and can strand the session. Cancel first, then only continue if the
+      // restore path intentionally kept the window hidden.
+      await screenshotController.cancelSession(traceId, reason: 'launcher_show_app');
+      final isVisibleAfterCancel = await windowManager.isVisible();
+      if (isVisibleAfterCancel) {
+        return;
+      }
+    }
+
     // update some properties to latest for later use
     latestQueryHistories.assignAll(params.queryHistories);
     lastLaunchMode = params.launchMode;
@@ -1112,6 +1152,16 @@ class WoxLauncherController extends GetxController {
   }
 
   Future<void> hideApp(String traceId) async {
+    final screenshotController = Get.find<WoxScreenshotController>();
+    if (screenshotController.isSessionActive.value) {
+      // Hiding the launcher while screenshot capture is active hides the capture workspace too
+      // because both flows share the same window. The previous hide path left the screenshot
+      // session running in the background, which made later toggles feel broken until the backend
+      // CaptureScreenshot call eventually timed out. Cancel the screenshot instead of hiding it.
+      await screenshotController.cancelSession(traceId, reason: 'launcher_hide_app');
+      return;
+    }
+
     // hide first to avoid the potential delay caused by some heavy operations in onHide callback
     // E.g. on tray query mode, hideActionPanel will call resize height, which may cause a noticeable
     // resize animation if the window is still visible while resizing, so we hide the window first and then do the rest of the operations
@@ -1226,6 +1276,15 @@ class WoxLauncherController extends GetxController {
   }
 
   Future<void> focusQueryBox({bool selectAll = false}) async {
+    final screenshotController = Get.find<WoxScreenshotController>();
+    if (screenshotController.isSessionActive.value) {
+      // Screenshot capture owns the shared window while the annotation workspace is visible. The
+      // previous launcher helpers still tried to refocus the hidden query box from generic cleanup
+      // paths, which pulled focus/IME behavior back into the launcher and made some screenshot
+      // sessions auto-cancel. Ignore launcher focus requests until the screenshot session ends.
+      return;
+    }
+
     // only focus when window is visible
     // otherwise it will gain focus but not visible, causing some issues on windows
     // e.g. active window snapshot is wrong
@@ -1716,10 +1775,7 @@ class WoxLauncherController extends GetxController {
       responseWoxWebsocketRequest(msg, true, files);
     } else if (msg.method == "CaptureScreenshot") {
       final screenshotController = Get.find<WoxScreenshotController>();
-      final result = await screenshotController.startCaptureSession(
-        msg.traceId,
-        CaptureScreenshotRequest.fromJson(msg.data),
-      );
+      final result = await screenshotController.startCaptureSession(msg.traceId, CaptureScreenshotRequest.fromJson(msg.data));
       responseWoxWebsocketRequest(msg, true, result.toJson());
     } else if (msg.method == "OpenSettingWindow") {
       openSetting(msg.traceId, SettingWindowContext.fromJson(msg.data));

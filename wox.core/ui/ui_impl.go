@@ -164,7 +164,11 @@ func (u *uiImpl) Notify(ctx context.Context, msg common.NotifyMsg) {
 		if msg.Icon != "" {
 			wimg, parseErr := common.ParseWoxImage(msg.Icon)
 			if parseErr == nil {
-				img, imgErr := wimg.ToImage()
+				// System notifications should appear as soon as the action succeeds. The previous path used
+				// ToImage(), which could synchronously download Twemoji assets for emoji icons and delay the
+				// success notification by seconds on a cold cache. Keep the notify path local-only and let the
+				// notifier fall back to the default Wox icon when the plugin icon is not already cached.
+				img, imgErr := wimg.ToImageWithoutRemoteFetch()
 				if imgErr == nil {
 					icon = img
 				}

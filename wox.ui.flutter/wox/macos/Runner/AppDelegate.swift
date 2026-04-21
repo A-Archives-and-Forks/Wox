@@ -42,6 +42,31 @@ private func appKitRect(fromTopLeftRect rect: NSRect) -> NSRect {
   )
 }
 
+private func screenshotWindowLevel() -> NSWindow.Level {
+  // `.popUpMenu` was high enough for regular launcher panels but still sat underneath some
+  // fullscreen and always-on-top utility windows, which made the capture UI appear to vanish right
+  // after screenshot handoff. Match the system shielding/window-saver range so both the native
+  // selector and the Flutter annotation workspace stay above the windows being captured.
+  let shieldingLevel = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+  return max(.screenSaver, shieldingLevel)
+}
+
+private func screenshotCollectionBehavior() -> NSWindow.CollectionBehavior {
+  // The native selector already relied on fullscreen auxiliary behavior to coexist with fullscreen
+  // apps. Reusing that exact behavior for the prepared Flutter workspace avoids downgrading the
+  // annotation stage into a regular panel that can be pushed behind fullscreen floating windows.
+  var collectionBehavior: NSWindow.CollectionBehavior = [
+    .canJoinAllSpaces,
+    .fullScreenAuxiliary,
+    .stationary,
+    .ignoresCycle,
+  ]
+  if #available(macOS 13.0, *) {
+    collectionBehavior.insert(.canJoinAllApplications)
+  }
+  return collectionBehavior
+}
+
 private func clampPoint(_ point: CGPoint, to bounds: NSRect) -> CGPoint {
   return CGPoint(
     x: min(max(point.x, bounds.minX), bounds.maxX),
@@ -65,6 +90,20 @@ private func intersectionArea(_ lhs: NSRect, _ rhs: NSRect) -> CGFloat {
   }
 
   return intersection.width * intersection.height
+}
+
+private func describeRect(_ rect: NSRect?) -> String {
+  guard let rect else {
+    return "null"
+  }
+
+  return String(
+    format: "%.1f,%.1f %.1fx%.1f",
+    rect.origin.x,
+    rect.origin.y,
+    rect.width,
+    rect.height
+  )
 }
 
 private struct CachedDisplayCapture {
@@ -254,21 +293,13 @@ private final class ScreenshotOverlayWindow: NSWindow {
     // The overlay session owns these windows explicitly. Releasing them as a side effect of close()
     // makes lifetime depend on AppKit event timing and was the most likely source of the drag-time crash.
     isReleasedWhenClosed = false
-    level = .popUpMenu
+    level = screenshotWindowLevel()
     ignoresMouseEvents = false
     acceptsMouseMovedEvents = true
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
     animationBehavior = .none
-    collectionBehavior = [
-      .canJoinAllSpaces,
-      .fullScreenAuxiliary,
-      .stationary,
-      .ignoresCycle,
-    ]
-    if #available(macOS 13.0, *) {
-      collectionBehavior.insert(.canJoinAllApplications)
-    }
+    collectionBehavior = screenshotCollectionBehavior()
 
     contentView = overlayView
   }
@@ -492,13 +523,19 @@ class AppDelegate: FlutterAppDelegate {
   private struct ScreenshotPresentationState {
     let collectionBehavior: NSWindow.CollectionBehavior
     let level: NSWindow.Level
+    let animationBehavior: NSWindow.AnimationBehavior
     let hasShadow: Bool
     let styleMask: NSWindow.StyleMask
+    let ignoresMouseEvents: Bool
+    let acceptsMouseMovedEvents: Bool
     let titleVisibility: NSWindow.TitleVisibility
     let titlebarAppearsTransparent: Bool
     let closeButtonHidden: Bool
     let miniaturizeButtonHidden: Bool
     let zoomButtonHidden: Bool
+    let panelHidesOnDeactivate: Bool?
+    let panelBecomesKeyOnlyIfNeeded: Bool?
+    let panelIsFloating: Bool?
   }
 
   // Store the previous active application
@@ -521,6 +558,14 @@ class AppDelegate: FlutterAppDelegate {
   private var cachedDisplayCaptures: [CachedDisplayCapture] = []
   private var activeOverlaySession: ScreenshotOverlaySession?
   private var nativeOverlayDismissTimeoutWorkItem: DispatchWorkItem?
+
+  private func describeFrontmostApplication() -> String {
+    guard let frontApp = NSWorkspace.shared.frontmostApplication else {
+      return "Unknown (bundleID: Unknown)"
+    }
+
+    return "\(frontApp.localizedName ?? "Unknown") (bundleID: \(frontApp.bundleIdentifier ?? "Unknown"))"
+  }
 
   private func savePreviousActiveAppIfNeeded() {
     if let frontApp = NSWorkspace.shared.frontmostApplication,
@@ -664,6 +709,71 @@ class AppDelegate: FlutterAppDelegate {
     ]
   }
 
+  private func writeClipboardImageRgbaFile(arguments: [String: Any]) throws {
+    guard
+      let filePath = arguments["filePath"] as? String,
+      let width = (arguments["width"] as? NSNumber)?.intValue,
+      let height = (arguments["height"] as? NSNumber)?.intValue,
+      let bytesPerRow = (arguments["bytesPerRow"] as? NSNumber)?.intValue
+    else {
+      throw DisplayCaptureError(code: "INVALID_ARGS", message: "Invalid arguments for writeClipboardImageRgbaFile", details: nil)
+    }
+
+    let expectedByteCount = bytesPerRow * height
+    let fileUrl = URL(fileURLWithPath: filePath)
+    let pixelData: Data
+    do {
+      pixelData = try Data(contentsOf: fileUrl, options: [.mappedIfSafe])
+    } catch {
+      throw DisplayCaptureError(code: "clipboard_write_failed", message: "Failed to read RGBA screenshot file", details: error.localizedDescription)
+    }
+
+    guard pixelData.count == expectedByteCount else {
+      throw DisplayCaptureError(
+        code: "clipboard_write_failed",
+        message: "RGBA screenshot size does not match the expected dimensions",
+        details: [
+          "expectedByteCount": expectedByteCount,
+          "actualByteCount": pixelData.count,
+          "width": width,
+          "height": height,
+          "bytesPerRow": bytesPerRow,
+        ]
+      )
+    }
+
+    guard let provider = CGDataProvider(data: pixelData as CFData) else {
+      throw DisplayCaptureError(code: "clipboard_write_failed", message: "Failed to create RGBA data provider", details: nil)
+    }
+
+    let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    // The previous confirm path forced Flutter to PNG-encode the composed screenshot before it could
+    // reach the clipboard. Building the NSImage directly from raw RGBA pixels keeps the export local
+    // to macOS and removes that expensive encode/decode roundtrip without changing the captured pixels.
+    guard
+      let cgImage = CGImage(
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bitsPerPixel: 32,
+        bytesPerRow: bytesPerRow,
+        space: colorSpace,
+        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+        provider: provider,
+        decode: nil,
+        shouldInterpolate: false,
+        intent: .defaultIntent
+      )
+    else {
+      throw DisplayCaptureError(code: "clipboard_write_failed", message: "Failed to build CGImage from RGBA screenshot data", details: nil)
+    }
+
+    let image = NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.writeObjects([image])
+  }
+
   private func isStandardWindowButtonHidden(_ buttonType: NSWindow.ButtonType, on window: NSWindow) -> Bool {
     return window.standardWindowButton(buttonType)?.isHidden ?? false
   }
@@ -707,7 +817,6 @@ class AppDelegate: FlutterAppDelegate {
       // Flutter should acknowledge the handoff quickly by converting the selector into a passive
       // backdrop. This timeout only exists to prevent a leaked topmost drag overlay if that
       // handoff fails before Flutter starts driving the session.
-      self?.log("Native selection overlay timed out while waiting for Flutter to activate the backdrop handoff; dismissing overlays")
       self?.dismissNativeSelectionOverlays()
     }
     nativeOverlayDismissTimeoutWorkItem = workItem
@@ -781,13 +890,19 @@ class AppDelegate: FlutterAppDelegate {
       screenshotPresentationState = ScreenshotPresentationState(
         collectionBehavior: window.collectionBehavior,
         level: window.level,
+        animationBehavior: window.animationBehavior,
         hasShadow: window.hasShadow,
         styleMask: window.styleMask,
+        ignoresMouseEvents: window.ignoresMouseEvents,
+        acceptsMouseMovedEvents: window.acceptsMouseMovedEvents,
         titleVisibility: window.titleVisibility,
         titlebarAppearsTransparent: window.titlebarAppearsTransparent,
         closeButtonHidden: isStandardWindowButtonHidden(.closeButton, on: window),
         miniaturizeButtonHidden: isStandardWindowButtonHidden(.miniaturizeButton, on: window),
-        zoomButtonHidden: isStandardWindowButtonHidden(.zoomButton, on: window)
+        zoomButtonHidden: isStandardWindowButtonHidden(.zoomButton, on: window),
+        panelHidesOnDeactivate: (window as? NSPanel)?.hidesOnDeactivate,
+        panelBecomesKeyOnlyIfNeeded: (window as? NSPanel)?.becomesKeyOnlyIfNeeded,
+        panelIsFloating: (window as? NSPanel)?.isFloatingPanel
       )
     }
 
@@ -797,25 +912,42 @@ class AppDelegate: FlutterAppDelegate {
     window.styleMask = .borderless
     let flippedY = appKitY(fromTopLeftY: bounds.origin.y, height: bounds.height)
 
+    let requestedScreenshotLevel = screenshotWindowLevel()
     // The launcher window's default collection behavior is tuned for a compact app panel. Screenshot
     // capture needs a system-overlay style contract instead so one window can stay pinned across the
     // full virtual desktop without inheriting the main launcher panel's single-display assumptions.
-    var collectionBehavior: NSWindow.CollectionBehavior = [
-      .canJoinAllSpaces,
-      .stationary,
-      .ignoresCycle,
-      .fullScreenNone,
-    ]
-    if #available(macOS 13.0, *) {
-      collectionBehavior.insert(.canJoinAllApplications)
-    }
-    window.collectionBehavior = collectionBehavior
-    window.level = .popUpMenu
+    window.collectionBehavior = screenshotCollectionBehavior()
+    // The native selection overlay already appears without AppKit window animations. Leaving the
+    // reused Flutter window at its default animation behavior makes the handoff look like a short
+    // fade/zoom even when the content is ready. Disable window animation for screenshot mode so the
+    // prepared Flutter frame replaces the native selector without any visible transition.
+    window.animationBehavior = .none
     window.hasShadow = false
+    // The launcher panel never had to prove that it owned the full-screen mouse path. Once the
+    // screenshot flow turned that same panel into a borderless overlay, macOS could leave it in a
+    // half-active panel state where clicks reactivated the app underneath and the annotation editor
+    // appeared to disappear instantly. Force the screenshot shell to keep mouse ownership and stay
+    // active on deactivation so the next trace can verify whether the blur loop was caused by stale
+    // panel defaults rather than Flutter's annotation layer.
+    window.ignoresMouseEvents = false
+    window.acceptsMouseMovedEvents = true
+    if let panel = window as? NSPanel {
+      panel.hidesOnDeactivate = false
+      panel.becomesKeyOnlyIfNeeded = false
+      // Reusing the launcher NSPanel for screenshot annotation exposed a hidden AppKit constraint:
+      // leaving the panel in floating-panel mode silently clamps the effective level back to
+      // `.floating`, which puts the editor underneath other always-on-top windows. Disable that
+      // panel behavior for screenshot mode so the requested shielding-level ordering can stick.
+      panel.isFloatingPanel = false
+    }
     window.setFrame(NSRect(x: bounds.origin.x, y: flippedY, width: bounds.width, height: bounds.height), display: true)
     window.contentView?.needsLayout = true
     window.contentView?.layoutSubtreeIfNeeded()
     window.displayIfNeeded()
+    // Borderless/style mutations on NSPanel can still reset the effective level after the earlier
+    // configuration changes. Reapply the screenshot level at the end of preparation so the visible
+    // handoff window matches the native selector's ordering instead of falling back to `.floating`.
+    window.level = requestedScreenshotLevel
 
     isCapturePresentationActive = true
     captureWorkspaceBounds = bounds
@@ -836,6 +968,14 @@ class AppDelegate: FlutterAppDelegate {
     // all geometry/layout work off the visible path. Reveal only happens once Flutter has already
     // produced the annotation frame that will immediately replace the native selector.
     savePreviousActiveAppIfNeeded()
+    // The launcher window is reused across normal launcher, settings, and screenshot flows. Reapply
+    // the screenshot level right before reveal so no earlier launcher path can leave the handoff
+    // window stuck at a lower panel level once it becomes visible.
+    if let panel = window as? NSPanel {
+      panel.isFloatingPanel = false
+    }
+    window.collectionBehavior = screenshotCollectionBehavior()
+    window.level = screenshotWindowLevel()
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
   }
@@ -858,11 +998,28 @@ class AppDelegate: FlutterAppDelegate {
     window.level = savedState.level
     window.hasShadow = savedState.hasShadow
     window.styleMask = savedState.styleMask
+    window.ignoresMouseEvents = savedState.ignoresMouseEvents
+    window.acceptsMouseMovedEvents = savedState.acceptsMouseMovedEvents
     // The screenshot selector only needs a temporary borderless shell. Once it exits, restore the
     // original title-bar appearance as well so Wox returns to the exact launcher chrome instead of
     // leaving the default macOS window controls visible in the top-left corner.
     window.titleVisibility = savedState.titleVisibility
     window.titlebarAppearsTransparent = savedState.titlebarAppearsTransparent
+    if let panel = window as? NSPanel {
+      if let hidesOnDeactivate = savedState.panelHidesOnDeactivate {
+        panel.hidesOnDeactivate = hidesOnDeactivate
+      }
+      if let becomesKeyOnlyIfNeeded = savedState.panelBecomesKeyOnlyIfNeeded {
+        panel.becomesKeyOnlyIfNeeded = becomesKeyOnlyIfNeeded
+      }
+      if let isFloatingPanel = savedState.panelIsFloating {
+        panel.isFloatingPanel = isFloatingPanel
+      }
+    }
+    // Screenshot mode temporarily disables AppKit's window-order animations to keep the native-to-
+    // Flutter handoff seamless. Restore the original launcher behavior here so non-screenshot window
+    // flows keep their previous animation semantics.
+    window.animationBehavior = savedState.animationBehavior
     applyStandardWindowButtonVisibility(
       on: window,
       closeHidden: savedState.closeButtonHidden,
@@ -890,12 +1047,21 @@ class AppDelegate: FlutterAppDelegate {
       "workspaceBounds": buildRectPayload(captureWorkspaceBounds),
       "windowBounds": buildRectPayload(windowTopLeftRect),
       "collectionBehavior": window.collectionBehavior.rawValue,
+      "levelRawValue": window.level.rawValue,
       "styleMask": Int(window.styleMask.rawValue),
+      "ignoresMouseEvents": window.ignoresMouseEvents,
+      "acceptsMouseMovedEvents": window.acceptsMouseMovedEvents,
+      "isKeyWindow": window.isKeyWindow,
+      "isMainWindow": window.isMainWindow,
       "titleVisibility": window.titleVisibility.rawValue,
       "titlebarAppearsTransparent": window.titlebarAppearsTransparent,
       "closeButtonHidden": isStandardWindowButtonHidden(.closeButton, on: window),
       "miniaturizeButtonHidden": isStandardWindowButtonHidden(.miniaturizeButton, on: window),
       "zoomButtonHidden": isStandardWindowButtonHidden(.zoomButton, on: window),
+      "frontmostApplication": describeFrontmostApplication(),
+      "panelHidesOnDeactivate": (window as? NSPanel)?.hidesOnDeactivate as Any,
+      "panelBecomesKeyOnlyIfNeeded": (window as? NSPanel)?.becomesKeyOnlyIfNeeded as Any,
+      "panelIsFloating": (window as? NSPanel)?.isFloatingPanel as Any,
     ]
   }
 
@@ -1299,6 +1465,31 @@ class AppDelegate: FlutterAppDelegate {
           self?.dismissNativeSelectionOverlays()
           result(nil)
 
+        case "writeClipboardImageRgbaFile":
+          if let args = call.arguments as? [String: Any] {
+            do {
+              try self?.writeClipboardImageRgbaFile(arguments: args)
+              result(nil)
+            } catch let error as DisplayCaptureError {
+              result(error.asFlutterError())
+            } catch {
+              result(
+                FlutterError(
+                  code: "clipboard_write_failed",
+                  message: error.localizedDescription,
+                  details: nil
+                ))
+            }
+          } else {
+            result(
+              FlutterError(
+                code: "INVALID_ARGS",
+                message: "Invalid arguments for writeClipboardImageRgbaFile",
+                details: nil
+              )
+            )
+          }
+
         case "debugCaptureWorkspaceState":
           result(self?.debugCaptureWorkspaceState(for: window))
 
@@ -1513,6 +1704,17 @@ class AppDelegate: FlutterAppDelegate {
           result(nil)
 
         case "focus":
+          if self?.isCapturePresentationActive == true {
+            // Blur recovery is part of the screenshot interaction loop, so a generic focus call must
+            // not revive the launcher's lower panel ordering. Reapply screenshot-specific window
+            // traits here to keep recovery aligned with the prepared capture workspace contract.
+            if let panel = window as? NSPanel {
+              panel.isFloatingPanel = false
+            }
+            window.collectionBehavior = screenshotCollectionBehavior()
+            window.level = screenshotWindowLevel()
+          }
+          self?.log("Focusing Wox window")
           self?.savePreviousActiveAppIfNeeded()
           window.makeKeyAndOrderFront(nil)
           NSApp.activate(ignoringOtherApps: true)
@@ -1523,6 +1725,14 @@ class AppDelegate: FlutterAppDelegate {
 
         case "setAlwaysOnTop":
           if let alwaysOnTop = call.arguments as? Bool {
+            if self?.isCapturePresentationActive == true {
+              // Screenshot presentation owns the window level while capture is active. Letting the
+              // generic always-on-top toggle run here would collapse the shielding-level editor back
+              // into launcher panel levels and reintroduce the "annotation UI behind other windows"
+              // regression we are debugging.
+              result(nil)
+              return
+            }
             if alwaysOnTop {
               window.level = .popUpMenu
             } else {

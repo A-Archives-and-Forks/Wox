@@ -171,11 +171,12 @@ type DisplaySnapshot struct {
 }
 
 // CaptureScreenshotResult carries the final PNG back to Go.
-// Go intentionally only receives the exported image and session outcome so the UI remains the only
-// owner of transient annotation state and platform capture details.
+// Go intentionally only receives the exported image or an explicit "output already handled" signal
+// so the UI remains the only owner of transient annotation state and platform capture details.
 type CaptureScreenshotResult struct {
 	Status               CaptureScreenshotStatus `json:"status"`
 	PngBase64            string                  `json:"pngBase64,omitempty"`
+	OutputHandled        bool                    `json:"outputHandled,omitempty"`
 	LogicalSelectionRect *ScreenshotRect         `json:"logicalSelectionRect,omitempty"`
 	ErrorCode            string                  `json:"errorCode,omitempty"`
 	ErrorMessage         string                  `json:"errorMessage,omitempty"`

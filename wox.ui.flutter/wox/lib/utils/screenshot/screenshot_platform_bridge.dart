@@ -35,6 +35,8 @@ abstract class ScreenshotPlatformBridge {
 
   Future<void> dismissNativeSelectionOverlays();
 
+  Future<void> writeClipboardImageRgbaFile({required String filePath, required int width, required int height, required int bytesPerRow}) async {}
+
   Future<Map<String, dynamic>> debugCaptureWorkspaceState();
 }
 
@@ -152,6 +154,15 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
       await _channel.invokeMethod<void>('dismissNativeSelectionOverlays');
     } on MissingPluginException {
       return;
+    }
+  }
+
+  @override
+  Future<void> writeClipboardImageRgbaFile({required String filePath, required int width, required int height, required int bytesPerRow}) async {
+    try {
+      await _channel.invokeMethod<void>('writeClipboardImageRgbaFile', {'filePath': filePath, 'width': width, 'height': height, 'bytesPerRow': bytesPerRow});
+    } on MissingPluginException {
+      throw UnsupportedError('Clipboard RGBA export is not available on ${Platform.operatingSystem}');
     }
   }
 

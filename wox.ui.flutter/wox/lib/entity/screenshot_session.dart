@@ -173,16 +173,22 @@ class CaptureScreenshotRequest {
 }
 
 class CaptureScreenshotResult {
-  const CaptureScreenshotResult({required this.status, this.pngBase64, this.logicalSelectionRect, this.errorCode, this.errorMessage});
+  const CaptureScreenshotResult({required this.status, this.pngBase64, this.outputHandled = false, this.logicalSelectionRect, this.errorCode, this.errorMessage});
 
   final String status;
   final String? pngBase64;
+  final bool outputHandled;
   final ScreenshotRect? logicalSelectionRect;
   final String? errorCode;
   final String? errorMessage;
 
-  factory CaptureScreenshotResult.completed(Uint8List pngBytes, Rect selectionRect) {
-    return CaptureScreenshotResult(status: 'completed', pngBase64: base64Encode(pngBytes), logicalSelectionRect: ScreenshotRect.fromRect(selectionRect));
+  factory CaptureScreenshotResult.completed({required Rect selectionRect, Uint8List? pngBytes, bool outputHandled = false}) {
+    return CaptureScreenshotResult(
+      status: 'completed',
+      pngBase64: pngBytes == null ? null : base64Encode(pngBytes),
+      outputHandled: outputHandled,
+      logicalSelectionRect: ScreenshotRect.fromRect(selectionRect),
+    );
   }
 
   factory CaptureScreenshotResult.cancelled() => const CaptureScreenshotResult(status: 'cancelled');
@@ -197,6 +203,7 @@ class CaptureScreenshotResult {
     return CaptureScreenshotResult(
       status: json['status'] as String? ?? json['Status'] as String? ?? 'failed',
       pngBase64: json['pngBase64'] as String? ?? json['PngBase64'] as String?,
+      outputHandled: json['outputHandled'] as bool? ?? json['OutputHandled'] as bool? ?? false,
       logicalSelectionRect: logicalSelectionRect != null ? ScreenshotRect.fromJson(logicalSelectionRect) : null,
       errorCode: json['errorCode'] as String? ?? json['ErrorCode'] as String?,
       errorMessage: json['errorMessage'] as String? ?? json['ErrorMessage'] as String?,
@@ -204,7 +211,14 @@ class CaptureScreenshotResult {
   }
 
   Map<String, dynamic> toJson() {
-    return {'status': status, 'pngBase64': pngBase64, 'logicalSelectionRect': logicalSelectionRect?.toJson(), 'errorCode': errorCode, 'errorMessage': errorMessage};
+    return {
+      'status': status,
+      'pngBase64': pngBase64,
+      'outputHandled': outputHandled,
+      'logicalSelectionRect': logicalSelectionRect?.toJson(),
+      'errorCode': errorCode,
+      'errorMessage': errorMessage,
+    };
   }
 }
 

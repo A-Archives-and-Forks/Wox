@@ -120,12 +120,12 @@ func serveAndWait(ctx context.Context, port int) {
 				logger.Error(ctxNew, fmt.Sprintf("failed to unmarshal websocket response: %s", unmarshalErr.Error()))
 				return
 			}
+			responseCtx := util.WithSessionContext(
+				context.WithValue(ctxNew, util.ContextKeyTraceId, response.TraceId),
+				response.SessionId,
+			)
 			util.Go(ctxNew, "handle ui response", func() {
-				traceCtx := util.WithSessionContext(
-					context.WithValue(ctxNew, util.ContextKeyTraceId, response.TraceId),
-					response.SessionId,
-				)
-				onUIWebsocketResponse(traceCtx, response)
+				onUIWebsocketResponse(responseCtx, response)
 			})
 		} else {
 			logger.Error(ctxNew, fmt.Sprintf("unknown websocket msg: %s", string(msg)))

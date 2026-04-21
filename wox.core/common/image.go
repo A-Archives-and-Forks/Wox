@@ -153,6 +153,17 @@ func (w *WoxImage) ToPng() (image.Image, error) {
 }
 
 func (w *WoxImage) ToImage() (image.Image, error) {
+	return w.toImage(true)
+}
+
+func (w *WoxImage) ToImageWithoutRemoteFetch() (image.Image, error) {
+	// Some user-visible flows, such as screenshot success notifications, only need a best-effort icon.
+	// The previous implementation always routed emoji icons through Twemoji download on cache miss, which
+	// blocked those flows on network latency. Callers that need predictable completion can use this local-only path.
+	return w.toImage(false)
+}
+
+func (w *WoxImage) toImage(allowRemoteFetch bool) (image.Image, error) {
 	if w.ImageType == WoxImageTypeAbsolutePath {
 		if isSvgFilePath(w.ImageData) {
 			svgData, err := os.ReadFile(w.ImageData)
@@ -194,6 +205,10 @@ func (w *WoxImage) ToImage() (image.Image, error) {
 		emojiPath := path.Join(util.GetLocation().GetImageCacheDirectory(), fmt.Sprintf("emoji_%s.png", codePoint))
 		if _, err := os.Stat(emojiPath); err == nil {
 			return imaging.Open(emojiPath)
+		}
+
+		if !allowRemoteFetch {
+			return nil, fmt.Errorf("emoji image cache miss: %s", codePoint)
 		}
 
 		//download emoji image and cache it

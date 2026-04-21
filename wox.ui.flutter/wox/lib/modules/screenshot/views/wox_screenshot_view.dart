@@ -23,7 +23,7 @@ const List<Color> _annotationPalette = <Color>[Color(0xFFFF5B36), Color(0xFFF9C7
 const double _selectionHandleSize = 12;
 const double _annotationHandleSize = 12;
 const double _selectionEdgeTolerance = 7;
-const Size _textDraftBoxSize = Size(260, 60);
+const double _textDraftMaxWidth = 480;
 
 class WoxScreenshotView extends StatefulWidget {
   const WoxScreenshotView({super.key});
@@ -101,7 +101,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     }
 
     _isCancellingSession = true;
-    controller.cancelSession(const UuidV4().generate()).whenComplete(() {
+    controller.cancelSession(const UuidV4().generate(), reason: 'keyboard_escape').whenComplete(() {
       if (mounted) {
         _isCancellingSession = false;
       }
@@ -213,6 +213,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                                 draftType: _currentDraftType(),
                                 previewColor: controller.annotationCreationColor.value,
                                 selectedAnnotationId: selectedAnnotationId,
+                                editingTextAnnotationId: controller.editingTextAnnotationId.value,
                               ),
                             ),
                           ),
@@ -301,7 +302,12 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                 const SizedBox(width: 6),
                 _ToolButton(key: screenshotUndoKey, icon: Icons.undo, enabled: controller.annotations.isNotEmpty, onPressed: controller.undoAnnotation),
                 const SizedBox(width: 6),
-                _ToolButton(key: screenshotCancelKey, icon: Icons.close, color: const Color(0xFFFF6B6B), onPressed: () => controller.cancelSession(const UuidV4().generate())),
+                _ToolButton(
+                  key: screenshotCancelKey,
+                  icon: Icons.close,
+                  color: const Color(0xFFFF6B6B),
+                  onPressed: () => controller.cancelSession(const UuidV4().generate(), reason: 'toolbar_cancel_button'),
+                ),
                 _ToolButton(
                   key: screenshotConfirmKey,
                   icon: Icons.check,
@@ -417,35 +423,23 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     return Positioned(
       left: localPosition.dx,
       top: localPosition.dy,
-      child: Material(
-        color: Colors.transparent,
-        child: SizedBox(
-          width: _textDraftBoxSize.width,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0xCC161311),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 18, offset: Offset(0, 8))],
-            ),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.text,
+        child: Material(
+          type: MaterialType.transparency,
+          child: ConstrainedBox(
+            // The draft editor now sits directly on top of the rendered text instead of inside a
+            // decorated popup. Matching the painter width cap keeps wrapping identical while the
+            // transparent field makes the edit state look like the same annotation gaining a caret.
+            constraints: const BoxConstraints(minWidth: 24, maxWidth: _textDraftMaxWidth),
             child: TextField(
               controller: controller.textDraftController,
               autofocus: true,
               maxLines: null,
-              style: TextStyle(
-                color: controller.textDraftColor.value,
-                fontSize: controller.textDraftFontSize.value,
-                fontWeight: FontWeight.w600,
-                shadows: const [Shadow(color: Color(0xAA000000), blurRadius: 4)],
-              ),
-              decoration: const InputDecoration(
-                isDense: true,
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                hintText: 'Text',
-                hintStyle: TextStyle(color: Colors.white54),
-              ),
+              minLines: 1,
+              cursorColor: controller.textDraftColor.value,
+              style: buildScreenshotTextStyle(color: controller.textDraftColor.value, fontSize: controller.textDraftFontSize.value),
+              decoration: const InputDecoration.collapsed(hintText: ''),
               onSubmitted: (_) => controller.commitTextDraft(),
               onTapOutside: (_) => controller.commitTextDraft(),
             ),
@@ -463,9 +457,16 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     final globalPosition = _toGlobalPosition(localPosition);
     final annotation = _hitTestAnnotationBody(globalPosition);
     if (annotation != null) {
-      // Selection is now an explicit tap on an existing annotation instead of an automatic
-      // post-draw side effect. That keeps new marks idle by default while still letting users pick
-      // any annotation for editing without first switching tools.
+      // Text annotations should feel editable in place. A single click now both selects the label
+      // and opens the inline editor so the cursor changes to text mode immediately instead of
+      // forcing the user through a separate double-click gesture.
+      if (annotation.type == ScreenshotAnnotationType.text && annotation.start != null) {
+        controller.selectAnnotation(annotation.id);
+        controller.startTextDraft(annotation.start!, annotationId: annotation.id, initialText: annotation.text ?? '', fontSize: annotation.fontSize, color: annotation.color);
+        return;
+      }
+
+      // Non-text annotations still use single-click selection without entering a secondary mode.
       controller.selectAnnotation(annotation.id);
       return;
     }
@@ -693,6 +694,10 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
 
     final annotationBodyHit = _hitTestAnnotationBody(globalPosition);
     if (annotationBodyHit != null) {
+      if (annotationBodyHit.type == ScreenshotAnnotationType.text) {
+        _setHoverCursor(SystemMouseCursors.text);
+        return;
+      }
       _setHoverCursor(SystemMouseCursors.move);
       return;
     }
@@ -1368,6 +1373,7 @@ class _AnnotationPainter extends CustomPainter {
     required this.draftType,
     required this.previewColor,
     required this.selectedAnnotationId,
+    required this.editingTextAnnotationId,
   });
 
   final List<ScreenshotAnnotation> annotations;
@@ -1379,10 +1385,16 @@ class _AnnotationPainter extends CustomPainter {
   final ScreenshotAnnotationType? draftType;
   final Color previewColor;
   final String? selectedAnnotationId;
+  final String? editingTextAnnotationId;
 
   @override
   void paint(Canvas canvas, Size size) {
-    paintWorkspaceAnnotations(canvas, annotations: annotations, canvasOrigin: canvasOrigin, selectionClipRect: selectionClipRect);
+    final visibleAnnotations = editingTextAnnotationId == null ? annotations : annotations.where((annotation) => annotation.id != editingTextAnnotationId).toList(growable: false);
+
+    // Inline text editing paints the caret field directly above the annotation. Hiding the source
+    // text while that editor is active prevents the stale rendered label from peeking through and
+    // keeps editing visually identical to the non-editing state apart from the caret itself.
+    paintWorkspaceAnnotations(canvas, annotations: visibleAnnotations, canvasOrigin: canvasOrigin, selectionClipRect: selectionClipRect);
     if (draftType != null) {
       final previewAnnotations = <ScreenshotAnnotation>[];
       if (draftType == ScreenshotAnnotationType.arrow && draftStart != null && draftEnd != null) {
@@ -1483,7 +1495,8 @@ class _AnnotationPainter extends CustomPainter {
         oldDelegate.draftEnd != draftEnd ||
         oldDelegate.draftType != draftType ||
         oldDelegate.previewColor != previewColor ||
-        oldDelegate.selectedAnnotationId != selectedAnnotationId;
+        oldDelegate.selectedAnnotationId != selectedAnnotationId ||
+        oldDelegate.editingTextAnnotationId != editingTextAnnotationId;
   }
 }
 

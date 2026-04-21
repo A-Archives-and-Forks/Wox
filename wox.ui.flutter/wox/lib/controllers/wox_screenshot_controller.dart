@@ -221,6 +221,12 @@ class WoxScreenshotController extends GetxController {
     isSessionActive.value = true;
 
     final launcherController = Get.find<WoxLauncherController>();
+    // The launcher query box can still hold primary focus from the action that started screenshot
+    // capture. If that stale focus survives into the screenshot workspace, launcher-side IME and
+    // focus listeners wake back up behind the overlay and can cancel the session before annotation
+    // begins. Clear the launcher focus up front so the screenshot view becomes the only focus owner.
+    FocusManager.instance.primaryFocus?.unfocus();
+    launcherController.queryBoxFocusNode.unfocus();
     final isVisible = await windowManager.isVisible();
     final position = await windowManager.getPosition();
     final size = await windowManager.getSize();
@@ -246,12 +252,12 @@ class WoxScreenshotController extends GetxController {
     await Future.delayed(const Duration(milliseconds: 220));
   }
 
-  Future<void> cancelSession(String traceId) async {
-    await _finishSession(traceId, CaptureScreenshotResult.cancelled(), ScreenshotSessionStage.cancelled);
+  Future<void> cancelSession(String traceId, {String reason = 'unspecified'}) async {
+    await _finishSession(traceId, CaptureScreenshotResult.cancelled(), ScreenshotSessionStage.cancelled, reason: reason);
   }
 
   Future<void> failSession(String traceId, {required String errorCode, required String errorMessage}) async {
-    await _finishSession(traceId, CaptureScreenshotResult.failed(errorCode: errorCode, errorMessage: errorMessage), ScreenshotSessionStage.failed);
+    await _finishSession(traceId, CaptureScreenshotResult.failed(errorCode: errorCode, errorMessage: errorMessage), ScreenshotSessionStage.failed, reason: 'failure:$errorCode');
   }
 
   Future<void> confirmSelection(String traceId) async {
@@ -263,17 +269,69 @@ class WoxScreenshotController extends GetxController {
     stage.value = ScreenshotSessionStage.exporting;
     try {
       await _hideCompletedScreenshotWindow(traceId);
-      final pngBytes = await exportSelectionPng();
-      await _finishSession(
-        traceId,
-        CaptureScreenshotResult.completed(pngBytes, currentSelection),
-        ScreenshotSessionStage.done,
-        restoreVisibility: false,
-        windowAlreadyHidden: true,
-      );
+
+      CaptureScreenshotResult result;
+      var outputHandled = false;
+      if (Platform.isMacOS) {
+        try {
+          await _writeSelectionToNativeClipboard(selection: currentSelection, snapshots: displaySnapshots.toList(), annotationsToPaint: annotations.toList());
+          outputHandled = true;
+        } catch (error) {
+          // macOS clipboard writes now have a native fast path so confirms do not wait on Flutter's
+          // PNG encoder. Keep the old PNG bridge as a fallback because a failed native handoff must
+          // still leave screenshot capture functional instead of converting a performance issue into a hard failure.
+          Logger.instance.warn(traceId, 'Native screenshot clipboard export failed, falling back to PNG bridge: $error');
+        }
+      }
+
+      if (outputHandled) {
+        result = CaptureScreenshotResult.completed(selectionRect: currentSelection, outputHandled: true);
+      } else {
+        final pngBytes = await exportSelectionPng();
+        result = CaptureScreenshotResult.completed(selectionRect: currentSelection, pngBytes: pngBytes);
+      }
+      await _finishSession(traceId, result, ScreenshotSessionStage.done, restoreVisibility: false, windowAlreadyHidden: true);
     } catch (e) {
       Logger.instance.error(traceId, 'Failed to export screenshot: $e');
       await failSession(traceId, errorCode: 'export_failed', errorMessage: e.toString());
+    }
+  }
+
+  Future<void> _writeSelectionToNativeClipboard({required Rect selection, required List<DisplaySnapshot> snapshots, required List<ScreenshotAnnotation> annotationsToPaint}) async {
+    final composed = await _composeSelectionImage(selection: selection, snapshots: snapshots, annotationsToPaint: annotationsToPaint);
+    File? rawFile;
+
+    try {
+      final byteData = await composed.image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (byteData == null) {
+        throw StateError('Failed to extract raw screenshot bytes');
+      }
+
+      final rawBytes = byteData.buffer.asUint8List();
+      rawFile = File('${Directory.systemTemp.path}/wox_screenshot_export_${DateTime.now().microsecondsSinceEpoch}.rgba');
+      await rawFile.writeAsBytes(rawBytes);
+      // The previous macOS path re-encoded the composed image to PNG, base64-wrapped it for the
+      // WebSocket bridge, then decoded it again in Go before finally writing the clipboard. Passing
+      // a raw RGBA temp file to the native runner keeps the clipboard write local and removes the
+      // slowest confirm stage without changing the exported pixels the user selected.
+      await ScreenshotPlatformBridge.instance.writeClipboardImageRgbaFile(
+        filePath: rawFile.path,
+        width: composed.pixelWidth,
+        height: composed.pixelHeight,
+        bytesPerRow: composed.pixelWidth * 4,
+      );
+    } finally {
+      composed.image.dispose();
+      if (rawFile != null) {
+        try {
+          if (await rawFile.exists()) {
+            await rawFile.delete();
+          }
+        } catch (_) {
+          // Best-effort cleanup is enough here because a leaked temp file is preferable to masking
+          // a successful clipboard export with a secondary delete failure.
+        }
+      }
     }
   }
 
@@ -283,6 +341,7 @@ class WoxScreenshotController extends GetxController {
     ScreenshotSessionStage finalStage, {
     bool restoreVisibility = true,
     bool windowAlreadyHidden = false,
+    String reason = 'unspecified',
   }) async {
     final completer = _sessionCompleter;
     if (completer == null || completer.isCompleted) {
@@ -299,6 +358,7 @@ class WoxScreenshotController extends GetxController {
   Future<void> _restoreWindowState(String traceId, {bool restoreVisibility = true, bool windowAlreadyHidden = false}) async {
     final savedState = _savedWindowState;
     if (savedState == null) {
+      Logger.instance.warn(traceId, 'Screenshot restore skipped because no saved window state is available');
       return;
     }
 
@@ -502,7 +562,10 @@ class WoxScreenshotController extends GetxController {
     textDraftFontSize.value = fontSize.clamp(minTextFontSize, maxTextFontSize).toDouble();
     textDraftColor.value = color ?? annotationCreationColor.value;
     textDraftController.text = initialText;
-    textDraftController.selection = TextSelection(baseOffset: 0, extentOffset: initialText.length);
+    // Existing text annotations now enter inline editing on a single click. Selecting all text made
+    // the visual jump obvious and did not feel like editing the same rendered label, so the caret is
+    // placed at the end to keep the editing state visually continuous with the painted text.
+    textDraftController.selection = TextSelection.collapsed(offset: initialText.length);
   }
 
   void cancelTextDraft() {
@@ -680,6 +743,25 @@ class WoxScreenshotController extends GetxController {
     required List<DisplaySnapshot> snapshots,
     required List<ScreenshotAnnotation> annotationsToPaint,
   }) async {
+    final composed = await _composeSelectionImage(selection: selection, snapshots: snapshots, annotationsToPaint: annotationsToPaint);
+    try {
+      final byteData = await composed.image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) {
+        throw StateError('Failed to encode exported screenshot');
+      }
+
+      final pngBytes = byteData.buffer.asUint8List();
+      return _RenderedSelectionImage(pngBytes: pngBytes, pixelWidth: composed.pixelWidth, pixelHeight: composed.pixelHeight);
+    } finally {
+      composed.image.dispose();
+    }
+  }
+
+  Future<_ComposedSelectionImage> _composeSelectionImage({
+    required Rect selection,
+    required List<DisplaySnapshot> snapshots,
+    required List<ScreenshotAnnotation> annotationsToPaint,
+  }) async {
     final exportSlices = <_DisplayExportSlice>[];
     for (final snapshot in snapshots) {
       final logicalRect = snapshot.logicalBounds.toRect();
@@ -756,13 +838,7 @@ class WoxScreenshotController extends GetxController {
 
     final picture = recorder.endRecording();
     final image = await picture.toImage(pixelUnion.width.ceil(), pixelUnion.height.ceil());
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    image.dispose();
-    if (byteData == null) {
-      throw StateError('Failed to encode exported screenshot');
-    }
-
-    return _RenderedSelectionImage(pngBytes: byteData.buffer.asUint8List(), pixelWidth: pixelUnion.width.ceil(), pixelHeight: pixelUnion.height.ceil());
+    return _ComposedSelectionImage(image: image, pixelWidth: pixelUnion.width.ceil(), pixelHeight: pixelUnion.height.ceil());
   }
 
   Future<void> _decodeDisplayImages(List<DisplaySnapshot> snapshots) async {
@@ -900,6 +976,14 @@ class _RenderedSelectionImage {
   final int pixelHeight;
 }
 
+class _ComposedSelectionImage {
+  const _ComposedSelectionImage({required this.image, required this.pixelWidth, required this.pixelHeight});
+
+  final ui.Image image;
+  final int pixelWidth;
+  final int pixelHeight;
+}
+
 void paintScreenshotAnnotations(Canvas canvas, List<ScreenshotAnnotation> annotations, Offset selectionOrigin) {
   for (final annotation in annotations) {
     final paint =
@@ -951,9 +1035,13 @@ void paintScreenshotAnnotations(Canvas canvas, List<ScreenshotAnnotation> annota
   }
 }
 
-// Text annotations now support selection, drag, and inline editing. Centralizing the text layout
-// logic keeps hit testing and painting aligned so editing overlays appear exactly where the text
-// was rendered instead of drifting due to duplicated style calculations.
+// Text annotations now support selection, drag, and inline editing. Sharing the exact same text
+// style between painter and editor keeps the caret overlay visually merged with the rendered label
+// instead of swapping between two slightly different text appearances.
+TextStyle buildScreenshotTextStyle({required Color color, required double fontSize}) {
+  return TextStyle(color: color, fontSize: fontSize, fontWeight: FontWeight.w600, shadows: const [Shadow(color: Color(0xAA000000), blurRadius: 4)]);
+}
+
 TextPainter? buildScreenshotTextPainter(ScreenshotAnnotation annotation) {
   final start = annotation.start;
   final text = annotation.text;
@@ -961,13 +1049,8 @@ TextPainter? buildScreenshotTextPainter(ScreenshotAnnotation annotation) {
     return null;
   }
 
-  return TextPainter(
-    text: TextSpan(
-      text: text,
-      style: TextStyle(color: annotation.color, fontSize: annotation.fontSize, fontWeight: FontWeight.w600, shadows: const [Shadow(color: Color(0xAA000000), blurRadius: 4)]),
-    ),
-    textDirection: TextDirection.ltr,
-  )..layout(maxWidth: 480);
+  return TextPainter(text: TextSpan(text: text, style: buildScreenshotTextStyle(color: annotation.color, fontSize: annotation.fontSize)), textDirection: TextDirection.ltr)
+    ..layout(maxWidth: 480);
 }
 
 Rect? screenshotAnnotationBounds(ScreenshotAnnotation annotation) {

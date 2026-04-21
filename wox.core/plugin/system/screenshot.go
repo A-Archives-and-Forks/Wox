@@ -9,6 +9,7 @@ import (
 	"strings"
 	"wox/common"
 	"wox/plugin"
+	"wox/util"
 	"wox/util/clipboard"
 )
 
@@ -80,10 +81,16 @@ func (p *ScreenshotPlugin) captureScreenshot(ctx context.Context, actionContext 
 
 	switch result.Status {
 	case common.CaptureScreenshotStatusCompleted:
-		if writeErr := writeScreenshotToClipboard(result.PngBase64); writeErr != nil {
-			p.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("write screenshot to clipboard failed: %s", writeErr.Error()))
-			p.api.Notify(ctx, "plugin_screenshot_capture_failed")
-			return
+		if result.OutputHandled {
+			// macOS now has a UI-side clipboard fast path that writes raw pixels directly through the
+			// native runner. Skipping the old Go clipboard replay here avoids duplicating work after the
+			// UI has already satisfied the requested output.
+		} else {
+			if writeErr := writeScreenshotToClipboard(result.PngBase64); writeErr != nil {
+				p.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("write screenshot to clipboard failed: %s", writeErr.Error()))
+				p.api.Notify(ctx, "plugin_screenshot_capture_failed")
+				return
+			}
 		}
 		p.api.Notify(ctx, "plugin_screenshot_capture_success")
 	case common.CaptureScreenshotStatusFailed:
@@ -109,6 +116,16 @@ func writeScreenshotToClipboard(pngBase64 string) error {
 	pngBytes, err := base64.StdEncoding.DecodeString(pngBase64)
 	if err != nil {
 		return fmt.Errorf("decode screenshot png failed: %w", err)
+	}
+
+	if util.IsMacOS() {
+		// macOS can write the exported PNG bytes directly to the clipboard. The previous generic path
+		// decoded the PNG into an image.Image and then encoded it back to PNG before writing, which
+		// doubled the hottest part of screenshot completion without changing the actual payload.
+		if writeErr := clipboard.WriteImageBytes(pngBytes, nil); writeErr != nil {
+			return fmt.Errorf("clipboard write failed: %w", writeErr)
+		}
+		return nil
 	}
 
 	img, decodeErr := png.Decode(bytes.NewReader(pngBytes))
