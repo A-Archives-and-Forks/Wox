@@ -1,6 +1,11 @@
 package filesearch
 
-import "testing"
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+)
 
 func TestRunPlanSealFreezesWorkload(t *testing.T) {
 	scopeTree := ScopeNode{
@@ -147,5 +152,213 @@ func TestRunPlanSealFreezesWorkload(t *testing.T) {
 	}
 	if got, want := sealed.Jobs[0].PlannedTotalUnits, int64(16); got != want {
 		t.Fatalf("sealed job totals changed: got %d want %d", got, want)
+	}
+}
+
+func TestRunPlannerBuildsSingleRootPlan(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "single-root")
+	mustWriteTestFile(t, filepath.Join(rootPath, "alpha.txt"), "alpha")
+	mustWriteTestFile(t, filepath.Join(rootPath, "beta.txt"), "beta")
+
+	planner := &RunPlanner{
+		policy: newPolicyState(Policy{}),
+		budget: splitBudget{
+			LeafEntryBudget:     16,
+			LeafWriteBudget:     16,
+			LeafMemoryBudget:    1 << 20,
+			DirectFileChunkSize: 16,
+		},
+	}
+
+	plan, err := planner.PlanFullRun(context.Background(), []RootRecord{testRunPlannerRootRecord("root-single", rootPath)})
+	if err != nil {
+		t.Fatalf("plan full run: %v", err)
+	}
+
+	if got, want := plan.Kind, RunKindFull; got != want {
+		t.Fatalf("unexpected run kind: got %s want %s", got, want)
+	}
+	if got, want := len(plan.RootPlans), 1; got != want {
+		t.Fatalf("unexpected root plan count: got %d want %d", got, want)
+	}
+	rootPlan := plan.RootPlans[0]
+	if got, want := rootPlan.Strategy, RootPlanStrategySingle; got != want {
+		t.Fatalf("unexpected root strategy: got %s want %s", got, want)
+	}
+	if rootPlan.ScopeTree == nil {
+		t.Fatal("expected sealed scope tree")
+	}
+	if got, want := rootPlan.Totals.DirectoryCount, int64(1); got != want {
+		t.Fatalf("unexpected directory count: got %d want %d", got, want)
+	}
+	if got, want := rootPlan.Totals.FileCount, int64(2); got != want {
+		t.Fatalf("unexpected file count: got %d want %d", got, want)
+	}
+	if got, want := rootPlan.Totals.IndexableEntryCount, int64(3); got != want {
+		t.Fatalf("unexpected indexable entry count: got %d want %d", got, want)
+	}
+	if got, want := len(plan.Jobs), 2; got != want {
+		t.Fatalf("unexpected job count: got %d want %d", got, want)
+	}
+	if got, want := plan.Jobs[0].Kind, JobKindDirectFiles; got != want {
+		t.Fatalf("unexpected first job kind: got %s want %s", got, want)
+	}
+	if got, want := plan.Jobs[0].ScopePath, rootPath; got != want {
+		t.Fatalf("unexpected first job scope: got %q want %q", got, want)
+	}
+	if got, want := plan.Jobs[1].Kind, JobKindFinalizeRoot; got != want {
+		t.Fatalf("unexpected finalize job kind: got %s want %s", got, want)
+	}
+	if got, want := len(rootPlan.Jobs), 2; got != want {
+		t.Fatalf("unexpected root job refs: got %d want %d", got, want)
+	}
+	if planner.planningRootBuffers != nil {
+		t.Fatal("expected planner buffers to be released after sealing")
+	}
+}
+
+func TestRunPlannerSplitsLargeRootIntoLeafJobs(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "segmented-root")
+	mustWriteTestFile(t, filepath.Join(rootPath, "huge", "leaf-a", "a-1.txt"), "a1")
+	mustWriteTestFile(t, filepath.Join(rootPath, "huge", "leaf-a", "a-2.txt"), "a2")
+	mustWriteTestFile(t, filepath.Join(rootPath, "huge", "leaf-b", "b-1.txt"), "b1")
+	mustWriteTestFile(t, filepath.Join(rootPath, "huge", "leaf-b", "b-2.txt"), "b2")
+
+	planner := &RunPlanner{
+		policy: newPolicyState(Policy{}),
+		budget: splitBudget{
+			LeafEntryBudget:     3,
+			LeafWriteBudget:     3,
+			LeafMemoryBudget:    1 << 20,
+			DirectFileChunkSize: 3,
+		},
+	}
+
+	plan, err := planner.PlanFullRun(context.Background(), []RootRecord{testRunPlannerRootRecord("root-segmented", rootPath)})
+	if err != nil {
+		t.Fatalf("plan full run: %v", err)
+	}
+
+	rootPlan := plan.RootPlans[0]
+	if got, want := rootPlan.Strategy, RootPlanStrategySegmented; got != want {
+		t.Fatalf("unexpected root strategy: got %s want %s", got, want)
+	}
+	if rootPlan.ScopeTree == nil {
+		t.Fatal("expected sealed scope tree")
+	}
+	if got, want := rootPlan.Totals.DirectoryCount, int64(4); got != want {
+		t.Fatalf("unexpected directory count: got %d want %d", got, want)
+	}
+	if got, want := rootPlan.Totals.FileCount, int64(4); got != want {
+		t.Fatalf("unexpected file count: got %d want %d", got, want)
+	}
+	if got, want := rootPlan.Totals.IndexableEntryCount, int64(8); got != want {
+		t.Fatalf("unexpected indexable entry count: got %d want %d", got, want)
+	}
+	if len(plan.Jobs) < 4 {
+		t.Fatalf("expected multiple leaf jobs plus finalize, got %d jobs", len(plan.Jobs))
+	}
+	if plan.Jobs[len(plan.Jobs)-1].Kind != JobKindFinalizeRoot {
+		t.Fatalf("expected final job to finalize root, got %s", plan.Jobs[len(plan.Jobs)-1].Kind)
+	}
+
+	subtreeScopeA := filepath.Join(rootPath, "huge", "leaf-a")
+	subtreeScopeB := filepath.Join(rootPath, "huge", "leaf-b")
+	sawLeafA := false
+	sawLeafB := false
+	for _, job := range plan.Jobs[:len(plan.Jobs)-1] {
+		if job.PlannedTotalUnits > 6 {
+			t.Fatalf("expected split leaf job to stay bounded, got planned total %d for %s", job.PlannedTotalUnits, job.ScopePath)
+		}
+		if job.Kind != JobKindDirectFiles && job.Kind != JobKindSubtree {
+			t.Fatalf("unexpected leaf job kind: %s", job.Kind)
+		}
+		if job.ScopePath == subtreeScopeA {
+			sawLeafA = true
+		}
+		if job.ScopePath == subtreeScopeB {
+			sawLeafB = true
+		}
+	}
+	if !sawLeafA || !sawLeafB {
+		t.Fatalf("expected split plan to create leaf subtree jobs for %q and %q", subtreeScopeA, subtreeScopeB)
+	}
+	if planner.planningRootBuffers != nil {
+		t.Fatal("expected planner buffers to be released after sealing")
+	}
+}
+
+func TestRunPlannerChunksWideDirectFiles(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "wide-root")
+	for i := 0; i < 5; i++ {
+		mustWriteTestFile(t, filepath.Join(rootPath, filepath.Base(rootPath)+"-"+time.Unix(int64(i+1), 0).Format("150405")+".txt"), "wide")
+	}
+
+	planner := &RunPlanner{
+		policy: newPolicyState(Policy{}),
+		budget: splitBudget{
+			LeafEntryBudget:     3,
+			LeafWriteBudget:     3,
+			LeafMemoryBudget:    1 << 20,
+			DirectFileChunkSize: 2,
+		},
+	}
+
+	plan, err := planner.PlanFullRun(context.Background(), []RootRecord{testRunPlannerRootRecord("root-wide", rootPath)})
+	if err != nil {
+		t.Fatalf("plan full run: %v", err)
+	}
+
+	rootPlan := plan.RootPlans[0]
+	if got, want := rootPlan.Strategy, RootPlanStrategySegmented; got != want {
+		t.Fatalf("unexpected root strategy: got %s want %s", got, want)
+	}
+	if got, want := rootPlan.Totals.DirectoryCount, int64(1); got != want {
+		t.Fatalf("unexpected directory count: got %d want %d", got, want)
+	}
+	if got, want := rootPlan.Totals.FileCount, int64(5); got != want {
+		t.Fatalf("unexpected file count: got %d want %d", got, want)
+	}
+	if got, want := rootPlan.Totals.IndexableEntryCount, int64(6); got != want {
+		t.Fatalf("unexpected indexable entry count: got %d want %d", got, want)
+	}
+
+	directFileJobs := 0
+	for _, job := range plan.Jobs[:len(plan.Jobs)-1] {
+		if job.Kind != JobKindDirectFiles {
+			t.Fatalf("expected wide root to chunk only direct-files jobs before finalize, got %s", job.Kind)
+		}
+		if job.ScopePath != rootPath {
+			t.Fatalf("expected chunked direct-files jobs to stay on the root scope, got %q want %q", job.ScopePath, rootPath)
+		}
+		if job.PlannedScanUnits > 3 || job.PlannedWriteUnits > 3 {
+			t.Fatalf(
+				"expected chunked direct-files jobs to stay within per-phase budgets, got scan=%d write=%d",
+				job.PlannedScanUnits,
+				job.PlannedWriteUnits,
+			)
+		}
+		directFileJobs++
+	}
+	if directFileJobs < 2 {
+		t.Fatalf("expected direct files to be chunked into multiple jobs, got %d", directFileJobs)
+	}
+	if got, want := plan.Jobs[len(plan.Jobs)-1].Kind, JobKindFinalizeRoot; got != want {
+		t.Fatalf("unexpected finalize job kind: got %s want %s", got, want)
+	}
+	if planner.planningRootBuffers != nil {
+		t.Fatal("expected planner buffers to be released after sealing")
+	}
+}
+
+func testRunPlannerRootRecord(id string, path string) RootRecord {
+	now := time.Now().UnixMilli()
+	return RootRecord{
+		ID:        id,
+		Path:      path,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 }
