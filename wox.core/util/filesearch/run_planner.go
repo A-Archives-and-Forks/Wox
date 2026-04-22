@@ -169,9 +169,9 @@ func (p *RunPlanner) listImmediateChildDirs(ctx context.Context, root RootRecord
 		}
 
 		childPath := filepath.Join(dirPath, dirEntry.Name())
-		info, infoErr := dirEntry.Info()
+		info, infoErr := strictDirEntryInfo(dirPath, dirEntry)
 		if infoErr != nil {
-			continue
+			return nil, infoErr
 		}
 		if !info.IsDir() {
 			continue
@@ -327,9 +327,9 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 		}
 
 		childPath := filepath.Join(scopePath, dirEntry.Name())
-		info, infoErr := dirEntry.Info()
+		info, infoErr := strictDirEntryInfo(scopePath, dirEntry)
 		if infoErr != nil {
-			continue
+			return PlanTotals{}, nil, infoErr
 		}
 		if info.IsDir() {
 			if shouldSkipSystemPath(childPath, true) || !p.policy.shouldIndexPath(root, childPath, true) {
@@ -399,9 +399,9 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 
 		for _, dirEntry := range dirEntries {
 			childPath := filepath.Join(current.path, dirEntry.Name())
-			info, infoErr := dirEntry.Info()
+			info, infoErr := strictDirEntryInfo(current.path, dirEntry)
 			if infoErr != nil {
-				continue
+				return PlanTotals{}, nil, infoErr
 			}
 
 			isDir := info.IsDir()
@@ -649,4 +649,17 @@ func jobKindForScope(scopeKind ScopeKind) JobKind {
 	default:
 		return JobKindSubtree
 	}
+}
+
+func strictDirEntryInfo(parentPath string, dirEntry os.DirEntry) (os.FileInfo, error) {
+	// Planning and pre-scan must keep exact counts. The previous silent continue
+	// undercounted files or directories when metadata lookup failed, which could
+	// change split decisions and make progress totals dishonest. Failing fast here
+	// keeps the sealed workload truthful instead of pretending the missing entry
+	// never existed.
+	info, err := dirEntry.Info()
+	if err != nil {
+		return nil, fmt.Errorf("read metadata for %q: %w", filepath.Join(parentPath, dirEntry.Name()), err)
+	}
+	return info, nil
 }
