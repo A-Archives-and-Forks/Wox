@@ -465,6 +465,21 @@ class WoxLauncherController extends GetxController {
     return calculateWindowHeight(overrideItemCount: incomingItems.length, overrideGridHeight: overrideGridHeight);
   }
 
+  double? getPreResizeTargetHeightForIncomingResults(List<WoxListItem<WoxQueryResult>> incomingItems) {
+    final shouldPrepareWindowGrowth = activeResultViewController.items.isEmpty || hasVisibleStaleResultsDuringQueryTransition;
+    if (!shouldPrepareWindowGrowth) {
+      return null;
+    }
+
+    final incomingTargetHeight = calculateWindowHeightForIncomingResults(incomingItems);
+    final currentVisibleHeight = calculateWindowHeight();
+    if (incomingTargetHeight <= currentVisibleHeight) {
+      return null;
+    }
+
+    return incomingTargetHeight;
+  }
+
   /// Triggered when received query results from the server.
   Future<void> onReceivedQueryResults(String traceId, String queryId, List<WoxQueryResult> receivedResults, {required bool isFinal}) async {
     // Cancel loading timer and hide loading animation when results are received
@@ -514,12 +529,13 @@ class WoxLauncherController extends GetxController {
     // 2. We need update items in both list and grid controllers, because metdata query (grid and list layout change relay on this) may after results arrival,
     //    at this point, we don't know which layout this query will use, so we update both
     final listItems = receivedResults.map((e) => WoxListItem.fromQueryResult(e)).toList();
-    if (activeResultViewController.items.isEmpty) {
-      // Bug fix: the first non-empty batch used to paint inside the collapsed
-      // launcher and only then trigger window growth, which made the toolbar
-      // flash below the query box for one frame. Grow first, then commit the
-      // new items so the first painted result frame already has enough height.
-      final targetHeight = calculateWindowHeightForIncomingResults(listItems);
+    final preResizeTargetHeight = getPreResizeTargetHeightForIncomingResults(listItems);
+    if (preResizeTargetHeight != null) {
+      // Bug fix: empty and stale visible snapshots used to swap content before
+      // the window had grown to the new result height. Expanding first avoids
+      // exposing the acrylic background while Flutter is still painting the new
+      // result frame.
+      final targetHeight = preResizeTargetHeight;
       await resizeHeight(traceId: traceId, reason: "prepare height before first result paint", overrideTargetHeight: targetHeight);
     }
 
