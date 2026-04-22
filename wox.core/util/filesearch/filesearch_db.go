@@ -13,7 +13,8 @@ import (
 )
 
 type FileSearchDB struct {
-	db *sql.DB
+	db     *sql.DB
+	dbPath string
 	// Bulk sync mode defers expensive FTS maintenance until the full scan cycle
 	// finishes. The previous all-at-once in-memory index build avoided per-entry
 	// write amplification, so the SQLite-first path needs an explicit bulk gate
@@ -43,7 +44,7 @@ func NewFileSearchDB(ctx context.Context) (*FileSearchDB, error) {
 	db.SetMaxIdleConns(4)
 	db.SetConnMaxLifetime(time.Hour)
 
-	fileSearchDB := &FileSearchDB{db: db}
+	fileSearchDB := &FileSearchDB{db: db, dbPath: dbPath}
 	if err := fileSearchDB.initTables(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -281,40 +282,32 @@ func (d *FileSearchDB) ReplaceRootSnapshot(
 	}
 
 	totalEntries := int64(len(entries))
-	reportProgress(ReplaceEntriesProgress{
-		Stage: ReplaceEntriesStageWriting,
-		Total: totalEntries,
-	})
-
-	lastReportedCurrent := int64(-1)
-	lastReportedAt := time.Now()
-
-	for index, entry := range entries {
-		_ = entry
-
-		currentEntries := int64(index + 1)
-		if currentEntries == totalEntries || currentEntries%progressBatchSize == 0 || time.Since(lastReportedAt) >= progressUpdateGap {
-			if currentEntries != lastReportedCurrent {
-				reportProgress(ReplaceEntriesProgress{
-					Stage:   ReplaceEntriesStageWriting,
-					Current: currentEntries,
-					Total:   totalEntries,
-				})
-				lastReportedCurrent = currentEntries
-				lastReportedAt = time.Now()
-			}
-		}
-	}
-
-	reportProgress(ReplaceEntriesProgress{Stage: ReplaceEntriesStageFinalizing})
-
 	// Root replacement used to delete every row and reinsert it, which changed
 	// rowids and broke any external index keyed by the persisted entry identity.
 	// The SQLite search tables now depend on stable entry_id values, so root
 	// snapshots must upsert facts and delete only the stale paths.
-	if err := d.replaceRootEntriesTx(ctx, tx, root, entries); err != nil {
+	if totalEntries == 0 {
+		reportProgress(ReplaceEntriesProgress{
+			Stage:   ReplaceEntriesStageWriting,
+			Current: 1,
+			Total:   1,
+		})
+	} else {
+		reportProgress(ReplaceEntriesProgress{
+			Stage: ReplaceEntriesStageWriting,
+			Total: totalEntries,
+		})
+	}
+	if err := d.replaceRootEntriesTx(ctx, tx, root, entries, func(current int64, total int64) {
+		reportProgress(ReplaceEntriesProgress{
+			Stage:   ReplaceEntriesStageWriting,
+			Current: current,
+			Total:   total,
+		})
+	}); err != nil {
 		return err
 	}
+	reportProgress(ReplaceEntriesProgress{Stage: ReplaceEntriesStageFinalizing})
 
 	if err := tx.Commit(); err != nil {
 		return err
@@ -325,6 +318,100 @@ func (d *FileSearchDB) ReplaceRootSnapshot(
 
 func (d *FileSearchDB) ReplaceRootEntries(ctx context.Context, root RootRecord, entries []EntryRecord, onProgress func(ReplaceEntriesProgress)) error {
 	return d.ReplaceRootSnapshot(ctx, root, nil, entries, onProgress)
+}
+
+func (d *FileSearchDB) ApplyDirectFilesJob(ctx context.Context, job Job, batch SubtreeSnapshotBatch) error {
+	if job.Kind != JobKindDirectFiles {
+		return fmt.Errorf("apply direct-files job requires kind %q, got %q", JobKindDirectFiles, job.Kind)
+	}
+	if err := validateJobSnapshotBatch(job, batch); err != nil {
+		return err
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	root, err := lockRootForSubtreeSnapshot(ctx, tx, batch.RootID)
+	if err != nil {
+		return err
+	}
+	if !pathWithinScope(root.Path, batch.ScopePath) {
+		return fmt.Errorf("direct-files job scope path %q is outside root path %q", batch.ScopePath, root.Path)
+	}
+
+	directoryStmt, err := prepareDirectoryUpsertStmtTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	defer directoryStmt.Close()
+
+	for _, directory := range batch.Directories {
+		if _, err := directoryStmt.ExecContext(
+			ctx,
+			directory.Path,
+			directory.RootID,
+			directory.ParentPath,
+			directory.LastScanTime,
+			boolToInt(directory.Exists),
+		); err != nil {
+			return err
+		}
+	}
+
+	// Bounded direct-file jobs used to share the root-wide replace path, which
+	// deleted sibling chunks and subtree scopes before their own jobs ran. The
+	// job-oriented path now upserts only the rows owned by this job so replay is
+	// safe and unrelated sibling scopes remain intact until their jobs apply.
+	if err := d.applyDirectFilesEntriesTx(ctx, tx, batch); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (d *FileSearchDB) ApplySubtreeJob(ctx context.Context, job Job, batch SubtreeSnapshotBatch) error {
+	if job.Kind != JobKindSubtree {
+		return fmt.Errorf("apply subtree job requires kind %q, got %q", JobKindSubtree, job.Kind)
+	}
+	if err := validateJobSnapshotBatch(job, batch); err != nil {
+		return err
+	}
+
+	// Subtree jobs still own a complete recursive scope, so the existing scoped
+	// replace helper remains correct and keeps this job-oriented wrapper small.
+	return d.ReplaceSubtreeSnapshot(ctx, batch)
+}
+
+func (d *FileSearchDB) FinalizeRootRun(ctx context.Context, root RootRecord) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := lockRootForSubtreeSnapshot(ctx, tx, root.ID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM directories
+		WHERE root_id = ?
+		  AND "exists" = 0
+	`, root.ID); err != nil {
+		return err
+	}
+	if err := d.finalizeRootRunTx(ctx, tx, root); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	d.checkpointWALAfterFinalize(ctx)
+	return nil
 }
 
 func (d *FileSearchDB) ReplaceSubtreeSnapshot(ctx context.Context, batch SubtreeSnapshotBatch) error {
@@ -342,15 +429,7 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 	}
 	defer tx.Rollback()
 
-	directoryStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO directories (path, root_id, parent_path, last_scan_time, "exists")
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(path) DO UPDATE SET
-			root_id = excluded.root_id,
-			parent_path = excluded.parent_path,
-			last_scan_time = excluded.last_scan_time,
-			"exists" = excluded."exists"
-	`)
+	directoryStmt, err := prepareDirectoryUpsertStmtTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -396,6 +475,34 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 	}
 
 	return tx.Commit()
+}
+
+func prepareDirectoryUpsertStmtTx(ctx context.Context, tx *sql.Tx) (*sql.Stmt, error) {
+	return tx.PrepareContext(ctx, `
+		INSERT INTO directories (path, root_id, parent_path, last_scan_time, "exists")
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
+			root_id = excluded.root_id,
+			parent_path = excluded.parent_path,
+			last_scan_time = excluded.last_scan_time,
+			"exists" = excluded."exists"
+	`)
+}
+
+func validateJobSnapshotBatch(job Job, batch SubtreeSnapshotBatch) error {
+	if err := validateSubtreeSnapshotBatch(batch); err != nil {
+		return err
+	}
+	if job.RootID == "" {
+		return fmt.Errorf("job root id is required")
+	}
+	if batch.RootID != job.RootID {
+		return fmt.Errorf("job root id %q does not match batch root id %q", job.RootID, batch.RootID)
+	}
+	if filepath.Clean(batch.ScopePath) != filepath.Clean(job.ScopePath) {
+		return fmt.Errorf("job scope path %q does not match batch scope path %q", job.ScopePath, batch.ScopePath)
+	}
+	return nil
 }
 
 func subtreeBatchScanTime(batch SubtreeSnapshotBatch) int64 {

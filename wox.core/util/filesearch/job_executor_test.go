@@ -271,6 +271,86 @@ func TestJobExecutorNinetyNinePercentMeansSmallKnownRemainder(t *testing.T) {
 	}
 }
 
+func TestJobExecutorFinalizeRootAdvancesCursorAfterPriorJobs(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "root-finalize")
+	nestedPath := filepath.Join(rootPath, "nested")
+	mustWriteTestFile(t, filepath.Join(rootPath, "alpha.txt"), "alpha")
+	mustWriteTestFile(t, filepath.Join(nestedPath, "beta.txt"), "beta")
+
+	root := testRunPlannerRootRecord("root-finalize", rootPath)
+	directFilesJob := Job{
+		JobID:                 "job-direct-files",
+		RootID:                root.ID,
+		RootPath:              root.Path,
+		ScopePath:             root.Path,
+		Kind:                  JobKindDirectFiles,
+		DirectFileChunkIndex:  0,
+		DirectFileChunkOffset: 0,
+		DirectFileChunkCount:  1,
+		PlannedScanUnits:      1,
+		PlannedWriteUnits:     1,
+		PlannedTotalUnits:     2,
+		Status:                JobStatusPending,
+		OrderIndex:            0,
+	}
+	subtreeJob := Job{
+		JobID:             "job-subtree",
+		RootID:            root.ID,
+		RootPath:          root.Path,
+		ScopePath:         nestedPath,
+		Kind:              JobKindSubtree,
+		PlannedScanUnits:  1,
+		PlannedWriteUnits: 1,
+		PlannedTotalUnits: 2,
+		Status:            JobStatusPending,
+		OrderIndex:        1,
+	}
+	finalizeJob := testFinalizeJob(root, 2)
+	plan := RunPlan{
+		PlanID: "plan-finalize-order",
+		RunID:  "run-finalize-order",
+		Kind:   RunKindFull,
+		RootPlans: []RootPlan{{
+			RootID:   root.ID,
+			RootPath: root.Path,
+		}},
+		Jobs:           []Job{directFilesJob, subtreeJob, finalizeJob},
+		TotalWorkUnits: directFilesJob.PlannedTotalUnits + subtreeJob.PlannedTotalUnits + finalizeJob.PlannedTotalUnits,
+	}
+
+	executor := NewJobExecutor(NewSnapshotBuilder(newPolicyState(Policy{})))
+	completedKinds := make([]JobKind, 0, len(plan.Jobs))
+	finalizeStartProgress := int64(-1)
+	_, _, err := executor.ExecuteRun(context.Background(), plan, []RootRecord{root}, func(snapshot StatusSnapshot, job Job) {
+		if job.Status == JobStatusCompleted {
+			completedKinds = append(completedKinds, job.Kind)
+		}
+		if snapshot.ActiveJobKind == JobKindFinalizeRoot && snapshot.ActiveRunStatus == RunStatusFinalizing && job.Status == JobStatusRunning {
+			finalizeStartProgress = snapshot.RunProgressCurrent
+		}
+	})
+	if err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+
+	if finalizeStartProgress != directFilesJob.PlannedTotalUnits+subtreeJob.PlannedTotalUnits {
+		t.Fatalf(
+			"expected finalize job to start after prior jobs completed, got progress %d want %d",
+			finalizeStartProgress,
+			directFilesJob.PlannedTotalUnits+subtreeJob.PlannedTotalUnits,
+		)
+	}
+	if got, want := completedKinds, []JobKind{JobKindDirectFiles, JobKindSubtree, JobKindFinalizeRoot}; len(got) != len(want) {
+		t.Fatalf("unexpected completed job kinds: got %v want %v", got, want)
+	} else {
+		for index := range want {
+			if got[index] != want[index] {
+				t.Fatalf("unexpected completed job kinds: got %v want %v", got, want)
+			}
+		}
+	}
+}
+
 func testFinalizeJob(root RootRecord, orderIndex int) Job {
 	return Job{
 		JobID:             fmt.Sprintf("%s-job-%03d", root.ID, orderIndex),

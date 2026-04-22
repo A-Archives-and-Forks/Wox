@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
+	"wox/util"
 )
 
 const fileSearchSchemaVersion = 1
@@ -43,21 +46,33 @@ type storedEntryRecord struct {
 }
 
 type sqliteIndexSnapshot struct {
-	RootCount          int
-	EntryCount         int64
-	BigramRowCount     int64
-	DBFileBytes        int64
-	NameFTSVocab       int64
-	PathFTSVocab       int64
-	PinyinFullFTSVocab int64
-	InitialsFTSVocab   int64
-	TopRoots           []sqliteRootSnapshot
+	RootCount              int
+	EntryCount             int64
+	BigramRowCount         int64
+	FactBytesEstimate      int64
+	FTSSourceBytesEstimate int64
+	BigramBytesEstimate    int64
+	TotalBytesEstimate     int64
+	DBMainFileBytes        int64
+	DBWALFileBytes         int64
+	DBSHMFileBytes         int64
+	DBTotalFileBytes       int64
+	NameFTSVocab           int64
+	PathFTSVocab           int64
+	PinyinFullFTSVocab     int64
+	InitialsFTSVocab       int64
+	TopRoots               []sqliteRootSnapshot
 }
 
 type sqliteRootSnapshot struct {
-	RootID string
-	Path   string
-	Docs   int64
+	RootID                 string
+	Path                   string
+	Docs                   int64
+	BigramRows             int64
+	FactBytesEstimate      int64
+	FTSSourceBytesEstimate int64
+	BigramBytesEstimate    int64
+	TotalBytesEstimate     int64
 }
 
 func (d *FileSearchDB) ensureBaseTables(ctx context.Context) error {
@@ -129,21 +144,42 @@ func (d *FileSearchDB) ensureSQLiteSearchSchema(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 
-	if err := migrateEntriesTableIfNeeded(ctx, tx); err != nil {
+	currentVersion, err := schemaUserVersionTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	entriesRebuilt, err := migrateEntriesTableIfNeeded(ctx, tx)
+	if err != nil {
 		return err
 	}
 	if err := createEntriesIndexes(ctx, tx); err != nil {
 		return err
 	}
-	if err := createSearchTables(ctx, tx); err != nil {
+	searchArtifactsCreated, err := createSearchTables(ctx, tx)
+	if err != nil {
 		return err
 	}
-	if err := rebuildAllSearchArtifactsTx(ctx, tx); err != nil {
-		return err
+
+	shouldRebuildArtifacts := currentVersion < fileSearchSchemaVersion || entriesRebuilt || searchArtifactsCreated
+	if shouldRebuildArtifacts {
+		// Rebuild derived search artifacts only when schema state changed. The
+		// previous startup path rebuilt every FTS/bigram structure on every launch,
+		// which blocked the system file plugin init for minutes on large indexes
+		// and prevented `f ` from entering file-plugin query mode at all.
+		if err := rebuildAllSearchArtifactsTx(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, fileSearchSchemaVersion)); err != nil {
 		return err
 	}
+	util.GetLogger().Info(ctx, fmt.Sprintf(
+		"filesearch sqlite schema ready: current_version=%d target_version=%d rebuild_artifacts=%v",
+		currentVersion,
+		fileSearchSchemaVersion,
+		shouldRebuildArtifacts,
+	))
 
 	return tx.Commit()
 }
@@ -160,31 +196,40 @@ func (d *FileSearchDB) probeFTS5(ctx context.Context) error {
 	return nil
 }
 
-func migrateEntriesTableIfNeeded(ctx context.Context, tx *sql.Tx) error {
+func schemaUserVersionTx(ctx context.Context, tx *sql.Tx) (int, error) {
+	row := tx.QueryRowContext(ctx, `PRAGMA user_version`)
+	var version int
+	if err := row.Scan(&version); err != nil {
+		return 0, fmt.Errorf("read filesearch schema version: %w", err)
+	}
+	return version, nil
+}
+
+func migrateEntriesTableIfNeeded(ctx context.Context, tx *sql.Tx) (bool, error) {
 	exists, err := tableExists(ctx, tx, "entries")
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !exists {
-		return createEntriesTable(ctx, tx)
+		return true, createEntriesTable(ctx, tx)
 	}
 
 	columns, err := tableColumnNames(ctx, tx, "entries")
 	if err != nil {
-		return err
+		return false, err
 	}
 	if columns["entry_id"] && columns["name_key"] && columns["extension"] {
-		return nil
+		return false, nil
 	}
 
 	// Rebuild the entries table once because the old schema used path as the
 	// primary key. SQLite-first search needs a stable integer entry_id so FTS and
 	// side tables can reference entries without rowid churn.
 	if _, err := tx.ExecContext(ctx, `ALTER TABLE entries RENAME TO entries_legacy`); err != nil {
-		return fmt.Errorf("rename legacy entries table: %w", err)
+		return false, fmt.Errorf("rename legacy entries table: %w", err)
 	}
 	if err := createEntriesTable(ctx, tx); err != nil {
-		return err
+		return false, err
 	}
 
 	rows, err := tx.QueryContext(ctx, `
@@ -194,7 +239,7 @@ func migrateEntriesTableIfNeeded(ctx context.Context, tx *sql.Tx) error {
 		ORDER BY path ASC
 	`)
 	if err != nil {
-		return fmt.Errorf("load legacy entries: %w", err)
+		return false, fmt.Errorf("load legacy entries: %w", err)
 	}
 	defer rows.Close()
 
@@ -205,7 +250,7 @@ func migrateEntriesTableIfNeeded(ctx context.Context, tx *sql.Tx) error {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
-		return fmt.Errorf("prepare migrated entry insert: %w", err)
+		return false, fmt.Errorf("prepare migrated entry insert: %w", err)
 	}
 	defer insertStmt.Close()
 
@@ -226,7 +271,7 @@ func migrateEntriesTableIfNeeded(ctx context.Context, tx *sql.Tx) error {
 			&entry.Size,
 			&entry.UpdatedAt,
 		); err != nil {
-			return fmt.Errorf("scan legacy entry: %w", err)
+			return false, fmt.Errorf("scan legacy entry: %w", err)
 		}
 		entry.IsDir = isDir == 1
 		stored := buildStoredEntryRecord(entry)
@@ -247,17 +292,17 @@ func migrateEntriesTableIfNeeded(ctx context.Context, tx *sql.Tx) error {
 			stored.Size,
 			stored.UpdatedAt,
 		); err != nil {
-			return fmt.Errorf("insert migrated entry %q: %w", stored.Path, err)
+			return false, fmt.Errorf("insert migrated entry %q: %w", stored.Path, err)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate legacy entries: %w", err)
+		return false, fmt.Errorf("iterate legacy entries: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `DROP TABLE entries_legacy`); err != nil {
-		return fmt.Errorf("drop legacy entries table: %w", err)
+		return false, fmt.Errorf("drop legacy entries table: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func createEntriesTable(ctx context.Context, tx *sql.Tx) error {
@@ -302,7 +347,19 @@ func createEntriesIndexes(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func createSearchTables(ctx context.Context, tx *sql.Tx) error {
+func createSearchTables(ctx context.Context, tx *sql.Tx) (bool, error) {
+	searchArtifactsCreated := false
+	tableNames := append([]string{"entries_bigram"}, filesearchFTSTables...)
+	for _, tableName := range tableNames {
+		exists, err := tableExists(ctx, tx, tableName)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			searchArtifactsCreated = true
+		}
+	}
+
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS entries_bigram (
 			field TEXT NOT NULL,
@@ -342,15 +399,15 @@ func createSearchTables(ctx context.Context, tx *sql.Tx) error {
 	}
 	for _, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return err
+			return false, err
 		}
 	}
 	for _, tableName := range filesearchFTSTables {
 		if err := configureFTSTableTx(ctx, tx, tableName); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return searchArtifactsCreated, nil
 }
 
 func rebuildAllSearchArtifactsTx(ctx context.Context, tx *sql.Tx) error {
@@ -623,14 +680,54 @@ func (d *FileSearchDB) SearchIndexSnapshot(ctx context.Context) (sqliteIndexSnap
 		return sqliteIndexSnapshot{}, err
 	}
 
-	var pageCount, pageSize int64
-	if err := d.db.QueryRowContext(ctx, `PRAGMA page_count`).Scan(&pageCount); err != nil {
+	// The previous log used PRAGMA page_count * page_size as "db_file_bytes".
+	// That only described the main database allocation and hid the WAL/shm files,
+	// so the reported size did not match what users saw on disk.
+	snapshot.DBMainFileBytes = fileSizeOrZero(d.dbPath)
+	snapshot.DBWALFileBytes = fileSizeOrZero(d.dbPath + "-wal")
+	snapshot.DBSHMFileBytes = fileSizeOrZero(d.dbPath + "-shm")
+	snapshot.DBTotalFileBytes = snapshot.DBMainFileBytes + snapshot.DBWALFileBytes + snapshot.DBSHMFileBytes
+
+	// SQLite does not expose per-index byte ownership cheaply here, so the
+	// snapshot reports a stable estimate split by fact rows, FTS source text, and
+	// bigram rows. This keeps the logs comparable without pretending the estimate
+	// is a precise on-disk index size.
+	if err := d.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(
+				length(CAST(path AS BLOB)) +
+				length(CAST(root_id AS BLOB)) +
+				length(CAST(parent_path AS BLOB)) +
+				length(CAST(name AS BLOB)) +
+				length(CAST(normalized_name AS BLOB)) +
+				length(CAST(name_key AS BLOB)) +
+				length(CAST(normalized_path AS BLOB)) +
+				length(CAST(pinyin_full AS BLOB)) +
+				length(CAST(pinyin_initials AS BLOB)) +
+				length(CAST(extension AS BLOB)) +
+				25
+			), 0),
+			COALESCE(SUM(
+				length(CAST(normalized_name AS BLOB)) +
+				length(CAST(normalized_path AS BLOB)) +
+				length(CAST(pinyin_full AS BLOB)) +
+				length(CAST(pinyin_initials AS BLOB))
+			), 0)
+		FROM entries
+	`).Scan(&snapshot.FactBytesEstimate, &snapshot.FTSSourceBytesEstimate); err != nil {
 		return sqliteIndexSnapshot{}, err
 	}
-	if err := d.db.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
+	if err := d.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(
+			length(CAST(field AS BLOB)) +
+			length(CAST(gram AS BLOB)) +
+			8
+		), 0)
+		FROM entries_bigram
+	`).Scan(&snapshot.BigramBytesEstimate); err != nil {
 		return sqliteIndexSnapshot{}, err
 	}
-	snapshot.DBFileBytes = pageCount * pageSize
+	snapshot.TotalBytesEstimate = snapshot.FactBytesEstimate + snapshot.FTSSourceBytesEstimate + snapshot.BigramBytesEstimate
 
 	nameVocab, err := countFTSVocabRows(ctx, d.db, "entries_name_fts")
 	if err != nil {
@@ -654,11 +751,58 @@ func (d *FileSearchDB) SearchIndexSnapshot(ctx context.Context) (sqliteIndexSnap
 	snapshot.InitialsFTSVocab = initialsVocab
 
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT roots.id, roots.path, count(entries.entry_id) AS docs
+		SELECT
+			roots.id,
+			roots.path,
+			COALESCE(entry_stats.docs, 0) AS docs,
+			COALESCE(bigram_stats.bigram_rows, 0) AS bigram_rows,
+			COALESCE(entry_stats.fact_bytes_est, 0) AS fact_bytes_est,
+			COALESCE(entry_stats.fts_source_bytes_est, 0) AS fts_source_bytes_est,
+			COALESCE(bigram_stats.bigram_bytes_est, 0) AS bigram_bytes_est,
+			COALESCE(entry_stats.fact_bytes_est, 0) +
+			COALESCE(entry_stats.fts_source_bytes_est, 0) +
+			COALESCE(bigram_stats.bigram_bytes_est, 0) AS total_bytes_est
 		FROM roots
-		LEFT JOIN entries ON entries.root_id = roots.id
-		GROUP BY roots.id, roots.path
-		ORDER BY docs DESC, roots.path ASC
+		LEFT JOIN (
+			SELECT
+				root_id,
+				COUNT(*) AS docs,
+				COALESCE(SUM(
+					length(CAST(path AS BLOB)) +
+					length(CAST(root_id AS BLOB)) +
+					length(CAST(parent_path AS BLOB)) +
+					length(CAST(name AS BLOB)) +
+					length(CAST(normalized_name AS BLOB)) +
+					length(CAST(name_key AS BLOB)) +
+					length(CAST(normalized_path AS BLOB)) +
+					length(CAST(pinyin_full AS BLOB)) +
+					length(CAST(pinyin_initials AS BLOB)) +
+					length(CAST(extension AS BLOB)) +
+					25
+				), 0) AS fact_bytes_est,
+				COALESCE(SUM(
+					length(CAST(normalized_name AS BLOB)) +
+					length(CAST(normalized_path AS BLOB)) +
+					length(CAST(pinyin_full AS BLOB)) +
+					length(CAST(pinyin_initials AS BLOB))
+				), 0) AS fts_source_bytes_est
+			FROM entries
+			GROUP BY root_id
+		) AS entry_stats ON entry_stats.root_id = roots.id
+		LEFT JOIN (
+			SELECT
+				entries.root_id AS root_id,
+				COUNT(*) AS bigram_rows,
+				COALESCE(SUM(
+					length(CAST(entries_bigram.field AS BLOB)) +
+					length(CAST(entries_bigram.gram AS BLOB)) +
+					8
+				), 0) AS bigram_bytes_est
+			FROM entries_bigram
+			INNER JOIN entries ON entries.entry_id = entries_bigram.entry_id
+			GROUP BY entries.root_id
+		) AS bigram_stats ON bigram_stats.root_id = roots.id
+		ORDER BY total_bytes_est DESC, docs DESC, roots.path ASC
 		LIMIT 5
 	`)
 	if err != nil {
@@ -668,7 +812,16 @@ func (d *FileSearchDB) SearchIndexSnapshot(ctx context.Context) (sqliteIndexSnap
 
 	for rows.Next() {
 		var root sqliteRootSnapshot
-		if err := rows.Scan(&root.RootID, &root.Path, &root.Docs); err != nil {
+		if err := rows.Scan(
+			&root.RootID,
+			&root.Path,
+			&root.Docs,
+			&root.BigramRows,
+			&root.FactBytesEstimate,
+			&root.FTSSourceBytesEstimate,
+			&root.BigramBytesEstimate,
+			&root.TotalBytesEstimate,
+		); err != nil {
 			return sqliteIndexSnapshot{}, err
 		}
 		snapshot.TopRoots = append(snapshot.TopRoots, root)
@@ -680,11 +833,25 @@ func (d *FileSearchDB) SearchIndexSnapshot(ctx context.Context) (sqliteIndexSnap
 	return snapshot, nil
 }
 
+func fileSizeOrZero(path string) int64 {
+	if strings.TrimSpace(path) == "" {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
 func countFTSVocabRows(ctx context.Context, db *sql.DB, tableName string) (int64, error) {
-	vocabTable := fmt.Sprintf("temp.%s_vocab", tableName)
+	vocabTable := fmt.Sprintf("filesearch_%s_vocab", tableName)
 	if _, err := db.ExecContext(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, vocabTable)); err != nil {
 		return 0, err
 	}
+	// fts5vocab resolves its source table in the schema that owns the virtual
+	// table itself. Create and drop the helper in main so snapshot sampling does
+	// not accidentally resolve temp.entries_* and fail before logging anything.
 	if _, err := db.ExecContext(ctx, fmt.Sprintf(`CREATE VIRTUAL TABLE %s USING fts5vocab(%s, 'row')`, vocabTable, tableName)); err != nil {
 		return 0, err
 	}
@@ -740,7 +907,48 @@ func (d *FileSearchDB) isBulkSyncEnabled() bool {
 	return d.bulkSyncDepth > 0
 }
 
-func (d *FileSearchDB) replaceRootEntriesTx(ctx context.Context, tx *sql.Tx, root RootRecord, entries []EntryRecord) error {
+func (d *FileSearchDB) applyDirectFilesEntriesTx(ctx context.Context, tx *sql.Tx, batch SubtreeSnapshotBatch) error {
+	if len(batch.Entries) == 0 {
+		return nil
+	}
+
+	artifactSync, err := newEntrySearchArtifactSyncTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	defer artifactSync.Close()
+
+	factMutator, err := newEntryFactMutatorTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	defer factMutator.Close()
+
+	for _, entry := range batch.Entries {
+		row := buildStoredEntryRecord(entry)
+		existing, ok, err := selectStoredEntryByPathTx(ctx, tx, row.Path)
+		if err != nil {
+			return err
+		}
+		if ok {
+			if err := deleteEntrySearchArtifactsWithSyncTx(ctx, artifactSync, existing); err != nil {
+				return err
+			}
+		}
+
+		current, err := upsertEntryFactsWithMutatorTx(ctx, factMutator, row)
+		if err != nil {
+			return err
+		}
+		if err := insertEntrySearchArtifactsWithSyncTx(ctx, artifactSync, current); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (d *FileSearchDB) replaceRootEntriesTx(ctx context.Context, tx *sql.Tx, root RootRecord, entries []EntryRecord, onProgress func(current int64, total int64)) error {
 	if err := stageEntryRecordsTx(ctx, tx, entries); err != nil {
 		return err
 	}
@@ -750,7 +958,11 @@ func (d *FileSearchDB) replaceRootEntriesTx(ctx context.Context, tx *sql.Tx, roo
 		return err
 	}
 
-	if err := applyChangedEntrySetsTx(ctx, tx, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled()); err != nil {
+	// The old toolbar progress was driven by the size of the in-memory snapshot,
+	// which said "writing 100%" before SQLite had applied the expensive delta.
+	// Report progress from the actual changed-set replay so large roots expose
+	// meaningful write progress while FTS/bigram updates are running.
+	if err := applyChangedEntrySetsTx(ctx, tx, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled(), onProgress); err != nil {
 		return err
 	}
 
@@ -773,7 +985,7 @@ func (d *FileSearchDB) replaceSubtreeEntriesTx(ctx context.Context, tx *sql.Tx, 
 		return err
 	}
 
-	return applyChangedEntrySetsTx(ctx, tx, staleRows, changedOldRows, changedOrNewRows, true)
+	return applyChangedEntrySetsTx(ctx, tx, staleRows, changedOldRows, changedOrNewRows, true, nil)
 }
 
 func stageEntryRecordsTx(ctx context.Context, tx *sql.Tx, entries []EntryRecord) error {
@@ -918,7 +1130,7 @@ func collectChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, rootID string, s
 	return staleRows, changedOldRows, changedOrNewRows, nil
 }
 
-func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, staleRows []storedEntryRecord, changedOldRows []storedEntryRecord, changedOrNewRows []storedEntryRecord, syncSearchArtifacts bool) error {
+func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, staleRows []storedEntryRecord, changedOldRows []storedEntryRecord, changedOrNewRows []storedEntryRecord, syncSearchArtifacts bool, onProgress func(current int64, total int64)) error {
 	var artifactSync *entrySearchArtifactSyncTx
 	var factMutator *entryFactMutatorTx
 	var err error
@@ -943,6 +1155,26 @@ func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, staleRows []stored
 		defer factMutator.Close()
 	}
 
+	totalChangedRows := int64(len(staleRows) + len(changedOrNewRows))
+	completedRows := int64(0)
+	lastReportedCurrent := int64(-1)
+	lastReportedAt := time.Now()
+	reportProgress := func(force bool) {
+		if onProgress == nil || totalChangedRows <= 0 {
+			return
+		}
+		if !force && completedRows != totalChangedRows && completedRows%progressBatchSize != 0 && time.Since(lastReportedAt) < progressUpdateGap {
+			return
+		}
+		if completedRows == lastReportedCurrent {
+			return
+		}
+		onProgress(completedRows, totalChangedRows)
+		lastReportedCurrent = completedRows
+		lastReportedAt = time.Now()
+	}
+	reportProgress(true)
+
 	if syncSearchArtifacts {
 		for _, existing := range staleRows {
 			if err := deleteEntrySearchArtifactsWithSyncTx(ctx, artifactSync, existing); err != nil {
@@ -960,6 +1192,8 @@ func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, staleRows []stored
 		if _, err := factMutator.deleteStmt.ExecContext(ctx, existing.EntryID); err != nil {
 			return fmt.Errorf("delete stale entry %q: %w", existing.Path, err)
 		}
+		completedRows++
+		reportProgress(false)
 	}
 
 	for _, staged := range changedOrNewRows {
@@ -972,7 +1206,11 @@ func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, staleRows []stored
 				return err
 			}
 		}
+		completedRows++
+		reportProgress(false)
 	}
+
+	reportProgress(true)
 
 	return nil
 }
@@ -1130,6 +1368,22 @@ func selectStoredEntriesTx(ctx context.Context, tx *sql.Tx, query string, args .
 		loaded = append(loaded, row)
 	}
 	return loaded, rows.Err()
+}
+
+func selectStoredEntryByPathTx(ctx context.Context, tx *sql.Tx, path string) (storedEntryRecord, bool, error) {
+	rows, err := selectStoredEntriesTx(ctx, tx, `
+		SELECT entry_id, path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+		       pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
+		FROM entries
+		WHERE path = ?
+	`, path)
+	if err != nil {
+		return storedEntryRecord{}, false, err
+	}
+	if len(rows) == 0 {
+		return storedEntryRecord{}, false, nil
+	}
+	return rows[0], true, nil
 }
 
 func buildEntryScopeQuery(scopePath string, column string) (string, []any) {
@@ -1303,6 +1557,61 @@ func insertEntryFTSWithSyncTx(ctx context.Context, syncer *entrySearchArtifactSy
 		}
 	}
 	return nil
+}
+
+func (d *FileSearchDB) finalizeRootRunTx(ctx context.Context, tx *sql.Tx, root RootRecord) error {
+	if !d.isBulkSyncEnabled() {
+		// Finalize is the only place allowed to advance the persisted feed cursor.
+		// Applying job rows before this point is safe because a crash can replay
+		// the same writes, but advancing the cursor early would acknowledge
+		// unseen change-feed signals and permanently skip them on recovery.
+		if err := optimizeFTSTablesTx(ctx, tx); err != nil {
+			return err
+		}
+	}
+
+	_, err := tx.ExecContext(ctx, `
+		UPDATE roots
+		SET status = ?, feed_type = ?, feed_cursor = ?, feed_state = ?, last_reconcile_at = ?, last_full_scan_at = ?,
+		    progress_current = ?, progress_total = ?, last_error = ?, updated_at = ?
+		WHERE id = ?
+	`,
+		string(root.Status),
+		string(root.FeedType),
+		root.FeedCursor,
+		string(root.FeedState),
+		root.LastReconcileAt,
+		root.LastFullScanAt,
+		root.ProgressCurrent,
+		root.ProgressTotal,
+		root.LastError,
+		root.UpdatedAt,
+		root.ID,
+	)
+	return err
+}
+
+func optimizeFTSTablesTx(ctx context.Context, tx *sql.Tx) error {
+	for _, tableName := range filesearchFTSTables {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s(%s) VALUES('optimize')`, tableName, tableName)); err != nil {
+			return fmt.Errorf("optimize %s: %w", tableName, err)
+		}
+	}
+	return nil
+}
+
+func (d *FileSearchDB) checkpointWALAfterFinalize(ctx context.Context) {
+	if d == nil || d.db == nil || d.isBulkSyncEnabled() {
+		return
+	}
+
+	// Finalize is the SQLite-first maintenance boundary because it runs after a
+	// batch of job writes has committed. A checkpoint miss should not undo the
+	// committed facts/cursor state, so this hook is best-effort and only trims
+	// WAL growth instead of reviving the old whole-index rebuild path.
+	if _, err := d.db.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`); err != nil {
+		util.GetLogger().Warn(ctx, "filesearch finalize wal checkpoint failed: "+err.Error())
+	}
 }
 
 func (d *FileSearchDB) rebuildFTSTables(ctx context.Context, optimize bool) error {

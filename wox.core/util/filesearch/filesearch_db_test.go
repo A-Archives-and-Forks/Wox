@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,6 +113,96 @@ func TestFileSearchDBInitCreatesSQLiteSearchSchema(t *testing.T) {
 		if err := row.Scan(&found); err != nil {
 			t.Fatalf("expected sqlite search table %q to exist: %v", tableName, err)
 		}
+	}
+}
+
+func TestFileSearchDBSearchIndexSnapshotReportsTopRootsAndByteFields(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+
+	rootSmallPath := filepath.Join(t.TempDir(), "root-small")
+	rootLargePath := filepath.Join(t.TempDir(), "root-large")
+	rootSmall := RootRecord{ID: "root-small", Path: rootSmallPath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now, UpdatedAt: now}
+	rootLarge := RootRecord{ID: "root-large", Path: rootLargePath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now, UpdatedAt: now}
+	mustInsertRoot(t, ctx, db, rootSmall)
+	mustInsertRoot(t, ctx, db, rootLarge)
+
+	if err := db.ReplaceRootEntries(ctx, rootSmall, []EntryRecord{{
+		Path:           filepath.Join(rootSmallPath, "tiny.txt"),
+		RootID:         rootSmall.ID,
+		ParentPath:     rootSmallPath,
+		Name:           "tiny.txt",
+		NormalizedName: "tiny.txt",
+		NormalizedPath: filepath.Join(rootSmallPath, "tiny.txt"),
+		PinyinFull:     "",
+		PinyinInitials: "",
+		IsDir:          false,
+		Mtime:          now,
+		Size:           1,
+		UpdatedAt:      now,
+	}}, nil); err != nil {
+		t.Fatalf("seed small root entries: %v", err)
+	}
+
+	if err := db.ReplaceRootEntries(ctx, rootLarge, []EntryRecord{
+		{
+			Path:           filepath.Join(rootLargePath, "alpha-report.txt"),
+			RootID:         rootLarge.ID,
+			ParentPath:     rootLargePath,
+			Name:           "alpha-report.txt",
+			NormalizedName: "alpha-report.txt",
+			NormalizedPath: filepath.Join(rootLargePath, "alpha-report.txt"),
+			PinyinFull:     "",
+			PinyinInitials: "",
+			IsDir:          false,
+			Mtime:          now,
+			Size:           10,
+			UpdatedAt:      now,
+		},
+		{
+			Path:           filepath.Join(rootLargePath, "nested", "beta-report.txt"),
+			RootID:         rootLarge.ID,
+			ParentPath:     filepath.Join(rootLargePath, "nested"),
+			Name:           "beta-report.txt",
+			NormalizedName: "beta-report.txt",
+			NormalizedPath: filepath.Join(rootLargePath, "nested", "beta-report.txt"),
+			PinyinFull:     "",
+			PinyinInitials: "",
+			IsDir:          false,
+			Mtime:          now + 1,
+			Size:           20,
+			UpdatedAt:      now + 1,
+		},
+	}, nil); err != nil {
+		t.Fatalf("seed large root entries: %v", err)
+	}
+
+	snapshot, err := db.SearchIndexSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("capture sqlite snapshot: %v", err)
+	}
+
+	if snapshot.EntryCount != 3 {
+		t.Fatalf("expected three entries in snapshot, got %d", snapshot.EntryCount)
+	}
+	if len(snapshot.TopRoots) == 0 || snapshot.TopRoots[0].RootID != rootLarge.ID {
+		t.Fatalf("expected heavier root %q to lead top roots, got %#v", rootLarge.ID, snapshot.TopRoots)
+	}
+	if snapshot.DBTotalFileBytes <= 0 {
+		t.Fatalf("expected sqlite snapshot to report total file bytes, got %#v", snapshot)
+	}
+	if snapshot.TopRoots[0].TotalBytesEstimate <= 0 {
+		t.Fatalf("expected top root bytes estimate to be populated, got %#v", snapshot.TopRoots[0])
+	}
+
+	summary := formatSQLiteIndexSnapshotSummary("test", snapshot)
+	if !strings.Contains(summary, "db_total_file_bytes=") || !strings.Contains(summary, "total_bytes_est=") {
+		t.Fatalf("expected sqlite snapshot summary to expose byte fields, got %q", summary)
+	}
+
+	topRoots := formatSQLiteIndexTopRoots("test", snapshot)
+	if !strings.Contains(topRoots, "top_roots=[") || !strings.Contains(topRoots, "total_bytes_est=") {
+		t.Fatalf("expected sqlite top roots summary to expose top_roots and bytes, got %q", topRoots)
 	}
 }
 
@@ -409,6 +500,267 @@ func TestFileSearchDBReplaceSubtreeSnapshotReplacesOnlyScopedPaths(t *testing.T)
 	}
 	if !directorySeen[outsideDirectoryPath] {
 		t.Fatalf("expected outside-scope directory to remain")
+	}
+}
+
+func TestFileSearchDBApplyJobPreservesSiblingScopes(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootPath := filepath.Join(t.TempDir(), "root-apply-job")
+	nestedPath := filepath.Join(rootPath, "nested")
+	chunkOwnedPath := filepath.Join(rootPath, "alpha.txt")
+	siblingDirectPath := filepath.Join(rootPath, "beta.txt")
+	siblingSubtreePath := filepath.Join(nestedPath, "keep.txt")
+	root := RootRecord{
+		ID:        "root-apply-job",
+		Path:      rootPath,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	mustInsertEntrySnapshots(t, ctx, db,
+		EntryRecord{
+			Path:           chunkOwnedPath,
+			RootID:         root.ID,
+			ParentPath:     rootPath,
+			Name:           "alpha.txt",
+			NormalizedName: "alpha.txt",
+			NormalizedPath: chunkOwnedPath,
+			IsDir:          false,
+			Mtime:          now,
+			Size:           1,
+			UpdatedAt:      now,
+		},
+		EntryRecord{
+			Path:           siblingDirectPath,
+			RootID:         root.ID,
+			ParentPath:     rootPath,
+			Name:           "beta.txt",
+			NormalizedName: "beta.txt",
+			NormalizedPath: siblingDirectPath,
+			IsDir:          false,
+			Mtime:          now,
+			Size:           2,
+			UpdatedAt:      now,
+		},
+		EntryRecord{
+			Path:           siblingSubtreePath,
+			RootID:         root.ID,
+			ParentPath:     nestedPath,
+			Name:           "keep.txt",
+			NormalizedName: "keep.txt",
+			NormalizedPath: siblingSubtreePath,
+			IsDir:          false,
+			Mtime:          now,
+			Size:           3,
+			UpdatedAt:      now,
+		},
+	)
+
+	job := Job{
+		JobID:                 "job-direct-files",
+		RootID:                root.ID,
+		RootPath:              root.Path,
+		ScopePath:             root.Path,
+		Kind:                  JobKindDirectFiles,
+		DirectFileChunkIndex:  0,
+		DirectFileChunkOffset: 0,
+		DirectFileChunkCount:  1,
+	}
+	batch := SubtreeSnapshotBatch{
+		RootID:    root.ID,
+		ScopePath: root.Path,
+		Directories: []DirectoryRecord{{
+			Path:         root.Path,
+			RootID:       root.ID,
+			ParentPath:   filepath.Dir(root.Path),
+			LastScanTime: now + 10,
+			Exists:       true,
+		}},
+		Entries: []EntryRecord{
+			{
+				Path:           root.Path,
+				RootID:         root.ID,
+				ParentPath:     filepath.Dir(root.Path),
+				Name:           filepath.Base(root.Path),
+				NormalizedName: filepath.Base(root.Path),
+				NormalizedPath: root.Path,
+				IsDir:          true,
+				Mtime:          now + 10,
+				UpdatedAt:      now + 10,
+			},
+			{
+				Path:           chunkOwnedPath,
+				RootID:         root.ID,
+				ParentPath:     root.Path,
+				Name:           "alpha.txt",
+				NormalizedName: "alpha.txt",
+				NormalizedPath: chunkOwnedPath,
+				IsDir:          false,
+				Mtime:          now + 10,
+				Size:           99,
+				UpdatedAt:      now + 10,
+			},
+		},
+	}
+
+	if err := db.ApplyDirectFilesJob(ctx, job, batch); err != nil {
+		t.Fatalf("apply direct-files job: %v", err)
+	}
+
+	entries, err := db.ListEntriesByRoot(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("list root entries: %v", err)
+	}
+	seen := map[string]EntryRecord{}
+	for _, entry := range entries {
+		seen[entry.Path] = entry
+	}
+
+	if got := seen[chunkOwnedPath].Size; got != 99 {
+		t.Fatalf("expected owned direct file to be updated, got size %d", got)
+	}
+	if _, ok := seen[siblingDirectPath]; !ok {
+		t.Fatalf("expected sibling direct file to remain after bounded job")
+	}
+	if _, ok := seen[siblingSubtreePath]; !ok {
+		t.Fatalf("expected sibling subtree entry to remain after bounded job")
+	}
+}
+
+func TestFileSearchDBFinalizeRootCursorIsConservative(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootPath := filepath.Join(t.TempDir(), "root-finalize")
+	ownedPath := filepath.Join(rootPath, "alpha.txt")
+	initialCursor := mustEncodeFeedCursorForTest(t, FeedCursor{
+		FeedType:  RootFeedTypeFSEvents,
+		UpdatedAt: now - 1000,
+		FSEventID: 10,
+	})
+	finalCursor := mustEncodeFeedCursorForTest(t, FeedCursor{
+		FeedType:  RootFeedTypeFSEvents,
+		UpdatedAt: now + 5000,
+		FSEventID: 25,
+	})
+	root := RootRecord{
+		ID:              "root-finalize",
+		Path:            rootPath,
+		Kind:            RootKindUser,
+		Status:          RootStatusIdle,
+		FeedType:        RootFeedTypeFSEvents,
+		FeedCursor:      initialCursor,
+		FeedState:       RootFeedStateReady,
+		LastReconcileAt: now - 1000,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	job := Job{
+		JobID:                 "job-direct-files",
+		RootID:                root.ID,
+		RootPath:              root.Path,
+		ScopePath:             root.Path,
+		Kind:                  JobKindDirectFiles,
+		DirectFileChunkIndex:  0,
+		DirectFileChunkOffset: 0,
+		DirectFileChunkCount:  1,
+	}
+	batch := SubtreeSnapshotBatch{
+		RootID:    root.ID,
+		ScopePath: root.Path,
+		Directories: []DirectoryRecord{{
+			Path:         root.Path,
+			RootID:       root.ID,
+			ParentPath:   filepath.Dir(root.Path),
+			LastScanTime: now + 10,
+			Exists:       true,
+		}},
+		Entries: []EntryRecord{
+			{
+				Path:           root.Path,
+				RootID:         root.ID,
+				ParentPath:     filepath.Dir(root.Path),
+				Name:           filepath.Base(root.Path),
+				NormalizedName: filepath.Base(root.Path),
+				NormalizedPath: root.Path,
+				IsDir:          true,
+				Mtime:          now + 10,
+				UpdatedAt:      now + 10,
+			},
+			{
+				Path:           ownedPath,
+				RootID:         root.ID,
+				ParentPath:     root.Path,
+				Name:           "alpha.txt",
+				NormalizedName: "alpha.txt",
+				NormalizedPath: ownedPath,
+				IsDir:          false,
+				Mtime:          now + 10,
+				Size:           41,
+				UpdatedAt:      now + 10,
+			},
+		},
+	}
+
+	if err := db.ApplyDirectFilesJob(ctx, job, batch); err != nil {
+		t.Fatalf("apply direct-files job before finalize: %v", err)
+	}
+
+	rootAfterApply, err := db.FindRootByID(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("load root after direct-files job: %v", err)
+	}
+	if rootAfterApply == nil {
+		t.Fatal("expected root after direct-files job")
+	}
+	if rootAfterApply.FeedCursor != initialCursor {
+		t.Fatalf("expected direct-files job to leave feed cursor unchanged, got %q want %q", rootAfterApply.FeedCursor, initialCursor)
+	}
+
+	if err := db.ApplyDirectFilesJob(ctx, job, batch); err != nil {
+		t.Fatalf("replay direct-files job before finalize: %v", err)
+	}
+
+	entriesAfterReplay, err := db.ListEntriesByRoot(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("list root entries after replay: %v", err)
+	}
+	ownedCount := 0
+	for _, entry := range entriesAfterReplay {
+		if entry.Path == ownedPath {
+			ownedCount++
+		}
+	}
+	if ownedCount != 1 {
+		t.Fatalf("expected replay before finalize to stay idempotent, got %d rows for %q", ownedCount, ownedPath)
+	}
+
+	finalizedRoot := *rootAfterApply
+	finalizedRoot.FeedCursor = finalCursor
+	finalizedRoot.LastReconcileAt = now + 5000
+	finalizedRoot.LastFullScanAt = now + 5000
+	finalizedRoot.UpdatedAt = now + 5000
+	if err := db.FinalizeRootRun(ctx, finalizedRoot); err != nil {
+		t.Fatalf("finalize root run: %v", err)
+	}
+
+	rootAfterFinalize, err := db.FindRootByID(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("load root after finalize: %v", err)
+	}
+	if rootAfterFinalize == nil {
+		t.Fatal("expected root after finalize")
+	}
+	if rootAfterFinalize.FeedCursor != finalCursor {
+		t.Fatalf("expected finalize to advance feed cursor, got %q want %q", rootAfterFinalize.FeedCursor, finalCursor)
+	}
+	if rootAfterFinalize.LastReconcileAt != finalizedRoot.LastReconcileAt {
+		t.Fatalf("expected finalize to persist reconcile fence, got %d want %d", rootAfterFinalize.LastReconcileAt, finalizedRoot.LastReconcileAt)
 	}
 }
 
