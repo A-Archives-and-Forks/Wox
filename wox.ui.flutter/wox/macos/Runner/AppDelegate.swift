@@ -709,69 +709,23 @@ class AppDelegate: FlutterAppDelegate {
     ]
   }
 
-  private func writeClipboardImageRgbaFile(arguments: [String: Any]) throws {
-    guard
-      let filePath = arguments["filePath"] as? String,
-      let width = (arguments["width"] as? NSNumber)?.intValue,
-      let height = (arguments["height"] as? NSNumber)?.intValue,
-      let bytesPerRow = (arguments["bytesPerRow"] as? NSNumber)?.intValue
-    else {
-      throw DisplayCaptureError(code: "INVALID_ARGS", message: "Invalid arguments for writeClipboardImageRgbaFile", details: nil)
+  private func writeClipboardImageFile(arguments: [String: Any]) throws {
+    guard let filePath = arguments["filePath"] as? String else {
+      throw DisplayCaptureError(code: "INVALID_ARGS", message: "Invalid arguments for writeClipboardImageFile", details: nil)
     }
 
-    let expectedByteCount = bytesPerRow * height
-    let fileUrl = URL(fileURLWithPath: filePath)
-    let pixelData: Data
-    do {
-      pixelData = try Data(contentsOf: fileUrl, options: [.mappedIfSafe])
-    } catch {
-      throw DisplayCaptureError(code: "clipboard_write_failed", message: "Failed to read RGBA screenshot file", details: error.localizedDescription)
+    // Flutter already exported the final annotated PNG to disk. Loading that file directly here
+    // keeps the screenshot clipboard handoff inside the macOS runner and removes the extra Go-side
+    // reopen/decode/write pass without changing the exported artifact contract.
+    guard let image = NSImage(contentsOfFile: filePath) else {
+      throw DisplayCaptureError(code: "clipboard_write_failed", message: "Failed to load screenshot file for clipboard export", details: ["filePath": filePath])
     }
 
-    guard pixelData.count == expectedByteCount else {
-      throw DisplayCaptureError(
-        code: "clipboard_write_failed",
-        message: "RGBA screenshot size does not match the expected dimensions",
-        details: [
-          "expectedByteCount": expectedByteCount,
-          "actualByteCount": pixelData.count,
-          "width": width,
-          "height": height,
-          "bytesPerRow": bytesPerRow,
-        ]
-      )
-    }
-
-    guard let provider = CGDataProvider(data: pixelData as CFData) else {
-      throw DisplayCaptureError(code: "clipboard_write_failed", message: "Failed to create RGBA data provider", details: nil)
-    }
-
-    let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-    // The previous confirm path forced Flutter to PNG-encode the composed screenshot before it could
-    // reach the clipboard. Building the NSImage directly from raw RGBA pixels keeps the export local
-    // to macOS and removes that expensive encode/decode roundtrip without changing the captured pixels.
-    guard
-      let cgImage = CGImage(
-        width: width,
-        height: height,
-        bitsPerComponent: 8,
-        bitsPerPixel: 32,
-        bytesPerRow: bytesPerRow,
-        space: colorSpace,
-        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-        provider: provider,
-        decode: nil,
-        shouldInterpolate: false,
-        intent: .defaultIntent
-      )
-    else {
-      throw DisplayCaptureError(code: "clipboard_write_failed", message: "Failed to build CGImage from RGBA screenshot data", details: nil)
-    }
-
-    let image = NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
-    pasteboard.writeObjects([image])
+    if !pasteboard.writeObjects([image]) {
+      throw DisplayCaptureError(code: "clipboard_write_failed", message: "Failed to write screenshot image to clipboard", details: ["filePath": filePath])
+    }
   }
 
   private func isStandardWindowButtonHidden(_ buttonType: NSWindow.ButtonType, on window: NSWindow) -> Bool {
@@ -1535,10 +1489,10 @@ class AppDelegate: FlutterAppDelegate {
           self?.dismissNativeSelectionOverlays()
           result(nil)
 
-        case "writeClipboardImageRgbaFile":
+        case "writeClipboardImageFile":
           if let args = call.arguments as? [String: Any] {
             do {
-              try self?.writeClipboardImageRgbaFile(arguments: args)
+              try self?.writeClipboardImageFile(arguments: args)
               result(nil)
             } catch let error as DisplayCaptureError {
               result(error.asFlutterError())
@@ -1554,7 +1508,7 @@ class AppDelegate: FlutterAppDelegate {
             result(
               FlutterError(
                 code: "INVALID_ARGS",
-                message: "Invalid arguments for writeClipboardImageRgbaFile",
+                message: "Invalid arguments for writeClipboardImageFile",
                 details: nil
               )
             )

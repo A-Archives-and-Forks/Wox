@@ -151,11 +151,12 @@ type ScreenshotRect struct {
 // We keep the request explicit instead of inferring defaults in Flutter so both layers stay aligned
 // when tests trigger the flow directly through the UI bridge.
 type CaptureScreenshotRequest struct {
-	SessionId string   `json:"sessionId"`
-	Trigger   string   `json:"trigger"`
-	Scope     string   `json:"scope"`
-	Output    string   `json:"output"`
-	Tools     []string `json:"tools"`
+	SessionId      string   `json:"sessionId"`
+	Trigger        string   `json:"trigger"`
+	Scope          string   `json:"scope"`
+	Output         string   `json:"output"`
+	Tools          []string `json:"tools"`
+	ExportFilePath string   `json:"exportFilePath"`
 }
 
 // DisplaySnapshot describes one native capture surface that Flutter can render and crop from.
@@ -173,13 +174,18 @@ type DisplaySnapshot struct {
 // CaptureScreenshotResult carries the exported screenshot file back to Go.
 // The previous websocket contract base64-wrapped full PNG payloads, which added avoidable transport
 // cost on every completed screenshot. Returning the exported file path keeps annotation state in the
-// UI while still letting Go continue clipboard and plugin-facing post-processing from disk.
+// UI while still giving Go the saved artifact path and clipboard warning state without re-sending
+// the PNG bytes over the websocket.
 type CaptureScreenshotResult struct {
 	Status               CaptureScreenshotStatus `json:"status"`
 	ScreenshotPath       string                  `json:"screenshotPath,omitempty"`
 	LogicalSelectionRect *ScreenshotRect         `json:"logicalSelectionRect,omitempty"`
-	ErrorCode            string                  `json:"errorCode,omitempty"`
-	ErrorMessage         string                  `json:"errorMessage,omitempty"`
+	// ClipboardWriteSucceeded stays explicit instead of overloading Status so export-success plus
+	// clipboard-failure can still return a completed screenshot together with a warning.
+	ClipboardWriteSucceeded bool   `json:"clipboardWriteSucceeded"`
+	ClipboardWarningMessage string `json:"clipboardWarningMessage,omitempty"`
+	ErrorCode               string `json:"errorCode,omitempty"`
+	ErrorMessage            string `json:"errorMessage,omitempty"`
 }
 
 func DefaultCaptureScreenshotRequest() CaptureScreenshotRequest {

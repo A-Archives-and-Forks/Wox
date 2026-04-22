@@ -1,11 +1,10 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' as ui;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:path/path.dart' as path;
 import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
@@ -52,6 +51,7 @@ class WoxScreenshotController extends GetxController {
   int _captureSessionRevision = 0;
   Completer<CaptureScreenshotResult>? _sessionCompleter;
   _SavedScreenshotWindowState? _savedWindowState;
+  CaptureScreenshotRequest? _activeRequest;
 
   String tr(String key) => Get.find<WoxSettingController>().tr(key);
 
@@ -80,6 +80,7 @@ class WoxScreenshotController extends GetxController {
       return CaptureScreenshotResult.failed(errorCode: 'busy', errorMessage: 'Screenshot session is already running');
     }
 
+    _activeRequest = request;
     _sessionCompleter = Completer<CaptureScreenshotResult>();
     await _prepareNewSession(traceId);
 
@@ -340,10 +341,41 @@ class WoxScreenshotController extends GetxController {
       await _ensureSelectionSnapshotsReady(currentSelection);
 
       // Screenshot completion used to push full PNG/base64 payloads back through the websocket
-      // bridge. Persisting the exported PNG locally keeps the transport payload small, preserves a
-      // reusable artifact for backend post-processing, and still reflects the exact pixels Flutter exported.
-      final screenshotPath = await _writeSelectionPngFile(selection: currentSelection, snapshots: displaySnapshots.toList(), annotationsToPaint: annotations.toList());
-      final result = CaptureScreenshotResult.completed(selectionRect: currentSelection, screenshotPath: screenshotPath);
+      // bridge. The backend now preallocates the export path inside woxDataDirectory so Flutter can
+      // write the final PNG there and immediately hand the same file to the platform clipboard code.
+      final activeRequest = _activeRequest;
+      if (activeRequest == null || activeRequest.exportFilePath.isEmpty) {
+        throw StateError('Screenshot export file path is missing');
+      }
+
+      final screenshotPath = await _writeSelectionPngFile(
+        exportFilePath: activeRequest.exportFilePath,
+        selection: currentSelection,
+        snapshots: displaySnapshots.toList(),
+        annotationsToPaint: annotations.toList(),
+      );
+
+      var clipboardWriteSucceeded = true;
+      String? clipboardWarningMessage;
+      if (activeRequest.output == 'clipboard') {
+        try {
+          await ScreenshotPlatformBridge.instance.writeClipboardImageFile(filePath: screenshotPath);
+        } catch (e) {
+          // Clipboard rejection should not discard a screenshot file that was already exported.
+          // Returning a completed session with warning fields lets Go notify the user about the
+          // degraded clipboard path while keeping the saved PNG available.
+          clipboardWriteSucceeded = false;
+          clipboardWarningMessage = e.toString();
+          Logger.instance.warn(traceId, 'Screenshot exported but clipboard write failed: $clipboardWarningMessage');
+        }
+      }
+
+      final result = CaptureScreenshotResult.completed(
+        selectionRect: currentSelection,
+        screenshotPath: screenshotPath,
+        clipboardWriteSucceeded: clipboardWriteSucceeded,
+        clipboardWarningMessage: clipboardWarningMessage,
+      );
       await _finishSession(traceId, result, ScreenshotSessionStage.done, restoreVisibility: false, windowAlreadyHidden: true);
     } catch (e) {
       Logger.instance.error(traceId, 'Failed to export screenshot: $e');
@@ -351,9 +383,15 @@ class WoxScreenshotController extends GetxController {
     }
   }
 
-  Future<String> _writeSelectionPngFile({required Rect selection, required List<DisplaySnapshot> snapshots, required List<ScreenshotAnnotation> annotationsToPaint}) async {
+  Future<String> _writeSelectionPngFile({
+    required String exportFilePath,
+    required Rect selection,
+    required List<DisplaySnapshot> snapshots,
+    required List<ScreenshotAnnotation> annotationsToPaint,
+  }) async {
     final rendered = await _renderSelectionImage(selection: selection, snapshots: snapshots, annotationsToPaint: annotationsToPaint);
-    final exportFile = await _reserveScreenshotExportFile();
+    final exportFile = File(exportFilePath);
+    await exportFile.parent.create(recursive: true);
     await exportFile.writeAsBytes(rendered.pngBytes, flush: true);
     return exportFile.path;
   }
@@ -431,6 +469,7 @@ class WoxScreenshotController extends GetxController {
 
   void _resetSessionState() {
     _savedWindowState = null;
+    _activeRequest = null;
     _clearMacOSPreparationState();
     selectedAnnotationId.value = null;
     editingTextAnnotationId.value = null;
@@ -956,40 +995,6 @@ class WoxScreenshotController extends GetxController {
     } finally {
       composed.image.dispose();
     }
-  }
-
-  Future<File> _reserveScreenshotExportFile() async {
-    final screenshotDirectory = Directory(path.join(_getHomeDir(), '.wox', 'screenshots'));
-    await screenshotDirectory.create(recursive: true);
-
-    final timestamp = _formatScreenshotTimestamp(DateTime.now());
-    final baseName = '${timestamp}_wox_snapshots';
-    var suffix = 0;
-    while (true) {
-      final suffixText = suffix == 0 ? '' : '_${suffix.toString().padLeft(2, '0')}';
-      final candidate = File(path.join(screenshotDirectory.path, '$baseName$suffixText.png'));
-      if (!await candidate.exists()) {
-        return candidate;
-      }
-      suffix += 1;
-    }
-  }
-
-  String _formatScreenshotTimestamp(DateTime timestamp) {
-    final year = timestamp.year.toString().padLeft(4, '0');
-    final month = timestamp.month.toString().padLeft(2, '0');
-    final day = timestamp.day.toString().padLeft(2, '0');
-    final hour = timestamp.hour.toString().padLeft(2, '0');
-    final minute = timestamp.minute.toString().padLeft(2, '0');
-    final second = timestamp.second.toString().padLeft(2, '0');
-    return '$year$month${day}_$hour$minute$second';
-  }
-
-  String _getHomeDir() {
-    if (Platform.isWindows) {
-      return Platform.environment['UserProfile']!;
-    }
-    return Platform.environment['HOME']!;
   }
 
   Future<_ComposedSelectionImage> _composeSelectionImage({

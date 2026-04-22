@@ -149,13 +149,14 @@ class ScreenshotSelectionDisplayHint {
 }
 
 class CaptureScreenshotRequest {
-  const CaptureScreenshotRequest({required this.sessionId, required this.trigger, required this.scope, required this.output, required this.tools});
+  const CaptureScreenshotRequest({required this.sessionId, required this.trigger, required this.scope, required this.output, required this.tools, required this.exportFilePath});
 
   final String sessionId;
   final String trigger;
   final String scope;
   final String output;
   final List<String> tools;
+  final String exportFilePath;
 
   factory CaptureScreenshotRequest.fromJson(Map<String, dynamic> json) {
     return CaptureScreenshotRequest(
@@ -164,25 +165,44 @@ class CaptureScreenshotRequest {
       scope: json['Scope'] as String? ?? json['scope'] as String? ?? 'all_displays',
       output: json['Output'] as String? ?? json['output'] as String? ?? 'clipboard',
       tools: ((json['Tools'] ?? json['tools']) as List<dynamic>? ?? const []).map((tool) => tool.toString()).toList(),
+      exportFilePath: json['ExportFilePath'] as String? ?? json['exportFilePath'] as String? ?? '',
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {'sessionId': sessionId, 'trigger': trigger, 'scope': scope, 'output': output, 'tools': tools};
+    return {'sessionId': sessionId, 'trigger': trigger, 'scope': scope, 'output': output, 'tools': tools, 'exportFilePath': exportFilePath};
   }
 }
 
 class CaptureScreenshotResult {
-  const CaptureScreenshotResult({required this.status, this.screenshotPath, this.logicalSelectionRect, this.errorCode, this.errorMessage});
+  const CaptureScreenshotResult({
+    required this.status,
+    this.screenshotPath,
+    this.logicalSelectionRect,
+    this.clipboardWriteSucceeded,
+    this.clipboardWarningMessage,
+    this.errorCode,
+    this.errorMessage,
+  });
 
   final String status;
   final String? screenshotPath;
   final ScreenshotRect? logicalSelectionRect;
+  // Clipboard export is intentionally modeled as a warning channel so screenshot file export can
+  // still complete successfully even when the platform clipboard rejects the image handoff.
+  final bool? clipboardWriteSucceeded;
+  final String? clipboardWarningMessage;
   final String? errorCode;
   final String? errorMessage;
 
-  factory CaptureScreenshotResult.completed({required Rect selectionRect, required String screenshotPath}) {
-    return CaptureScreenshotResult(status: 'completed', screenshotPath: screenshotPath, logicalSelectionRect: ScreenshotRect.fromRect(selectionRect));
+  factory CaptureScreenshotResult.completed({required Rect selectionRect, required String screenshotPath, bool clipboardWriteSucceeded = true, String? clipboardWarningMessage}) {
+    return CaptureScreenshotResult(
+      status: 'completed',
+      screenshotPath: screenshotPath,
+      logicalSelectionRect: ScreenshotRect.fromRect(selectionRect),
+      clipboardWriteSucceeded: clipboardWriteSucceeded,
+      clipboardWarningMessage: clipboardWarningMessage,
+    );
   }
 
   factory CaptureScreenshotResult.cancelled() => const CaptureScreenshotResult(status: 'cancelled');
@@ -198,13 +218,23 @@ class CaptureScreenshotResult {
       status: json['status'] as String? ?? json['Status'] as String? ?? 'failed',
       screenshotPath: json['screenshotPath'] as String? ?? json['ScreenshotPath'] as String?,
       logicalSelectionRect: logicalSelectionRect != null ? ScreenshotRect.fromJson(logicalSelectionRect) : null,
+      clipboardWriteSucceeded: json['clipboardWriteSucceeded'] as bool? ?? json['ClipboardWriteSucceeded'] as bool?,
+      clipboardWarningMessage: json['clipboardWarningMessage'] as String? ?? json['ClipboardWarningMessage'] as String?,
       errorCode: json['errorCode'] as String? ?? json['ErrorCode'] as String?,
       errorMessage: json['errorMessage'] as String? ?? json['ErrorMessage'] as String?,
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {'status': status, 'screenshotPath': screenshotPath, 'logicalSelectionRect': logicalSelectionRect?.toJson(), 'errorCode': errorCode, 'errorMessage': errorMessage};
+    return {
+      'status': status,
+      'screenshotPath': screenshotPath,
+      'logicalSelectionRect': logicalSelectionRect?.toJson(),
+      'clipboardWriteSucceeded': clipboardWriteSucceeded,
+      'clipboardWarningMessage': clipboardWarningMessage,
+      'errorCode': errorCode,
+      'errorMessage': errorMessage,
+    };
   }
 }
 

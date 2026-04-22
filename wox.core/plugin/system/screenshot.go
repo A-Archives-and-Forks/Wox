@@ -1,16 +1,10 @@
 package system
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image/png"
-	"os"
-	"path/filepath"
 	"wox/common"
 	"wox/plugin"
-	"wox/util"
-	"wox/util/clipboard"
 )
 
 var screenshotIcon = common.PluginScreenshotIcon
@@ -81,12 +75,19 @@ func (p *ScreenshotPlugin) captureScreenshot(ctx context.Context, actionContext 
 
 	switch result.Status {
 	case common.CaptureScreenshotStatusCompleted:
-		if writeErr := writeScreenshotToClipboard(result.ScreenshotPath); writeErr != nil {
-			p.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("write screenshot to clipboard failed: %s", writeErr.Error()))
+		// Screenshot export and clipboard write now complete inside Flutter plus the platform runner.
+		// Go treats a completed export as success and only surfaces clipboard warnings separately.
+		if result.ScreenshotPath == "" {
+			p.api.Log(ctx, plugin.LogLevelError, "screenshot completed without an export path")
 			p.api.Notify(ctx, "plugin_screenshot_capture_failed")
 			return
 		}
+
 		p.api.Notify(ctx, "plugin_screenshot_capture_success")
+		if result.ClipboardWarningMessage != "" {
+			p.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("screenshot clipboard warning: %s", result.ClipboardWarningMessage))
+			p.api.Notify(ctx, "plugin_screenshot_capture_clipboard_warning")
+		}
 	case common.CaptureScreenshotStatusFailed:
 		errText := result.ErrorMessage
 		if errText == "" {
@@ -100,37 +101,4 @@ func (p *ScreenshotPlugin) captureScreenshot(ctx context.Context, actionContext 
 		p.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("unexpected screenshot status: %s", result.Status))
 		p.api.Notify(ctx, "plugin_screenshot_capture_failed")
 	}
-}
-
-func writeScreenshotToClipboard(screenshotPath string) error {
-	if screenshotPath == "" {
-		return fmt.Errorf("screenshot path is empty")
-	}
-
-	cleanedPath := filepath.Clean(screenshotPath)
-	pngBytes, err := os.ReadFile(cleanedPath)
-	if err != nil {
-		return fmt.Errorf("read screenshot file failed: %w", err)
-	}
-
-	if util.IsMacOS() {
-		// The screenshot UI now persists the final PNG locally and Go reads it back from disk. macOS
-		// can still write those PNG bytes directly to the clipboard without an extra decode/re-encode
-		// hop, so keep the fast clipboard write while removing websocket-sized payloads.
-		if writeErr := clipboard.WriteImageBytes(pngBytes, nil); writeErr != nil {
-			return fmt.Errorf("clipboard write failed: %w", writeErr)
-		}
-		return nil
-	}
-
-	img, decodeErr := png.Decode(bytes.NewReader(pngBytes))
-	if decodeErr != nil {
-		return fmt.Errorf("decode screenshot image failed: %w", decodeErr)
-	}
-
-	if writeErr := clipboard.Write(&clipboard.ImageData{Image: img}); writeErr != nil {
-		return fmt.Errorf("clipboard write failed: %w", writeErr)
-	}
-
-	return nil
 }

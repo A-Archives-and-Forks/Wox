@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <mutex>
 #include <sstream>
@@ -111,6 +112,319 @@ static bool GetPngEncoderClsid(CLSID *out_clsid)
   }
 
   return false;
+}
+
+static std::wstring Utf16FromUtf8(const std::string &utf8_string)
+{
+  if (utf8_string.empty())
+  {
+    return std::wstring();
+  }
+
+  const int target_length = ::MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, utf8_string.data(),
+      static_cast<int>(utf8_string.size()), nullptr, 0);
+  if (target_length <= 0)
+  {
+    return std::wstring();
+  }
+
+  std::wstring utf16_string(target_length, L'\0');
+  const int converted_length = ::MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, utf8_string.data(),
+      static_cast<int>(utf8_string.size()), utf16_string.data(), target_length);
+  if (converted_length != target_length)
+  {
+    return std::wstring();
+  }
+
+  return utf16_string;
+}
+
+static bool ReadFileBytes(const std::wstring &file_path, std::vector<uint8_t> *bytes_out, std::string *error)
+{
+  HANDLE file = ::CreateFileW(file_path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE)
+  {
+    if (error != nullptr)
+    {
+      *error = "Failed to open screenshot file";
+    }
+    return false;
+  }
+
+  LARGE_INTEGER file_size{};
+  if (!::GetFileSizeEx(file, &file_size))
+  {
+    ::CloseHandle(file);
+    if (error != nullptr)
+    {
+      *error = "Failed to read screenshot file size";
+    }
+    return false;
+  }
+
+  if (file_size.QuadPart < 0 || file_size.QuadPart > static_cast<LONGLONG>(128 * 1024 * 1024))
+  {
+    ::CloseHandle(file);
+    if (error != nullptr)
+    {
+      *error = "Screenshot file is too large for clipboard export";
+    }
+    return false;
+  }
+
+  bytes_out->assign(static_cast<size_t>(file_size.QuadPart), 0);
+  if (!bytes_out->empty())
+  {
+    DWORD bytes_read = 0;
+    const DWORD bytes_to_read = static_cast<DWORD>(bytes_out->size());
+    if (!::ReadFile(file, bytes_out->data(), bytes_to_read, &bytes_read, nullptr) || bytes_read != bytes_to_read)
+    {
+      ::CloseHandle(file);
+      if (error != nullptr)
+      {
+        *error = "Failed to read screenshot file bytes";
+      }
+      return false;
+    }
+  }
+
+  ::CloseHandle(file);
+  return true;
+}
+
+static bool BuildClipboardDibData(Gdiplus::Bitmap *bitmap, std::vector<uint8_t> *dib_out, std::string *error)
+{
+  const UINT width = bitmap->GetWidth();
+  const UINT height = bitmap->GetHeight();
+  if (width == 0 || height == 0)
+  {
+    if (error != nullptr)
+    {
+      *error = "Screenshot bitmap has invalid dimensions";
+    }
+    return false;
+  }
+
+  HBITMAP hbitmap = nullptr;
+  if (bitmap->GetHBITMAP(Gdiplus::Color(0, 0, 0, 0), &hbitmap) != Gdiplus::Ok || hbitmap == nullptr)
+  {
+    if (error != nullptr)
+    {
+      *error = "Failed to convert screenshot bitmap to HBITMAP";
+    }
+    return false;
+  }
+
+  HDC screen_dc = ::GetDC(nullptr);
+  HDC memory_dc = ::CreateCompatibleDC(screen_dc);
+  if (screen_dc == nullptr || memory_dc == nullptr)
+  {
+    if (memory_dc != nullptr)
+    {
+      ::DeleteDC(memory_dc);
+    }
+    if (screen_dc != nullptr)
+    {
+      ::ReleaseDC(nullptr, screen_dc);
+    }
+    ::DeleteObject(hbitmap);
+    if (error != nullptr)
+    {
+      *error = "Failed to create device context for screenshot clipboard export";
+    }
+    return false;
+  }
+
+  BITMAPINFOHEADER header{};
+  header.biSize = sizeof(BITMAPINFOHEADER);
+  header.biWidth = static_cast<LONG>(width);
+  header.biHeight = static_cast<LONG>(height);
+  header.biPlanes = 1;
+  header.biBitCount = 32;
+  header.biCompression = BI_RGB;
+  header.biSizeImage = static_cast<DWORD>(width * height * 4);
+
+  dib_out->assign(sizeof(BITMAPINFOHEADER) + header.biSizeImage, 0);
+  std::memcpy(dib_out->data(), &header, sizeof(BITMAPINFOHEADER));
+  HGDIOBJ previous_bitmap = ::SelectObject(memory_dc, hbitmap);
+  if (!::GetDIBits(memory_dc, hbitmap, 0, height, dib_out->data() + sizeof(BITMAPINFOHEADER), reinterpret_cast<BITMAPINFO *>(dib_out->data()), DIB_RGB_COLORS))
+  {
+    if (previous_bitmap != nullptr)
+    {
+      ::SelectObject(memory_dc, previous_bitmap);
+    }
+    ::DeleteDC(memory_dc);
+    ::ReleaseDC(nullptr, screen_dc);
+    ::DeleteObject(hbitmap);
+    if (error != nullptr)
+    {
+      *error = "Failed to build CF_DIB data for screenshot clipboard export";
+    }
+    return false;
+  }
+
+  if (previous_bitmap != nullptr)
+  {
+    ::SelectObject(memory_dc, previous_bitmap);
+  }
+  ::DeleteDC(memory_dc);
+  ::ReleaseDC(nullptr, screen_dc);
+  ::DeleteObject(hbitmap);
+  return true;
+}
+
+static bool OpenClipboardRetry()
+{
+  for (int attempt = 0; attempt < 10; ++attempt)
+  {
+    if (::OpenClipboard(nullptr))
+    {
+      return true;
+    }
+    ::Sleep(10);
+  }
+  return false;
+}
+
+static bool WriteClipboardImageBytes(const std::vector<uint8_t> &png_bytes, const std::vector<uint8_t> &dib_bytes, std::string *error)
+{
+  if (dib_bytes.empty())
+  {
+    if (error != nullptr)
+    {
+      *error = "Screenshot clipboard export requires CF_DIB bytes";
+    }
+    return false;
+  }
+
+  if (!OpenClipboardRetry())
+  {
+    if (error != nullptr)
+    {
+      *error = "Failed to open Windows clipboard";
+    }
+    return false;
+  }
+
+  if (!::EmptyClipboard())
+  {
+    ::CloseClipboard();
+    if (error != nullptr)
+    {
+      *error = "Failed to clear Windows clipboard";
+    }
+    return false;
+  }
+
+  // Windows screenshot paste remains most compatible when we publish both the registered PNG
+  // format and CF_DIB. The PNG keeps transparency-aware consumers fast, while CF_DIB preserves
+  // compatibility with native apps that ignore the registered PNG clipboard type.
+  const UINT png_format = ::RegisterClipboardFormatW(L"PNG");
+  if (png_format != 0 && !png_bytes.empty())
+  {
+    HGLOBAL png_handle = ::GlobalAlloc(GMEM_MOVEABLE, png_bytes.size());
+    if (png_handle != nullptr)
+    {
+      void *png_memory = ::GlobalLock(png_handle);
+      if (png_memory != nullptr)
+      {
+        std::memcpy(png_memory, png_bytes.data(), png_bytes.size());
+        ::GlobalUnlock(png_handle);
+        if (::SetClipboardData(png_format, png_handle) == nullptr)
+        {
+          ::GlobalFree(png_handle);
+        }
+      }
+      else
+      {
+        ::GlobalFree(png_handle);
+      }
+    }
+  }
+
+  HGLOBAL dib_handle = ::GlobalAlloc(GMEM_MOVEABLE, dib_bytes.size());
+  if (dib_handle == nullptr)
+  {
+    ::CloseClipboard();
+    if (error != nullptr)
+    {
+      *error = "Failed to allocate CF_DIB clipboard buffer";
+    }
+    return false;
+  }
+
+  void *dib_memory = ::GlobalLock(dib_handle);
+  if (dib_memory == nullptr)
+  {
+    ::GlobalFree(dib_handle);
+    ::CloseClipboard();
+    if (error != nullptr)
+    {
+      *error = "Failed to lock CF_DIB clipboard buffer";
+    }
+    return false;
+  }
+
+  std::memcpy(dib_memory, dib_bytes.data(), dib_bytes.size());
+  ::GlobalUnlock(dib_handle);
+
+  if (::SetClipboardData(CF_DIB, dib_handle) == nullptr)
+  {
+    ::GlobalFree(dib_handle);
+    ::CloseClipboard();
+    if (error != nullptr)
+    {
+      *error = "Failed to publish CF_DIB screenshot data to clipboard";
+    }
+    return false;
+  }
+
+  ::CloseClipboard();
+  return true;
+}
+
+static bool WriteClipboardImageFile(const std::string &file_path, std::string *error)
+{
+  const std::wstring wide_file_path = Utf16FromUtf8(file_path);
+  if (wide_file_path.empty())
+  {
+    if (error != nullptr)
+    {
+      *error = "Invalid screenshot clipboard file path";
+    }
+    return false;
+  }
+
+  std::vector<uint8_t> png_bytes;
+  if (!ReadFileBytes(wide_file_path, &png_bytes, error))
+  {
+    return false;
+  }
+
+  // Flutter already persisted the final annotated PNG, so the Windows runner should derive its
+  // clipboard-native formats from that one file instead of forcing Go to reopen and decode it.
+  // This keeps the websocket payload tiny while still publishing the CF_DIB data Windows paste
+  // targets need for compatibility.
+  EnsureGdiplusInitialized();
+  Gdiplus::Bitmap bitmap(wide_file_path.c_str());
+  if (bitmap.GetLastStatus() != Gdiplus::Ok)
+  {
+    if (error != nullptr)
+    {
+      *error = "Failed to load screenshot file for clipboard export";
+    }
+    return false;
+  }
+
+  std::vector<uint8_t> dib_bytes;
+  if (!BuildClipboardDibData(&bitmap, &dib_bytes, error))
+  {
+    return false;
+  }
+
+  return WriteClipboardImageBytes(png_bytes, dib_bytes, error);
 }
 
 static bool EncodeBitmapToPngBase64(HBITMAP bitmap, std::string &png_base64, std::string &error)
@@ -1606,6 +1920,38 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       }
 
       result->Success(flutter::EncodableValue(snapshots));
+    }
+    else if (method_name == "writeClipboardImageFile")
+    {
+      const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
+      if (arguments == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Invalid arguments for writeClipboardImageFile");
+        return;
+      }
+
+      auto file_path_it = arguments->find(flutter::EncodableValue("filePath"));
+      if (file_path_it == arguments->end())
+      {
+        result->Error("INVALID_ARGUMENTS", "Missing filePath for writeClipboardImageFile");
+        return;
+      }
+
+      const auto *file_path = std::get_if<std::string>(&file_path_it->second);
+      if (file_path == nullptr || file_path->empty())
+      {
+        result->Error("INVALID_ARGUMENTS", "filePath must be a non-empty string");
+        return;
+      }
+
+      std::string clipboard_error;
+      if (!WriteClipboardImageFile(*file_path, &clipboard_error))
+      {
+        result->Error("CLIPBOARD_ERROR", clipboard_error);
+        return;
+      }
+
+      result->Success();
     }
     else if (method_name == "prepareCaptureWorkspace")
     {

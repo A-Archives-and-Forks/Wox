@@ -327,6 +327,49 @@ static gboolean encode_pixbuf_to_png_base64(GdkPixbuf *pixbuf, gchar **base64_ou
   return TRUE;
 }
 
+static gboolean write_clipboard_image_file(GtkWindow *window, const gchar *file_path, gchar **error_out)
+{
+  if (window == nullptr || file_path == nullptr || *file_path == '\0')
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Invalid screenshot clipboard file path");
+    }
+    return FALSE;
+  }
+
+  GError *file_error = nullptr;
+  GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file(file_path, &file_error);
+  if (pixbuf == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(file_error != nullptr ? file_error->message : "Failed to load screenshot file for clipboard export");
+    }
+    g_clear_error(&file_error);
+    return FALSE;
+  }
+
+  GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(window));
+  GtkClipboard *clipboard = display != nullptr ? gtk_clipboard_get_default(display) : nullptr;
+  if (clipboard == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Failed to access GTK clipboard");
+    }
+    g_object_unref(pixbuf);
+    return FALSE;
+  }
+
+  // Flutter already wrote the final PNG to disk. Reusing that file here keeps screenshot clipboard
+  // ownership in the GTK runner and removes the extra backend hop that used to decode the image in Go.
+  gtk_clipboard_set_image(clipboard, pixbuf);
+  gtk_clipboard_store(clipboard);
+  g_object_unref(pixbuf);
+  return TRUE;
+}
+
 struct PortalRequestResponse
 {
   GMainLoop *loop;
@@ -1721,6 +1764,34 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
             response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", capture_error != nullptr ? capture_error : "Failed to load portal snapshot", nullptr));
             g_free(capture_error);
           }
+        }
+      }
+    }
+  }
+  else if (strcmp(method, "writeClipboardImageFile") == 0)
+  {
+    if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP)
+    {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing arguments for writeClipboardImageFile", nullptr));
+    }
+    else
+    {
+      FlValue *file_path_value = fl_value_lookup_string(args, "filePath");
+      if (file_path_value == nullptr || fl_value_get_type(file_path_value) != FL_VALUE_TYPE_STRING)
+      {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "filePath must be a string", nullptr));
+      }
+      else
+      {
+        gchar *clipboard_error = nullptr;
+        if (write_clipboard_image_file(window, fl_value_get_string(file_path_value), &clipboard_error))
+        {
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+        }
+        else
+        {
+          response = FL_METHOD_RESPONSE(fl_method_error_response_new("CLIPBOARD_ERROR", clipboard_error != nullptr ? clipboard_error : "Failed to write screenshot image to clipboard", nullptr));
+          g_free(clipboard_error);
         }
       }
     }

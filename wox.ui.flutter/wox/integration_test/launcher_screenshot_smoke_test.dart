@@ -150,9 +150,9 @@ class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
   }
 
   @override
-  Future<void> writeClipboardImageRgbaFile({required String filePath, required int width, required int height, required int bytesPerRow}) async {
+  Future<void> writeClipboardImageFile({required String filePath}) async {
     if (delegateNativePresentation) {
-      await _delegate.writeClipboardImageRgbaFile(filePath: filePath, width: width, height: height, bytesPerRow: bytesPerRow);
+      await _delegate.writeClipboardImageFile(filePath: filePath);
     }
   }
 }
@@ -511,7 +511,14 @@ void registerLauncherScreenshotSmokeTests() {
 }
 
 CaptureScreenshotRequest _defaultRequest() {
-  return const CaptureScreenshotRequest(sessionId: 'smoke-session', trigger: 'plugin', scope: 'all_displays', output: 'clipboard', tools: ['rect', 'ellipse', 'arrow', 'text']);
+  return const CaptureScreenshotRequest(
+    sessionId: 'smoke-session',
+    trigger: 'plugin',
+    scope: 'all_displays',
+    output: 'clipboard',
+    tools: ['rect', 'ellipse', 'arrow', 'text'],
+    exportFilePath: '/tmp/wox-smoke-screenshot.png',
+  );
 }
 
 Future<DisplaySnapshot> _buildSnapshot(String id, Color color, ScreenshotRect logicalBounds) async {

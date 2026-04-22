@@ -49,7 +49,7 @@ abstract class ScreenshotPlatformBridge {
 
   Future<void> dismissNativeSelectionOverlays();
 
-  Future<void> writeClipboardImageRgbaFile({required String filePath, required int width, required int height, required int bytesPerRow}) async {}
+  Future<void> writeClipboardImageFile({required String filePath}) async {}
 
   Future<Map<String, dynamic>> debugCaptureWorkspaceState();
 }
@@ -193,11 +193,11 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
   }
 
   @override
-  Future<void> writeClipboardImageRgbaFile({required String filePath, required int width, required int height, required int bytesPerRow}) async {
+  Future<void> writeClipboardImageFile({required String filePath}) async {
     try {
-      await _channel.invokeMethod<void>('writeClipboardImageRgbaFile', {'filePath': filePath, 'width': width, 'height': height, 'bytesPerRow': bytesPerRow});
+      await _channel.invokeMethod<void>('writeClipboardImageFile', {'filePath': filePath});
     } on MissingPluginException {
-      throw UnsupportedError('Clipboard RGBA export is not available on ${Platform.operatingSystem}');
+      throw UnsupportedError('Clipboard screenshot export is not available on ${Platform.operatingSystem}');
     }
   }
 

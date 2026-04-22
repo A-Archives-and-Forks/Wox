@@ -456,6 +456,7 @@
   "plugin_screenshot_capture_action": "Start screenshot",
   "plugin_screenshot_capture_failed": "Screenshot failed",
   "plugin_screenshot_capture_success": "Screenshot saved",
+  "plugin_screenshot_capture_clipboard_warning": "Screenshot saved, but copying to clipboard failed",
   "plugin_shell_plugin_name": "Shell",
   "plugin_shell_plugin_description": "Execute shell commands directly from Wox",
   "plugin_sys_plugin_name": "System Commands",

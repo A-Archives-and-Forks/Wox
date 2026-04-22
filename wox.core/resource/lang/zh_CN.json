@@ -456,6 +456,7 @@
   "plugin_screenshot_capture_action": "开始截图",
   "plugin_screenshot_capture_failed": "截图失败",
   "plugin_screenshot_capture_success": "截图已保存",
+  "plugin_screenshot_capture_clipboard_warning": "截图已保存，但复制到剪贴板失败",
   "plugin_shell_plugin_name": "Shell",
   "plugin_shell_plugin_description": "在 Wox 中直接执行 Shell 命令",
   "plugin_sys_plugin_name": "系统命令",
