@@ -103,6 +103,7 @@ func TestRunPlanSealFreezesWorkload(t *testing.T) {
 	// the active run.
 	rootPlans[0].RootPath = "/mutated-root"
 	rootPlans[0].Totals.PlannedWriteUnits = 999
+	rootPlans[0].Jobs[0].JobID = "mutated-job-ref"
 	rootPlans[0].ScopeTree.ScopePath = "/mutated-scope"
 	rootPlans[0].ScopeTree.Children[0].ScopePath = "/mutated-child"
 	jobs[0].ScopePath = "/mutated-job-scope"
@@ -131,6 +132,9 @@ func TestRunPlanSealFreezesWorkload(t *testing.T) {
 	}
 	if got, want := sealed.RootPlans[0].Totals.PlannedWriteUnits, int64(7); got != want {
 		t.Fatalf("sealed root totals changed: got %d want %d", got, want)
+	}
+	if got, want := sealed.RootPlans[0].Jobs[0].JobID, "job-1"; got != want {
+		t.Fatalf("sealed root job refs changed: got %q want %q", got, want)
 	}
 	if got, want := sealed.RootPlans[0].ScopeTree.ScopePath, "/root/subtree"; got != want {
 		t.Fatalf("sealed scope tree root changed: got %q want %q", got, want)
