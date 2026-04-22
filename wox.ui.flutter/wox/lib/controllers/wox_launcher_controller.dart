@@ -450,8 +450,23 @@ class WoxLauncherController extends GetxController {
     await resizeHeight(traceId: traceId, reason: reason, overrideTargetHeight: targetHeight);
   }
 
+  double calculateWindowHeightForIncomingResults(List<WoxListItem<WoxQueryResult>> incomingItems) {
+    double? overrideGridHeight;
+    if (isInGridMode()) {
+      overrideGridHeight = resultGridViewController.calculateGridHeightForItems(incomingItems);
+      if (overrideGridHeight == 0) {
+        // Grid row height is measured by the view after layout. When that value
+        // is not ready yet, fall back to the list-height estimate so the first
+        // batch still expands the window before painting.
+        overrideGridHeight = WoxThemeUtil.instance.getResultListViewHeightByCount(incomingItems.length);
+      }
+    }
+
+    return calculateWindowHeight(overrideItemCount: incomingItems.length, overrideGridHeight: overrideGridHeight);
+  }
+
   /// Triggered when received query results from the server.
-  void onReceivedQueryResults(String traceId, String queryId, List<WoxQueryResult> receivedResults, {required bool isFinal}) {
+  Future<void> onReceivedQueryResults(String traceId, String queryId, List<WoxQueryResult> receivedResults, {required bool isFinal}) async {
     // Cancel loading timer and hide loading animation when results are received
     if (queryId == currentQuery.value.queryId) {
       if (receivedResults.isNotEmpty || isFinal) {
@@ -487,9 +502,10 @@ class WoxLauncherController extends GetxController {
       isShowActionPanel.value = false;
       syncPreviewFullscreenState();
       refreshToolbarActionsForCurrentState(traceId);
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        resizeHeightForResultUpdate(traceId: traceId, reason: "empty query results received");
-      });
+      // Bug fix: empty terminal snapshots used to wait until the next frame
+      // before shrinking, which still let the old geometry flash once. Resize
+      // in the same async flow so the empty state is committed immediately.
+      await resizeHeightForResultUpdate(traceId: traceId, reason: "empty query results received");
       return;
     }
 
@@ -498,13 +514,22 @@ class WoxLauncherController extends GetxController {
     // 2. We need update items in both list and grid controllers, because metdata query (grid and list layout change relay on this) may after results arrival,
     //    at this point, we don't know which layout this query will use, so we update both
     final listItems = receivedResults.map((e) => WoxListItem.fromQueryResult(e)).toList();
+    if (activeResultViewController.items.isEmpty) {
+      // Bug fix: the first non-empty batch used to paint inside the collapsed
+      // launcher and only then trigger window growth, which made the toolbar
+      // flash below the query box for one frame. Grow first, then commit the
+      // new items so the first painted result frame already has enough height.
+      final targetHeight = calculateWindowHeightForIncomingResults(listItems);
+      await resizeHeight(traceId: traceId, reason: "prepare height before first result paint", overrideTargetHeight: targetHeight);
+    }
+
     resultListViewController.updateItems(traceId, listItems, silent: true);
     resultGridViewController.updateItems(traceId, listItems, silent: true);
 
     updateActiveResultIndex(traceId);
     updateDoctorToolbarIfNeeded(traceId);
 
-    resizeHeightForResultUpdate(traceId: traceId, reason: "query results updated");
+    unawaited(resizeHeightForResultUpdate(traceId: traceId, reason: "query results updated"));
   }
 
   void updateActiveResultIndex(String traceId) {
@@ -1564,7 +1589,7 @@ class WoxLauncherController extends GetxController {
       for (var result in results) {
         result.queryId = queryId;
       }
-      onReceivedQueryResults(traceId, queryId, results, isFinal: true);
+      await onReceivedQueryResults(traceId, queryId, results, isFinal: true);
       var endTime = DateTime.now().millisecondsSinceEpoch;
       Logger.instance.debug(traceId, "queryMRU via websocket took ${endTime - startTime} ms");
     } catch (e) {
@@ -1808,7 +1833,7 @@ class WoxLauncherController extends GetxController {
       final queryId = data['QueryId'] as String? ?? "";
       final resultsData = data['Results'] as List<dynamic>? ?? [];
       final results = resultsData.map((item) => WoxQueryResult.fromJson(item)).toList();
-      final success = pushResults(msg.traceId, queryId, results);
+      final success = await pushResults(msg.traceId, queryId, results);
       responseWoxWebsocketRequest(msg, true, success);
     }
   }
@@ -1849,7 +1874,7 @@ class WoxLauncherController extends GetxController {
       Logger.instance.info(msg.traceId, "Received websocket message: ${msg.method}, results count: ${results.length}, isFinal: $isFinal");
 
       // Process results first
-      onReceivedQueryResults(msg.traceId, queryId, results, isFinal: isFinal);
+      await onReceivedQueryResults(msg.traceId, queryId, results, isFinal: isFinal);
 
       // If this is the final final response, we must stop loading animation explicitly
       // This handles cases where results are empty but the query is finished
@@ -2127,7 +2152,10 @@ class WoxLauncherController extends GetxController {
   /// of reading the actual items in the active result view controller. This is
   /// used by the initial-show path to compute height with 0 results when a new
   /// query is about to be issued and old results should be ignored.
-  double calculateWindowHeight({int? overrideItemCount}) {
+  ///
+  /// [overrideGridHeight] lets callers provide a grid height that was
+  /// estimated from incoming items before those items are committed.
+  double calculateWindowHeight({int? overrideItemCount, double? overrideGridHeight}) {
     final maxResultCount = getMaxResultCount();
     final maxHeight = WoxThemeUtil.instance.getResultListViewHeightByCount(maxResultCount);
     final itemCount = overrideItemCount ?? activeResultViewController.items.length;
@@ -2135,7 +2163,7 @@ class WoxLauncherController extends GetxController {
     double resultHeight;
 
     if (isInGridMode()) {
-      resultHeight = resultGridViewController.calculateGridHeight();
+      resultHeight = overrideGridHeight ?? resultGridViewController.calculateGridHeight();
     } else {
       resultHeight = WoxThemeUtil.instance.getResultListViewHeightByCount(itemCount);
     }
@@ -2423,7 +2451,7 @@ class WoxLauncherController extends GetxController {
     }
   }
 
-  bool pushResults(String traceId, String queryId, List<WoxQueryResult> results) {
+  Future<bool> pushResults(String traceId, String queryId, List<WoxQueryResult> results) async {
     if (queryId.isEmpty) {
       Logger.instance.error(traceId, "push results ignored: query id is empty");
       return false;
@@ -2454,7 +2482,7 @@ class WoxLauncherController extends GetxController {
       }
     }
 
-    onReceivedQueryResults(traceId, queryId, results, isFinal: false);
+    await onReceivedQueryResults(traceId, queryId, results, isFinal: false);
     return true;
   }
 

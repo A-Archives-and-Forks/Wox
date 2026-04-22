@@ -13,7 +13,7 @@ import (
 	"wox/util/clipboard"
 )
 
-var screenshotIcon = common.NewWoxImageEmoji("📸")
+var screenshotIcon = common.PluginScreenshotIcon
 
 func init() {
 	plugin.AllSystemPlugin = append(plugin.AllSystemPlugin, &ScreenshotPlugin{})

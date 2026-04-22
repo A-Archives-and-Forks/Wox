@@ -28,7 +28,18 @@ class WoxGridController<T> extends WoxBaseListController<T> {
   /// Calculate total height needed for grid view content
   /// Returns the height for all rows and group headers, capped at maxRowCount
   double calculateGridHeight() {
-    if (items.isEmpty || gridLayoutParams.columns <= 0 || rowHeight <= 0) {
+    return _calculateGridHeightFor(items.length, (index) => items[index].value);
+  }
+
+  /// Bug fix: the launcher needs the next grid height before new results are
+  /// committed. Estimating from the incoming snapshot lets the window grow
+  /// before the first frame paints those results into the old height.
+  double calculateGridHeightForItems(List<WoxListItem<T>> incomingItems) {
+    return _calculateGridHeightFor(incomingItems.length, (index) => incomingItems[index]);
+  }
+
+  double _calculateGridHeightFor(int itemCount, WoxListItem<T> Function(int index) itemAt) {
+    if (itemCount == 0 || gridLayoutParams.columns <= 0 || rowHeight <= 0) {
       return 0;
     }
 
@@ -36,15 +47,16 @@ class WoxGridController<T> extends WoxBaseListController<T> {
     double totalHeight = 0;
     int i = 0;
 
-    while (i < items.length) {
-      if (items[i].value.isGroup) {
+    while (i < itemCount) {
+      final item = itemAt(i);
+      if (item.isGroup) {
         totalHeight += groupHeaderHeight;
         i++;
       } else {
         // Count items in this row (same group, up to columns count)
-        final currentGroup = _getItemGroup(items[i].value);
+        final currentGroup = _getItemGroup(item);
         int itemsInRow = 0;
-        while (i < items.length && !items[i].value.isGroup && _getItemGroup(items[i].value) == currentGroup && itemsInRow < gridLayoutParams.columns) {
+        while (i < itemCount && !itemAt(i).isGroup && _getItemGroup(itemAt(i)) == currentGroup && itemsInRow < gridLayoutParams.columns) {
           itemsInRow++;
           i++;
         }
