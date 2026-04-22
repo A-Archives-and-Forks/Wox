@@ -44,8 +44,9 @@ type Run struct {
 }
 
 // RootPlan describes one configured root inside a sealed run plan.
-// The planner freezes this structure so the root can be split into jobs without
-// keeping mutable traversal buffers alive during execution.
+// Root-local progress was not sufficient because one logical root can fan out
+// into many execution jobs, so the planner freezes this structure before
+// execution and keeps its traversal buffers immutable.
 type RootPlan struct {
 	RootID             string
 	RootPath           string
