@@ -42,6 +42,30 @@ class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
   Future<List<DisplaySnapshot>> captureAllDisplays() => _capture();
 
   @override
+  Future<List<DisplaySnapshot>> captureDisplayMetadata() async {
+    if (delegateNativePresentation) {
+      return _delegate.captureDisplayMetadata();
+    }
+
+    return _capture();
+  }
+
+  @override
+  Future<List<DisplaySnapshot>> loadDisplaySnapshots(List<String> displayIds) async {
+    if (delegateNativePresentation) {
+      return _delegate.loadDisplaySnapshots(displayIds);
+    }
+
+    final snapshots = await _capture();
+    if (displayIds.isEmpty) {
+      return snapshots;
+    }
+
+    final displayIdSet = displayIds.toSet();
+    return snapshots.where((snapshot) => displayIdSet.contains(snapshot.displayId)).toList();
+  }
+
+  @override
   Future<ScreenshotNativeSelectionResult> selectCaptureRegion(ScreenshotRect nativeWorkspaceBounds) async {
     if (nativeSelection != null) {
       return nativeSelection!(nativeWorkspaceBounds);
@@ -124,6 +148,13 @@ class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
     }
     return <String, dynamic>{};
   }
+
+  @override
+  Future<void> writeClipboardImageRgbaFile({required String filePath, required int width, required int height, required int bytesPerRow}) async {
+    if (delegateNativePresentation) {
+      await _delegate.writeClipboardImageRgbaFile(filePath: filePath, width: width, height: height, bytesPerRow: bytesPerRow);
+    }
+  }
 }
 
 void main() {
@@ -205,9 +236,11 @@ void registerLauncherScreenshotSmokeTests() {
       final result = await sessionFuture;
 
       expect(result['status'], equals('completed'));
-      final pngBase64 = result['pngBase64'] as String? ?? '';
-      expect(pngBase64, isNotEmpty);
-      expect(base64Decode(pngBase64).length, greaterThan(2048));
+      final screenshotPath = result['screenshotPath'] as String? ?? '';
+      expect(screenshotPath, isNotEmpty);
+      expect(await File(screenshotPath).exists(), isTrue);
+      expect(_screenshotFileNameForPath(screenshotPath), matches(RegExp(r'^\d{8}_\d{6}_wox_snapshots(?:_\d+)?\.png$')));
+      expect((await File(screenshotPath).readAsBytes()).length, greaterThan(2048));
 
       await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
       expect(screenshotController.isSessionActive.value, isFalse);
@@ -331,7 +364,7 @@ void registerLauncherScreenshotSmokeTests() {
       await tester.pump(const Duration(milliseconds: 250));
 
       final result = (await sessionFuture).toJson();
-      final pngBytes = base64Decode(result['pngBase64'] as String);
+      final pngBytes = await File(result['screenshotPath'] as String).readAsBytes();
       final codec = await ui.instantiateImageCodec(pngBytes);
       final frame = await codec.getNextFrame();
 
@@ -415,7 +448,7 @@ void registerLauncherScreenshotSmokeTests() {
       await tester.pump(const Duration(milliseconds: 250));
 
       final result = (await sessionFuture).toJson();
-      final pngBytes = base64Decode(result['pngBase64'] as String);
+      final pngBytes = await File(result['screenshotPath'] as String).readAsBytes();
       final codec = await ui.instantiateImageCodec(pngBytes);
       final frame = await codec.getNextFrame();
 
@@ -442,13 +475,15 @@ void registerLauncherScreenshotSmokeTests() {
             await _buildSnapshot('display-left', const Color(0xFF135D66), const ScreenshotRect(x: 0, y: 0, width: 200, height: 120)),
             await _buildSnapshot('display-right', const Color(0xFF6A4C93), const ScreenshotRect(x: 200, y: 0, width: 200, height: 120)),
           ],
-          nativeSelection: (_) async => const ScreenshotNativeSelectionResult(
-            wasHandled: true,
-            selection: ScreenshotRect(x: 80, y: 16, width: 140, height: 72),
-            editorVisibleBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120),
-          ),
-          presentation: (nativeWorkspaceBounds) async =>
-              const ScreenshotWorkspacePresentation(workspaceBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120), workspaceScale: 1, presentedByPlatform: false),
+          nativeSelection:
+              (_) async => const ScreenshotNativeSelectionResult(
+                wasHandled: true,
+                selection: ScreenshotRect(x: 80, y: 16, width: 140, height: 72),
+                editorVisibleBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120),
+              ),
+          presentation:
+              (nativeWorkspaceBounds) async =>
+                  const ScreenshotWorkspacePresentation(workspaceBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120), workspaceScale: 1, presentedByPlatform: false),
           dismissNativeOverlays: () async {
             dismissCalls += 1;
           },
@@ -497,4 +532,14 @@ Future<DisplaySnapshot> _buildSnapshot(String id, Color color, ScreenshotRect lo
     rotation: 0,
     imageBytesBase64: base64Encode(bytes!.buffer.asUint8List()),
   );
+}
+
+String _screenshotFileNameForPath(String screenshotPath) {
+  final normalized = screenshotPath.replaceAll('\\', '/');
+  final slashIndex = normalized.lastIndexOf('/');
+  if (slashIndex == -1) {
+    return normalized;
+  }
+
+  return normalized.substring(slashIndex + 1);
 }

@@ -195,12 +195,6 @@ static flutter::EncodableMap BuildScaledRectValue(const RECT &rect, double scale
       static_cast<double>(rect.bottom - rect.top) / safe_scale);
 }
 
-struct MonitorSnapshotCapture
-{
-  std::vector<flutter::EncodableValue> snapshots;
-  std::string error;
-};
-
 static bool IsKeyDownMessage(UINT message)
 {
   return message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
@@ -823,6 +817,313 @@ float FlutterWindow::GetDpiScale(HWND hwnd)
   return dpiScale;
 }
 
+void FlutterWindow::ClearCachedDisplayCaptures()
+{
+  for (auto &capture : cached_display_captures_)
+  {
+    if (capture.bitmap != nullptr)
+    {
+      DeleteObject(capture.bitmap);
+      capture.bitmap = nullptr;
+    }
+  }
+  cached_display_captures_.clear();
+}
+
+bool FlutterWindow::CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *captures_out, std::string *error_out)
+{
+  if (captures_out == nullptr || error_out == nullptr)
+  {
+    return false;
+  }
+
+  captures_out->clear();
+  error_out->clear();
+
+  struct MonitorCaptureContext
+  {
+    std::vector<CachedDisplayCapture> *captures;
+    std::string *error;
+  } context{captures_out, error_out};
+
+  const BOOL enumerated = EnumDisplayMonitors(
+      nullptr,
+      nullptr,
+      [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL
+      {
+        auto *context = reinterpret_cast<MonitorCaptureContext *>(data);
+        MONITORINFOEXW monitor_info{};
+        monitor_info.cbSize = sizeof(MONITORINFOEXW);
+        if (!GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO *>(&monitor_info)))
+        {
+          *context->error = "Failed to query monitor info";
+          return FALSE;
+        }
+
+        const int width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+        const int height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+        if (width <= 0 || height <= 0)
+        {
+          *context->error = "Monitor has invalid bounds";
+          return FALSE;
+        }
+
+        HDC screen_dc = GetDC(nullptr);
+        if (screen_dc == nullptr)
+        {
+          *context->error = "Failed to access desktop device context";
+          return FALSE;
+        }
+
+        HDC memory_dc = CreateCompatibleDC(screen_dc);
+        HBITMAP bitmap = CreateCompatibleBitmap(screen_dc, width, height);
+        if (memory_dc == nullptr || bitmap == nullptr)
+        {
+          if (bitmap != nullptr)
+          {
+            DeleteObject(bitmap);
+          }
+          if (memory_dc != nullptr)
+          {
+            DeleteDC(memory_dc);
+          }
+          ReleaseDC(nullptr, screen_dc);
+          *context->error = "Failed to allocate monitor bitmap";
+          return FALSE;
+        }
+
+        HGDIOBJ old_bitmap = SelectObject(memory_dc, bitmap);
+        const BOOL copied = BitBlt(
+            memory_dc,
+            0,
+            0,
+            width,
+            height,
+            screen_dc,
+            monitor_info.rcMonitor.left,
+            monitor_info.rcMonitor.top,
+            SRCCOPY | CAPTUREBLT);
+
+        SelectObject(memory_dc, old_bitmap);
+        DeleteDC(memory_dc);
+        ReleaseDC(nullptr, screen_dc);
+
+        if (!copied)
+        {
+          DeleteObject(bitmap);
+          *context->error = "Failed to capture monitor bitmap";
+          return FALSE;
+        }
+
+        DEVMODEW dev_mode{};
+        dev_mode.dmSize = sizeof(DEVMODEW);
+        int rotation = 0;
+        if (EnumDisplaySettingsExW(monitor_info.szDevice, ENUM_CURRENT_SETTINGS, &dev_mode, 0))
+        {
+          switch (dev_mode.dmDisplayOrientation)
+          {
+          case DMDO_90:
+            rotation = 90;
+            break;
+          case DMDO_180:
+            rotation = 180;
+            break;
+          case DMDO_270:
+            rotation = 270;
+            break;
+          default:
+            rotation = 0;
+            break;
+          }
+        }
+
+        const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+        const double scale = static_cast<double>(dpi) / 96.0;
+        context->captures->push_back(CachedDisplayCapture{
+            monitor_info.szDevice,
+            monitor_info.rcMonitor,
+            scale,
+            rotation,
+            bitmap,
+        });
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(&context));
+
+  if (!enumerated && error_out->empty())
+  {
+    *error_out = "Failed to enumerate display monitors";
+  }
+
+  if (!error_out->empty())
+  {
+    for (auto &capture : *captures_out)
+    {
+      if (capture.bitmap != nullptr)
+      {
+        DeleteObject(capture.bitmap);
+        capture.bitmap = nullptr;
+      }
+    }
+    captures_out->clear();
+    return false;
+  }
+
+  return true;
+}
+
+bool FlutterWindow::BuildDisplaySnapshotPayloads(const std::vector<CachedDisplayCapture> &captures, bool include_image_bytes, flutter::EncodableList *snapshots_out, std::string *error_out)
+{
+  if (snapshots_out == nullptr || error_out == nullptr)
+  {
+    return false;
+  }
+
+  snapshots_out->clear();
+  error_out->clear();
+
+  for (const auto &capture : captures)
+  {
+    const int width = capture.monitor_bounds.right - capture.monitor_bounds.left;
+    const int height = capture.monitor_bounds.bottom - capture.monitor_bounds.top;
+
+    flutter::EncodableMap snapshot;
+    snapshot[flutter::EncodableValue("displayId")] = flutter::EncodableValue(Utf8FromUtf16(capture.display_id.c_str()));
+    // The old Windows path eagerly PNG-encoded every monitor before the workspace even knew its
+    // final bounds. Reusing cached monitor bitmaps lets Flutter ask for geometry first, then load
+    // image payloads only after the native workspace shell has already been prepared.
+    snapshot[flutter::EncodableValue("logicalBounds")] = flutter::EncodableValue(
+        BuildRectValue(
+            static_cast<double>(capture.monitor_bounds.left),
+            static_cast<double>(capture.monitor_bounds.top),
+            static_cast<double>(width),
+            static_cast<double>(height)));
+    snapshot[flutter::EncodableValue("pixelBounds")] = flutter::EncodableValue(
+        BuildRectValue(
+            static_cast<double>(capture.monitor_bounds.left),
+            static_cast<double>(capture.monitor_bounds.top),
+            static_cast<double>(width),
+            static_cast<double>(height)));
+    snapshot[flutter::EncodableValue("scale")] = flutter::EncodableValue(capture.scale);
+    snapshot[flutter::EncodableValue("rotation")] = flutter::EncodableValue(capture.rotation);
+
+    if (include_image_bytes)
+    {
+      std::string png_base64;
+      if (!EncodeBitmapToPngBase64(capture.bitmap, png_base64, *error_out))
+      {
+        return false;
+      }
+      snapshot[flutter::EncodableValue("imageBytesBase64")] = flutter::EncodableValue(png_base64);
+    }
+
+    snapshots_out->push_back(flutter::EncodableValue(snapshot));
+  }
+
+  return true;
+}
+
+const FlutterWindow::CachedDisplayCapture *FlutterWindow::FindCachedDisplayCapture(const std::string &display_id) const
+{
+  for (const auto &capture : cached_display_captures_)
+  {
+    if (Utf8FromUtf16(capture.display_id.c_str()) == display_id)
+    {
+      return &capture;
+    }
+  }
+
+  return nullptr;
+}
+
+bool FlutterWindow::CachedDisplayCapturesMatch(const std::vector<std::string> &display_ids) const
+{
+  for (const auto &display_id : display_ids)
+  {
+    if (FindCachedDisplayCapture(display_id) == nullptr)
+    {
+      return false;
+    }
+  }
+
+  return !display_ids.empty() || !cached_display_captures_.empty();
+}
+
+void FlutterWindow::PrepareCaptureWorkspace(HWND hwnd, const RECT &native_workspace_bounds)
+{
+  SavePreviousActiveWindow(hwnd);
+  FlushPendingChildKeyUps();
+
+  SetWindowPos(
+      hwnd,
+      HWND_TOPMOST,
+      native_workspace_bounds.left,
+      native_workspace_bounds.top,
+      native_workspace_bounds.right - native_workspace_bounds.left,
+      native_workspace_bounds.bottom - native_workspace_bounds.top,
+      SWP_FRAMECHANGED | SWP_NOACTIVATE);
+
+  if (flutter_controller_)
+  {
+    flutter_controller_->ForceRedraw();
+  }
+  SyncFlutterChildWindowToClientArea(hwnd, "prepareCaptureWorkspace", false);
+
+  screenshot_presentation_state_.prepared = true;
+  screenshot_presentation_state_.active = false;
+  screenshot_presentation_state_.workspace_scale = static_cast<double>(GetDpiScale(hwnd));
+  screenshot_presentation_state_.native_workspace_bounds = native_workspace_bounds;
+}
+
+void FlutterWindow::RevealPreparedCaptureWorkspace(HWND hwnd)
+{
+  if (!screenshot_presentation_state_.prepared)
+  {
+    return;
+  }
+
+  blur_guard_active_ = true;
+  blur_guard_until_tick_ = GetTickCount64() + kPostShowBlurGraceMs;
+
+  const RECT &native_workspace_bounds = screenshot_presentation_state_.native_workspace_bounds;
+  SetWindowPos(
+      hwnd,
+      HWND_TOPMOST,
+      native_workspace_bounds.left,
+      native_workspace_bounds.top,
+      native_workspace_bounds.right - native_workspace_bounds.left,
+      native_workspace_bounds.bottom - native_workspace_bounds.top,
+      SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+
+  SyncFlutterChildWindowToClientArea(hwnd, "revealPreparedCaptureWorkspace", false);
+
+  // Screenshot capture replaces the standard show() -> focus() sequence on Windows because the
+  // generic window-manager path assumes one monitor/DPI. Reapplying the focus restore steps here
+  // keeps the prepared capture overlay interactive without reusing the single-monitor geometry path.
+  DismissStartMenuIfOpen();
+  SavePreviousActiveWindow(hwnd);
+  if (!SetForegroundWindow(hwnd))
+  {
+    AllowSetForegroundWindow(ASFW_ANY);
+    SetForegroundWindow(hwnd);
+  }
+  SetFocus(hwnd);
+  BringWindowToTop(hwnd);
+  blur_guard_active_ = false;
+
+  screenshot_presentation_state_.prepared = false;
+  screenshot_presentation_state_.active = true;
+}
+
+flutter::EncodableMap FlutterWindow::BuildCaptureWorkspaceResponse(const RECT &native_workspace_bounds) const
+{
+  flutter::EncodableMap response;
+  response[flutter::EncodableValue("workspaceBounds")] = flutter::EncodableValue(BuildScaledRectValue(native_workspace_bounds, screenshot_presentation_state_.workspace_scale));
+  response[flutter::EncodableValue("workspaceScale")] = flutter::EncodableValue(screenshot_presentation_state_.workspace_scale);
+  response[flutter::EncodableValue("presentedByPlatform")] = flutter::EncodableValue(true);
+  return response;
+}
+
 bool FlutterWindow::OnCreate()
 {
   if (!Win32Window::OnCreate())
@@ -888,6 +1189,7 @@ bool FlutterWindow::OnCreate()
 void FlutterWindow::OnDestroy()
 {
   pending_child_keydowns_.clear();
+  ClearCachedDisplayCaptures();
 
   if (child_window_ != nullptr && original_child_window_proc_ != nullptr)
   {
@@ -1185,150 +1487,157 @@ void FlutterWindow::HandleWindowManagerMethodCall(
     }
     else if (method_name == "captureAllDisplays")
     {
-      MonitorSnapshotCapture monitor_capture;
-
-      EnumDisplayMonitors(
-          nullptr,
-          nullptr,
-          [](HMONITOR monitor, HDC, LPRECT, LPARAM data) -> BOOL
-          {
-            auto *capture = reinterpret_cast<MonitorSnapshotCapture *>(data);
-            MONITORINFOEXW monitor_info{};
-            monitor_info.cbSize = sizeof(MONITORINFOEXW);
-            if (!GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO *>(&monitor_info)))
-            {
-              capture->error = "Failed to query monitor info";
-              return FALSE;
-            }
-
-            const int width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
-            const int height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
-            if (width <= 0 || height <= 0)
-            {
-              capture->error = "Monitor has invalid bounds";
-              return FALSE;
-            }
-
-            HDC screen_dc = GetDC(nullptr);
-            if (screen_dc == nullptr)
-            {
-              capture->error = "Failed to access desktop device context";
-              return FALSE;
-            }
-
-            HDC memory_dc = CreateCompatibleDC(screen_dc);
-            HBITMAP bitmap = CreateCompatibleBitmap(screen_dc, width, height);
-            if (memory_dc == nullptr || bitmap == nullptr)
-            {
-              if (bitmap != nullptr)
-              {
-                DeleteObject(bitmap);
-              }
-              if (memory_dc != nullptr)
-              {
-                DeleteDC(memory_dc);
-              }
-              ReleaseDC(nullptr, screen_dc);
-              capture->error = "Failed to allocate monitor bitmap";
-              return FALSE;
-            }
-
-            HGDIOBJ old_bitmap = SelectObject(memory_dc, bitmap);
-            const BOOL copied = BitBlt(
-                memory_dc,
-                0,
-                0,
-                width,
-                height,
-                screen_dc,
-                monitor_info.rcMonitor.left,
-                monitor_info.rcMonitor.top,
-                SRCCOPY | CAPTUREBLT);
-
-            SelectObject(memory_dc, old_bitmap);
-            DeleteDC(memory_dc);
-            ReleaseDC(nullptr, screen_dc);
-
-            if (!copied)
-            {
-              DeleteObject(bitmap);
-              capture->error = "Failed to capture monitor bitmap";
-              return FALSE;
-            }
-
-            std::string png_base64;
-            std::string encode_error;
-            const bool encoded = EncodeBitmapToPngBase64(bitmap, png_base64, encode_error);
-            DeleteObject(bitmap);
-            if (!encoded)
-            {
-              capture->error = encode_error;
-              return FALSE;
-            }
-
-            DEVMODEW dev_mode{};
-            dev_mode.dmSize = sizeof(DEVMODEW);
-            int rotation = 0;
-            if (EnumDisplaySettingsExW(monitor_info.szDevice, ENUM_CURRENT_SETTINGS, &dev_mode, 0))
-            {
-              switch (dev_mode.dmDisplayOrientation)
-              {
-              case DMDO_90:
-                rotation = 90;
-                break;
-              case DMDO_180:
-                rotation = 180;
-                break;
-              case DMDO_270:
-                rotation = 270;
-                break;
-              default:
-                rotation = 0;
-                break;
-              }
-            }
-
-            const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
-            const double scale = static_cast<double>(dpi) / 96.0;
-            flutter::EncodableMap snapshot;
-            snapshot[flutter::EncodableValue("displayId")] = flutter::EncodableValue(Utf8FromUtf16(monitor_info.szDevice));
-            // Windows screenshot presentation now sizes one overlay window in native virtual-
-            // desktop pixels. Mixed-DPI monitor layouts cannot be represented by dividing each
-            // monitor rect by its own scale because the combined workspace would no longer share
-            // one coordinate system. Flutter normalizes these native bounds after the platform
-            // reports the final overlay window scale.
-            snapshot[flutter::EncodableValue("logicalBounds")] = flutter::EncodableValue(
-                BuildRectValue(
-                    static_cast<double>(monitor_info.rcMonitor.left),
-                    static_cast<double>(monitor_info.rcMonitor.top),
-                    static_cast<double>(width),
-                    static_cast<double>(height)));
-            snapshot[flutter::EncodableValue("pixelBounds")] = flutter::EncodableValue(
-                BuildRectValue(
-                    static_cast<double>(monitor_info.rcMonitor.left),
-                    static_cast<double>(monitor_info.rcMonitor.top),
-                    static_cast<double>(width),
-                    static_cast<double>(height)));
-            snapshot[flutter::EncodableValue("scale")] = flutter::EncodableValue(scale);
-            snapshot[flutter::EncodableValue("rotation")] = flutter::EncodableValue(rotation);
-            snapshot[flutter::EncodableValue("imageBytesBase64")] = flutter::EncodableValue(png_base64);
-            capture->snapshots.emplace_back(snapshot);
-            return TRUE;
-          },
-          reinterpret_cast<LPARAM>(&monitor_capture));
-
-      if (!monitor_capture.error.empty())
+      std::vector<CachedDisplayCapture> captures;
+      std::string capture_error;
+      if (!CaptureDisplaySnapshots(&captures, &capture_error))
       {
-        result->Error("CAPTURE_ERROR", monitor_capture.error);
+        result->Error("CAPTURE_ERROR", capture_error);
         return;
       }
 
+      ClearCachedDisplayCaptures();
+      cached_display_captures_ = captures;
+
       flutter::EncodableList snapshots;
-      for (const auto &snapshot : monitor_capture.snapshots)
+      if (!BuildDisplaySnapshotPayloads(cached_display_captures_, true, &snapshots, &capture_error))
       {
-        snapshots.push_back(snapshot);
+        result->Error("CAPTURE_ERROR", capture_error);
+        return;
       }
       result->Success(flutter::EncodableValue(snapshots));
+    }
+    else if (method_name == "captureDisplayMetadata")
+    {
+      std::vector<CachedDisplayCapture> captures;
+      std::string capture_error;
+      if (!CaptureDisplaySnapshots(&captures, &capture_error))
+      {
+        result->Error("CAPTURE_ERROR", capture_error);
+        return;
+      }
+
+      ClearCachedDisplayCaptures();
+      cached_display_captures_ = captures;
+
+      flutter::EncodableList snapshots;
+      if (!BuildDisplaySnapshotPayloads(cached_display_captures_, false, &snapshots, &capture_error))
+      {
+        result->Error("CAPTURE_ERROR", capture_error);
+        return;
+      }
+
+      result->Success(flutter::EncodableValue(snapshots));
+    }
+    else if (method_name == "loadDisplaySnapshots")
+    {
+      const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
+      if (arguments == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Invalid arguments for loadDisplaySnapshots");
+        return;
+      }
+
+      auto display_ids_it = arguments->find(flutter::EncodableValue("displayIds"));
+      if (display_ids_it == arguments->end())
+      {
+        result->Error("INVALID_ARGUMENTS", "Missing displayIds for loadDisplaySnapshots");
+        return;
+      }
+
+      const auto *display_ids_value = std::get_if<flutter::EncodableList>(&display_ids_it->second);
+      if (display_ids_value == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "displayIds must be a list");
+        return;
+      }
+
+      std::vector<std::string> display_ids;
+      display_ids.reserve(display_ids_value->size());
+      for (const auto &display_id_value : *display_ids_value)
+      {
+        const auto *display_id = std::get_if<std::string>(&display_id_value);
+        if (display_id == nullptr)
+        {
+          result->Error("INVALID_ARGUMENTS", "displayIds must contain strings");
+          return;
+        }
+        display_ids.push_back(*display_id);
+      }
+
+      if (!display_ids.empty() && !CachedDisplayCapturesMatch(display_ids))
+      {
+        std::vector<CachedDisplayCapture> captures;
+        std::string capture_error;
+        if (!CaptureDisplaySnapshots(&captures, &capture_error))
+        {
+          result->Error("CAPTURE_ERROR", capture_error);
+          return;
+        }
+
+        ClearCachedDisplayCaptures();
+        cached_display_captures_ = captures;
+      }
+
+      std::vector<CachedDisplayCapture> filtered_captures;
+      if (display_ids.empty())
+      {
+        filtered_captures = cached_display_captures_;
+      }
+      else
+      {
+        for (const auto &display_id : display_ids)
+        {
+          const auto *capture = FindCachedDisplayCapture(display_id);
+          if (capture == nullptr)
+          {
+            result->Error("CAPTURE_ERROR", "Failed to locate cached display capture");
+            return;
+          }
+          filtered_captures.push_back(*capture);
+        }
+      }
+
+      std::string capture_error;
+      flutter::EncodableList snapshots;
+      if (!BuildDisplaySnapshotPayloads(filtered_captures, true, &snapshots, &capture_error))
+      {
+        result->Error("CAPTURE_ERROR", capture_error);
+        return;
+      }
+
+      result->Success(flutter::EncodableValue(snapshots));
+    }
+    else if (method_name == "prepareCaptureWorkspace")
+    {
+      const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
+      if (arguments == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Invalid arguments for prepareCaptureWorkspace");
+        return;
+      }
+
+      auto x_it = arguments->find(flutter::EncodableValue("x"));
+      auto y_it = arguments->find(flutter::EncodableValue("y"));
+      auto width_it = arguments->find(flutter::EncodableValue("width"));
+      auto height_it = arguments->find(flutter::EncodableValue("height"));
+      if (x_it == arguments->end() || y_it == arguments->end() || width_it == arguments->end() || height_it == arguments->end())
+      {
+        result->Error("INVALID_ARGUMENTS", "Invalid arguments for prepareCaptureWorkspace");
+        return;
+      }
+
+      const double x = std::get<double>(x_it->second);
+      const double y = std::get<double>(y_it->second);
+      const double width = std::get<double>(width_it->second);
+      const double height = std::get<double>(height_it->second);
+      const RECT native_workspace_bounds{
+          static_cast<LONG>(std::lround(x)),
+          static_cast<LONG>(std::lround(y)),
+          static_cast<LONG>(std::lround(x + width)),
+          static_cast<LONG>(std::lround(y + height))};
+
+      PrepareCaptureWorkspace(hwnd, native_workspace_bounds);
+      result->Success(flutter::EncodableValue(BuildCaptureWorkspaceResponse(native_workspace_bounds)));
     }
     else if (method_name == "presentCaptureWorkspace")
     {
@@ -1359,54 +1668,19 @@ void FlutterWindow::HandleWindowManagerMethodCall(
           static_cast<LONG>(std::lround(x + width)),
           static_cast<LONG>(std::lround(y + height))};
 
-      SavePreviousActiveWindow(hwnd);
-      FlushPendingChildKeyUps();
-      blur_guard_active_ = true;
-      blur_guard_until_tick_ = GetTickCount64() + kPostShowBlurGraceMs;
-
-      SetWindowPos(
-          hwnd,
-          HWND_TOPMOST,
-          native_workspace_bounds.left,
-          native_workspace_bounds.top,
-          native_workspace_bounds.right - native_workspace_bounds.left,
-          native_workspace_bounds.bottom - native_workspace_bounds.top,
-          SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-
-      if (flutter_controller_)
-      {
-        flutter_controller_->ForceRedraw();
-      }
-      SyncFlutterChildWindowToClientArea(hwnd, "presentCaptureWorkspace", false);
-
-      // Screenshot capture replaces the standard show() -> focus() sequence on Windows because the
-      // generic window-manager path assumes one monitor/DPI. Reapplying the focus restore steps
-      // here keeps the capture overlay interactive without reusing the single-monitor geometry path.
-      DismissStartMenuIfOpen();
-      SavePreviousActiveWindow(hwnd);
-      if (!SetForegroundWindow(hwnd))
-      {
-        AllowSetForegroundWindow(ASFW_ANY);
-        SetForegroundWindow(hwnd);
-      }
-      SetFocus(hwnd);
-      BringWindowToTop(hwnd);
-      blur_guard_active_ = false;
-
-      const double workspace_scale = static_cast<double>(GetDpiScale(hwnd));
-      screenshot_presentation_state_.active = true;
-      screenshot_presentation_state_.workspace_scale = workspace_scale;
-      screenshot_presentation_state_.native_workspace_bounds = native_workspace_bounds;
-
-      flutter::EncodableMap response;
-      response[flutter::EncodableValue("workspaceBounds")] = flutter::EncodableValue(BuildScaledRectValue(native_workspace_bounds, workspace_scale));
-      response[flutter::EncodableValue("workspaceScale")] = flutter::EncodableValue(workspace_scale);
-      response[flutter::EncodableValue("presentedByPlatform")] = flutter::EncodableValue(true);
-      result->Success(flutter::EncodableValue(response));
+      PrepareCaptureWorkspace(hwnd, native_workspace_bounds);
+      RevealPreparedCaptureWorkspace(hwnd);
+      result->Success(flutter::EncodableValue(BuildCaptureWorkspaceResponse(native_workspace_bounds)));
+    }
+    else if (method_name == "revealPreparedCaptureWorkspace")
+    {
+      RevealPreparedCaptureWorkspace(hwnd);
+      result->Success();
     }
     else if (method_name == "dismissCaptureWorkspacePresentation")
     {
       screenshot_presentation_state_.active = false;
+      screenshot_presentation_state_.prepared = false;
       screenshot_presentation_state_.workspace_scale = 1.0;
       screenshot_presentation_state_.native_workspace_bounds = {0, 0, 0, 0};
       SyncFlutterChildWindowToClientArea(hwnd, "dismissCaptureWorkspacePresentation", false);

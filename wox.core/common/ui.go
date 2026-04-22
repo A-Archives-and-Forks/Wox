@@ -170,13 +170,13 @@ type DisplaySnapshot struct {
 	ImageBytesBase64 string         `json:"imageBytesBase64"`
 }
 
-// CaptureScreenshotResult carries the final PNG back to Go.
-// Go intentionally only receives the exported image or an explicit "output already handled" signal
-// so the UI remains the only owner of transient annotation state and platform capture details.
+// CaptureScreenshotResult carries the exported screenshot file back to Go.
+// The previous websocket contract base64-wrapped full PNG payloads, which added avoidable transport
+// cost on every completed screenshot. Returning the exported file path keeps annotation state in the
+// UI while still letting Go continue clipboard and plugin-facing post-processing from disk.
 type CaptureScreenshotResult struct {
 	Status               CaptureScreenshotStatus `json:"status"`
-	PngBase64            string                  `json:"pngBase64,omitempty"`
-	OutputHandled        bool                    `json:"outputHandled,omitempty"`
+	ScreenshotPath       string                  `json:"screenshotPath,omitempty"`
 	LogicalSelectionRect *ScreenshotRect         `json:"logicalSelectionRect,omitempty"`
 	ErrorCode            string                  `json:"errorCode,omitempty"`
 	ErrorMessage         string                  `json:"errorMessage,omitempty"`

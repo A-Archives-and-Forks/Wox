@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:path/path.dart' as path;
 import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
@@ -83,34 +84,32 @@ class WoxScreenshotController extends GetxController {
     await _prepareNewSession(traceId);
 
     try {
+      final metadataSnapshots = await ScreenshotPlatformBridge.instance.captureDisplayMetadata();
+      if (metadataSnapshots.isEmpty) {
+        throw StateError('No display snapshots returned');
+      }
+
+      final nativeWorkspaceBounds = _calculateUnionRect(metadataSnapshots.map((item) => item.logicalBounds.toRect()).toList());
       if (Platform.isMacOS) {
         // macOS native selection now starts from cached display metadata so the topmost overlay can
         // appear before Flutter receives PNG/base64 payloads for every monitor. That keeps the
         // screenshot startup path focused on the native selector, then hydrates pixels only when
         // the annotation/export pipeline truly needs them.
-        final metadataSnapshots = await ScreenshotPlatformBridge.instance.captureDisplayMetadata();
-        if (metadataSnapshots.isEmpty) {
-          throw StateError('No display snapshots returned');
-        }
-
-        final nativeWorkspaceBounds = _calculateUnionRect(metadataSnapshots.map((item) => item.logicalBounds.toRect()).toList());
         final nativeSelectionResult = await _tryStartMacOSNativeSelectionEditor(traceId, metadataSnapshots, nativeWorkspaceBounds);
         if (nativeSelectionResult != null) {
           return nativeSelectionResult;
         }
 
-        final rawSnapshots = await _hydrateRawSnapshots(metadataSnapshots);
-        await _presentFlutterCaptureWorkspace(traceId, rawSnapshots, nativeWorkspaceBounds);
+        await _presentPreparedCaptureWorkspace(traceId, metadataSnapshots, nativeWorkspaceBounds);
         return _sessionFutureOrCancelled();
       }
 
-      final rawSnapshots = await ScreenshotPlatformBridge.instance.captureAllDisplays();
-      if (rawSnapshots.isEmpty) {
-        throw StateError('No display snapshots returned');
+      if (Platform.isWindows) {
+        await _presentPreparedCaptureWorkspace(traceId, metadataSnapshots, nativeWorkspaceBounds);
+      } else {
+        final rawSnapshots = await _hydrateRawSnapshots(metadataSnapshots);
+        await _presentFlutterCaptureWorkspace(traceId, rawSnapshots, nativeWorkspaceBounds);
       }
-
-      final nativeWorkspaceBounds = _calculateUnionRect(rawSnapshots.map((item) => item.logicalBounds.toRect()).toList());
-      await _presentFlutterCaptureWorkspace(traceId, rawSnapshots, nativeWorkspaceBounds);
     } catch (e) {
       Logger.instance.error(traceId, 'Failed to start screenshot session: $e');
       final failed = CaptureScreenshotResult.failed(errorCode: 'capture_failed', errorMessage: e.toString());
@@ -161,6 +160,39 @@ class WoxScreenshotController extends GetxController {
     }
 
     await WoxApi.instance.onShow(traceId);
+    stage.value = ScreenshotSessionStage.selecting;
+  }
+
+  Future<void> _presentPreparedCaptureWorkspace(String traceId, List<DisplaySnapshot> metadataSnapshots, Rect nativeWorkspaceBounds) async {
+    final presentation = await ScreenshotPlatformBridge.instance.prepareCaptureWorkspace(ScreenshotRect.fromRect(nativeWorkspaceBounds));
+    final rawSnapshots = await _hydrateRawSnapshots(metadataSnapshots);
+    final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
+      rawSnapshots,
+      nativeWorkspaceBounds: nativeWorkspaceBounds,
+      workspaceBounds: presentation.workspaceBounds.toRect(),
+      workspaceScale: presentation.workspaceScale,
+    );
+
+    await _decodeDisplayImages(normalizedSnapshots);
+    displaySnapshots.assignAll(normalizedSnapshots);
+    virtualBounds.value = ScreenshotRect.fromRect(presentation.workspaceBounds.toRect());
+    workspaceScale.value = presentation.workspaceScale;
+
+    await WoxApi.instance.onShow(traceId);
+    if (presentation.presentedByPlatform) {
+      // macOS and Windows now share the same handoff: resize and prime the native screenshot shell
+      // before Flutter decodes monitor PNGs, then reveal only after the first annotation frame is
+      // ready. The previous all-in-one path made the user wait for capture, PNG encoding, layout,
+      // and show on one visible transition.
+      await ScreenshotPlatformBridge.instance.revealPreparedCaptureWorkspace();
+    } else {
+      final bounds = virtualBoundsRect;
+      await windowManager.setBounds(bounds.topLeft, bounds.size);
+      await windowManager.setAlwaysOnTop(true);
+      await windowManager.show();
+      await windowManager.focus();
+    }
+
     stage.value = ScreenshotSessionStage.selecting;
   }
 
@@ -307,26 +339,11 @@ class WoxScreenshotController extends GetxController {
       await _hideCompletedScreenshotWindow(traceId);
       await _ensureSelectionSnapshotsReady(currentSelection);
 
-      CaptureScreenshotResult result;
-      var outputHandled = false;
-      if (Platform.isMacOS) {
-        try {
-          await _writeSelectionToNativeClipboard(selection: currentSelection, snapshots: displaySnapshots.toList(), annotationsToPaint: annotations.toList());
-          outputHandled = true;
-        } catch (error) {
-          // macOS clipboard writes now have a native fast path so confirms do not wait on Flutter's
-          // PNG encoder. Keep the old PNG bridge as a fallback because a failed native handoff must
-          // still leave screenshot capture functional instead of converting a performance issue into a hard failure.
-          Logger.instance.warn(traceId, 'Native screenshot clipboard export failed, falling back to PNG bridge: $error');
-        }
-      }
-
-      if (outputHandled) {
-        result = CaptureScreenshotResult.completed(selectionRect: currentSelection, outputHandled: true);
-      } else {
-        final pngBytes = await exportSelectionPng();
-        result = CaptureScreenshotResult.completed(selectionRect: currentSelection, pngBytes: pngBytes);
-      }
+      // Screenshot completion used to push full PNG/base64 payloads back through the websocket
+      // bridge. Persisting the exported PNG locally keeps the transport payload small, preserves a
+      // reusable artifact for backend post-processing, and still reflects the exact pixels Flutter exported.
+      final screenshotPath = await _writeSelectionPngFile(selection: currentSelection, snapshots: displaySnapshots.toList(), annotationsToPaint: annotations.toList());
+      final result = CaptureScreenshotResult.completed(selectionRect: currentSelection, screenshotPath: screenshotPath);
       await _finishSession(traceId, result, ScreenshotSessionStage.done, restoreVisibility: false, windowAlreadyHidden: true);
     } catch (e) {
       Logger.instance.error(traceId, 'Failed to export screenshot: $e');
@@ -334,42 +351,11 @@ class WoxScreenshotController extends GetxController {
     }
   }
 
-  Future<void> _writeSelectionToNativeClipboard({required Rect selection, required List<DisplaySnapshot> snapshots, required List<ScreenshotAnnotation> annotationsToPaint}) async {
-    final composed = await _composeSelectionImage(selection: selection, snapshots: snapshots, annotationsToPaint: annotationsToPaint);
-    File? rawFile;
-
-    try {
-      final byteData = await composed.image.toByteData(format: ui.ImageByteFormat.rawRgba);
-      if (byteData == null) {
-        throw StateError('Failed to extract raw screenshot bytes');
-      }
-
-      final rawBytes = byteData.buffer.asUint8List();
-      rawFile = File('${Directory.systemTemp.path}/wox_screenshot_export_${DateTime.now().microsecondsSinceEpoch}.rgba');
-      await rawFile.writeAsBytes(rawBytes);
-      // The previous macOS path re-encoded the composed image to PNG, base64-wrapped it for the
-      // WebSocket bridge, then decoded it again in Go before finally writing the clipboard. Passing
-      // a raw RGBA temp file to the native runner keeps the clipboard write local and removes the
-      // slowest confirm stage without changing the exported pixels the user selected.
-      await ScreenshotPlatformBridge.instance.writeClipboardImageRgbaFile(
-        filePath: rawFile.path,
-        width: composed.pixelWidth,
-        height: composed.pixelHeight,
-        bytesPerRow: composed.pixelWidth * 4,
-      );
-    } finally {
-      composed.image.dispose();
-      if (rawFile != null) {
-        try {
-          if (await rawFile.exists()) {
-            await rawFile.delete();
-          }
-        } catch (_) {
-          // Best-effort cleanup is enough here because a leaked temp file is preferable to masking
-          // a successful clipboard export with a secondary delete failure.
-        }
-      }
-    }
+  Future<String> _writeSelectionPngFile({required Rect selection, required List<DisplaySnapshot> snapshots, required List<ScreenshotAnnotation> annotationsToPaint}) async {
+    final rendered = await _renderSelectionImage(selection: selection, snapshots: snapshots, annotationsToPaint: annotationsToPaint);
+    final exportFile = await _reserveScreenshotExportFile();
+    await exportFile.writeAsBytes(rendered.pngBytes, flush: true);
+    return exportFile.path;
   }
 
   Future<void> _finishSession(
@@ -555,14 +541,73 @@ class WoxScreenshotController extends GetxController {
     return hydrationTask;
   }
 
+  Future<List<DisplaySnapshot>> _hydrateRawSnapshotBatch(List<String> displayIds) async {
+    if (displayIds.isEmpty) {
+      return const <DisplaySnapshot>[];
+    }
+
+    final requestedDisplayIds = displayIds.toSet().toList();
+    final pendingDisplayIds = <String>[];
+    final resolvedSnapshots = <String, DisplaySnapshot>{};
+    for (final displayId in requestedDisplayIds) {
+      final hydratedSnapshot = _hydratedRawSnapshots[displayId];
+      if (hydratedSnapshot != null && hydratedSnapshot.hasImageBytes) {
+        resolvedSnapshots[displayId] = hydratedSnapshot;
+        continue;
+      }
+
+      pendingDisplayIds.add(displayId);
+    }
+
+    if (pendingDisplayIds.isNotEmpty) {
+      final sessionRevision = _captureSessionRevision;
+      final loadedSnapshots = await ScreenshotPlatformBridge.instance.loadDisplaySnapshots(pendingDisplayIds);
+      final loadedSnapshotMap = <String, DisplaySnapshot>{};
+      for (final loadedSnapshot in loadedSnapshots) {
+        loadedSnapshotMap[loadedSnapshot.displayId] = loadedSnapshot;
+      }
+
+      // The original hydration path called the native bridge once per monitor. Batch-loading keeps
+      // the metadata-first startup useful on Windows and Linux by collapsing those repeated method
+      // channel round-trips into one payload fetch while still updating the per-display cache.
+      for (final displayId in pendingDisplayIds) {
+        final loadedSnapshot = loadedSnapshotMap[displayId];
+        if (loadedSnapshot == null) {
+          throw StateError('Display snapshot $displayId could not be hydrated');
+        }
+
+        final rawSnapshot = _rawSnapshotForDisplayId(displayId);
+        final hydratedSnapshot = rawSnapshot.copyWith(
+          logicalBounds: loadedSnapshot.logicalBounds,
+          pixelBounds: loadedSnapshot.pixelBounds,
+          scale: loadedSnapshot.scale,
+          rotation: loadedSnapshot.rotation,
+          imageBytesBase64: loadedSnapshot.imageBytesBase64,
+        );
+
+        resolvedSnapshots[displayId] = hydratedSnapshot;
+        if (sessionRevision == _captureSessionRevision && _sessionCompleter != null && !_sessionCompleter!.isCompleted) {
+          _hydratedRawSnapshots[displayId] = hydratedSnapshot;
+        }
+      }
+    }
+
+    return displayIds.map((displayId) {
+      final hydratedSnapshot = _hydratedRawSnapshots[displayId] ?? resolvedSnapshots[displayId];
+      if (hydratedSnapshot == null) {
+        throw StateError('Display snapshot $displayId could not be resolved');
+      }
+      return hydratedSnapshot;
+    }).toList();
+  }
+
   Future<List<DisplaySnapshot>> _hydrateRawSnapshots(List<DisplaySnapshot> rawSnapshots) async {
     if (rawSnapshots.isEmpty) {
       return rawSnapshots;
     }
 
     _pendingRawSnapshots = rawSnapshots;
-    final hydratedSnapshots = await Future.wait(rawSnapshots.map((snapshot) => _ensureRawSnapshotHydrated(snapshot.displayId)));
-    return rawSnapshots.map((snapshot) => _hydratedRawSnapshots[snapshot.displayId] ?? hydratedSnapshots.firstWhere((item) => item.displayId == snapshot.displayId)).toList();
+    return _hydrateRawSnapshotBatch(rawSnapshots.map((snapshot) => snapshot.displayId).toList());
   }
 
   Future<void> _ensureSelectionSnapshotsReady(Rect selection) async {
@@ -574,7 +619,7 @@ class WoxScreenshotController extends GetxController {
       return;
     }
 
-    final hydratedSnapshots = await Future.wait(snapshotsNeedingHydration.map((snapshot) => _ensureRawSnapshotHydrated(snapshot.displayId)));
+    final hydratedSnapshots = await _hydrateRawSnapshotBatch(snapshotsNeedingHydration.map((snapshot) => snapshot.displayId).toList());
     for (final hydratedSnapshot in hydratedSnapshots) {
       DisplaySnapshot? currentSnapshot;
       for (final snapshot in displaySnapshots) {
@@ -894,16 +939,6 @@ class WoxScreenshotController extends GetxController {
     return best ?? snapshots.first;
   }
 
-  Future<Uint8List> exportSelectionPng() async {
-    final currentSelection = selectionRect;
-    if (currentSelection == null) {
-      throw StateError('Selection is empty');
-    }
-
-    final rendered = await _renderSelectionImage(selection: currentSelection, snapshots: displaySnapshots.toList(), annotationsToPaint: annotations.toList());
-    return rendered.pngBytes;
-  }
-
   Future<_RenderedSelectionImage> _renderSelectionImage({
     required Rect selection,
     required List<DisplaySnapshot> snapshots,
@@ -917,10 +952,44 @@ class WoxScreenshotController extends GetxController {
       }
 
       final pngBytes = byteData.buffer.asUint8List();
-      return _RenderedSelectionImage(pngBytes: pngBytes, pixelWidth: composed.pixelWidth, pixelHeight: composed.pixelHeight);
+      return _RenderedSelectionImage(pngBytes: pngBytes);
     } finally {
       composed.image.dispose();
     }
+  }
+
+  Future<File> _reserveScreenshotExportFile() async {
+    final screenshotDirectory = Directory(path.join(_getHomeDir(), '.wox', 'screenshots'));
+    await screenshotDirectory.create(recursive: true);
+
+    final timestamp = _formatScreenshotTimestamp(DateTime.now());
+    final baseName = '${timestamp}_wox_snapshots';
+    var suffix = 0;
+    while (true) {
+      final suffixText = suffix == 0 ? '' : '_${suffix.toString().padLeft(2, '0')}';
+      final candidate = File(path.join(screenshotDirectory.path, '$baseName$suffixText.png'));
+      if (!await candidate.exists()) {
+        return candidate;
+      }
+      suffix += 1;
+    }
+  }
+
+  String _formatScreenshotTimestamp(DateTime timestamp) {
+    final year = timestamp.year.toString().padLeft(4, '0');
+    final month = timestamp.month.toString().padLeft(2, '0');
+    final day = timestamp.day.toString().padLeft(2, '0');
+    final hour = timestamp.hour.toString().padLeft(2, '0');
+    final minute = timestamp.minute.toString().padLeft(2, '0');
+    final second = timestamp.second.toString().padLeft(2, '0');
+    return '$year$month${day}_$hour$minute$second';
+  }
+
+  String _getHomeDir() {
+    if (Platform.isWindows) {
+      return Platform.environment['UserProfile']!;
+    }
+    return Platform.environment['HOME']!;
   }
 
   Future<_ComposedSelectionImage> _composeSelectionImage({
@@ -1142,11 +1211,9 @@ class _DisplayExportSlice {
 }
 
 class _RenderedSelectionImage {
-  const _RenderedSelectionImage({required this.pngBytes, required this.pixelWidth, required this.pixelHeight});
+  const _RenderedSelectionImage({required this.pngBytes});
 
   final Uint8List pngBytes;
-  final int pixelWidth;
-  final int pixelHeight;
 }
 
 class _ComposedSelectionImage {

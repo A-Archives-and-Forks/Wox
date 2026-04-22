@@ -17,6 +17,37 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+struct PortalMonitorSnapshot
+{
+  std::string id;
+  int x;
+  int y;
+  int width;
+  int height;
+};
+
+struct CachedLinuxDisplayCapture
+{
+  std::string display_id;
+  int x;
+  int y;
+  int width;
+  int height;
+  double scale;
+  GdkPixbuf *pixbuf;
+};
+
+struct CachedPortalCapture
+{
+  gboolean has_value = FALSE;
+  gboolean is_single_desktop = FALSE;
+  std::vector<PortalMonitorSnapshot> monitors;
+  GdkRectangle logical_union{};
+  double scale_x = 1.0;
+  double scale_y = 1.0;
+  GdkPixbuf *desktop_pixbuf = nullptr;
+};
+
 struct _MyApplication
 {
   GtkApplication parent_instance;
@@ -24,6 +55,8 @@ struct _MyApplication
   GtkWindow *window; // Store reference to the main window
   gulong previous_active_window;
   gboolean restore_previous_window_on_hide;
+  std::vector<struct CachedLinuxDisplayCapture> cached_x11_display_captures;
+  struct CachedPortalCapture cached_portal_capture;
 };
 
 // Global variable to store method channel for window events
@@ -302,14 +335,53 @@ struct PortalRequestResponse
   gboolean received;
 };
 
-struct PortalMonitorSnapshot
+static void clear_x11_display_cache(MyApplication *self)
 {
-  std::string id;
-  int x;
-  int y;
-  int width;
-  int height;
-};
+  if (self == nullptr)
+  {
+    return;
+  }
+
+  for (auto &capture : self->cached_x11_display_captures)
+  {
+    if (capture.pixbuf != nullptr)
+    {
+      g_object_unref(capture.pixbuf);
+      capture.pixbuf = nullptr;
+    }
+  }
+  self->cached_x11_display_captures.clear();
+}
+
+static void clear_portal_capture(CachedPortalCapture *capture)
+{
+  if (capture == nullptr)
+  {
+    return;
+  }
+
+  if (capture->desktop_pixbuf != nullptr)
+  {
+    g_object_unref(capture->desktop_pixbuf);
+    capture->desktop_pixbuf = nullptr;
+  }
+
+  capture->has_value = FALSE;
+  capture->is_single_desktop = FALSE;
+  capture->monitors.clear();
+  capture->logical_union = GdkRectangle{};
+  capture->scale_x = 1.0;
+  capture->scale_y = 1.0;
+}
+
+static void clear_screenshot_capture_cache(MyApplication *self)
+{
+  clear_x11_display_cache(self);
+  if (self != nullptr)
+  {
+    clear_portal_capture(&self->cached_portal_capture);
+  }
+}
 
 static gboolean portal_timeout_cb(gpointer user_data)
 {
@@ -798,7 +870,7 @@ static gboolean capture_portal_monitor_metadata(
   return TRUE;
 }
 
-static gboolean capture_portal_monitor_snapshots(FlValue **snapshots_out, gchar **error_out)
+static gboolean G_GNUC_UNUSED capture_portal_monitor_snapshots(FlValue **snapshots_out, gchar **error_out)
 {
   GError *dbus_error = nullptr;
   GDBusConnection *connection = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &dbus_error);
@@ -911,7 +983,7 @@ static gboolean capture_portal_monitor_snapshots(FlValue **snapshots_out, gchar 
   return TRUE;
 }
 
-static gboolean capture_portal_desktop_snapshot(FlValue **snapshot_out, gchar **error_out)
+static gboolean G_GNUC_UNUSED capture_portal_desktop_snapshot(FlValue **snapshot_out, gchar **error_out)
 {
   GError *dbus_error = nullptr;
   GDBusConnection *connection = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &dbus_error);
@@ -1014,6 +1086,440 @@ static gboolean capture_portal_desktop_snapshot(FlValue **snapshot_out, gchar **
   g_free(image_base64);
 
   *snapshot_out = snapshot;
+  return TRUE;
+}
+
+static gboolean display_id_is_requested(FlValue *display_ids, const std::string &display_id)
+{
+  if (display_ids == nullptr || fl_value_get_type(display_ids) != FL_VALUE_TYPE_LIST)
+  {
+    return TRUE;
+  }
+
+  const size_t length = fl_value_get_length(display_ids);
+  if (length == 0)
+  {
+    return TRUE;
+  }
+
+  for (size_t index = 0; index < length; ++index)
+  {
+    FlValue *value = fl_value_get_list_value(display_ids, index);
+    if (value != nullptr && fl_value_get_type(value) == FL_VALUE_TYPE_STRING && display_id == fl_value_get_string(value))
+    {
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
+static gboolean cache_x11_display_captures(MyApplication *self, gchar **error_out)
+{
+#ifdef GDK_WINDOWING_X11
+  if (self == nullptr || self->window == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Linux screenshot cache is not initialized");
+    }
+    return FALSE;
+  }
+
+  GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(self->window));
+  if (display == nullptr || !GDK_IS_X11_DISPLAY(display))
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("X11 display is not available");
+    }
+    return FALSE;
+  }
+
+  GdkWindow *root_window = gdk_get_default_root_window();
+  if (root_window == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Failed to access X11 root window");
+    }
+    return FALSE;
+  }
+
+  clear_x11_display_cache(self);
+
+  const int monitor_count = gdk_display_get_n_monitors(display);
+  for (int index = 0; index < monitor_count; ++index)
+  {
+    GdkMonitor *monitor = gdk_display_get_monitor(display, index);
+    if (monitor == nullptr)
+    {
+      continue;
+    }
+
+    GdkRectangle geometry{};
+    gdk_monitor_get_geometry(monitor, &geometry);
+    GdkPixbuf *pixbuf = gdk_pixbuf_get_from_window(root_window, geometry.x, geometry.y, geometry.width, geometry.height);
+    if (pixbuf == nullptr)
+    {
+      clear_x11_display_cache(self);
+      if (error_out != nullptr)
+      {
+        *error_out = g_strdup("Failed to capture X11 monitor");
+      }
+      return FALSE;
+    }
+
+    self->cached_x11_display_captures.push_back(CachedLinuxDisplayCapture{
+        "x11-monitor-" + std::to_string(index),
+        geometry.x,
+        geometry.y,
+        geometry.width,
+        geometry.height,
+        static_cast<double>(gdk_monitor_get_scale_factor(monitor)),
+        pixbuf,
+    });
+  }
+
+  return !self->cached_x11_display_captures.empty();
+#else
+  if (error_out != nullptr)
+  {
+    *error_out = g_strdup("X11 capture is not available");
+  }
+  return FALSE;
+#endif
+}
+
+static gboolean build_x11_snapshot_payloads(MyApplication *self, FlValue *display_ids, gboolean include_image_bytes, FlValue **snapshots_out, gchar **error_out)
+{
+  if (self == nullptr)
+  {
+    return FALSE;
+  }
+
+  if (self->cached_x11_display_captures.empty())
+  {
+    if (!cache_x11_display_captures(self, error_out))
+    {
+      return FALSE;
+    }
+  }
+
+  g_autoptr(FlValue) snapshots = fl_value_new_list();
+  gboolean matched_any = FALSE;
+  for (const auto &capture : self->cached_x11_display_captures)
+  {
+    if (!display_id_is_requested(display_ids, capture.display_id))
+    {
+      continue;
+    }
+
+    matched_any = TRUE;
+    const int pixel_width = gdk_pixbuf_get_width(capture.pixbuf);
+    const int pixel_height = gdk_pixbuf_get_height(capture.pixbuf);
+    FlValue *snapshot = fl_value_new_map();
+    fl_value_set_string_take(snapshot, "displayId", fl_value_new_string(capture.display_id.c_str()));
+    fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(capture.x, capture.y, capture.width, capture.height));
+    fl_value_set_string_take(snapshot, "pixelBounds", build_rect_value(capture.x * capture.scale, capture.y * capture.scale, pixel_width, pixel_height));
+    fl_value_set_string_take(snapshot, "scale", fl_value_new_float(capture.scale));
+    fl_value_set_string_take(snapshot, "rotation", fl_value_new_int(0));
+
+    if (include_image_bytes)
+    {
+      gchar *image_base64 = nullptr;
+      gchar *encode_error = nullptr;
+      if (!encode_pixbuf_to_png_base64(capture.pixbuf, &image_base64, &encode_error))
+      {
+        if (error_out != nullptr)
+        {
+          *error_out = encode_error != nullptr ? encode_error : g_strdup("Failed to encode X11 monitor image");
+        }
+        else
+        {
+          g_free(encode_error);
+        }
+        return FALSE;
+      }
+
+      fl_value_set_string_take(snapshot, "imageBytesBase64", fl_value_new_string(image_base64));
+      g_free(image_base64);
+    }
+
+    fl_value_append_take(snapshots, snapshot);
+  }
+
+  if (!matched_any)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Requested X11 monitor snapshot is not available");
+    }
+    return FALSE;
+  }
+
+  *snapshots_out = g_steal_pointer(&snapshots);
+  return TRUE;
+}
+
+static gboolean cache_portal_capture(MyApplication *self, gchar **error_out)
+{
+  if (self == nullptr)
+  {
+    return FALSE;
+  }
+
+  clear_portal_capture(&self->cached_portal_capture);
+
+  GError *dbus_error = nullptr;
+  GDBusConnection *connection = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &dbus_error);
+  if (connection == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(dbus_error != nullptr ? dbus_error->message : "Failed to connect to portal session bus");
+    }
+    g_clear_error(&dbus_error);
+    return FALSE;
+  }
+
+  std::vector<PortalMonitorSnapshot> monitors;
+  gchar *monitor_error = nullptr;
+  const gboolean metadata_ok = capture_portal_monitor_metadata(connection, &monitors, &monitor_error);
+  if (metadata_ok)
+  {
+    GdkPixbuf *desktop_pixbuf = nullptr;
+    gchar *screenshot_error = nullptr;
+    const gboolean screenshot_ok = call_portal_screenshot(connection, &desktop_pixbuf, &screenshot_error);
+    if (screenshot_ok)
+    {
+      int union_left = monitors.front().x;
+      int union_top = monitors.front().y;
+      int union_right = monitors.front().x + monitors.front().width;
+      int union_bottom = monitors.front().y + monitors.front().height;
+      for (size_t index = 1; index < monitors.size(); ++index)
+      {
+        const auto &monitor = monitors[index];
+        union_left = MIN(union_left, monitor.x);
+        union_top = MIN(union_top, monitor.y);
+        union_right = MAX(union_right, monitor.x + monitor.width);
+        union_bottom = MAX(union_bottom, monitor.y + monitor.height);
+      }
+
+      self->cached_portal_capture.has_value = TRUE;
+      self->cached_portal_capture.is_single_desktop = FALSE;
+      self->cached_portal_capture.monitors = monitors;
+      self->cached_portal_capture.logical_union = GdkRectangle{union_left, union_top, union_right - union_left, union_bottom - union_top};
+      self->cached_portal_capture.scale_x = self->cached_portal_capture.logical_union.width > 0 ? static_cast<double>(gdk_pixbuf_get_width(desktop_pixbuf)) / self->cached_portal_capture.logical_union.width : 1.0;
+      self->cached_portal_capture.scale_y = self->cached_portal_capture.logical_union.height > 0 ? static_cast<double>(gdk_pixbuf_get_height(desktop_pixbuf)) / self->cached_portal_capture.logical_union.height : 1.0;
+      self->cached_portal_capture.desktop_pixbuf = desktop_pixbuf;
+      g_free(screenshot_error);
+      g_free(monitor_error);
+      g_object_unref(connection);
+      return TRUE;
+    }
+
+    g_free(screenshot_error);
+  }
+  g_free(monitor_error);
+
+  GdkDisplay *display = gdk_display_get_default();
+  if (display == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Failed to access GDK display");
+    }
+    g_object_unref(connection);
+    return FALSE;
+  }
+
+  int monitor_count = gdk_display_get_n_monitors(display);
+  if (monitor_count <= 0)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("No monitors are available for capture");
+    }
+    g_object_unref(connection);
+    return FALSE;
+  }
+
+  GdkRectangle logical_union{};
+  gboolean union_initialized = FALSE;
+  for (int index = 0; index < monitor_count; ++index)
+  {
+    GdkMonitor *monitor = gdk_display_get_monitor(display, index);
+    if (monitor == nullptr)
+    {
+      continue;
+    }
+
+    GdkRectangle geometry{};
+    gdk_monitor_get_geometry(monitor, &geometry);
+    if (!union_initialized)
+    {
+      logical_union = geometry;
+      union_initialized = TRUE;
+      continue;
+    }
+
+    const int left = MIN(logical_union.x, geometry.x);
+    const int top = MIN(logical_union.y, geometry.y);
+    const int right = MAX(logical_union.x + logical_union.width, geometry.x + geometry.width);
+    const int bottom = MAX(logical_union.y + logical_union.height, geometry.y + geometry.height);
+    logical_union.x = left;
+    logical_union.y = top;
+    logical_union.width = right - left;
+    logical_union.height = bottom - top;
+  }
+
+  GdkPixbuf *pixbuf = nullptr;
+  if (!call_portal_screenshot(connection, &pixbuf, error_out))
+  {
+    g_object_unref(connection);
+    return FALSE;
+  }
+  g_object_unref(connection);
+
+  self->cached_portal_capture.has_value = TRUE;
+  self->cached_portal_capture.is_single_desktop = TRUE;
+  self->cached_portal_capture.logical_union = logical_union;
+  self->cached_portal_capture.scale_x = logical_union.width > 0 ? static_cast<double>(gdk_pixbuf_get_width(pixbuf)) / logical_union.width : 1.0;
+  self->cached_portal_capture.scale_y = logical_union.height > 0 ? static_cast<double>(gdk_pixbuf_get_height(pixbuf)) / logical_union.height : 1.0;
+  self->cached_portal_capture.desktop_pixbuf = pixbuf;
+  return TRUE;
+}
+
+static gboolean build_portal_snapshot_payloads(MyApplication *self, FlValue *display_ids, gboolean include_image_bytes, FlValue **snapshots_out, gchar **error_out)
+{
+  if (self == nullptr)
+  {
+    return FALSE;
+  }
+
+  if (!self->cached_portal_capture.has_value && !cache_portal_capture(self, error_out))
+  {
+    return FALSE;
+  }
+
+  const auto &capture = self->cached_portal_capture;
+  g_autoptr(FlValue) snapshots = fl_value_new_list();
+  gboolean matched_any = FALSE;
+
+  if (capture.is_single_desktop)
+  {
+    const std::string display_id = "portal:desktop";
+    if (!display_id_is_requested(display_ids, display_id))
+    {
+      if (error_out != nullptr)
+      {
+        *error_out = g_strdup("Requested portal desktop snapshot is not available");
+      }
+      return FALSE;
+    }
+
+    matched_any = TRUE;
+    FlValue *snapshot = fl_value_new_map();
+    fl_value_set_string_take(snapshot, "displayId", fl_value_new_string(display_id.c_str()));
+    fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(capture.logical_union.x, capture.logical_union.y, capture.logical_union.width, capture.logical_union.height));
+    fl_value_set_string_take(snapshot, "pixelBounds", build_rect_value(capture.logical_union.x * capture.scale_x, capture.logical_union.y * capture.scale_y, gdk_pixbuf_get_width(capture.desktop_pixbuf), gdk_pixbuf_get_height(capture.desktop_pixbuf)));
+    fl_value_set_string_take(snapshot, "scale", fl_value_new_float(capture.scale_x));
+    fl_value_set_string_take(snapshot, "rotation", fl_value_new_int(0));
+
+    if (include_image_bytes)
+    {
+      gchar *image_base64 = nullptr;
+      gchar *encode_error = nullptr;
+      if (!encode_pixbuf_to_png_base64(capture.desktop_pixbuf, &image_base64, &encode_error))
+      {
+        if (error_out != nullptr)
+        {
+          *error_out = encode_error != nullptr ? encode_error : g_strdup("Failed to encode portal screenshot");
+        }
+        else
+        {
+          g_free(encode_error);
+        }
+        return FALSE;
+      }
+      fl_value_set_string_take(snapshot, "imageBytesBase64", fl_value_new_string(image_base64));
+      g_free(image_base64);
+    }
+
+    fl_value_append_take(snapshots, snapshot);
+  }
+  else
+  {
+    const int desktop_pixel_width = gdk_pixbuf_get_width(capture.desktop_pixbuf);
+    const int desktop_pixel_height = gdk_pixbuf_get_height(capture.desktop_pixbuf);
+    for (const auto &monitor : capture.monitors)
+    {
+      if (!display_id_is_requested(display_ids, monitor.id))
+      {
+        continue;
+      }
+
+      matched_any = TRUE;
+      const int crop_x = CLAMP(static_cast<int>(round((monitor.x - capture.logical_union.x) * capture.scale_x)), 0, MAX(0, desktop_pixel_width - 1));
+      const int crop_y = CLAMP(static_cast<int>(round((monitor.y - capture.logical_union.y) * capture.scale_y)), 0, MAX(0, desktop_pixel_height - 1));
+      const int crop_width = CLAMP(static_cast<int>(round(monitor.width * capture.scale_x)), 1, desktop_pixel_width - crop_x);
+      const int crop_height = CLAMP(static_cast<int>(round(monitor.height * capture.scale_y)), 1, desktop_pixel_height - crop_y);
+
+      FlValue *snapshot = fl_value_new_map();
+      fl_value_set_string_take(snapshot, "displayId", fl_value_new_string(monitor.id.c_str()));
+      fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(monitor.x, monitor.y, monitor.width, monitor.height));
+      fl_value_set_string_take(snapshot, "pixelBounds", build_rect_value(crop_x, crop_y, crop_width, crop_height));
+      fl_value_set_string_take(snapshot, "scale", fl_value_new_float(monitor.width > 0 ? static_cast<double>(crop_width) / monitor.width : capture.scale_x));
+      fl_value_set_string_take(snapshot, "rotation", fl_value_new_int(0));
+
+      if (include_image_bytes)
+      {
+        GdkPixbuf *monitor_pixbuf = gdk_pixbuf_new_subpixbuf(capture.desktop_pixbuf, crop_x, crop_y, crop_width, crop_height);
+        if (monitor_pixbuf == nullptr)
+        {
+          if (error_out != nullptr)
+          {
+            *error_out = g_strdup("Failed to crop portal monitor snapshot");
+          }
+          return FALSE;
+        }
+
+        gchar *image_base64 = nullptr;
+        gchar *encode_error = nullptr;
+        if (!encode_pixbuf_to_png_base64(monitor_pixbuf, &image_base64, &encode_error))
+        {
+          if (error_out != nullptr)
+          {
+            *error_out = encode_error != nullptr ? encode_error : g_strdup("Failed to encode portal monitor snapshot");
+          }
+          else
+          {
+            g_free(encode_error);
+          }
+          g_object_unref(monitor_pixbuf);
+          return FALSE;
+        }
+
+        fl_value_set_string_take(snapshot, "imageBytesBase64", fl_value_new_string(image_base64));
+        g_free(image_base64);
+        g_object_unref(monitor_pixbuf);
+      }
+
+      fl_value_append_take(snapshots, snapshot);
+    }
+  }
+
+  if (!matched_any)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("Requested portal snapshot is not available");
+    }
+    return FALSE;
+  }
+
+  *snapshots_out = g_steal_pointer(&snapshots);
   return TRUE;
 }
 
@@ -1134,106 +1640,87 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
   FlValue *args = fl_method_call_get_args(method_call);
   g_autoptr(FlMethodResponse) response = nullptr;
 
-  if (strcmp(method, "captureAllDisplays") == 0)
+  if (strcmp(method, "captureAllDisplays") == 0 || strcmp(method, "captureDisplayMetadata") == 0)
   {
+    const gboolean include_image_bytes = strcmp(method, "captureAllDisplays") == 0;
+    FlValue *snapshots = nullptr;
+    gchar *capture_error = nullptr;
 #ifdef GDK_WINDOWING_X11
     GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(window));
     if (display != nullptr && GDK_IS_X11_DISPLAY(display))
     {
-      GdkWindow *root_window = gdk_get_default_root_window();
-      if (root_window == nullptr)
+      // The old Linux path rebuilt and encoded every monitor inside the first capture call. Clear
+      // any previous cache here so each new screenshot session gets fresh pixels, then let Flutter
+      // choose whether it only wants geometry or the full PNG payloads.
+      clear_screenshot_capture_cache(self);
+      if (build_x11_snapshot_payloads(self, nullptr, include_image_bytes, &snapshots, &capture_error))
       {
-        response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", "Failed to access X11 root window", nullptr));
+        response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
       }
       else
       {
-        g_autoptr(FlValue) snapshots = fl_value_new_list();
-        const int monitor_count = gdk_display_get_n_monitors(display);
-        gchar *capture_error = nullptr;
-
-        for (int index = 0; index < monitor_count; ++index)
-        {
-          GdkMonitor *monitor = gdk_display_get_monitor(display, index);
-          if (monitor == nullptr)
-          {
-            continue;
-          }
-
-          GdkRectangle geometry{};
-          gdk_monitor_get_geometry(monitor, &geometry);
-          GdkPixbuf *pixbuf = gdk_pixbuf_get_from_window(root_window, geometry.x, geometry.y, geometry.width, geometry.height);
-          if (pixbuf == nullptr)
-          {
-            capture_error = g_strdup("Failed to capture X11 monitor");
-            break;
-          }
-
-          gchar *image_base64 = nullptr;
-          gchar *encode_error = nullptr;
-          if (!encode_pixbuf_to_png_base64(pixbuf, &image_base64, &encode_error))
-          {
-            capture_error = encode_error != nullptr ? encode_error : g_strdup("Failed to encode X11 monitor image");
-            g_object_unref(pixbuf);
-            break;
-          }
-
-          const int pixel_width = gdk_pixbuf_get_width(pixbuf);
-          const int pixel_height = gdk_pixbuf_get_height(pixbuf);
-          g_object_unref(pixbuf);
-
-          const int scale = gdk_monitor_get_scale_factor(monitor);
-          gchar *display_id = g_strdup_printf("x11-monitor-%d", index);
-          FlValue *snapshot = fl_value_new_map();
-          fl_value_set_string_take(snapshot, "displayId", fl_value_new_string(display_id));
-          fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(geometry.x, geometry.y, geometry.width, geometry.height));
-          fl_value_set_string_take(snapshot, "pixelBounds", build_rect_value(geometry.x * scale, geometry.y * scale, pixel_width, pixel_height));
-          fl_value_set_string_take(snapshot, "scale", fl_value_new_float(scale));
-          fl_value_set_string_take(snapshot, "rotation", fl_value_new_int(0));
-          fl_value_set_string_take(snapshot, "imageBytesBase64", fl_value_new_string(image_base64));
-          g_free(image_base64);
-          g_free(display_id);
-          fl_value_append_take(snapshots, snapshot);
-        }
-
-        if (capture_error != nullptr)
-        {
-          response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", capture_error, nullptr));
-          g_free(capture_error);
-        }
-        else
-        {
-          response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
-        }
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", capture_error != nullptr ? capture_error : "Failed to capture X11 monitor", nullptr));
+        g_free(capture_error);
       }
     }
     else
 #endif
     {
-      FlValue *portal_snapshots = nullptr;
-      gchar *capture_error = nullptr;
-      if (capture_portal_monitor_snapshots(&portal_snapshots, &capture_error))
+      clear_screenshot_capture_cache(self);
+      if (build_portal_snapshot_payloads(self, nullptr, include_image_bytes, &snapshots, &capture_error))
       {
-        response = FL_METHOD_RESPONSE(fl_method_success_response_new(portal_snapshots));
+        response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
       }
       else
       {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", capture_error != nullptr ? capture_error : "Portal screenshot capture failed", nullptr));
         g_free(capture_error);
-
-        // Some desktops do not expose ScreenCast on the active portal backend. Keep the older
-        // single-desktop screenshot fallback so capture remains available even when Wayland cannot
-        // provide per-monitor metadata for the Flutter workspace.
-        FlValue *snapshot = nullptr;
-        gchar *desktop_capture_error = nullptr;
-        if (capture_portal_desktop_snapshot(&snapshot, &desktop_capture_error))
+      }
+    }
+  }
+  else if (strcmp(method, "loadDisplaySnapshots") == 0)
+  {
+    if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP)
+    {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing arguments for loadDisplaySnapshots", nullptr));
+    }
+    else
+    {
+      FlValue *display_ids = fl_value_lookup_string(args, "displayIds");
+      if (display_ids == nullptr || fl_value_get_type(display_ids) != FL_VALUE_TYPE_LIST)
+      {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "displayIds must be a list", nullptr));
+      }
+      else
+      {
+        FlValue *snapshots = nullptr;
+        gchar *capture_error = nullptr;
+#ifdef GDK_WINDOWING_X11
+        GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(window));
+        if (display != nullptr && GDK_IS_X11_DISPLAY(display))
         {
-          g_autoptr(FlValue) snapshots = fl_value_new_list();
-          fl_value_append_take(snapshots, snapshot);
-          response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
+          if (build_x11_snapshot_payloads(self, display_ids, TRUE, &snapshots, &capture_error))
+          {
+            response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
+          }
+          else
+          {
+            response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", capture_error != nullptr ? capture_error : "Failed to load X11 monitor snapshot", nullptr));
+            g_free(capture_error);
+          }
         }
         else
+#endif
         {
-          response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", desktop_capture_error != nullptr ? desktop_capture_error : "Portal screenshot capture failed", nullptr));
-          g_free(desktop_capture_error);
+          if (build_portal_snapshot_payloads(self, display_ids, TRUE, &snapshots, &capture_error))
+          {
+            response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
+          }
+          else
+          {
+            response = FL_METHOD_RESPONSE(fl_method_error_response_new("CAPTURE_ERROR", capture_error != nullptr ? capture_error : "Failed to load portal snapshot", nullptr));
+            g_free(capture_error);
+          }
         }
       }
     }
@@ -1720,6 +2207,7 @@ static void my_application_dispose(GObject *object)
 {
   MyApplication *self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  clear_screenshot_capture_cache(self);
 
   // Clear method channel reference
   if (g_method_channel != nullptr)

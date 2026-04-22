@@ -7,7 +7,9 @@
 #include <flutter/standard_method_codec.h>
 
 #include <memory>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 #include "win32_window.h"
 
@@ -66,9 +68,21 @@ private:
   struct ScreenshotPresentationState
   {
     bool active = false;
+    bool prepared = false;
     double workspace_scale = 1.0;
     RECT native_workspace_bounds{0, 0, 0, 0};
   } screenshot_presentation_state_;
+
+  struct CachedDisplayCapture
+  {
+    std::wstring display_id;
+    RECT monitor_bounds{0, 0, 0, 0};
+    double scale = 1.0;
+    int rotation = 0;
+    HBITMAP bitmap = nullptr;
+  };
+
+  std::vector<CachedDisplayCapture> cached_display_captures_;
 
   // Save/restore the previously focused window (Windows focus rules require explicit restore)
   void SavePreviousActiveWindow(HWND selfHwnd);
@@ -85,6 +99,14 @@ private:
   // Helpers for logging native geometry.
   std::string RectToString(const RECT &rect) const;
   RECT GetWindowRectSafe(HWND hwnd) const;
+  void ClearCachedDisplayCaptures();
+  bool CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *captures_out, std::string *error_out);
+  bool BuildDisplaySnapshotPayloads(const std::vector<CachedDisplayCapture> &captures, bool include_image_bytes, flutter::EncodableList *snapshots_out, std::string *error_out);
+  const CachedDisplayCapture *FindCachedDisplayCapture(const std::string &display_id) const;
+  bool CachedDisplayCapturesMatch(const std::vector<std::string> &display_ids) const;
+  void PrepareCaptureWorkspace(HWND hwnd, const RECT &native_workspace_bounds);
+  void RevealPreparedCaptureWorkspace(HWND hwnd);
+  flutter::EncodableMap BuildCaptureWorkspaceResponse(const RECT &native_workspace_bounds) const;
 
   // Send window event to Flutter
   void SendWindowEvent(const std::string &eventName);
