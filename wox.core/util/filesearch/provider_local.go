@@ -3,7 +3,6 @@ package filesearch
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 
 	"wox/util"
@@ -37,16 +36,20 @@ func (p *LocalIndexProvider) ReplaceEntries(entries []EntryRecord) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.entries = cloneEntryRecords(entries)
-	p.entriesByRoot = groupEntriesByRoot(p.entries)
-	p.index = newQueryIndex(p.entries)
+	// Keep only the query index in steady state because duplicating the persisted
+	// EntryRecord slices in memory made file search scale poorly once many roots
+	// were indexed. Rebuilding the index directly preserves search behavior while
+	// removing the largest avoidable mirror from the hot path.
+	p.entries = nil
+	p.entriesByRoot = nil
+	p.index = newQueryIndex(cloneEntryRecords(entries))
 }
 
 func (p *LocalIndexProvider) ReplaceRootEntries(rootID string, entries []EntryRecord) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	oldRootEntries := cloneEntryRecords(p.entriesByRoot[rootID])
+	oldRootEntries := p.snapshotRootEntriesLocked(rootID)
 	rootEntries := cloneEntryRecords(entries)
 	delta := diffRootEntries(rootID, oldRootEntries, rootEntries)
 	if p.beforeReplaceRootEntriesApply != nil {
@@ -60,7 +63,7 @@ func (p *LocalIndexProvider) SnapshotRootEntries(rootID string) []EntryRecord {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	return cloneEntryRecords(p.entriesByRoot[rootID])
+	return p.snapshotRootEntriesLocked(rootID)
 }
 
 func (p *LocalIndexProvider) ApplyRootEntries(rootID string, entries []EntryRecord, delta EntryDeltaBatch) int {
@@ -71,20 +74,8 @@ func (p *LocalIndexProvider) ApplyRootEntries(rootID string, entries []EntryReco
 }
 
 func (p *LocalIndexProvider) applyRootEntriesLocked(rootID string, rootEntries []EntryRecord, delta EntryDeltaBatch) int {
-
-	if p.entriesByRoot == nil {
-		p.entriesByRoot = map[string][]EntryRecord{}
-	}
-
-	if len(rootEntries) == 0 {
-		delete(p.entriesByRoot, rootID)
-	} else {
-		p.entriesByRoot[rootID] = rootEntries
-	}
-
-	p.entries = flattenEntriesByRoot(p.entriesByRoot)
 	if p.index == nil {
-		p.index = newQueryIndex(p.entries)
+		p.index = newQueryIndex(rootEntries)
 	} else {
 		if shouldRebuildRootEntries(delta) {
 			p.index.replaceRootEntries(rootID, rootEntries)
@@ -93,7 +84,9 @@ func (p *LocalIndexProvider) applyRootEntriesLocked(rootID string, rootEntries [
 		}
 	}
 
-	return len(p.entries)
+	p.entries = nil
+	p.entriesByRoot = nil
+	return p.index.docCount()
 }
 
 func (p *LocalIndexProvider) Search(ctx context.Context, query SearchQuery, limit int) ([]ProviderCandidate, error) {
@@ -101,43 +94,33 @@ func (p *LocalIndexProvider) Search(ctx context.Context, query SearchQuery, limi
 	query = normalizeSearchQuery(query)
 
 	p.mu.RLock()
-	entries := append([]EntryRecord(nil), p.entries...)
 	index := p.index
 	p.mu.RUnlock()
+
+	entryCount := 0
+	if index != nil {
+		entryCount = index.docCount()
+	}
 
 	var indexStats querySearchStats
 	if index != nil && query.plan != nil {
 		results, stats := index.searchWithStats(ctx, query, limit)
 		indexStats = stats
 		if len(results) > 0 || !shouldFallbackToLinearScan(query) {
-			logLocalIndexSearch(ctx, query, searchModeIndexed, util.GetSystemTimestamp()-searchStartedAt, len(entries), indexStats, len(results))
+			logLocalIndexSearch(ctx, query, searchModeIndexed, util.GetSystemTimestamp()-searchStartedAt, entryCount, indexStats, len(results))
 			return convertResultsToCandidates(sortAndLimitResults(results, limit)), nil
 		}
 	}
 
-	results := make([]SearchResult, 0, len(entries))
-	for _, entry := range entries {
-		select {
-		case <-ctx.Done():
-			return convertResultsToCandidates(sortAndLimitResults(results, limit)), ctx.Err()
-		default:
-		}
-
-		matched, score := matchSearchQuery(query, entry.Name, entry.Path, entry.PinyinFull, entry.PinyinInitials)
-		if !matched {
-			continue
-		}
-
-		results = append(results, SearchResult{
-			Path:       entry.Path,
-			Name:       entry.Name,
-			ParentPath: entry.ParentPath,
-			IsDir:      entry.IsDir,
-			Score:      score,
-		})
+	// Fall back to live doc records because the old code scanned a duplicated
+	// EntryRecord mirror. Using the index-backed records keeps path/short-query
+	// fallback correct after steady-state mirrors are removed.
+	results, err := searchLinearFromIndex(ctx, index, query, limit)
+	if err != nil {
+		return convertResultsToCandidates(sortAndLimitResults(results, limit)), err
 	}
 
-	logLocalIndexSearch(ctx, query, searchModeLinearFallback, util.GetSystemTimestamp()-searchStartedAt, len(entries), indexStats, len(results))
+	logLocalIndexSearch(ctx, query, searchModeLinearFallback, util.GetSystemTimestamp()-searchStartedAt, entryCount, indexStats, len(results))
 	return convertResultsToCandidates(sortAndLimitResults(results, limit)), nil
 }
 
@@ -171,15 +154,36 @@ func cloneEntryRecords(entries []EntryRecord) []EntryRecord {
 	return append([]EntryRecord(nil), entries...)
 }
 
+func (p *LocalIndexProvider) snapshotRootEntriesLocked(rootID string) []EntryRecord {
+	if p == nil || p.index == nil {
+		return nil
+	}
+	return p.index.snapshotRootEntries(rootID)
+}
+
+func (p *LocalIndexProvider) snapshot() queryIndexSnapshot {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if p == nil || p.index == nil {
+		return queryIndexSnapshot{}
+	}
+	return p.index.snapshot()
+}
+
 func diffRootEntries(rootID string, oldEntries []EntryRecord, newEntries []EntryRecord) EntryDeltaBatch {
 	oldByPath := make(map[string]EntryRecord, len(oldEntries))
 	newByPath := make(map[string]EntryRecord, len(newEntries))
 
 	for _, entry := range oldEntries {
-		oldByPath[entry.NormalizedPath] = entry
+		// Root snapshots materialize normalized paths with slash separators, while
+		// live scanner entries still carry platform-native separators on Windows.
+		// Normalizing both sides to the same query-index key avoids false
+		// delete+add diffs that would rebuild or reshuffle stable doc IDs.
+		oldByPath[normalizeEntryPathKey(entry)] = entry
 	}
 	for _, entry := range newEntries {
-		newByPath[entry.NormalizedPath] = entry
+		newByPath[normalizeEntryPathKey(entry)] = entry
 	}
 
 	diff := EntryDeltaBatch{
@@ -209,15 +213,28 @@ func diffRootEntries(rootID string, oldEntries []EntryRecord, newEntries []Entry
 }
 
 func sameQueryIndexFields(a EntryRecord, b EntryRecord) bool {
+	aPinyinFull, aPinyinInitials := comparableEntryPinyin(a)
+	bPinyinFull, bPinyinInitials := comparableEntryPinyin(b)
+
 	return a.Path == b.Path &&
 		a.RootID == b.RootID &&
 		a.ParentPath == b.ParentPath &&
 		a.Name == b.Name &&
 		a.NormalizedName == b.NormalizedName &&
 		a.NormalizedPath == b.NormalizedPath &&
-		a.PinyinFull == b.PinyinFull &&
-		a.PinyinInitials == b.PinyinInitials &&
+		aPinyinFull == bPinyinFull &&
+		aPinyinInitials == bPinyinInitials &&
 		a.IsDir == b.IsDir
+}
+
+func comparableEntryPinyin(entry EntryRecord) (string, string) {
+	normalizedName := normalizeIndexText(entry.NormalizedName)
+	pinyinFull := normalizeIndexText(entry.PinyinFull)
+	pinyinInitials := normalizeIndexText(entry.PinyinInitials)
+	if shouldDropRedundantPinyinPayload(normalizedName, pinyinFull, pinyinInitials) {
+		return "", ""
+	}
+	return pinyinFull, pinyinInitials
 }
 
 func shouldRebuildRootEntries(diff EntryDeltaBatch) bool {
@@ -239,35 +256,6 @@ func shouldRebuildRootEntries(diff EntryDeltaBatch) bool {
 	}
 
 	return float64(affected)/float64(baseCount) >= rootPatchRebuildRatioThreshold
-}
-
-func groupEntriesByRoot(entries []EntryRecord) map[string][]EntryRecord {
-	grouped := make(map[string][]EntryRecord)
-	for _, entry := range entries {
-		grouped[entry.RootID] = append(grouped[entry.RootID], entry)
-	}
-	return grouped
-}
-
-func flattenEntriesByRoot(entriesByRoot map[string][]EntryRecord) []EntryRecord {
-	if len(entriesByRoot) == 0 {
-		return nil
-	}
-
-	rootIDs := make([]string, 0, len(entriesByRoot))
-	total := 0
-	for rootID, entries := range entriesByRoot {
-		rootIDs = append(rootIDs, rootID)
-		total += len(entries)
-	}
-	sort.Strings(rootIDs)
-
-	flattened := make([]EntryRecord, 0, total)
-	for _, rootID := range rootIDs {
-		flattened = append(flattened, entriesByRoot[rootID]...)
-	}
-
-	return flattened
 }
 
 type localIndexSearchMode string
@@ -306,4 +294,36 @@ func logLocalIndexSearch(ctx context.Context, query SearchQuery, mode localIndex
 	}
 
 	util.GetLogger().Debug(ctx, msg)
+}
+
+func searchLinearFromIndex(ctx context.Context, index *queryIndex, query SearchQuery, limit int) ([]SearchResult, error) {
+	if index == nil {
+		return nil, nil
+	}
+
+	results := make([]SearchResult, 0)
+	for _, record := range index.docRecords() {
+		select {
+		case <-ctx.Done():
+			return sortAndLimitResults(results, limit), ctx.Err()
+		default:
+		}
+
+		name := record.name()
+		parentPath := record.parentPath()
+		matched, score := matchSearchQuery(query, name, record.Path, record.PinyinFull, record.PinyinInitials)
+		if !matched {
+			continue
+		}
+
+		results = append(results, SearchResult{
+			Path:       record.Path,
+			Name:       name,
+			ParentPath: parentPath,
+			IsDir:      record.IsDir,
+			Score:      score,
+		})
+	}
+
+	return sortAndLimitResults(results, limit), nil
 }

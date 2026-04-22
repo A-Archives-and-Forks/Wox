@@ -270,3 +270,69 @@ func TestLocalIndexProviderReplaceRootEntriesKeepsSnapshotAndApplyAtomic(t *test
 		t.Fatalf("expected stale root entry %q to be absent, got %#v", first.Path, results)
 	}
 }
+
+func TestLocalIndexProviderSearchLinearFallbackUsesLiveIndexRecords(t *testing.T) {
+	rootID := "root-provider-live-fallback"
+	entry := makeProviderTestEntry(rootID, filepath.Join("root", "nested", "keep.txt"))
+
+	provider := NewLocalIndexProvider()
+	provider.ReplaceEntries([]EntryRecord{entry})
+
+	// Simulate the planned steady-state layout where the provider no longer keeps
+	// a second EntryRecord mirror outside the live query index.
+	provider.entries = nil
+	provider.entriesByRoot = nil
+
+	results, err := provider.Search(context.Background(), SearchQuery{Raw: filepath.Join("nested", "keep")}, 10)
+	if err != nil {
+		t.Fatalf("search with live-index fallback: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != entry.Path {
+		t.Fatalf("expected live-index fallback to return %q, got %#v", entry.Path, results)
+	}
+}
+
+func TestLocalIndexProviderSnapshotRootEntriesMaterializesFromIndex(t *testing.T) {
+	rootID := "root-provider-snapshot"
+	first := makeProviderTestEntry(rootID, filepath.Join("root", "first.txt"))
+	second := makeProviderTestEntry(rootID, filepath.Join("root", "second.txt"))
+
+	provider := NewLocalIndexProvider()
+	provider.ReplaceEntries([]EntryRecord{first, second})
+
+	// Simulate the planned steady-state layout where only the query index remains.
+	provider.entries = nil
+	provider.entriesByRoot = nil
+
+	rootEntries := provider.SnapshotRootEntries(rootID)
+	if len(rootEntries) != 2 {
+		t.Fatalf("expected snapshot to materialize two entries from the live index, got %#v", rootEntries)
+	}
+
+	paths := []string{rootEntries[0].Path, rootEntries[1].Path}
+	if !(containsString(paths, first.Path) && containsString(paths, second.Path)) {
+		t.Fatalf("expected snapshot paths %q and %q, got %#v", first.Path, second.Path, paths)
+	}
+}
+
+func TestDiffRootEntriesIgnoresRedundantAsciiPinyinCompaction(t *testing.T) {
+	rootID := "root-provider-pinyin-compaction"
+	oldEntry := makeProviderTestEntry(rootID, filepath.Join("root", "readme123"))
+	oldEntry.PinyinFull = ""
+	oldEntry.PinyinInitials = ""
+	newEntry := makeProviderTestEntry(rootID, filepath.Join("root", "readme123"))
+
+	diff := diffRootEntries(rootID, []EntryRecord{oldEntry}, []EntryRecord{newEntry})
+	if len(diff.Updated) != 0 {
+		t.Fatalf("expected redundant ASCII pinyin compaction to stay unchanged, got %#v", diff)
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}

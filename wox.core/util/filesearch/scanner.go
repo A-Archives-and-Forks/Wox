@@ -43,6 +43,8 @@ type Scanner struct {
 	transientRootState          *TransientRootState
 	transientSyncMu             sync.RWMutex
 	transientSyncState          *TransientSyncState
+	loggedRootBytesMu           sync.Mutex
+	loggedRootBytes             map[string]uint64
 	// Test hook to coordinate root-local provider reload ordering.
 	beforeApplyRootReload func(rootID string, entries []EntryRecord)
 }
@@ -88,6 +90,7 @@ func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
 		dirtyQueue:                  NewDirtyQueue(dirtyQueueConfig),
 		reconciler:                  NewReconciler(db, policy),
 		reloadWorkers:               map[string]*rootReloadWorker{},
+		loggedRootBytes:             map[string]uint64{},
 		rootReloadWorkerIdleTimeout: defaultRootReloadWorkerIdleTimeout,
 	}
 }
@@ -192,17 +195,42 @@ func (s *Scanner) scanAllRootsWithReason(ctx context.Context, reason string) {
 	}
 	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle started: reason=%s roots=%d", reason, len(roots)))
 
+	bulkSyncStarted := false
+	if len(roots) > 0 {
+		s.db.BeginBulkSync()
+		bulkSyncStarted = true
+	}
+
 	for index, root := range roots {
 		s.scanRoot(ctx, root, index+1, len(roots))
 	}
 
-	entries, err := s.db.ListEntries(ctx)
-	if err != nil {
-		util.GetLogger().Warn(ctx, "filesearch failed to reload entries: "+err.Error())
+	if bulkSyncStarted {
+		if err := s.db.EndBulkSync(ctx); err != nil {
+			util.GetLogger().Warn(ctx, "filesearch failed to finalize bulk sqlite search sync: "+err.Error())
+			return
+		}
+	}
+
+	if s.localProvider != nil {
+		entries, err := s.db.ListEntries(ctx)
+		if err != nil {
+			util.GetLogger().Warn(ctx, "filesearch failed to reload entries: "+err.Error())
+			return
+		}
+		s.localProvider.ReplaceEntries(entries)
+		util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: reason=%s entries=%d", reason, len(entries)))
+		logLocalIndexSnapshot(ctx, "full_scan_complete", s.localProvider.snapshot(), true)
 		return
 	}
-	s.localProvider.ReplaceEntries(entries)
-	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: reason=%s entries=%d", reason, len(entries)))
+
+	snapshot, err := s.db.SearchIndexSnapshot(ctx)
+	if err != nil {
+		util.GetLogger().Warn(ctx, "filesearch failed to capture sqlite snapshot after full scan: "+err.Error())
+		return
+	}
+	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: reason=%s entries=%d", reason, snapshot.EntryCount))
+	logSQLiteIndexSnapshot(ctx, "full_scan_complete", snapshot, true)
 }
 
 func (s *Scanner) refreshChangeFeed(ctx context.Context) {
@@ -937,6 +965,9 @@ func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
 				s.handleDirtyQueueFailure(batchCtx, root, batch, batches[batchIndex+1:], err)
 				return err
 			}
+			if s.localProvider == nil {
+				s.logRootReloadIndexSnapshot(batchCtx, batch.RootID)
+			}
 		}
 		if result.Mode == ReconcileModeRoot {
 			util.GetLogger().Debug(batchCtx, fmt.Sprintf("filesearch refreshing root feed snapshot after reconcile: root=%s path=%s", batch.RootID, root.Path))
@@ -1251,6 +1282,9 @@ func (s *Scanner) loadDirtyQueueContext(ctx context.Context) (map[string]int, ma
 }
 
 func (s *Scanner) reloadLocalProviderFromDB(ctx context.Context) (int, error) {
+	if s.localProvider == nil {
+		return 0, nil
+	}
 	entries, err := s.db.ListEntries(ctx)
 	if err != nil {
 		return 0, err
@@ -1261,6 +1295,9 @@ func (s *Scanner) reloadLocalProviderFromDB(ctx context.Context) (int, error) {
 }
 
 func (s *Scanner) reloadLocalProviderRootFromDB(ctx context.Context, rootID string) (int, error) {
+	if s.localProvider == nil {
+		return 0, nil
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1378,6 +1415,9 @@ func (s *Scanner) releaseRootReloadWorker(rootID string, worker *rootReloadWorke
 }
 
 func (s *Scanner) reloadLocalProviderRootFromDBOnce(ctx context.Context, rootID string) (int, error) {
+	if s.localProvider == nil {
+		return 0, nil
+	}
 	currentRootEntries := s.localProvider.SnapshotRootEntries(rootID)
 	entries, err := s.db.ListEntriesByRoot(ctx, rootID)
 	if err != nil {
@@ -1399,7 +1439,78 @@ func (s *Scanner) reloadLocalProviderRootFromDBOnce(ctx context.Context, rootID 
 		len(delta.Removed),
 		shouldRebuildRootEntries(delta),
 	))
+	s.logRootReloadIndexSnapshot(ctx, rootID)
 	return len(entries), nil
+}
+
+func (s *Scanner) logRootReloadIndexSnapshot(ctx context.Context, rootID string) {
+	if s.localProvider == nil {
+		snapshot, err := s.db.SearchIndexSnapshot(ctx)
+		if err != nil {
+			util.GetLogger().Warn(ctx, "filesearch failed to capture sqlite snapshot after root reload: "+err.Error())
+			return
+		}
+		logSQLiteIndexSnapshot(ctx, "root_reload_complete", snapshot, false)
+		return
+	}
+
+	snapshot := s.localProvider.snapshot()
+	logLocalIndexSnapshot(ctx, "root_reload_complete", snapshot, false)
+
+	rootSnapshot, previousBytes, shouldPromote := s.recordRootEstimate(snapshot, rootID)
+	if !shouldPromote {
+		return
+	}
+
+	util.GetLogger().Info(ctx, fmt.Sprintf(
+		"filesearch prominent root reload: root=%s docs=%d total_bytes_est=%d previous_total_bytes_est=%d",
+		rootID,
+		rootSnapshot.DocCount,
+		rootSnapshot.TotalBytesEstimate,
+		previousBytes,
+	))
+}
+
+func (s *Scanner) recordRootEstimate(snapshot queryIndexSnapshot, rootID string) (rootIndexSnapshot, uint64, bool) {
+	var current rootIndexSnapshot
+	for _, root := range snapshot.Roots {
+		if root.RootID == rootID {
+			current = root
+			break
+		}
+	}
+	if current.RootID == "" {
+		return rootIndexSnapshot{}, 0, false
+	}
+
+	s.loggedRootBytesMu.Lock()
+	defer s.loggedRootBytesMu.Unlock()
+
+	previousBytes := s.loggedRootBytes[rootID]
+	for _, root := range snapshot.Roots {
+		s.loggedRootBytes[root.RootID] = root.TotalBytesEstimate
+	}
+
+	isTopRoot := false
+	for _, root := range snapshot.TopRoots {
+		if root.RootID == rootID {
+			isTopRoot = true
+			break
+		}
+	}
+
+	if previousBytes == 0 {
+		return current, previousBytes, isTopRoot
+	}
+
+	delta := previousBytes
+	if current.TotalBytesEstimate > previousBytes {
+		delta = current.TotalBytesEstimate - previousBytes
+	} else {
+		delta = previousBytes - current.TotalBytesEstimate
+	}
+
+	return current, previousBytes, isTopRoot || delta*10 >= previousBytes
 }
 
 func (s *Scanner) findRootByID(ctx context.Context, rootID string) (RootRecord, bool) {

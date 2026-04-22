@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
-	"strings"
+	"sync"
 	"time"
 	"wox/util"
 
@@ -14,6 +14,12 @@ import (
 
 type FileSearchDB struct {
 	db *sql.DB
+	// Bulk sync mode defers expensive FTS maintenance until the full scan cycle
+	// finishes. The previous all-at-once in-memory index build avoided per-entry
+	// write amplification, so the SQLite-first path needs an explicit bulk gate
+	// to keep full rescans from thrashing the FTS tables.
+	bulkSyncMu    sync.Mutex
+	bulkSyncDepth int
 }
 
 func NewFileSearchDB(ctx context.Context) (*FileSearchDB, error) {
@@ -54,83 +60,12 @@ func (d *FileSearchDB) Close() error {
 }
 
 func (d *FileSearchDB) initTables(ctx context.Context) error {
-	createSQL := `
-	CREATE TABLE IF NOT EXISTS meta (
-		key TEXT PRIMARY KEY,
-		value TEXT NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS roots (
-		id TEXT PRIMARY KEY,
-		path TEXT NOT NULL UNIQUE,
-		kind TEXT NOT NULL,
-		status TEXT NOT NULL,
-		feed_type TEXT NOT NULL DEFAULT '',
-		feed_cursor TEXT NOT NULL DEFAULT '',
-		feed_state TEXT NOT NULL DEFAULT '',
-		last_reconcile_at INTEGER NOT NULL DEFAULT 0,
-		last_full_scan_at INTEGER NOT NULL DEFAULT 0,
-		progress_current INTEGER NOT NULL DEFAULT 0,
-		progress_total INTEGER NOT NULL DEFAULT 0,
-		last_error TEXT,
-		created_at INTEGER NOT NULL,
-		updated_at INTEGER NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS entries (
-		path TEXT PRIMARY KEY,
-		root_id TEXT NOT NULL,
-		parent_path TEXT NOT NULL,
-		name TEXT NOT NULL,
-		normalized_name TEXT NOT NULL,
-		normalized_path TEXT NOT NULL,
-		pinyin_full TEXT,
-		pinyin_initials TEXT,
-		is_dir INTEGER NOT NULL,
-		mtime INTEGER NOT NULL,
-		size INTEGER NOT NULL DEFAULT 0,
-		updated_at INTEGER NOT NULL
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_entries_root_id ON entries(root_id);
-	CREATE INDEX IF NOT EXISTS idx_entries_parent_path ON entries(parent_path);
-	CREATE INDEX IF NOT EXISTS idx_entries_normalized_name ON entries(normalized_name);
-	CREATE INDEX IF NOT EXISTS idx_entries_pinyin_full ON entries(pinyin_full);
-	CREATE INDEX IF NOT EXISTS idx_entries_pinyin_initials ON entries(pinyin_initials);
-	CREATE INDEX IF NOT EXISTS idx_entries_is_dir ON entries(is_dir);
-
-	CREATE TABLE IF NOT EXISTS directories (
-		path TEXT PRIMARY KEY,
-		root_id TEXT NOT NULL,
-		parent_path TEXT NOT NULL,
-		last_scan_time INTEGER NOT NULL,
-		"exists" INTEGER NOT NULL
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_directories_root_id ON directories(root_id);
-	CREATE INDEX IF NOT EXISTS idx_directories_parent_path ON directories(parent_path);
-	`
-
-	_, err := d.db.ExecContext(ctx, createSQL)
-	if err != nil {
+	if err := d.ensureBaseTables(ctx); err != nil {
 		return err
 	}
-
-	alterTableSQLs := []string{
-		`ALTER TABLE roots ADD COLUMN feed_type TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE roots ADD COLUMN feed_cursor TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE roots ADD COLUMN feed_state TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE roots ADD COLUMN last_reconcile_at INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE roots ADD COLUMN last_full_scan_at INTEGER NOT NULL DEFAULT 0`,
+	if err := d.ensureSQLiteSearchSchema(ctx); err != nil {
+		return err
 	}
-
-	for _, alterSQL := range alterTableSQLs {
-		_, alterErr := d.db.ExecContext(ctx, alterSQL)
-		if alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column name") {
-			return alterErr
-		}
-	}
-
 	return nil
 }
 
@@ -233,6 +168,29 @@ func (d *FileSearchDB) DeleteRoot(ctx context.Context, rootID string) error {
 	}
 	defer tx.Rollback()
 
+	// Delete search artifacts from the persisted facts so root removal no longer
+	// depends on the in-memory snapshot helpers that were removed by the SQLite-first path.
+	rows, err := selectStoredEntriesTx(ctx, tx, `
+		SELECT entry_id, path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+		       pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
+		FROM entries
+		WHERE root_id = ?
+		ORDER BY path ASC
+	`, rootID)
+	if err != nil {
+		return err
+	}
+	artifactSync, err := newEntrySearchArtifactSyncTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	defer artifactSync.Close()
+	for _, row := range rows {
+		if err := deleteEntrySearchArtifactsWithSyncTx(ctx, artifactSync, row); err != nil {
+			return err
+		}
+	}
+
 	if _, err := tx.ExecContext(ctx, `DELETE FROM directories WHERE root_id = ?`, rootID); err != nil {
 		return err
 	}
@@ -299,9 +257,6 @@ func (d *FileSearchDB) ReplaceRootSnapshot(
 	if _, err := tx.ExecContext(ctx, `DELETE FROM directories WHERE root_id = ?`, root.ID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM entries WHERE root_id = ?`, root.ID); err != nil {
-		return err
-	}
 
 	directoryStmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO directories (path, root_id, parent_path, last_scan_time, "exists")
@@ -325,17 +280,6 @@ func (d *FileSearchDB) ReplaceRootSnapshot(
 		}
 	}
 
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO entries (
-			path, root_id, parent_path, name, normalized_name, normalized_path,
-			pinyin_full, pinyin_initials, is_dir, mtime, size, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
 	totalEntries := int64(len(entries))
 	reportProgress(ReplaceEntriesProgress{
 		Stage: ReplaceEntriesStageWriting,
@@ -346,23 +290,7 @@ func (d *FileSearchDB) ReplaceRootSnapshot(
 	lastReportedAt := time.Now()
 
 	for index, entry := range entries {
-		if _, err := stmt.ExecContext(
-			ctx,
-			entry.Path,
-			entry.RootID,
-			entry.ParentPath,
-			entry.Name,
-			entry.NormalizedName,
-			entry.NormalizedPath,
-			entry.PinyinFull,
-			entry.PinyinInitials,
-			boolToInt(entry.IsDir),
-			entry.Mtime,
-			entry.Size,
-			entry.UpdatedAt,
-		); err != nil {
-			return err
-		}
+		_ = entry
 
 		currentEntries := int64(index + 1)
 		if currentEntries == totalEntries || currentEntries%progressBatchSize == 0 || time.Since(lastReportedAt) >= progressUpdateGap {
@@ -379,6 +307,14 @@ func (d *FileSearchDB) ReplaceRootSnapshot(
 	}
 
 	reportProgress(ReplaceEntriesProgress{Stage: ReplaceEntriesStageFinalizing})
+
+	// Root replacement used to delete every row and reinsert it, which changed
+	// rowids and broke any external index keyed by the persisted entry identity.
+	// The SQLite search tables now depend on stable entry_id values, so root
+	// snapshots must upsert facts and delete only the stale paths.
+	if err := d.replaceRootEntriesTx(ctx, tx, root, entries); err != nil {
+		return err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return err
@@ -420,17 +356,6 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 	}
 	defer directoryStmt.Close()
 
-	entryStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO entries (
-			path, root_id, parent_path, name, normalized_name, normalized_path,
-			pinyin_full, pinyin_initials, is_dir, mtime, size, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
-	if err != nil {
-		return err
-	}
-	defer entryStmt.Close()
-
 	for _, batch := range batches {
 		root, err := lockRootForSubtreeSnapshot(ctx, tx, batch.RootID)
 		if err != nil {
@@ -444,9 +369,6 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 			return err
 		}
 
-		if err := deleteScopedRows(tx, ctx, "entries", batch.RootID, batch.ScopePath); err != nil {
-			return err
-		}
 		if err := tombstoneScopedDirectories(tx, ctx, batch.RootID, batch.ScopePath, subtreeBatchScanTime(batch)); err != nil {
 			return err
 		}
@@ -464,24 +386,12 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 			}
 		}
 
-		for _, entry := range batch.Entries {
-			if _, err := entryStmt.ExecContext(
-				ctx,
-				entry.Path,
-				entry.RootID,
-				entry.ParentPath,
-				entry.Name,
-				entry.NormalizedName,
-				entry.NormalizedPath,
-				entry.PinyinFull,
-				entry.PinyinInitials,
-				boolToInt(entry.IsDir),
-				entry.Mtime,
-				entry.Size,
-				entry.UpdatedAt,
-			); err != nil {
-				return err
-			}
+		// Subtree refreshes can update, delete, and rename within the scope. The
+		// explicit delete-old -> upsert -> insert-new order keeps FTS and bigram
+		// rows aligned with the fact table so incremental reconcile does not leave
+		// stale matches behind.
+		if err := d.replaceSubtreeEntriesTx(ctx, tx, batch); err != nil {
+			return err
 		}
 	}
 
@@ -743,8 +653,8 @@ func (d *FileSearchDB) CountDirectoriesByRoot(ctx context.Context, rootID string
 
 func (d *FileSearchDB) ListEntries(ctx context.Context) ([]EntryRecord, error) {
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT path, root_id, parent_path, name, normalized_name, normalized_path,
-		       pinyin_full, pinyin_initials, is_dir, mtime, size, updated_at
+		SELECT entry_id, path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+		       pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
 		FROM entries
 	`)
 	if err != nil {
@@ -754,26 +664,11 @@ func (d *FileSearchDB) ListEntries(ctx context.Context) ([]EntryRecord, error) {
 
 	var entries []EntryRecord
 	for rows.Next() {
-		var entry EntryRecord
-		var isDir int
-		if err := rows.Scan(
-			&entry.Path,
-			&entry.RootID,
-			&entry.ParentPath,
-			&entry.Name,
-			&entry.NormalizedName,
-			&entry.NormalizedPath,
-			&entry.PinyinFull,
-			&entry.PinyinInitials,
-			&isDir,
-			&entry.Mtime,
-			&entry.Size,
-			&entry.UpdatedAt,
-		); err != nil {
+		row, err := scanStoredEntryRecord(rows)
+		if err != nil {
 			return nil, err
 		}
-		entry.IsDir = isDir == 1
-		entries = append(entries, entry)
+		entries = append(entries, row.toEntryRecord())
 	}
 
 	return entries, rows.Err()
@@ -781,8 +676,8 @@ func (d *FileSearchDB) ListEntries(ctx context.Context) ([]EntryRecord, error) {
 
 func (d *FileSearchDB) ListEntriesByRoot(ctx context.Context, rootID string) ([]EntryRecord, error) {
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT path, root_id, parent_path, name, normalized_name, normalized_path,
-		       pinyin_full, pinyin_initials, is_dir, mtime, size, updated_at
+		SELECT entry_id, path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+		       pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
 		FROM entries
 		WHERE root_id = ?
 	`, rootID)
@@ -793,26 +688,11 @@ func (d *FileSearchDB) ListEntriesByRoot(ctx context.Context, rootID string) ([]
 
 	var entries []EntryRecord
 	for rows.Next() {
-		var entry EntryRecord
-		var isDir int
-		if err := rows.Scan(
-			&entry.Path,
-			&entry.RootID,
-			&entry.ParentPath,
-			&entry.Name,
-			&entry.NormalizedName,
-			&entry.NormalizedPath,
-			&entry.PinyinFull,
-			&entry.PinyinInitials,
-			&isDir,
-			&entry.Mtime,
-			&entry.Size,
-			&entry.UpdatedAt,
-		); err != nil {
+		row, err := scanStoredEntryRecord(rows)
+		if err != nil {
 			return nil, err
 		}
-		entry.IsDir = isDir == 1
-		entries = append(entries, entry)
+		entries = append(entries, row.toEntryRecord())
 	}
 
 	return entries, rows.Err()

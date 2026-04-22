@@ -27,6 +27,7 @@ func (h searchHandle) Cancel() {
 type Engine struct {
 	db              *FileSearchDB
 	localProvider   *LocalIndexProvider
+	searchProvider  *SQLiteSearchProvider
 	scanner         *Scanner
 	policy          *policyState
 	statusListeners *util.HashMap[string, func(StatusSnapshot)]
@@ -42,31 +43,31 @@ func NewEngineWithOptions(ctx context.Context, options EngineOptions) (*Engine, 
 		return nil, err
 	}
 
-	localProvider := NewLocalIndexProvider()
 	engine := &Engine{
 		db:              db,
-		localProvider:   localProvider,
+		searchProvider:  NewSQLiteSearchProvider(db),
 		statusListeners: util.NewHashMap[string, func(StatusSnapshot)](),
 	}
 
-	engine.scanner = NewScanner(db, localProvider)
+	engine.scanner = NewScanner(db, nil)
 	engine.policy = engine.scanner.policy
 	if engine.policy != nil {
 		engine.policy.Set(options.Policy)
 	}
 	engine.scanner.SetStateChangeHandler(engine.notifyStatusChanged)
 
-	if err := engine.reloadLocalEntries(ctx); err != nil {
-		db.Close()
-		return nil, err
+	if snapshot, err := engine.db.SearchIndexSnapshot(ctx); err == nil {
+		logSQLiteIndexSnapshot(ctx, "engine_initialized", snapshot, true)
+	} else {
+		util.GetLogger().Warn(ctx, "filesearch failed to capture sqlite snapshot during init: "+err.Error())
 	}
 
-	// Keep the built-in file engine focused on the indexed roots managed by the
-	// scanner. The old provider fan-out pulled in platform-wide search backends,
-	// which made file search slower and mixed external responsibilities into the
-	// core indexing pipeline now that those integrations are moving to plugins.
+	// Keep the built-in file engine focused on the persisted SQLite search index.
+	// The previous runtime mirrored every entry into a second in-memory provider,
+	// which doubled storage responsibilities and made memory usage scale with the
+	// number of indexed roots.
 	engine.scanner.Start(util.NewTraceContext())
-	util.GetLogger().Info(ctx, "filesearch engine initialized: indexed_provider=local-index")
+	util.GetLogger().Info(ctx, "filesearch engine initialized: indexed_provider=sqlite-search")
 
 	return engine, nil
 }
@@ -487,18 +488,14 @@ func (e *Engine) runSearch(ctx context.Context, queryID string, query SearchQuer
 
 	searchStartedAt := util.GetSystemTimestamp()
 	aggregator := newResultAggregator(limit)
-	// Run the local index directly because built-in file search now has a single
-	// responsibility: return matches from the maintained index. The previous
-	// provider fan-out and platform-specific timeouts only existed to merge in
-	// external backends that are no longer part of this engine.
 	providerStartedAt := util.GetSystemTimestamp()
-	candidates, err := e.localProvider.Search(ctx, query, limit)
+	candidates, err := e.searchProvider.Search(ctx, query, limit)
 	providerElapsedMs := util.GetSystemTimestamp() - providerStartedAt
 
 	aggregationStartedAt := util.GetSystemTimestamp()
 	results, changed := aggregator.Add(candidates)
 	aggregationElapsedMs := util.GetSystemTimestamp() - aggregationStartedAt
-	logProviderSearchResponse(ctx, query, e.localProvider.Name(), providerElapsedMs, aggregationElapsedMs, len(candidates), len(results), changed, err)
+	logProviderSearchResponse(ctx, query, e.searchProvider.Name(), providerElapsedMs, aggregationElapsedMs, len(candidates), len(results), changed, err)
 
 	updateCount := 0
 	if changed {
@@ -521,13 +518,26 @@ func (e *Engine) runSearch(ctx context.Context, queryID string, query SearchQuer
 	})
 }
 
-func (e *Engine) reloadLocalEntries(ctx context.Context) error {
-	entries, err := e.db.ListEntries(ctx)
-	if err != nil {
-		return err
+func (e *Engine) LocalIndexSnapshotSummary() string {
+	if e == nil || e.db == nil {
+		return formatSQLiteIndexSnapshotSummary("manual", sqliteIndexSnapshot{})
 	}
-	e.localProvider.ReplaceEntries(entries)
-	return nil
+	snapshot, err := e.db.SearchIndexSnapshot(context.Background())
+	if err != nil {
+		return fmt.Sprintf("filesearch sqlite snapshot: stage=manual error=%s", err.Error())
+	}
+	return formatSQLiteIndexSnapshotSummary("manual", snapshot)
+}
+
+func (e *Engine) LocalIndexTopRootsSummary() string {
+	if e == nil || e.db == nil {
+		return ""
+	}
+	snapshot, err := e.db.SearchIndexSnapshot(context.Background())
+	if err != nil {
+		return ""
+	}
+	return formatSQLiteIndexTopRoots("manual", snapshot)
 }
 
 func errorsIsCanceled(err error) bool {

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"wox/util"
 )
@@ -14,6 +15,54 @@ type DocID uint32
 
 type queryIndex struct {
 	shards map[string]*rootShard
+}
+
+type postingDistribution struct {
+	PostingKeyCount int
+	PostingRefCount int
+	BytesEstimate   uint64
+}
+
+type trieDistribution struct {
+	NodeCount       int
+	PostingRefCount int
+	BytesEstimate   uint64
+}
+
+type rootIndexSnapshot struct {
+	RootID               string
+	DocCount             int
+	PathToDocKeyCount    int
+	FreedDocIDCount      int
+	DocBytesEstimate     uint64
+	PostingBytesEstimate uint64
+	PathKeyBytesEstimate uint64
+	TrieBytesEstimate    uint64
+	TotalBytesEstimate   uint64
+}
+
+type queryIndexSnapshot struct {
+	RootCount            int
+	DocCount             int
+	LiveDocRecords       int
+	PathToDocKeyCount    int
+	FreedDocIDCount      int
+	DocBytesEstimate     uint64
+	PostingBytesEstimate uint64
+	PathKeyBytesEstimate uint64
+	TrieBytesEstimate    uint64
+	TotalBytesEstimate   uint64
+	Extension            postingDistribution
+	NamePrefix           postingDistribution
+	NameBigram           postingDistribution
+	NameTrigram          postingDistribution
+	PathSegment          postingDistribution
+	PathTrigram          postingDistribution
+	PinyinFullBigram     postingDistribution
+	PinyinFullTrigram    postingDistribution
+	PinyinInitials       trieDistribution
+	Roots                []rootIndexSnapshot
+	TopRoots             []rootIndexSnapshot
 }
 
 type querySearchStats struct {
@@ -66,12 +115,8 @@ type rootShard struct {
 type docRecord struct {
 	ID             DocID
 	Path           string
-	Name           string
-	ParentPath     string
-	DirectoryPath  string
 	IsDir          bool
 	NormalizedName string
-	NormalizedPath string
 	PinyinFull     string
 	PinyinInitials string
 }
@@ -129,6 +174,274 @@ func newQueryIndex(entries []EntryRecord) *queryIndex {
 	return &queryIndex{shards: shards}
 }
 
+func (i *queryIndex) docCount() int {
+	if i == nil {
+		return 0
+	}
+
+	total := 0
+	for _, shard := range i.shards {
+		total += len(shard.docTable)
+	}
+	return total
+}
+
+func (i *queryIndex) docRecords() []docRecord {
+	if i == nil || len(i.shards) == 0 {
+		return nil
+	}
+
+	rootIDs := make([]string, 0, len(i.shards))
+	totalDocs := 0
+	for rootID, shard := range i.shards {
+		rootIDs = append(rootIDs, rootID)
+		totalDocs += len(shard.docTable)
+	}
+	sort.Strings(rootIDs)
+
+	records := make([]docRecord, 0, totalDocs)
+	for _, rootID := range rootIDs {
+		shard := i.shards[rootID]
+		docIDs := make([]DocID, 0, len(shard.docTable))
+		for docID := range shard.docTable {
+			docIDs = append(docIDs, docID)
+		}
+		sort.Slice(docIDs, func(left int, right int) bool {
+			return docIDs[left] < docIDs[right]
+		})
+		for _, docID := range docIDs {
+			records = append(records, shard.docTable[docID])
+		}
+	}
+
+	return records
+}
+
+func (i *queryIndex) snapshotRootEntries(rootID string) []EntryRecord {
+	if i == nil || rootID == "" {
+		return nil
+	}
+
+	shard := i.shards[rootID]
+	if shard == nil || len(shard.docTable) == 0 {
+		return nil
+	}
+
+	docIDs := make([]DocID, 0, len(shard.docTable))
+	for docID := range shard.docTable {
+		docIDs = append(docIDs, docID)
+	}
+	sort.Slice(docIDs, func(left int, right int) bool {
+		return docIDs[left] < docIDs[right]
+	})
+
+	entries := make([]EntryRecord, 0, len(docIDs))
+	for _, docID := range docIDs {
+		record := shard.docTable[docID]
+		entries = append(entries, EntryRecord{
+			Path:           record.Path,
+			RootID:         rootID,
+			ParentPath:     record.parentPath(),
+			Name:           record.name(),
+			NormalizedName: normalizeIndexText(record.name()),
+			NormalizedPath: record.pathKey(),
+			PinyinFull:     record.PinyinFull,
+			PinyinInitials: record.PinyinInitials,
+			IsDir:          record.IsDir,
+		})
+	}
+
+	return entries
+}
+
+func (i *queryIndex) snapshot() queryIndexSnapshot {
+	snapshot := queryIndexSnapshot{}
+	if i == nil || len(i.shards) == 0 {
+		return snapshot
+	}
+
+	rootIDs := make([]string, 0, len(i.shards))
+	for rootID := range i.shards {
+		rootIDs = append(rootIDs, rootID)
+	}
+	sort.Strings(rootIDs)
+
+	snapshot.RootCount = len(rootIDs)
+	snapshot.Roots = make([]rootIndexSnapshot, 0, len(rootIDs))
+
+	for _, rootID := range rootIDs {
+		shard := i.shards[rootID]
+		rootSnapshot, rootDistributions := shard.snapshot()
+		snapshot.DocCount += rootSnapshot.DocCount
+		snapshot.LiveDocRecords += rootSnapshot.DocCount
+		snapshot.PathToDocKeyCount += rootSnapshot.PathToDocKeyCount
+		snapshot.FreedDocIDCount += rootSnapshot.FreedDocIDCount
+		snapshot.DocBytesEstimate += rootSnapshot.DocBytesEstimate
+		snapshot.PostingBytesEstimate += rootSnapshot.PostingBytesEstimate
+		snapshot.PathKeyBytesEstimate += rootSnapshot.PathKeyBytesEstimate
+		snapshot.TrieBytesEstimate += rootSnapshot.TrieBytesEstimate
+		snapshot.TotalBytesEstimate += rootSnapshot.TotalBytesEstimate
+		snapshot.Extension = mergePostingDistribution(snapshot.Extension, rootDistributions.extension)
+		snapshot.NamePrefix = mergePostingDistribution(snapshot.NamePrefix, rootDistributions.namePrefix)
+		snapshot.NameBigram = mergePostingDistribution(snapshot.NameBigram, rootDistributions.nameBigram)
+		snapshot.NameTrigram = mergePostingDistribution(snapshot.NameTrigram, rootDistributions.nameTrigram)
+		snapshot.PathSegment = mergePostingDistribution(snapshot.PathSegment, rootDistributions.pathSegment)
+		snapshot.PathTrigram = mergePostingDistribution(snapshot.PathTrigram, rootDistributions.pathTrigram)
+		snapshot.PinyinFullBigram = mergePostingDistribution(snapshot.PinyinFullBigram, rootDistributions.pinyinFullBigram)
+		snapshot.PinyinFullTrigram = mergePostingDistribution(snapshot.PinyinFullTrigram, rootDistributions.pinyinFullTrigram)
+		snapshot.PinyinInitials = mergeTrieDistribution(snapshot.PinyinInitials, rootDistributions.pinyinInitials)
+		snapshot.Roots = append(snapshot.Roots, rootSnapshot)
+	}
+
+	snapshot.TopRoots = append([]rootIndexSnapshot(nil), snapshot.Roots...)
+	sort.Slice(snapshot.TopRoots, func(left int, right int) bool {
+		if snapshot.TopRoots[left].TotalBytesEstimate == snapshot.TopRoots[right].TotalBytesEstimate {
+			if snapshot.TopRoots[left].DocCount == snapshot.TopRoots[right].DocCount {
+				return snapshot.TopRoots[left].RootID < snapshot.TopRoots[right].RootID
+			}
+			return snapshot.TopRoots[left].DocCount > snapshot.TopRoots[right].DocCount
+		}
+		return snapshot.TopRoots[left].TotalBytesEstimate > snapshot.TopRoots[right].TotalBytesEstimate
+	})
+	if len(snapshot.TopRoots) > 5 {
+		snapshot.TopRoots = snapshot.TopRoots[:5]
+	}
+
+	return snapshot
+}
+
+type rootIndexDistributions struct {
+	extension         postingDistribution
+	namePrefix        postingDistribution
+	nameBigram        postingDistribution
+	nameTrigram       postingDistribution
+	pathSegment       postingDistribution
+	pathTrigram       postingDistribution
+	pinyinFullBigram  postingDistribution
+	pinyinFullTrigram postingDistribution
+	pinyinInitials    trieDistribution
+}
+
+func (s *rootShard) snapshot() (rootIndexSnapshot, rootIndexDistributions) {
+	rootSnapshot := rootIndexSnapshot{}
+	distributions := rootIndexDistributions{}
+	if s == nil {
+		return rootSnapshot, distributions
+	}
+
+	rootSnapshot.RootID = s.rootID
+	rootSnapshot.DocCount = len(s.docTable)
+	rootSnapshot.PathToDocKeyCount = len(s.pathToDocID)
+	rootSnapshot.FreedDocIDCount = len(s.freedDocIDs)
+
+	rootSnapshot.DocBytesEstimate = estimateDocTableBytes(s.docTable)
+	rootSnapshot.PathKeyBytesEstimate = estimatePathKeyBytes(s.pathToDocID)
+	distributions.extension = summarizePostingIndex(s.extensionIndex)
+	distributions.namePrefix = summarizePostingIndex(s.namePrefixIndex)
+	distributions.nameBigram = summarizePostingIndex(s.nameBigramIndex)
+	distributions.nameTrigram = summarizePostingIndex(s.nameTrigramIndex)
+	distributions.pathSegment = summarizePostingIndex(s.pathSegmentIndex)
+	distributions.pathTrigram = summarizePostingIndex(s.pathTrigramIndex)
+	distributions.pinyinFullBigram = summarizePostingIndex(s.pinyinFullBigramIndex)
+	distributions.pinyinFullTrigram = summarizePostingIndex(s.pinyinFullTrigramIndex)
+	distributions.pinyinInitials = summarizeInitialsTrie(s.initialsTrie)
+	rootSnapshot.PostingBytesEstimate =
+		distributions.extension.BytesEstimate +
+			distributions.namePrefix.BytesEstimate +
+			distributions.nameBigram.BytesEstimate +
+			distributions.nameTrigram.BytesEstimate +
+			distributions.pathSegment.BytesEstimate +
+			distributions.pathTrigram.BytesEstimate +
+			distributions.pinyinFullBigram.BytesEstimate +
+			distributions.pinyinFullTrigram.BytesEstimate
+	rootSnapshot.TrieBytesEstimate = distributions.pinyinInitials.BytesEstimate
+	rootSnapshot.TotalBytesEstimate =
+		rootSnapshot.DocBytesEstimate +
+			rootSnapshot.PathKeyBytesEstimate +
+			rootSnapshot.PostingBytesEstimate +
+			rootSnapshot.TrieBytesEstimate
+
+	return rootSnapshot, distributions
+}
+
+func mergePostingDistribution(left postingDistribution, right postingDistribution) postingDistribution {
+	return postingDistribution{
+		PostingKeyCount: left.PostingKeyCount + right.PostingKeyCount,
+		PostingRefCount: left.PostingRefCount + right.PostingRefCount,
+		BytesEstimate:   left.BytesEstimate + right.BytesEstimate,
+	}
+}
+
+func mergeTrieDistribution(left trieDistribution, right trieDistribution) trieDistribution {
+	return trieDistribution{
+		NodeCount:       left.NodeCount + right.NodeCount,
+		PostingRefCount: left.PostingRefCount + right.PostingRefCount,
+		BytesEstimate:   left.BytesEstimate + right.BytesEstimate,
+	}
+}
+
+func summarizePostingIndex(index map[string][]DocID) postingDistribution {
+	summary := postingDistribution{}
+	for key, docIDs := range index {
+		summary.PostingKeyCount++
+		summary.PostingRefCount += len(docIDs)
+		summary.BytesEstimate += postingKeyEstimate(key, docIDs)
+	}
+	return summary
+}
+
+func summarizeInitialsTrie(node *initialsTrieNode) trieDistribution {
+	if node == nil {
+		return trieDistribution{}
+	}
+
+	summary := trieDistribution{
+		NodeCount:       1,
+		PostingRefCount: len(node.docIDs),
+		BytesEstimate:   uint64(unsafe.Sizeof(initialsTrieNode{})) + uint64(len(node.docIDs))*uint64(unsafe.Sizeof(DocID(0))),
+	}
+
+	keys := make([]rune, 0, len(node.children))
+	for key := range node.children {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(left int, right int) bool {
+		return keys[left] < keys[right]
+	})
+	for _, key := range keys {
+		childSummary := summarizeInitialsTrie(node.children[key])
+		summary.NodeCount += childSummary.NodeCount
+		summary.PostingRefCount += childSummary.PostingRefCount
+		summary.BytesEstimate += childSummary.BytesEstimate
+	}
+
+	return summary
+}
+
+func estimateDocTableBytes(docTable map[DocID]docRecord) uint64 {
+	var total uint64
+	for _, record := range docTable {
+		total += uint64(unsafe.Sizeof(docRecord{}))
+		total += uint64(len(record.Path))
+		total += uint64(len(record.NormalizedName))
+		total += uint64(len(record.PinyinFull))
+		total += uint64(len(record.PinyinInitials))
+	}
+	return total
+}
+
+func estimatePathKeyBytes(pathToDocID map[string]DocID) uint64 {
+	var total uint64
+	for key := range pathToDocID {
+		total += uint64(len(key)) + uint64(unsafe.Sizeof(DocID(0)))
+	}
+	return total
+}
+
+func postingKeyEstimate(key string, docIDs []DocID) uint64 {
+	return uint64(len(key)) + uint64(unsafe.Sizeof([]DocID{})) + uint64(len(docIDs))*uint64(unsafe.Sizeof(DocID(0)))
+}
+
 func (i *queryIndex) replaceRootEntries(rootID string, entries []EntryRecord) {
 	if i == nil {
 		return
@@ -166,19 +479,24 @@ func (i *queryIndex) patchRootEntries(rootID string, diff EntryDeltaBatch, entri
 }
 
 func buildRootShard(rootID string, entries []EntryRecord) *rootShard {
+	postingKeyCapacity := estimatePostingKeyCapacity(len(entries))
 	shard := &rootShard{
-		rootID:                 rootID,
-		nextDocID:              1,
-		docTable:               map[DocID]docRecord{},
-		pathToDocID:            map[string]DocID{},
-		extensionIndex:         map[string][]DocID{},
-		namePrefixIndex:        map[string][]DocID{},
-		nameBigramIndex:        map[string][]DocID{},
-		nameTrigramIndex:       map[string][]DocID{},
-		pathSegmentIndex:       map[string][]DocID{},
-		pathTrigramIndex:       map[string][]DocID{},
-		pinyinFullBigramIndex:  map[string][]DocID{},
-		pinyinFullTrigramIndex: map[string][]DocID{},
+		rootID:    rootID,
+		nextDocID: 1,
+		// Preallocate the primary maps because root rebuilds already know how many
+		// entries they will ingest. The old zero-capacity maps repeatedly rehashed
+		// during startup restore, which increased GC pressure without improving the
+		// final query structure.
+		docTable:               make(map[DocID]docRecord, len(entries)),
+		pathToDocID:            make(map[string]DocID, len(entries)),
+		extensionIndex:         make(map[string][]DocID, postingKeyCapacity),
+		namePrefixIndex:        make(map[string][]DocID, postingKeyCapacity),
+		nameBigramIndex:        make(map[string][]DocID, postingKeyCapacity),
+		nameTrigramIndex:       make(map[string][]DocID, postingKeyCapacity),
+		pathSegmentIndex:       make(map[string][]DocID, postingKeyCapacity),
+		pathTrigramIndex:       make(map[string][]DocID, postingKeyCapacity),
+		pinyinFullBigramIndex:  make(map[string][]DocID, postingKeyCapacity),
+		pinyinFullTrigramIndex: make(map[string][]DocID, postingKeyCapacity),
 		initialsTrie:           newInitialsTrieNode(),
 	}
 
@@ -187,7 +505,7 @@ func buildRootShard(rootID string, entries []EntryRecord) *rootShard {
 		record := buildDocRecord(docID, entry)
 
 		shard.docTable[docID] = record
-		shard.pathToDocID[record.NormalizedPath] = docID
+		shard.pathToDocID[record.pathKey()] = docID
 		shard.indexDoc(record)
 	}
 
@@ -207,7 +525,7 @@ func (s *rootShard) allocateDocID() DocID {
 }
 
 func (s *rootShard) indexDoc(record docRecord) {
-	insertDocID(s.extensionIndex, normalizeExtension(filepath.Ext(record.Name)), record.ID)
+	insertDocID(s.extensionIndex, normalizeExtension(filepath.Ext(record.name())), record.ID)
 
 	namePrefixes := buildNamePrefixes(record.NormalizedName)
 	for _, prefix := range namePrefixes {
@@ -255,7 +573,7 @@ func (s *rootShard) addEntry(entry EntryRecord) {
 	docID := s.allocateDocID()
 	record := buildDocRecord(docID, entry)
 	s.docTable[docID] = record
-	s.pathToDocID[record.NormalizedPath] = docID
+	s.pathToDocID[record.pathKey()] = docID
 	s.indexDoc(record)
 }
 
@@ -278,7 +596,7 @@ func (s *rootShard) updateEntry(oldEntry EntryRecord, newEntry EntryRecord) {
 
 	newRecord := buildDocRecord(docID, newEntry)
 	s.docTable[docID] = newRecord
-	s.pathToDocID[newRecord.NormalizedPath] = docID
+	s.pathToDocID[newRecord.pathKey()] = docID
 	s.indexDoc(newRecord)
 }
 
@@ -302,7 +620,7 @@ func (s *rootShard) removeEntry(entry EntryRecord) {
 }
 
 func (s *rootShard) deindexDoc(record docRecord) {
-	removeDocID(s.extensionIndex, normalizeExtension(filepath.Ext(record.Name)), record.ID)
+	removeDocID(s.extensionIndex, normalizeExtension(filepath.Ext(record.name())), record.ID)
 
 	for _, prefix := range buildNamePrefixes(record.NormalizedName) {
 		removeDocID(s.namePrefixIndex, prefix, record.ID)
@@ -333,7 +651,22 @@ func (s *rootShard) deindexDoc(record docRecord) {
 }
 
 func (record docRecord) directoryPath() string {
-	return record.DirectoryPath
+	if record.IsDir {
+		return record.pathKey()
+	}
+	return normalizeIndexText(normalizePath(record.parentPath()))
+}
+
+func (record docRecord) name() string {
+	return filepath.Base(record.Path)
+}
+
+func (record docRecord) parentPath() string {
+	return filepath.Dir(record.Path)
+}
+
+func (record docRecord) pathKey() string {
+	return normalizeIndexText(normalizePath(record.Path))
 }
 
 func (i *queryIndex) search(ctx context.Context, query SearchQuery, limit int) []SearchResult {
@@ -448,8 +781,8 @@ func (s *rootShard) searchWithStats(ctx context.Context, query SearchQuery) ([]S
 
 		results = append(results, SearchResult{
 			Path:       record.Path,
-			Name:       record.Name,
-			ParentPath: record.ParentPath,
+			Name:       record.name(),
+			ParentPath: record.parentPath(),
 			IsDir:      record.IsDir,
 			Score:      score,
 		})
@@ -937,7 +1270,7 @@ func scoreDocAgainstQuery(query SearchQuery, record docRecord, hints queryMatchH
 	}
 
 	if query.wildcard != nil {
-		return query.wildcard.match(record.Name, record.Path)
+		return query.wildcard.match(record.name(), record.Path)
 	}
 
 	plan := query.plan
@@ -960,12 +1293,12 @@ func scoreDocAgainstQuery(query SearchQuery, record docRecord, hints queryMatchH
 		}
 	}
 
-	nameScore := maybeScoreFuzzy(record.Name, plan.raw, true)
+	nameScore := maybeScoreFuzzy(record.name(), plan.raw, true)
 	updateBest(nameScore.matched, nameScore.score+4000)
 
 	pathTarget := record.Path
 	if !record.IsDir {
-		pathTarget = record.ParentPath
+		pathTarget = record.parentPath()
 	}
 	pathQuery := plan.raw
 	if plan.pathLike {
@@ -983,11 +1316,11 @@ func scoreDocAgainstQuery(query SearchQuery, record docRecord, hints queryMatchH
 		updateBest(initialsScore.matched, initialsScore.score+2500)
 	}
 
-	if !matched && plan.extensionOnly && normalizeExtension(filepath.Ext(record.Name)) == plan.extension {
+	if !matched && plan.extensionOnly && normalizeExtension(filepath.Ext(record.name())) == plan.extension {
 		return true, 500
 	}
 
-	if matched && plan.extension != "" && normalizeExtension(filepath.Ext(record.Name)) == plan.extension {
+	if matched && plan.extension != "" && normalizeExtension(filepath.Ext(record.name())) == plan.extension {
 		bestScore += 500
 	}
 
@@ -1019,27 +1352,49 @@ func normalizeIndexText(value string) string {
 }
 
 func buildDocRecord(docID DocID, entry EntryRecord) docRecord {
-	directoryPath := normalizeIndexText(normalizePath(entry.ParentPath))
-	if entry.IsDir {
-		directoryPath = normalizeEntryPathKey(entry)
+	pinyinFull := normalizeIndexText(entry.PinyinFull)
+	pinyinInitials := normalizeIndexText(entry.PinyinInitials)
+	normalizedName := normalizeIndexText(entry.NormalizedName)
+	if shouldDropRedundantPinyinPayload(normalizedName, pinyinFull, pinyinInitials) {
+		// Drop pinyin copies when they are identical to the ASCII name payload
+		// because the old record stored the same bytes twice without improving
+		// recall for non-CJK names.
+		pinyinFull = ""
+		pinyinInitials = ""
 	}
 
 	return docRecord{
 		ID:             docID,
 		Path:           entry.Path,
-		Name:           entry.Name,
-		ParentPath:     entry.ParentPath,
-		DirectoryPath:  directoryPath,
 		IsDir:          entry.IsDir,
-		NormalizedName: normalizeIndexText(entry.NormalizedName),
-		NormalizedPath: normalizeEntryPathKey(entry),
-		PinyinFull:     normalizeIndexText(entry.PinyinFull),
-		PinyinInitials: normalizeIndexText(entry.PinyinInitials),
+		NormalizedName: normalizedName,
+		PinyinFull:     pinyinFull,
+		PinyinInitials: pinyinInitials,
 	}
 }
 
 func normalizeEntryPathKey(entry EntryRecord) string {
 	return normalizeIndexText(entry.NormalizedPath)
+}
+
+func shouldDropRedundantPinyinPayload(normalizedName string, pinyinFull string, pinyinInitials string) bool {
+	if normalizedName == "" || pinyinFull == "" || pinyinInitials == "" {
+		return false
+	}
+	if keepLettersAndDigits(normalizedName) != normalizedName {
+		return false
+	}
+	return pinyinFull == normalizedName && pinyinInitials == normalizedName
+}
+
+func estimatePostingKeyCapacity(entryCount int) int {
+	if entryCount <= 0 {
+		return 0
+	}
+	if entryCount < 16 {
+		return 16
+	}
+	return entryCount
 }
 
 func normalizeExtension(ext string) string {
