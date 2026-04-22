@@ -110,8 +110,10 @@ Cons:
 
 Wox should introduce a global indexing run model with four layers:
 
-1. `Run`
-   - one full or incremental indexing attempt
+1. `RunPlan`
+   - one sealed full or incremental workload
+2. `Run`
+   - one execution attempt against a sealed run plan
 2. `RootPlan`
    - the frozen plan for one configured root
 3. `Job`
@@ -148,18 +150,36 @@ The existing `RootRecord` remains the durable root configuration and root-level 
 
 ## Core Types
 
-### `Run`
+### `RunPlan`
 
 Represents one immutable indexing workload after planning finishes.
 
 Fields:
 
+- `plan_id`
 - `run_id`
 - `kind` (`full`, `incremental`)
-- `status` (`planning`, `pre_scan`, `executing`, `finalizing`, `completed`, `failed`, `canceled`)
 - `root_plans []RootPlan`
 - `jobs []Job`
 - `total_work_units`
+- `planning_totals`
+- `pre_scan_totals`
+- timestamps
+
+Rules:
+
+- incremental work discovered during execution is not appended to an existing sealed plan
+- once sealed, `root_plans`, `jobs`, and `total_work_units` do not change
+
+### `Run`
+
+Represents one execution attempt against a sealed `RunPlan`.
+
+Fields:
+
+- `run_id`
+- `plan_id`
+- `status` (`planning`, `pre_scan`, `executing`, `finalizing`, `completed`, `failed`, `canceled`)
 - `completed_work_units`
 - `active_job_id`
 - `queued_incremental_signals`
@@ -168,8 +188,8 @@ Fields:
 Rules:
 
 - only one run executes at a time
+- a run executes exactly one sealed `RunPlan`
 - incremental work discovered during execution queues for the next run
-- once sealed, `root_plans`, `jobs`, and `total_work_units` do not change
 
 ### `RootPlan`
 
@@ -286,6 +306,17 @@ Pre-scan walks every planned scope and computes exact counts needed for progress
 - planned write units
 
 Pre-scan does not build `EntryRecord`, does not compute pinyin/bigram payloads, and does not write SQLite rows. It exists to freeze a truthful workload.
+
+### Pre-Scan Cost Tradeoff
+
+Pre-scan deliberately introduces a second filesystem pass:
+
+- pass 1: exact planning and pre-scan
+- pass 2: execution and snapshot construction
+
+This means large roots will perform roughly double metadata I/O in version 1. The design accepts that cost because stable, truthful progress and bounded job sizing are the primary user-facing goals. In practice, local page cache should absorb part of the second pass, but the spec does not rely on that as a correctness property.
+
+Version 1 keeps pre-scan lightweight and exact rather than trying to cache every future `EntryRecord` field. A future optimization may allow pre-scan to carry selected metadata into execution, but that is explicitly out of scope for this design.
 
 ### Why Pre-Scan Must Be Exact
 
@@ -417,11 +448,26 @@ Executor behavior:
 
 This preserves one mental model. The difference is only what the planner consumes, not how execution works.
 
+### Incremental Planner Boundary
+
+Incremental planning does not reuse the previous full run's `ScopeNode` tree as mutable state. A sealed `RunPlan` is disposable execution metadata, not a long-lived scheduling graph.
+
+For an incremental run:
+
+1. queued dirty signals are coalesced by root and affected scope
+2. the incremental planner builds a fresh root-local scope frontier only for affected areas
+3. that frontier is pre-scanned with the same split policy used by full runs
+4. the resulting incremental `RootPlan` values are sealed into a new `RunPlan`
+
+This means the existing dirty-signal collection remains useful, but the current `DirtyQueue -> ReconcileBatch -> direct execution` flow is replaced by `DirtyQueue -> IncrementalPlanner -> RunPlan -> JobExecutor`.
+
+If one dirty path sits under a subtree that was previously split into multiple jobs, the incremental planner does not try to recover old job boundaries. It rebuilds only the affected root-local scope frontier and applies the same budget rules again. Because job boundaries are execution-local and not persisted identities, this recomputation is safe.
+
 ## Progress Model
 
 ### Ownership
 
-Global progress belongs to `Run`, not to `RootRecord`.
+Global progress belongs to `Run` and its sealed `RunPlan`, not to `RootRecord`.
 
 `RootRecord.Status` can continue to exist for compatibility and persistence, but toolbar percentage and active stage should come from the active run snapshot.
 
@@ -445,9 +491,9 @@ Each stage has a fixed denominator:
 
 Global percentage is:
 
-`run.completed_work_units / run.total_work_units`
+`run.completed_work_units / run_plan.total_work_units`
 
-The run's denominator is frozen when pre-scan completes. It must never increase during execution.
+The plan's denominator is frozen when pre-scan completes. It must never increase during execution.
 
 This guarantees:
 
@@ -472,12 +518,12 @@ This keeps the stable percentage global while still telling the user what is hap
 
 ## Integration With Existing Types
 
-The existing code already stores root-level status in `roots` and aggregates it in [engine.go](/mnt/c/dev/Wox/wox.core/util/filesearch/engine.go). That model should be migrated rather than removed abruptly.
+The existing code already stores root-level status in `roots` and aggregates it in [engine.go](/mnt/c/dev/Wox/wox.core/util/filesearch/engine.go). Version 1 should integrate with that runtime model without preserving root-centric progress semantics.
 
-Version 1 migration path:
+Implementation path:
 
 1. add run-level in-memory state and status events
-2. keep `RootRecord` persistence for compatibility and recovery
+2. keep `RootRecord` persistence for configuration and recovery
 3. teach `Engine.GetStatus` to prefer active run progress when a run exists
 4. keep root-level counts as secondary detail, not the source of the main percentage
 
@@ -497,6 +543,8 @@ The existing `StatusSnapshot` should be extended rather than replaced in version
 - apply recursive split policy
 - seal `RunPlan`
 
+Once `JobBuilder` has emitted the sealed job list, the planner must release the expanded `ScopeNode` tree and any traversal buffers that are no longer needed. Keeping the entire scope tree alive through execution would recreate the same memory-retention problem that this design is trying to solve.
+
 ### Executor Responsibilities
 
 - execute one job at a time
@@ -510,6 +558,16 @@ The database layer remains job-oriented, not run-oriented.
 
 It should accept bounded job payloads and report write progress for each job. The global run tracker is responsible for combining job progress into one monotonic percentage.
 
+### Changefeed Cursor And Finalization
+
+Version 1 uses a conservative cursor rule:
+
+- job transactions persist entries and derived artifacts for that job
+- durable root-level feed cursor advancement happens only in `FinalizeRootJob`
+- `FinalizeRootJob` advances the cursor to the run's captured fence only after every prior job for that root has committed successfully
+
+This means a crash before `FinalizeRootJob` may leave entries newer than the persisted root cursor. That is acceptable because the next run may replay some already-applied signals, but it will not skip unseen filesystem changes. The write path therefore relies on idempotent job application, not on partial cursor advancement.
+
 ## Error Handling And Recovery
 
 1. If planning fails before sealing the run, the run fails with no partial denominator exposed to the UI.
@@ -520,7 +578,7 @@ It should accept bounded job payloads and report write progress for each job. Th
 3. Incremental signals arriving during execution are queued for the next run rather than mutating the current run plan.
 4. Cancellation leaves the current run incomplete and the queue intact.
 
-Version 1 favors correctness and observability over partial in-run replanning.
+Version 1 intentionally chooses fail-fast run semantics over root-isolated continuation. This is stricter than the current root-by-root behavior, but it keeps the first run-based implementation readable and makes progress semantics easier to reason about. The user-visible consequence is that one hard job failure stops the active run and requires a later retry. Root-isolated continuation and job-level retry are valid future enhancements once the run model is proven.
 
 ## Testing And Verification Expectations
 
@@ -534,6 +592,7 @@ Implementation should verify the following behaviors:
 6. `99%` only occurs when the remaining frozen work is small
 7. wide directories can be chunked even without deeper subdirectories
 8. bounded job execution reduces peak in-memory snapshot size compared with whole-root execution
+9. a crash before `FinalizeRootJob` may replay changefeed input but must not skip it
 
 Smoke coverage should focus on run planning, large-root split behavior, and progress stability because those are the core user-visible guarantees of this design.
 
@@ -545,5 +604,9 @@ Version 1 should prefer the simplest readable control flow:
 - one planner
 - one sequential executor
 - one global progress tracker
+
+`JobBuilder` is responsible for producing jobs in final execution order and assigning `order_index`. `JobExecutor` must consume jobs in slice order and must not apply a second sorting layer.
+
+Direct-file chunk boundaries are execution-local only. They are not persisted identities and are not used as diff keys across runs. If file additions or removals shift chunk membership between two runs, the next incremental or full planner simply computes a fresh set of chunks from the affected scope frontier.
 
 This design intentionally avoids parallel job execution, dynamic replanning, and user-configurable split thresholds because those would make progress semantics and debugging harder before the basic run model is proven.
