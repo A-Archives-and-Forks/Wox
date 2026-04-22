@@ -504,12 +504,7 @@ class WoxLauncherController extends GetxController {
     updateActiveResultIndex(traceId);
     updateDoctorToolbarIfNeeded(traceId);
 
-    // Schedule resize to post-frame to avoid blocking the main thread during result updates.
-    // This prevents input lag by allowing key events to be processed between the list rebuild
-    // and the window resize platform channel calls.
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      resizeHeightForResultUpdate(traceId: traceId, reason: "query results updated");
-    });
+    resizeHeightForResultUpdate(traceId: traceId, reason: "query results updated");
   }
 
   void updateActiveResultIndex(String traceId) {
