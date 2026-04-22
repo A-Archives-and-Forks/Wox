@@ -44,6 +44,7 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 
 	jobs := make([]Job, len(plan.Jobs))
 	copy(jobs, plan.Jobs)
+	var lastJob Job
 
 	for index := range jobs {
 		select {
@@ -55,8 +56,18 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 		}
 
 		job := &jobs[index]
+		lastJob = *job
 		job.Status = JobStatusRunning
 		run.ActiveJobID = job.JobID
+		run.Status = RunStatusExecuting
+		run.Stage = RunStageExecuting
+		if job.Kind == JobKindFinalizeRoot {
+			// Consumers need to see finalizing while the finalize job is active,
+			// not only after it finishes, otherwise the last root still looks like
+			// generic execution right before the run completes.
+			run.Status = RunStatusFinalizing
+			run.Stage = RunStageFinalizing
+		}
 		emitJobExecutorSnapshot(run, plan, rootOrder, *job, onSnapshot)
 
 		root, ok := rootByID[job.RootID]
@@ -83,11 +94,14 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 		// next root's first job.
 		job.Status = JobStatusCompleted
 		run.CompletedWorkUnits += job.PlannedTotalUnits
+		lastJob = *job
 		emitJobExecutorSnapshot(run, plan, rootOrder, *job, onSnapshot)
 	}
 
 	run.Status = RunStatusCompleted
 	run.ActiveJobID = ""
+	lastJob.Status = ""
+	emitJobExecutorSnapshot(run, plan, rootOrder, lastJob, onSnapshot)
 	return run, jobs, nil
 }
 
@@ -118,18 +132,20 @@ func buildJobExecutorStatusSnapshot(run Run, plan RunPlan, rootOrder map[string]
 	if job.Kind == JobKindFinalizeRoot {
 		rootStatus = RootStatusFinalizing
 	}
+	activeProgressCurrent, activeProgressTotal := activeJobProgress(job)
 
 	// The previous root-local progress view could show regressions when the next
 	// root started at zero. Mirroring the run's sealed unit counters into the
-	// exported status snapshot makes the global progress bar monotonic across job
-	// and root boundaries while still reporting which root/job is active.
+	// exported run-progress fields makes the global progress bar monotonic across
+	// job and root boundaries while preserving the legacy active-progress fields
+	// as the scoped progress of the current job/root.
 	return StatusSnapshot{
 		RootCount:             len(plan.RootPlans),
 		ProgressCurrent:       run.CompletedWorkUnits,
 		ProgressTotal:         run.TotalWorkUnits,
 		ActiveRootStatus:      rootStatus,
-		ActiveProgressCurrent: run.CompletedWorkUnits,
-		ActiveProgressTotal:   run.TotalWorkUnits,
+		ActiveProgressCurrent: activeProgressCurrent,
+		ActiveProgressTotal:   activeProgressTotal,
 		ActiveRootIndex:       rootOrder[job.RootID],
 		ActiveRootTotal:       len(plan.RootPlans),
 		ActiveRunStatus:       run.Status,
@@ -141,4 +157,16 @@ func buildJobExecutorStatusSnapshot(run Run, plan RunPlan, rootOrder map[string]
 		IsIndexing:            run.Status == RunStatusExecuting || run.Status == RunStatusFinalizing,
 		LastError:             run.LastError,
 	}
+}
+
+func activeJobProgress(job Job) (int64, int64) {
+	total := job.PlannedTotalUnits
+	if total < 0 {
+		total = 0
+	}
+	current := int64(0)
+	if job.Status == JobStatusCompleted {
+		current = total
+	}
+	return current, total
 }
