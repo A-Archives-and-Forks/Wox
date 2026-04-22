@@ -30,9 +30,18 @@ type StatusSnapshot struct {
 	ActiveDirectoryTotal  int
 	ActiveItemCurrent     int64
 	ActiveItemTotal       int64
-	IsIndexing            bool
-	IsInitialIndexing     bool
-	LastError             string
+	// Root-local progress was no longer enough once one logical root could fan
+	// out into many execution jobs, so these fields expose the active run state
+	// without removing the existing root-centric compatibility data.
+	ActiveRunStatus    RunStatus
+	ActiveJobKind      JobKind
+	ActiveScopePath    string
+	ActiveStage        RunStage
+	RunProgressCurrent int64
+	RunProgressTotal   int64
+	IsIndexing         bool
+	IsInitialIndexing  bool
+	LastError          string
 }
 
 type SearchResult struct {
