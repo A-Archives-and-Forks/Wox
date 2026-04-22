@@ -675,5 +675,22 @@
         ],
         "DateCreated": "2026-03-30 00:00:00",
         "DateUpdated": "2026-04-01 15:27:18"
+    },
+    {
+        "Id": "6987b7b1-89da-41ef-bab3-d1ba2e3daba0",
+        "Name": "Everything",
+        "Author": "qianlifeng",
+        "Version": "0.0.8",
+        "MinWoxVersion": "2.0.0",
+        "Runtime": "nodejs",
+        "Description": "Search files with Everything on Windows",
+        "IconUrl": "https://raw.githubusercontent.com/qianlifeng/Wox.Plugin.Everything/main/images/app.png",
+        "Website": "https://github.com/qianlifeng/Wox.Plugin.Everything",
+        "DownloadUrl": "https://github.com/qianlifeng/Wox.Plugin.Everything/releases/latest/download/wox.plugin.everything.wox",
+        "SupportedOS": [
+            "Windows"
+        ],
+        "DateCreated": "2026-04-22 20:40:30",
+        "DateUpdated": "2026-04-22 20:40:30"
     }
 ]
