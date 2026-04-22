@@ -157,8 +157,8 @@ func TestRunPlanSealFreezesWorkload(t *testing.T) {
 
 func TestRunPlannerBuildsSingleRootPlan(t *testing.T) {
 	rootPath := filepath.Join(t.TempDir(), "single-root")
-	mustWriteTestFile(t, filepath.Join(rootPath, "alpha.txt"), "alpha")
-	mustWriteTestFile(t, filepath.Join(rootPath, "beta.txt"), "beta")
+	mustWriteTestFile(t, filepath.Join(rootPath, "nested", "alpha.txt"), "alpha")
+	mustWriteTestFile(t, filepath.Join(rootPath, "nested", "beta.txt"), "beta")
 
 	planner := &RunPlanner{
 		policy: newPolicyState(Policy{}),
@@ -188,23 +188,26 @@ func TestRunPlannerBuildsSingleRootPlan(t *testing.T) {
 	if rootPlan.ScopeTree == nil {
 		t.Fatal("expected sealed scope tree")
 	}
-	if got, want := rootPlan.Totals.DirectoryCount, int64(1); got != want {
+	if got, want := rootPlan.Totals.DirectoryCount, int64(2); got != want {
 		t.Fatalf("unexpected directory count: got %d want %d", got, want)
 	}
 	if got, want := rootPlan.Totals.FileCount, int64(2); got != want {
 		t.Fatalf("unexpected file count: got %d want %d", got, want)
 	}
-	if got, want := rootPlan.Totals.IndexableEntryCount, int64(3); got != want {
+	if got, want := rootPlan.Totals.IndexableEntryCount, int64(4); got != want {
 		t.Fatalf("unexpected indexable entry count: got %d want %d", got, want)
 	}
 	if got, want := len(plan.Jobs), 2; got != want {
 		t.Fatalf("unexpected job count: got %d want %d", got, want)
 	}
-	if got, want := plan.Jobs[0].Kind, JobKindDirectFiles; got != want {
+	if got, want := plan.Jobs[0].Kind, JobKindSubtree; got != want {
 		t.Fatalf("unexpected first job kind: got %s want %s", got, want)
 	}
 	if got, want := plan.Jobs[0].ScopePath, rootPath; got != want {
 		t.Fatalf("unexpected first job scope: got %q want %q", got, want)
+	}
+	if got, want := plan.Jobs[0].DirectFileChunkCount, 0; got != want {
+		t.Fatalf("unexpected chunk count on single subtree job: got %d want %d", got, want)
 	}
 	if got, want := plan.Jobs[1].Kind, JobKindFinalizeRoot; got != want {
 		t.Fatalf("unexpected finalize job kind: got %s want %s", got, want)
@@ -324,6 +327,9 @@ func TestRunPlannerChunksWideDirectFiles(t *testing.T) {
 	}
 
 	directFileJobs := 0
+	chunkedFileCount := 0
+	expectedChunkIndex := 0
+	expectedChunkOffset := 0
 	for _, job := range plan.Jobs[:len(plan.Jobs)-1] {
 		if job.Kind != JobKindDirectFiles {
 			t.Fatalf("expected wide root to chunk only direct-files jobs before finalize, got %s", job.Kind)
@@ -338,10 +344,25 @@ func TestRunPlannerChunksWideDirectFiles(t *testing.T) {
 				job.PlannedWriteUnits,
 			)
 		}
+		if got, want := job.DirectFileChunkIndex, expectedChunkIndex; got != want {
+			t.Fatalf("unexpected chunk index: got %d want %d", got, want)
+		}
+		if got, want := job.DirectFileChunkOffset, expectedChunkOffset; got != want {
+			t.Fatalf("unexpected chunk offset: got %d want %d", got, want)
+		}
+		if job.DirectFileChunkCount <= 0 {
+			t.Fatalf("expected wide direct-files job to own a concrete file chunk, got count=%d", job.DirectFileChunkCount)
+		}
+		chunkedFileCount += job.DirectFileChunkCount
+		expectedChunkIndex++
+		expectedChunkOffset += job.DirectFileChunkCount
 		directFileJobs++
 	}
 	if directFileJobs < 2 {
 		t.Fatalf("expected direct files to be chunked into multiple jobs, got %d", directFileJobs)
+	}
+	if got, want := chunkedFileCount, 5; got != want {
+		t.Fatalf("unexpected total chunked file count: got %d want %d", got, want)
 	}
 	if got, want := plan.Jobs[len(plan.Jobs)-1].Kind, JobKindFinalizeRoot; got != want {
 		t.Fatalf("unexpected finalize job kind: got %s want %s", got, want)

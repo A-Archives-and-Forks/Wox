@@ -74,18 +74,25 @@ func (p RootPlan) seal() RootPlan {
 // Root-local progress was not enough because the planner can split one root
 // into multiple execution units, so the tree is sealed before execution.
 type ScopeNode struct {
-	ScopePath           string
-	ScopeKind           ScopeKind
-	ParentScopePath     string
-	Children            []ScopeNode
-	DirectoryCount      int64
-	FileCount           int64
-	IndexableEntryCount int64
-	SkippedCount        int64
-	PlannedScanUnits    int64
-	PlannedWriteUnits   int64
-	SplitRequired       bool
-	Sealed              bool
+	ScopePath       string
+	ScopeKind       ScopeKind
+	ParentScopePath string
+	// Chunk metadata is only populated for split direct-files scopes. The older
+	// planner reused the same scope path for every chunk, which made future
+	// execution unable to tell chunk ownership apart even though the planner had
+	// already decided to split the work.
+	DirectFileChunkIndex  int
+	DirectFileChunkOffset int
+	DirectFileChunkCount  int
+	Children              []ScopeNode
+	DirectoryCount        int64
+	FileCount             int64
+	IndexableEntryCount   int64
+	SkippedCount          int64
+	PlannedScanUnits      int64
+	PlannedWriteUnits     int64
+	SplitRequired         bool
+	Sealed                bool
 }
 
 func (n ScopeNode) seal() ScopeNode {
@@ -104,16 +111,22 @@ func (n ScopeNode) seal() ScopeNode {
 // Root-local progress was not enough because one root now becomes a sequence of
 // jobs, and each job needs its own stable kind and progress budget.
 type Job struct {
-	JobID             string
-	RootID            string
-	RootPath          string
-	ScopePath         string
-	Kind              JobKind
-	PlannedScanUnits  int64
-	PlannedWriteUnits int64
-	PlannedTotalUnits int64
-	Status            JobStatus
-	OrderIndex        int
+	JobID     string
+	RootID    string
+	RootPath  string
+	ScopePath string
+	Kind      JobKind
+	// Chunk metadata is only populated for split direct-files jobs. Future
+	// execution needs a concrete sorted-file range so chunked jobs remain
+	// distinguishable and actionable after planning has sealed.
+	DirectFileChunkIndex  int
+	DirectFileChunkOffset int
+	DirectFileChunkCount  int
+	PlannedScanUnits      int64
+	PlannedWriteUnits     int64
+	PlannedTotalUnits     int64
+	Status                JobStatus
+	OrderIndex            int
 }
 
 // PlanTotals freezes the counted work for a root or the whole run.

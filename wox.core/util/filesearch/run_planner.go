@@ -30,12 +30,15 @@ type runPlannerRootBuffer struct {
 }
 
 type runPlannerScopeBuffer struct {
-	scopePath       string
-	scopeKind       ScopeKind
-	parentScopePath string
-	totals          PlanTotals
-	splitRequired   bool
-	children        []*runPlannerScopeBuffer
+	scopePath             string
+	scopeKind             ScopeKind
+	parentScopePath       string
+	directFileChunkIndex  int
+	directFileChunkOffset int
+	directFileChunkCount  int
+	totals                PlanTotals
+	splitRequired         bool
+	children              []*runPlannerScopeBuffer
 }
 
 func NewRunPlanner(policy *policyState) *RunPlanner {
@@ -129,23 +132,6 @@ func (p *RunPlanner) planRoot(ctx context.Context, root RootRecord) (*runPlanner
 	rootScope := &runPlannerScopeBuffer{
 		scopePath: cleanRootPath,
 		scopeKind: ScopeKindSubtree,
-		children: []*runPlannerScopeBuffer{{
-			scopePath:       cleanRootPath,
-			scopeKind:       ScopeKindDirectFiles,
-			parentScopePath: cleanRootPath,
-		}},
-	}
-
-	childDirs, err := p.listImmediateChildDirs(ctx, root, cleanRootPath)
-	if err != nil {
-		return nil, err
-	}
-	for _, childDir := range childDirs {
-		rootScope.children = append(rootScope.children, &runPlannerScopeBuffer{
-			scopePath:       childDir,
-			scopeKind:       ScopeKindSubtree,
-			parentScopePath: cleanRootPath,
-		})
 	}
 
 	return &runPlannerRootBuffer{
@@ -154,49 +140,8 @@ func (p *RunPlanner) planRoot(ctx context.Context, root RootRecord) (*runPlanner
 	}, nil
 }
 
-func (p *RunPlanner) listImmediateChildDirs(ctx context.Context, root RootRecord, dirPath string) ([]string, error) {
-	dirEntries, err := os.ReadDir(dirPath)
-	if err != nil {
-		return nil, fmt.Errorf("read root planning frontier %q: %w", dirPath, err)
-	}
-
-	childDirs := make([]string, 0, len(dirEntries))
-	for _, dirEntry := range dirEntries {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		childPath := filepath.Join(dirPath, dirEntry.Name())
-		info, infoErr := strictDirEntryInfo(dirPath, dirEntry)
-		if infoErr != nil {
-			return nil, infoErr
-		}
-		if !info.IsDir() {
-			continue
-		}
-		if shouldSkipSystemPath(childPath, true) {
-			continue
-		}
-		if !p.policy.shouldIndexPath(root, childPath, true) {
-			continue
-		}
-		childDirs = append(childDirs, childPath)
-	}
-
-	sort.Strings(childDirs)
-	return childDirs, nil
-}
-
 func (p *RunPlanner) preScanRoot(ctx context.Context, rootBuffer *runPlannerRootBuffer, budget splitBudget) error {
-	for _, child := range rootBuffer.rootScope.children {
-		if err := p.preScanScope(ctx, rootBuffer.root, child, budget); err != nil {
-			return err
-		}
-	}
-	rootBuffer.rootScope.totals = aggregateChildTotals(rootBuffer.rootScope.children)
-	return nil
+	return p.preScanScope(ctx, rootBuffer.root, rootBuffer.rootScope, budget)
 }
 
 func (p *RunPlanner) preScanScope(ctx context.Context, root RootRecord, scope *runPlannerScopeBuffer, budget splitBudget) error {
@@ -227,6 +172,7 @@ func (p *RunPlanner) preScanDirectFilesScope(ctx context.Context, root RootRecor
 
 	scope.splitRequired = true
 	scope.children = make([]*runPlannerScopeBuffer, 0, len(chunks))
+	chunkOffset := 0
 	for index, chunk := range chunks {
 		chunkTotals := PlanTotals{
 			FileCount:           int64(len(chunk)),
@@ -241,11 +187,15 @@ func (p *RunPlanner) preScanDirectFilesScope(ctx context.Context, root RootRecor
 			chunkTotals.PlannedWriteUnits++
 		}
 		scope.children = append(scope.children, &runPlannerScopeBuffer{
-			scopePath:       scope.scopePath,
-			scopeKind:       ScopeKindDirectFiles,
-			parentScopePath: scope.parentScopePath,
-			totals:          chunkTotals,
+			scopePath:             scope.scopePath,
+			scopeKind:             ScopeKindDirectFiles,
+			parentScopePath:       scope.parentScopePath,
+			directFileChunkIndex:  index,
+			directFileChunkOffset: chunkOffset,
+			directFileChunkCount:  len(chunk),
+			totals:                chunkTotals,
 		})
+		chunkOffset += len(chunk)
 	}
 	return nil
 }
@@ -472,15 +422,18 @@ func (p *RunPlanner) buildDraftPlan() (RunPlan, error) {
 			}
 
 			job := Job{
-				JobID:             fmt.Sprintf("%s-job-%03d", rootBuffer.root.ID, orderIndex),
-				RootID:            rootBuffer.root.ID,
-				RootPath:          rootPlan.RootPath,
-				ScopePath:         leaf.scopePath,
-				Kind:              jobKindForScope(leaf.scopeKind),
-				PlannedScanUnits:  leaf.totals.PlannedScanUnits,
-				PlannedWriteUnits: leaf.totals.PlannedWriteUnits,
-				Status:            JobStatusPending,
-				OrderIndex:        orderIndex,
+				JobID:                 fmt.Sprintf("%s-job-%03d", rootBuffer.root.ID, orderIndex),
+				RootID:                rootBuffer.root.ID,
+				RootPath:              rootPlan.RootPath,
+				ScopePath:             leaf.scopePath,
+				Kind:                  jobKindForScope(leaf.scopeKind),
+				DirectFileChunkIndex:  leaf.directFileChunkIndex,
+				DirectFileChunkOffset: leaf.directFileChunkOffset,
+				DirectFileChunkCount:  leaf.directFileChunkCount,
+				PlannedScanUnits:      leaf.totals.PlannedScanUnits,
+				PlannedWriteUnits:     leaf.totals.PlannedWriteUnits,
+				Status:                JobStatusPending,
+				OrderIndex:            orderIndex,
 			}
 			job.PlannedTotalUnits = job.PlannedScanUnits + job.PlannedWriteUnits
 			plan.TotalWorkUnits += job.PlannedTotalUnits
@@ -523,16 +476,19 @@ func (s *runPlannerScopeBuffer) toScopeNode() *ScopeNode {
 	}
 
 	node := &ScopeNode{
-		ScopePath:           s.scopePath,
-		ScopeKind:           s.scopeKind,
-		ParentScopePath:     s.parentScopePath,
-		DirectoryCount:      s.totals.DirectoryCount,
-		FileCount:           s.totals.FileCount,
-		IndexableEntryCount: s.totals.IndexableEntryCount,
-		SkippedCount:        s.totals.SkippedCount,
-		PlannedScanUnits:    s.totals.PlannedScanUnits,
-		PlannedWriteUnits:   s.totals.PlannedWriteUnits,
-		SplitRequired:       s.splitRequired,
+		ScopePath:             s.scopePath,
+		ScopeKind:             s.scopeKind,
+		ParentScopePath:       s.parentScopePath,
+		DirectFileChunkIndex:  s.directFileChunkIndex,
+		DirectFileChunkOffset: s.directFileChunkOffset,
+		DirectFileChunkCount:  s.directFileChunkCount,
+		DirectoryCount:        s.totals.DirectoryCount,
+		FileCount:             s.totals.FileCount,
+		IndexableEntryCount:   s.totals.IndexableEntryCount,
+		SkippedCount:          s.totals.SkippedCount,
+		PlannedScanUnits:      s.totals.PlannedScanUnits,
+		PlannedWriteUnits:     s.totals.PlannedWriteUnits,
+		SplitRequired:         s.splitRequired,
 	}
 	if len(s.children) == 0 {
 		return node
