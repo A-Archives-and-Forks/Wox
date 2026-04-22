@@ -434,6 +434,69 @@ func (m *Manager) UnloadPlugin(ctx context.Context, pluginInstance *Instance) {
 	m.instances = newInstances
 }
 
+func (m *Manager) RestartHostForRuntime(ctx context.Context, runtime Runtime, skipPluginIDs []string, progressCallback UninstallProgressCallback) error {
+	pluginHost, exist := lo.Find(AllHosts, func(item Host) bool {
+		return strings.EqualFold(string(item.GetRuntime(ctx)), string(runtime))
+	})
+	if !exist {
+		return fmt.Errorf("unsupported runtime: %s", runtime)
+	}
+
+	skipPluginIDSet := make(map[string]struct{}, len(skipPluginIDs))
+	for _, pluginID := range skipPluginIDs {
+		skipPluginIDSet[pluginID] = struct{}{}
+	}
+
+	var reloadMetadataList []Metadata
+	var nextInstances []*Instance
+	for _, instance := range m.instances {
+		if !strings.EqualFold(instance.Metadata.Runtime, string(runtime)) {
+			nextInstances = append(nextInstances, instance)
+			continue
+		}
+		if _, shouldSkip := skipPluginIDSet[instance.Metadata.Id]; shouldSkip {
+			continue
+		}
+		reloadMetadataList = append(reloadMetadataList, instance.Metadata)
+	}
+
+	// Bug fix: a shared runtime host can keep process-wide native modules loaded even after one
+	// plugin unregisters. Restart the host so uninstall can retry with fresh process state.
+	pluginHost.Stop(ctx)
+
+	if progressCallback != nil {
+		progressCallback(i18n.GetI18nManager().TranslateWox(ctx, "i18n:plugin_uninstall_progress_starting_host"))
+	}
+	if err := pluginHost.Start(ctx); err != nil {
+		return fmt.Errorf("failed to restart %s host: %w", runtime, err)
+	}
+
+	// Replace stale runtime instances only after the new host is available, then rebuild the
+	// remaining plugins from metadata so the shared runtime returns to a consistent state.
+	m.instances = nextInstances
+
+	if len(reloadMetadataList) == 0 {
+		return nil
+	}
+
+	var reloadErrors []string
+	for _, metadata := range reloadMetadataList {
+		if progressCallback != nil {
+			progressCallback(fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "i18n:plugin_uninstall_progress_restoring_runtime_plugin"), metadata.GetName(ctx)))
+		}
+		if err := m.loadHostPlugin(ctx, pluginHost, metadata); err != nil {
+			logger.Error(ctx, fmt.Sprintf("failed to reload %s plugin %s(%s) after host restart: %s", runtime, metadata.GetName(ctx), metadata.Version, err.Error()))
+			reloadErrors = append(reloadErrors, fmt.Sprintf("%s(%s)", metadata.GetName(ctx), metadata.Version))
+		}
+	}
+
+	if len(reloadErrors) > 0 {
+		return fmt.Errorf("failed to reload %s host plugins after restart: %s", runtime, strings.Join(reloadErrors, ", "))
+	}
+
+	return nil
+}
+
 func (m *Manager) loadSystemPlugins(ctx context.Context) {
 	start := util.GetSystemTimestamp()
 	logger.Info(ctx, fmt.Sprintf("start loading system plugins, found %d system plugins", len(AllSystemPlugin)))

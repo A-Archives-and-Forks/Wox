@@ -765,16 +765,22 @@ func (s *Store) Uninstall(ctx context.Context, plugin *Instance, skipCleanSettin
 
 func (s *Store) UninstallWithProgress(ctx context.Context, plugin *Instance, skipCleanSetting bool, progressCallback UninstallProgressCallback) error {
 	logger.Info(ctx, fmt.Sprintf("start to uninstall plugin %s(%s)", plugin.Metadata.GetName(ctx), plugin.Metadata.Version))
-
-	if progressCallback != nil {
-		progressCallback(i18n.GetI18nManager().TranslateWox(ctx, "i18n:plugin_uninstall_progress_preparing"))
+	pluginAlreadyUnloaded := false
+	reportProgress := func(key string, args ...any) {
+		if progressCallback == nil {
+			return
+		}
+		message := i18n.GetI18nManager().TranslateWox(ctx, "i18n:"+key)
+		if len(args) > 0 {
+			message = fmt.Sprintf(message, args...)
+		}
+		progressCallback(message)
 	}
 
-	if progressCallback != nil {
-		progressCallback(i18n.GetI18nManager().TranslateWox(ctx, "i18n:plugin_uninstall_progress_removing"))
-	}
+	reportProgress("plugin_uninstall_progress_preparing")
 
 	if plugin.IsDevPlugin {
+		reportProgress("plugin_uninstall_progress_removing")
 		var wpmPlugin *Instance
 		for _, instance := range GetPluginManager().GetPluginInstances() {
 			if instance.Metadata.Id == "e2c5f005-6c73-43c8-bc53-ab04def265b2" {
@@ -789,6 +795,7 @@ func (s *Store) UninstallWithProgress(ctx context.Context, plugin *Instance, ski
 	} else {
 		// uninstall for non-dev plugins
 		if strings.EqualFold(plugin.Metadata.Runtime, string(PLUGIN_RUNTIME_SCRIPT)) {
+			reportProgress("plugin_uninstall_progress_removing")
 			// script plugin: delete the actual script file under user scripts directory
 			scriptPath := path.Join(util.GetLocation().GetUserScriptPluginsDirectory(), plugin.Metadata.Entry)
 			if util.IsFileExists(scriptPath) {
@@ -798,18 +805,42 @@ func (s *Store) UninstallWithProgress(ctx context.Context, plugin *Instance, ski
 				}
 			}
 		} else {
+			reportProgress("plugin_uninstall_progress_unloading")
+			// Bug fix: native plugins can keep DLL/.node handles open until their unload callbacks run.
+			// Release the runtime first so Windows can move the plugin directory to trash successfully.
+			GetPluginManager().UnloadPlugin(ctx, plugin)
+			pluginAlreadyUnloaded = true
+
+			reportProgress("plugin_uninstall_progress_removing")
 			removeErr := trash.MoveToTrash(plugin.PluginDirectory)
 			if removeErr != nil {
+				runtime := ConvertToRuntime(plugin.Metadata.Runtime)
+				// Bug fix: the shared runtime process may keep native files mapped even after the plugin
+				// unload callback runs. Retry deletion while the host is stopped, then always start it back.
+				reportProgress("plugin_uninstall_progress_stopping_host")
+				plugin.Host.Stop(ctx)
+				reportProgress("plugin_uninstall_progress_retrying_removal")
+				removeErr = trash.MoveToTrash(plugin.PluginDirectory)
+				restartErr := GetPluginManager().RestartHostForRuntime(ctx, runtime, []string{plugin.Metadata.Id}, progressCallback)
+				if restartErr != nil {
+					logger.Error(ctx, fmt.Sprintf("failed to restart %s host while uninstalling plugin %s(%s): %s", runtime, plugin.Metadata.GetName(ctx), plugin.Metadata.Version, restartErr.Error()))
+				}
+			}
+			if removeErr != nil {
 				logger.Error(ctx, fmt.Sprintf("failed to remove plugin directory %s: %s", plugin.PluginDirectory, removeErr.Error()))
+				// If deletion still fails, reload the plugin so the current session does not stay half-uninstalled.
+				reportProgress("plugin_uninstall_progress_restoring_plugin", plugin.Metadata.GetName(ctx))
+				if restoreErr := GetPluginManager().LoadPlugin(ctx, plugin.PluginDirectory); restoreErr != nil {
+					logger.Error(ctx, fmt.Sprintf("failed to restore plugin %s(%s) after uninstall rollback: %s", plugin.Metadata.GetName(ctx), plugin.Metadata.Version, restoreErr.Error()))
+				}
+				GetPluginManager().GetUI().ReloadSettingPlugins(ctx)
 				return removeErr
 			}
 		}
 	}
 
 	if !skipCleanSetting {
-		if progressCallback != nil {
-			progressCallback(i18n.GetI18nManager().TranslateWox(ctx, "i18n:plugin_uninstall_progress_cleaning_settings"))
-		}
+		reportProgress("plugin_uninstall_progress_cleaning_settings")
 		if db := database.GetDB(); db != nil {
 			if err := setting.NewPluginSettingStore(db, plugin.Metadata.Id).DeleteAll(); err != nil {
 				logger.Error(ctx, fmt.Sprintf("failed to delete plugin settings %s(%s): %s", plugin.Metadata.GetName(ctx), plugin.Metadata.Version, err.Error()))
@@ -817,16 +848,13 @@ func (s *Store) UninstallWithProgress(ctx context.Context, plugin *Instance, ski
 		}
 	}
 
-	if progressCallback != nil {
-		progressCallback(i18n.GetI18nManager().TranslateWox(ctx, "i18n:plugin_uninstall_progress_unloading"))
+	if !pluginAlreadyUnloaded {
+		reportProgress("plugin_uninstall_progress_unloading")
+		GetPluginManager().UnloadPlugin(ctx, plugin)
 	}
-
-	GetPluginManager().UnloadPlugin(ctx, plugin)
 	GetPluginManager().GetUI().ReloadSettingPlugins(ctx)
 
-	if progressCallback != nil {
-		progressCallback(i18n.GetI18nManager().TranslateWox(ctx, "i18n:plugin_uninstall_progress_complete"))
-	}
+	reportProgress("plugin_uninstall_progress_complete")
 
 	return nil
 }
