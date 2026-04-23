@@ -396,3 +396,33 @@ func TestConverterBase(t *testing.T) {
 
 	suite.RunQueryTests(tests)
 }
+
+func TestConverterUnits(t *testing.T) {
+	suite := NewTestSuite(t)
+
+	tests := []QueryTest{
+		{
+			Name:           "Length conversion",
+			Query:          "10cm to mm",
+			ExpectedTitle:  "100 millimeters",
+			ExpectedAction: "Copy",
+		},
+		{
+			Name:           "Weight conversion",
+			Query:          "100lb to kg",
+			ExpectedTitle:  "",
+			ExpectedAction: "Copy",
+			TitleCheck: func(title string) bool {
+				return strings.Contains(title, "45.36") && strings.Contains(title, "kilograms")
+			},
+		},
+		{
+			Name:           "Temperature conversion",
+			Query:          "32f to c",
+			ExpectedTitle:  "0 celsius",
+			ExpectedAction: "Copy",
+		},
+	}
+
+	suite.RunQueryTests(tests)
+}

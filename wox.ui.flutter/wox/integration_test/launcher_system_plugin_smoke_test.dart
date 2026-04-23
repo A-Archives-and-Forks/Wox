@@ -215,6 +215,17 @@ void registerSystemPluginSmokeTests() {
       expectQueryLatencyWithinThreshold(result);
     });
 
+    testWidgets('T6-10A: Converter plugin length conversion', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final result = await queryAndWaitForActiveResult(tester, controller, '10cm to mm');
+
+      expect(result.title, contains('100'));
+      expect(result.title.toLowerCase(), contains('millimeter'));
+      expect(result.isGroup, isFalse);
+      expectResultActionByName(result, 'copy');
+      expectQueryLatencyWithinThreshold(result);
+    });
+
     testWidgets('T6-11: Theme plugin returns theme options', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final result = await queryAndWaitForActiveResult(tester, controller, 'theme');

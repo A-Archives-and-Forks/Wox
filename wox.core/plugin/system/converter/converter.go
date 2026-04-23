@@ -67,6 +67,11 @@ func (c *Converter) Init(ctx context.Context, initParams plugin.InitParams) {
 
 	registry.Register(modules.NewBaseModule(ctx, c.api))
 
+	// Length, weight, and temperature conversions previously fell through to the
+	// calculator placeholder because Converter only knew about base/time/rates.
+	// Register the units module here so those physical conversions stay in Converter.
+	registry.Register(modules.NewUnitModule(ctx, c.api))
+
 	registry.Register(modules.NewTimeModule(ctx, c.api))
 
 	currencyModule := modules.NewCurrencyModule(ctx, c.api)

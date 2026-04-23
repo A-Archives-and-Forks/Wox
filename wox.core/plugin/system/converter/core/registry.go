@@ -10,10 +10,13 @@ import (
 type UnitType int
 
 const (
-	UnitTypeNumber   UnitType = iota // For pure numbers without unit
-	UnitTypeCrypto                   // For cryptocurrency units (BTC, ETH, etc.)
-	UnitTypeCurrency                 // For fiat currency units (USD, EUR, etc.)
-	UnitTypeTime                     // For time units (seconds, minutes, etc.)
+	UnitTypeNumber      UnitType = iota // For pure numbers without unit
+	UnitTypeCrypto                      // For cryptocurrency units (BTC, ETH, etc.)
+	UnitTypeCurrency                    // For fiat currency units (USD, EUR, etc.)
+	UnitTypeTime                        // For time units (seconds, minutes, etc.)
+	UnitTypeLength                      // For length units (millimeters, meters, etc.)
+	UnitTypeWeight                      // For weight units (grams, kilograms, etc.)
+	UnitTypeTemperature                 // For temperature units (celsius, fahrenheit, etc.)
 )
 
 type Unit struct {
