@@ -2,6 +2,7 @@ package filesearch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,10 +40,18 @@ type Scanner struct {
 	reloadWorkersMu             sync.Mutex
 	reloadWorkers               map[string]*rootReloadWorker
 	rootReloadWorkerIdleTimeout time.Duration
+	transientRunMu              sync.RWMutex
+	transientRunState           *StatusSnapshot
 	transientRootMu             sync.RWMutex
 	transientRootState          *TransientRootState
 	transientSyncMu             sync.RWMutex
 	transientSyncState          *TransientSyncState
+	loggedRootBytesMu           sync.Mutex
+	loggedRootBytes             map[string]uint64
+	// Tests override the planner budget so run-based smoke coverage can force
+	// job splitting without manufacturing thousands of files just to cross the
+	// production thresholds.
+	plannerBudgetOverride *splitBudget
 	// Test hook to coordinate root-local provider reload ordering.
 	beforeApplyRootReload func(rootID string, entries []EntryRecord)
 }
@@ -88,6 +97,7 @@ func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
 		dirtyQueue:                  NewDirtyQueue(dirtyQueueConfig),
 		reconciler:                  NewReconciler(db, policy),
 		reloadWorkers:               map[string]*rootReloadWorker{},
+		loggedRootBytes:             map[string]uint64{},
 		rootReloadWorkerIdleTimeout: defaultRootReloadWorkerIdleTimeout,
 	}
 }
@@ -192,17 +202,287 @@ func (s *Scanner) scanAllRootsWithReason(ctx context.Context, reason string) {
 	}
 	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle started: reason=%s roots=%d", reason, len(roots)))
 
-	for index, root := range roots {
-		s.scanRoot(ctx, root, index+1, len(roots))
-	}
-
-	entries, err := s.db.ListEntries(ctx)
-	if err != nil {
-		util.GetLogger().Warn(ctx, "filesearch failed to reload entries: "+err.Error())
+	if len(roots) == 0 {
+		s.clearTransientRunState()
 		return
 	}
-	s.localProvider.ReplaceEntries(entries)
-	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: reason=%s entries=%d", reason, len(entries)))
+
+	if err := s.executePlannedRun(ctx, RunKindFull, reason, roots, nil); err != nil {
+		util.GetLogger().Warn(ctx, "filesearch full run failed: "+err.Error())
+		return
+	}
+
+	if s.localProvider != nil {
+		entries, err := s.db.ListEntries(ctx)
+		if err != nil {
+			util.GetLogger().Warn(ctx, "filesearch failed to reload entries: "+err.Error())
+			return
+		}
+		s.localProvider.ReplaceEntries(entries)
+		util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: reason=%s entries=%d", reason, len(entries)))
+		logLocalIndexSnapshot(ctx, "full_scan_complete", s.localProvider.snapshot(), true)
+		return
+	}
+
+	snapshot, err := s.db.SearchIndexSnapshot(ctx)
+	if err != nil {
+		util.GetLogger().Warn(ctx, "filesearch failed to capture sqlite snapshot after full scan: "+err.Error())
+		return
+	}
+	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: reason=%s entries=%d", reason, snapshot.EntryCount))
+	logSQLiteIndexSnapshot(ctx, "full_scan_complete", snapshot, true)
+}
+
+func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason string, roots []RootRecord, batches []ReconcileBatch) error {
+	totalStartedAt := util.GetSystemTimestamp()
+	planner := NewRunPlanner(s.policy)
+	if s != nil && s.plannerBudgetOverride != nil {
+		planner.budget = *s.plannerBudgetOverride
+	}
+	planner.SetProgressCallback(func(progress RunPlannerProgress) {
+		s.setTransientRunState(buildPlannerStatusSnapshot(progress))
+		s.emitStateChange(ctx)
+		logFilesearchRunStage(ctx, kind, progress.Stage, progress.Root, Job{}, progress.RootIndex, progress.RootTotal, 0, int64(progress.RootTotal))
+	})
+
+	var (
+		plan RunPlan
+		err  error
+	)
+	plannerStartedAt := util.GetSystemTimestamp()
+	switch kind {
+	case RunKindIncremental:
+		plan, err = planner.PlanIncrementalRun(ctx, roots, batches)
+	default:
+		plan, err = planner.PlanFullRun(ctx, roots)
+	}
+	if err != nil {
+		s.clearTransientRunState()
+		return err
+	}
+	// Planner and pre-scan can traverse large trees before execution starts, but
+	// the old logs only showed coarse stage labels. Record the sealed workload
+	// timing so slow runs reveal whether the stall starts before any SQLite write.
+	logFilesearchRunPlanner(ctx, kind, util.GetSystemTimestamp()-plannerStartedAt, len(plan.RootPlans), len(plan.Jobs), plan.TotalWorkUnits)
+
+	snapshotBuilder := NewSnapshotBuilder(s.policy)
+	if s.plannerBudgetOverride != nil && s.plannerBudgetOverride.DirectFileBatchSize > 0 {
+		// Tests and local tuning already override the direct-files batch budget.
+		// The planner now keeps one direct-files job per directory, so this value
+		// only caps the internal staging batch size of that single job.
+		snapshotBuilder.SetDirectFileBatchSize(s.plannerBudgetOverride.DirectFileBatchSize)
+	}
+	executor := NewJobExecutor(snapshotBuilder)
+	executor.SetDirectFilesStreamFunc(func(runCtx context.Context, root RootRecord, job Job, snapshot *SnapshotBuilder) error {
+		return s.db.ApplyDirectFilesJobStream(runCtx, root, job, snapshot)
+	})
+	if kind == RunKindFull {
+		// Full runs are the only place where we deliberately coalesce multiple
+		// small subtree snapshots into one SQLite transaction. Incremental work
+		// keeps its per-batch apply boundary so dirty-path retries and deletes
+		// continue to map 1:1 to the planner-owned reconcile scopes.
+		executor.SetSubtreeBatchConfig(defaultFullRunSubtreeApplyBatchConfig())
+		executor.SetSubtreeBatchApplyFunc(func(runCtx context.Context, _ RootRecord, batches []SubtreeSnapshotBatch) error {
+			return s.db.ReplaceSubtreeSnapshots(runCtx, batches)
+		})
+	}
+	executor.SetApplyFunc(func(runCtx context.Context, root RootRecord, job Job, batch *SubtreeSnapshotBatch) error {
+		if snapshot, ok := s.GetTransientRunState(); ok {
+			snapshot.ActiveRootStatus = RootStatusWriting
+			snapshot.ActiveStage = RunStageExecuting
+			snapshot.ActiveJobKind = job.Kind
+			snapshot.ActiveScopePath = job.ScopePath
+			snapshot.ActiveProgressCurrent = 0
+			snapshot.ActiveProgressTotal = 1
+			s.setTransientRunState(snapshot)
+			s.emitStateChange(runCtx)
+		}
+		return s.applyRunJob(runCtx, kind, root, job, batch)
+	})
+
+	bulkSyncStarted := false
+	if kind == RunKindFull {
+		s.db.BeginBulkSync()
+		bulkSyncStarted = true
+		for _, root := range roots {
+			// Full-run leaf scopes are sealed before execution and then applied once
+			// each. Preparing the root baseline up front lets the DB layer reuse one
+			// "was this root empty?" answer across the whole run instead of issuing
+			// the same scope-level empty checks for every fresh subtree.
+			if err := s.db.prepareBulkSyncFullRunRoot(ctx, root.ID); err != nil {
+				return err
+			}
+		}
+	}
+	defer func() {
+		if !bulkSyncStarted {
+			return
+		}
+		bulkFinalizeStartedAt := util.GetSystemTimestamp()
+		if err := s.db.EndBulkSync(ctx); err != nil {
+			util.GetLogger().Warn(ctx, "filesearch failed to finalize bulk sqlite search sync: "+err.Error())
+			return
+		}
+		// Full runs intentionally defer the global FTS rebuild until the facts
+		// settle, so log the boundary explicitly instead of hiding that cost in a
+		// generic "scan cycle completed" message.
+		logFilesearchSQLiteMaintenance(ctx, "bulk_finalize", string(kind), util.GetSystemTimestamp()-bulkFinalizeStartedAt, len(filesearchFTSTables))
+		// The planner, execution, and deferred bulk finalize all belong to one
+		// user-visible full-index attempt. Record that outer elapsed time here,
+		// after bulk finalize succeeds, so later optimizations can compare one
+		// stable end-to-end metric instead of manually summing phase logs.
+		logFilesearchFullIndexTotal(ctx, reason, util.GetSystemTimestamp()-totalStartedAt, len(plan.RootPlans), len(plan.Jobs), plan.TotalWorkUnits)
+	}()
+
+	executionStartedAt := util.GetSystemTimestamp()
+	run, _, err := executor.ExecuteRun(ctx, plan, roots, func(snapshot StatusSnapshot, job Job) {
+		s.setTransientRunState(snapshot)
+		s.emitStateChange(ctx)
+		logFilesearchRunStage(ctx, kind, snapshot.ActiveStage, rootRecordForRunLog(roots, job.RootID), job, snapshot.ActiveRootIndex, snapshot.ActiveRootTotal, snapshot.RunProgressCurrent, snapshot.RunProgressTotal)
+	})
+	logFilesearchRunExecution(ctx, kind, util.GetSystemTimestamp()-executionStartedAt, len(plan.Jobs), plan.TotalWorkUnits)
+	if err != nil {
+		s.handleRunFailure(ctx, run, roots)
+		return err
+	}
+
+	s.clearTransientRunState()
+	s.refreshChangeFeed(ctx)
+	return nil
+}
+
+func (s *Scanner) applyRunJob(ctx context.Context, kind RunKind, root RootRecord, job Job, batch *SubtreeSnapshotBatch) error {
+	switch job.Kind {
+	case JobKindDirectFiles:
+		if batch == nil {
+			return fmt.Errorf("direct-files job %q is missing snapshot batch", job.JobID)
+		}
+		return s.db.ApplyDirectFilesJob(ctx, job, *batch)
+	case JobKindSubtree:
+		if batch == nil {
+			return fmt.Errorf("subtree job %q is missing snapshot batch", job.JobID)
+		}
+		return s.db.ApplySubtreeJob(ctx, job, *batch)
+	case JobKindFinalizeRoot:
+		now := util.GetSystemTimestamp()
+		root.LastReconcileAt = now
+		if kind == RunKindFull {
+			root.LastFullScanAt = now
+		}
+		root.FeedState = nextFeedStateAfterSuccessfulReconcile(root)
+		root.LastError = nil
+		root.ProgressCurrent = RootProgressScale
+		root.ProgressTotal = RootProgressScale
+		root.Status = RootStatusIdle
+		root = s.captureRootFeedSnapshot(ctx, root)
+		root.UpdatedAt = util.GetSystemTimestamp()
+		return s.db.FinalizeRootRun(ctx, root)
+	default:
+		return fmt.Errorf("unsupported run job kind %q", job.Kind)
+	}
+}
+
+func (s *Scanner) handleRunFailure(ctx context.Context, run Run, roots []RootRecord) {
+	snapshot, hasSnapshot := s.GetTransientRunState()
+	if hasSnapshot {
+		snapshot.ActiveRunStatus = run.Status
+		snapshot.ActiveStage = run.Stage
+		snapshot.IsIndexing = false
+		snapshot.LastError = run.LastError
+		s.setTransientRunState(snapshot)
+		s.emitStateChange(ctx)
+	}
+
+	if strings.TrimSpace(run.ActiveJobID) == "" {
+		s.clearTransientRunState()
+		return
+	}
+
+	rootID := ""
+	for _, root := range roots {
+		if strings.Contains(run.ActiveJobID, root.ID) {
+			rootID = root.ID
+			break
+		}
+	}
+	if rootID == "" {
+		s.clearTransientRunState()
+		return
+	}
+
+	root, ok := s.findRootByID(ctx, rootID)
+	if !ok {
+		s.clearTransientRunState()
+		return
+	}
+	root.Status = RootStatusError
+	root.ProgressCurrent = 0
+	root.ProgressTotal = 0
+	if strings.TrimSpace(run.LastError) != "" {
+		errMessage := run.LastError
+		root.LastError = &errMessage
+	}
+	root.UpdatedAt = util.GetSystemTimestamp()
+	_ = s.db.UpdateRootState(ctx, root)
+	s.clearTransientRunState()
+	s.emitStateChange(ctx)
+}
+
+func buildPlannerStatusSnapshot(progress RunPlannerProgress) StatusSnapshot {
+	current := int64(progress.RootIndex)
+	total := int64(progress.RootTotal)
+	if total <= 0 {
+		total = 1
+	}
+	rootStatus := RootStatusPreparing
+	if progress.Stage == RunStagePreScan {
+		rootStatus = RootStatusScanning
+	}
+
+	return StatusSnapshot{
+		ProgressCurrent:       0,
+		ProgressTotal:         0,
+		ActiveRootStatus:      rootStatus,
+		ActiveProgressCurrent: current,
+		ActiveProgressTotal:   total,
+		ActiveRootIndex:       progress.RootIndex,
+		ActiveRootTotal:       progress.RootTotal,
+		ActiveRootPath:        filepath.Clean(progress.Root.Path),
+		ActiveRunStatus:       runStatusForPlannerStage(progress.Stage),
+		ActiveStage:           progress.Stage,
+		ActiveScopePath:       activePlannerScopePath(progress),
+		RunProgressCurrent:    0,
+		RunProgressTotal:      0,
+		IsIndexing:            true,
+	}
+}
+
+func activePlannerScopePath(progress RunPlannerProgress) string {
+	scopePath := filepath.Clean(progress.ScopePath)
+	if strings.TrimSpace(scopePath) == "" {
+		return filepath.Clean(progress.Root.Path)
+	}
+	return scopePath
+}
+
+func runStatusForPlannerStage(stage RunStage) RunStatus {
+	switch stage {
+	case RunStagePlanning:
+		return RunStatusPlanning
+	case RunStagePreScan:
+		return RunStatusPreScan
+	default:
+		return RunStatusExecuting
+	}
+}
+
+func rootRecordForRunLog(roots []RootRecord, rootID string) RootRecord {
+	for _, root := range roots {
+		if root.ID == rootID {
+			return root
+		}
+	}
+	return RootRecord{ID: rootID}
 }
 
 func (s *Scanner) refreshChangeFeed(ctx context.Context) {
@@ -261,6 +541,16 @@ func (s *Scanner) GetTransientRootState() (TransientRootState, bool) {
 	return *s.transientRootState, true
 }
 
+func (s *Scanner) GetTransientRunState() (StatusSnapshot, bool) {
+	s.transientRunMu.RLock()
+	defer s.transientRunMu.RUnlock()
+	if s.transientRunState == nil {
+		return StatusSnapshot{}, false
+	}
+
+	return *s.transientRunState, true
+}
+
 func (s *Scanner) GetTransientSyncState() (TransientSyncState, bool) {
 	s.transientSyncMu.RLock()
 	defer s.transientSyncMu.RUnlock()
@@ -269,6 +559,19 @@ func (s *Scanner) GetTransientSyncState() (TransientSyncState, bool) {
 	}
 
 	return *s.transientSyncState, true
+}
+
+func (s *Scanner) setTransientRunState(state StatusSnapshot) {
+	stateCopy := state
+	s.transientRunMu.Lock()
+	s.transientRunState = &stateCopy
+	s.transientRunMu.Unlock()
+}
+
+func (s *Scanner) clearTransientRunState() {
+	s.transientRunMu.Lock()
+	s.transientRunState = nil
+	s.transientRunMu.Unlock()
 }
 
 func (s *Scanner) setTransientRootState(state TransientRootState) {
@@ -294,6 +597,37 @@ func (s *Scanner) setTransientSyncState(state TransientSyncState) {
 	s.transientSyncMu.Lock()
 	s.transientSyncState = &stateCopy
 	s.transientSyncMu.Unlock()
+}
+
+func (s *Scanner) updateTransientSyncProgress(rootID string, progress ReconcileProgress) bool {
+	s.transientSyncMu.Lock()
+	defer s.transientSyncMu.Unlock()
+
+	if s.transientSyncState == nil || s.transientSyncState.Root.ID != rootID {
+		return false
+	}
+
+	// Reconcile used to leave the active root in "syncing" until the whole batch
+	// finished, even after SQLite had started the expensive write phase. Mirror
+	// the DB progress into the transient root state so toolbar/status consumers can
+	// show actual write progress instead of a misleading pending-roots counter.
+	switch progress.Stage {
+	case ReplaceEntriesStageWriting:
+		s.transientSyncState.Root.Status = RootStatusWriting
+		s.transientSyncState.Root.ProgressCurrent = progress.Current
+		s.transientSyncState.Root.ProgressTotal = progress.Total
+	case ReplaceEntriesStageFinalizing:
+		s.transientSyncState.Root.Status = RootStatusFinalizing
+		s.transientSyncState.Root.ProgressCurrent = progress.Current
+		s.transientSyncState.Root.ProgressTotal = progress.Total
+	default:
+		s.transientSyncState.Root.Status = RootStatusSyncing
+		if progress.Total > 0 {
+			s.transientSyncState.Root.ProgressTotal = progress.Total
+		}
+	}
+	s.transientSyncState.Root.UpdatedAt = util.GetSystemTimestamp()
+	return true
 }
 
 func (s *Scanner) clearTransientSyncState(rootID string) {
@@ -494,8 +828,7 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 	}
 
 	queue := []scanState{{
-		path:     rootPath,
-		patterns: nil,
+		path: rootPath,
 	}}
 	plannedDirectories := make([]plannedDirectory, 0, 64)
 	discoveredDirectories := 1
@@ -524,11 +857,8 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 			continue
 		}
 
-		localPatterns := append([]gitIgnorePattern(nil), state.patterns...)
-		localPatterns = append(localPatterns, loadGitIgnorePatterns(state.path)...)
 		plannedDirectories = append(plannedDirectories, plannedDirectory{
 			path:       state.path,
-			patterns:   localPatterns,
 			childCount: len(dirEntries),
 		})
 		totalItems += int64(len(dirEntries))
@@ -545,9 +875,12 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 			}
 
 			if isDir {
+				// Planner only uses the directory list and child counts to size jobs.
+				// The previous build kept loading and copying .gitignore patterns here,
+				// but nothing in planning or execution consumed them, so we drop that
+				// dead work to reduce per-directory I/O and allocations.
 				queue = append(queue, scanState{
-					path:     fullPath,
-					patterns: localPatterns,
+					path: fullPath,
 				})
 				discoveredDirectories++
 			}
@@ -855,11 +1188,11 @@ func (s *Scanner) enqueueDirtyForPath(ctx context.Context, path string) bool {
 }
 
 func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
-	if s.dirtyQueue == nil || s.reconciler == nil {
+	if s.dirtyQueue == nil {
 		return nil
 	}
 
-	rootDirectoryCounts, rootsByID, rootIndexByID, err := s.loadDirtyQueueContext(ctx)
+	rootDirectoryCounts, rootsByID, _, err := s.loadDirtyQueueContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -879,87 +1212,38 @@ func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
 		remainingPathCount,
 	))
 
-	rootTotal := len(rootsByID)
-	for batchIndex, batch := range batches {
-		batchCtx := contextWithTraceID(ctx, batch.TraceID)
+	runRoots := make([]RootRecord, 0, len(batches))
+	for _, batch := range batches {
 		root, ok := rootsByID[batch.RootID]
 		if !ok {
-			s.refreshTransientSyncPendingCounts()
 			continue
 		}
-		originalMode := batch.Mode
-		batch = forceReconcileBatchForFeedState(root, batch)
-		if batch.Mode != originalMode {
-			util.GetLogger().Info(batchCtx, fmt.Sprintf(
-				"filesearch reconcile batch escalated: root=%s path=%s from=%s to=%s feed_state=%s",
-				batch.RootID,
-				root.Path,
-				originalMode,
-				batch.Mode,
-				root.FeedState,
-			))
-		}
-		util.GetLogger().Info(batchCtx, fmt.Sprintf(
-			"filesearch reconcile batch started: index=%d/%d root=%s path=%s mode=%s dirty_paths=%d scopes=%d feed_state=%s feed_type=%s",
-			batchIndex+1,
-			len(batches),
-			batch.RootID,
-			root.Path,
-			batch.Mode,
-			batch.DirtyPathCount,
-			len(batch.Paths),
-			root.FeedState,
-			root.FeedType,
-		))
-		if len(batch.Paths) > 0 {
-			util.GetLogger().Debug(batchCtx, fmt.Sprintf(
-				"filesearch reconcile batch scopes: root=%s paths=%s",
-				batch.RootID,
-				summarizeLogPaths(batch.Paths),
-			))
-		}
-
-		pendingRootCount, pendingPathCount := s.pendingDirtyCounts()
-		s.setTransientSyncState(newTransientSyncState(root, rootIndexByID[batch.RootID], rootTotal, batch, pendingRootCount, pendingPathCount))
-		s.emitStateChange(batchCtx)
-
-		batchStart := util.GetSystemTimestamp()
-		result, err := s.reconciler.Reconcile(batchCtx, batch)
-		if err != nil {
-			s.clearTransientSyncState(batch.RootID)
-			s.handleDirtyQueueFailure(batchCtx, root, batch, batches[batchIndex+1:], err)
-			return err
-		}
-
-		if result.ReloadNeeded {
-			if _, err := s.reloadLocalProviderRootFromDB(batchCtx, batch.RootID); err != nil {
-				s.clearTransientSyncState(batch.RootID)
-				s.handleDirtyQueueFailure(batchCtx, root, batch, batches[batchIndex+1:], err)
-				return err
-			}
-		}
-		if result.Mode == ReconcileModeRoot {
-			util.GetLogger().Debug(batchCtx, fmt.Sprintf("filesearch refreshing root feed snapshot after reconcile: root=%s path=%s", batch.RootID, root.Path))
-			s.refreshRootFeedSnapshot(batchCtx, batch.RootID)
-		}
-
-		s.clearTransientSyncState(batch.RootID)
+		runRoots = append(runRoots, root)
+	}
+	if len(runRoots) == 0 {
 		s.refreshTransientSyncPendingCounts()
-		remainingRootCount, remainingPathCount = s.pendingDirtyCounts()
-		util.GetLogger().Info(batchCtx, fmt.Sprintf(
-			"filesearch reconcile batch completed: root=%s mode=%s dirty_paths=%d scopes=%d reload_needed=%t remaining_roots=%d remaining_paths=%d cost=%dms",
-			batch.RootID,
-			result.Mode,
-			batch.DirtyPathCount,
-			len(batch.Paths),
-			result.ReloadNeeded,
-			remainingRootCount,
-			remainingPathCount,
-			util.GetSystemTimestamp()-batchStart,
-		))
-		s.emitStateChange(batchCtx)
+		return nil
 	}
 
+	if err := s.executePlannedRun(ctx, RunKindIncremental, "dirty_queue", runRoots, batches); err != nil {
+		s.handleIncrementalRunFailure(ctx, runRoots, batches, err)
+		return err
+	}
+
+	if s.localProvider != nil {
+		if _, err := s.reloadLocalProviderFromDB(ctx); err != nil {
+			s.handleIncrementalRunFailure(ctx, runRoots, batches, err)
+			return err
+		}
+	} else {
+		for _, root := range runRoots {
+			s.logRootReloadIndexSnapshot(ctx, root.ID)
+		}
+	}
+
+	s.clearTransientSyncState("")
+	s.refreshTransientSyncPendingCounts()
+	s.emitStateChange(ctx)
 	return nil
 }
 
@@ -1092,6 +1376,106 @@ func (s *Scanner) handleDirtyQueueFailure(ctx context.Context, root RootRecord, 
 	s.requeueDirtyBatches(ctx, remaining)
 	s.refreshTransientSyncPendingCounts()
 	s.emitStateChange(ctx)
+}
+
+func (s *Scanner) handleIncrementalRunFailure(ctx context.Context, roots []RootRecord, batches []ReconcileBatch, cause error) {
+	util.GetLogger().Warn(ctx, fmt.Sprintf(
+		"filesearch incremental run failed: roots=%d batches=%d err=%s",
+		len(roots),
+		len(batches),
+		cause.Error(),
+	))
+
+	// Incremental job boundaries are planner-owned execution metadata, not
+	// durable state. After a failure we escalate the failed root to a full-root
+	// retry, then requeue the untouched batches as-is so unaffected scopes keep
+	// their existing debounce granularity.
+	var rootErr *runRootError
+	failedRootID := ""
+	if errors.As(cause, &rootErr) && rootErr != nil {
+		failedRootID = rootErr.RootID
+	}
+	if failedRootID == "" && len(batches) > 0 {
+		failedRootID = batches[0].RootID
+	}
+
+	requeuedAt := time.Now()
+	for _, root := range roots {
+		if failedRootID != "" && root.ID != failedRootID {
+			continue
+		}
+		s.updateRootFeedState(ctx, root.ID, RootFeedStateDegraded)
+		s.markRootIncrementalFailure(ctx, root.ID, cause)
+		if shouldRetryIncrementalRootFailure(cause) {
+			s.enqueueDirtyWithContext(ctx, DirtySignal{
+				Kind:          DirtySignalKindRoot,
+				RootID:        root.ID,
+				Path:          root.Path,
+				PathIsDir:     true,
+				PathTypeKnown: true,
+				At:            requeuedAt,
+			})
+			continue
+		}
+		util.GetLogger().Warn(ctx, fmt.Sprintf(
+			"filesearch incremental run stopped retrying failed root: root=%s path=%s err=%s",
+			root.ID,
+			root.Path,
+			cause.Error(),
+		))
+	}
+	remaining := make([]ReconcileBatch, 0, len(batches))
+	for _, batch := range batches {
+		if failedRootID == "" {
+			break
+		}
+		if batch.RootID == failedRootID {
+			continue
+		}
+		remaining = append(remaining, batch)
+	}
+	s.requeueDirtyBatches(ctx, remaining)
+	s.refreshTransientSyncPendingCounts()
+	s.emitStateChange(ctx)
+}
+
+func (s *Scanner) markRootIncrementalFailure(ctx context.Context, rootID string, cause error) {
+	root, ok := s.findRootByID(ctx, rootID)
+	if !ok {
+		return
+	}
+
+	// Incremental failures need to surface as durable root errors because the
+	// run-local status disappears once the failed run exits. Without persisting
+	// the root error here, deterministic permission failures could silently clear
+	// the toolbar and then immediately hot-loop into another transient run.
+	root.Status = RootStatusError
+	errMessage := strings.TrimSpace(cause.Error())
+	if errMessage != "" {
+		root.LastError = &errMessage
+	}
+	root.UpdatedAt = util.GetSystemTimestamp()
+	if err := s.db.UpdateRootState(ctx, root); err != nil {
+		util.GetLogger().Warn(ctx, "filesearch failed to persist incremental root failure: "+err.Error())
+		return
+	}
+}
+
+func shouldRetryIncrementalRootFailure(cause error) bool {
+	return !isIncrementalPermissionFailure(cause)
+}
+
+func isIncrementalPermissionFailure(cause error) bool {
+	if cause == nil {
+		return false
+	}
+	if errors.Is(cause, os.ErrPermission) {
+		return true
+	}
+	message := strings.ToLower(strings.TrimSpace(cause.Error()))
+	return strings.Contains(message, "access is denied") ||
+		strings.Contains(message, "permission denied") ||
+		strings.Contains(message, "operation not permitted")
 }
 
 func (s *Scanner) updateRootFeedMetadata(ctx context.Context, rootID string, feedType RootFeedType, cursor string) {
@@ -1251,6 +1635,9 @@ func (s *Scanner) loadDirtyQueueContext(ctx context.Context) (map[string]int, ma
 }
 
 func (s *Scanner) reloadLocalProviderFromDB(ctx context.Context) (int, error) {
+	if s.localProvider == nil {
+		return 0, nil
+	}
 	entries, err := s.db.ListEntries(ctx)
 	if err != nil {
 		return 0, err
@@ -1261,6 +1648,9 @@ func (s *Scanner) reloadLocalProviderFromDB(ctx context.Context) (int, error) {
 }
 
 func (s *Scanner) reloadLocalProviderRootFromDB(ctx context.Context, rootID string) (int, error) {
+	if s.localProvider == nil {
+		return 0, nil
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1378,6 +1768,9 @@ func (s *Scanner) releaseRootReloadWorker(rootID string, worker *rootReloadWorke
 }
 
 func (s *Scanner) reloadLocalProviderRootFromDBOnce(ctx context.Context, rootID string) (int, error) {
+	if s.localProvider == nil {
+		return 0, nil
+	}
 	currentRootEntries := s.localProvider.SnapshotRootEntries(rootID)
 	entries, err := s.db.ListEntriesByRoot(ctx, rootID)
 	if err != nil {
@@ -1399,7 +1792,78 @@ func (s *Scanner) reloadLocalProviderRootFromDBOnce(ctx context.Context, rootID 
 		len(delta.Removed),
 		shouldRebuildRootEntries(delta),
 	))
+	s.logRootReloadIndexSnapshot(ctx, rootID)
 	return len(entries), nil
+}
+
+func (s *Scanner) logRootReloadIndexSnapshot(ctx context.Context, rootID string) {
+	if s.localProvider == nil {
+		snapshot, err := s.db.SearchIndexSnapshot(ctx)
+		if err != nil {
+			util.GetLogger().Warn(ctx, "filesearch failed to capture sqlite snapshot after root reload: "+err.Error())
+			return
+		}
+		logSQLiteIndexSnapshot(ctx, "root_reload_complete", snapshot, false)
+		return
+	}
+
+	snapshot := s.localProvider.snapshot()
+	logLocalIndexSnapshot(ctx, "root_reload_complete", snapshot, false)
+
+	rootSnapshot, previousBytes, shouldPromote := s.recordRootEstimate(snapshot, rootID)
+	if !shouldPromote {
+		return
+	}
+
+	util.GetLogger().Info(ctx, fmt.Sprintf(
+		"filesearch prominent root reload: root=%s docs=%d total_bytes_est=%d previous_total_bytes_est=%d",
+		rootID,
+		rootSnapshot.DocCount,
+		rootSnapshot.TotalBytesEstimate,
+		previousBytes,
+	))
+}
+
+func (s *Scanner) recordRootEstimate(snapshot queryIndexSnapshot, rootID string) (rootIndexSnapshot, uint64, bool) {
+	var current rootIndexSnapshot
+	for _, root := range snapshot.Roots {
+		if root.RootID == rootID {
+			current = root
+			break
+		}
+	}
+	if current.RootID == "" {
+		return rootIndexSnapshot{}, 0, false
+	}
+
+	s.loggedRootBytesMu.Lock()
+	defer s.loggedRootBytesMu.Unlock()
+
+	previousBytes := s.loggedRootBytes[rootID]
+	for _, root := range snapshot.Roots {
+		s.loggedRootBytes[root.RootID] = root.TotalBytesEstimate
+	}
+
+	isTopRoot := false
+	for _, root := range snapshot.TopRoots {
+		if root.RootID == rootID {
+			isTopRoot = true
+			break
+		}
+	}
+
+	if previousBytes == 0 {
+		return current, previousBytes, isTopRoot
+	}
+
+	delta := previousBytes
+	if current.TotalBytesEstimate > previousBytes {
+		delta = current.TotalBytesEstimate - previousBytes
+	} else {
+		delta = previousBytes - current.TotalBytesEstimate
+	}
+
+	return current, previousBytes, isTopRoot || delta*10 >= previousBytes
 }
 
 func (s *Scanner) findRootByID(ctx context.Context, rootID string) (RootRecord, bool) {
@@ -1600,13 +2064,11 @@ func newTransientSyncState(root RootRecord, rootIndex int, rootTotal int, batch 
 }
 
 type scanState struct {
-	path     string
-	patterns []gitIgnorePattern
+	path string
 }
 
 type plannedDirectory struct {
 	path       string
-	patterns   []gitIgnorePattern
 	childCount int
 }
 
@@ -1614,94 +2076,6 @@ type scanPlan struct {
 	directories    []plannedDirectory
 	DirectoryTotal int
 	TotalItems     int64
-}
-
-type gitIgnorePattern struct {
-	baseDir  string
-	pattern  string
-	negate   bool
-	dirOnly  bool
-	rooted   bool
-	hasSlash bool
-}
-
-func loadGitIgnorePatterns(directory string) []gitIgnorePattern {
-	gitIgnorePath := filepath.Join(directory, ".gitignore")
-	data, err := os.ReadFile(gitIgnorePath)
-	if err != nil {
-		return nil
-	}
-
-	lines := strings.Split(string(data), "\n")
-	patterns := make([]gitIgnorePattern, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		pattern := gitIgnorePattern{baseDir: directory}
-		if strings.HasPrefix(line, "!") {
-			pattern.negate = true
-			line = strings.TrimPrefix(line, "!")
-		}
-		if strings.HasPrefix(line, "/") {
-			pattern.rooted = true
-			line = strings.TrimPrefix(line, "/")
-		}
-		if strings.HasSuffix(line, "/") {
-			pattern.dirOnly = true
-			line = strings.TrimSuffix(line, "/")
-		}
-		pattern.pattern = line
-		pattern.hasSlash = strings.Contains(line, "/")
-		if pattern.pattern != "" {
-			patterns = append(patterns, pattern)
-		}
-	}
-
-	return patterns
-}
-
-func shouldIgnorePath(patterns []gitIgnorePattern, fullPath string, isDir bool) bool {
-	ignored := false
-	for _, pattern := range patterns {
-		if pattern.matches(fullPath, isDir) {
-			ignored = !pattern.negate
-		}
-	}
-	return ignored
-}
-
-func (p gitIgnorePattern) matches(fullPath string, isDir bool) bool {
-	if p.dirOnly && !isDir {
-		return false
-	}
-
-	relPath, err := filepath.Rel(p.baseDir, fullPath)
-	if err != nil || strings.HasPrefix(relPath, "..") {
-		return false
-	}
-	relPath = filepath.ToSlash(relPath)
-	pattern := filepath.ToSlash(p.pattern)
-
-	if p.rooted || p.hasSlash {
-		if ok, _ := filepath.Match(pattern, relPath); ok {
-			return true
-		}
-		if strings.HasPrefix(relPath, pattern+"/") {
-			return true
-		}
-		return false
-	}
-
-	for _, segment := range strings.Split(relPath, "/") {
-		if ok, _ := filepath.Match(pattern, segment); ok {
-			return true
-		}
-	}
-
-	return false
 }
 
 func newEntryRecord(root RootRecord, fullPath string, info os.FileInfo) EntryRecord {

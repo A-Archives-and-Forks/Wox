@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"wox/common"
 	"wox/plugin"
 	"wox/setting/definition"
@@ -28,6 +29,7 @@ const fileSearchToolbarMsgID = "file-search-status"
 const (
 	slowFileSearchQueryThresholdMs int64 = 40
 	slowFileSearchStageThresholdMs int64 = 15
+	toolbarActivityPathMaxChars          = 42
 )
 
 type fileRootSetting struct {
@@ -42,6 +44,8 @@ type FileSearchPlugin struct {
 	api                     plugin.API
 	engine                  *filesearch.Engine
 	unsubscribeStatusChange func()
+	toolbarMsgStateMu       sync.Mutex
+	lastToolbarMsgSignature string
 }
 
 type fileSearchQueryDiagnostics struct {
@@ -125,6 +129,13 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 	// on manager-side ignore behavior instead of blocking every search.
 	c.api.OnEnterPluginQuery(ctx, func(ctx context.Context) {
 		c.syncToolbarMsg(ctx, false)
+	})
+	c.api.OnLeavePluginQuery(ctx, func(ctx context.Context) {
+		// Reset the local de-duplication state when the file-search query session ends.
+		// The manager already clears the visible toolbar msg on leave, so keeping the
+		// old signature here would incorrectly suppress the first toolbar refresh when
+		// the user enters file-search again during the same indexing run.
+		c.resetToolbarMsgState()
 	})
 
 	c.syncUserRoots(ctx)
@@ -390,10 +401,26 @@ func (c *FileSearchPlugin) syncToolbarMsg(ctx context.Context, includeReady bool
 func (c *FileSearchPlugin) syncToolbarMsgWithStatus(ctx context.Context, status filesearch.StatusSnapshot, includeReady bool) {
 	toolbarMsg, found := c.buildToolbarMsgFromStatus(ctx, status, includeReady)
 	if !found {
+		// Avoid repeating the same clear request on every identical idle snapshot.
+		// The previous implementation always cleared and re-sent status updates, which
+		// produced long runs of duplicate file-search and UI bridge logs without any
+		// visible toolbar change.
+		if !c.takeToolbarMsgUpdate("") {
+			return
+		}
 		c.api.ClearToolbarMsg(ctx, fileSearchToolbarMsgID)
 		return
 	}
 
+	signature := buildToolbarMsgSignature(toolbarMsg)
+	// Only push toolbar updates when the rendered snapshot changes. The status
+	// listener can emit many identical planner snapshots, and forwarding each one
+	// forced redundant ShowToolbarMsg round-trips plus duplicate debug logs.
+	if !c.takeToolbarMsgUpdate(signature) {
+		return
+	}
+
+	c.logToolbarStatusSnapshot(ctx, status)
 	c.api.ShowToolbarMsg(ctx, toolbarMsg)
 }
 
@@ -402,36 +429,49 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 		return plugin.ToolbarMsg{}, false
 	}
 
-	c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf(
-		"File search status: roots=%d preparing=%d scanning=%d syncing=%d writing=%d finalizing=%d errors=%d active=%s progress=%d/%d root=%d/%d dirs=%d/%d items=%d/%d pending=%d/%d discovered=%d initial=%v",
-		status.RootCount,
-		status.PreparingRootCount,
-		status.ScanningRootCount,
-		status.SyncingRootCount,
-		status.WritingRootCount,
-		status.FinalizingRootCount,
-		status.ErrorRootCount,
-		status.ActiveRootStatus,
-		status.ActiveProgressCurrent,
-		status.ActiveProgressTotal,
-		status.ActiveRootIndex,
-		status.ActiveRootTotal,
-		status.ActiveDirectoryIndex,
-		status.ActiveDirectoryTotal,
-		status.ActiveItemCurrent,
-		status.ActiveItemTotal,
-		status.PendingDirtyRootCount,
-		status.PendingDirtyPathCount,
-		status.ActiveDiscoveredCount,
-		status.IsInitialIndexing,
-	))
-
 	title := c.api.GetTranslation(ctx, "plugin_file_status_error")
 	icon := common.PermissionIcon
 	progress := (*int)(nil)
 	indeterminate := false
 	hasPermissionError := util.IsMacOS() && isFileAccessPermissionError(status.LastError)
-	if status.ActiveRootStatus == filesearch.RootStatusPreparing {
+	if status.ActiveStage == filesearch.RunStagePlanning || status.ActiveStage == filesearch.RunStagePreScan {
+		// The planner now owns the pre-execution phases because one persisted root
+		// can fan out into many jobs. Version 1 keeps a root-level denominator
+		// here because recursive split discovery can still grow the scope frontier
+		// mid-pass, but the active root/scope suffix tells users exactly which
+		// part of the filesystem the planner is currently measuring.
+		title = c.api.GetTranslation(ctx, "plugin_file_status_preparing")
+		icon = fileIcon
+		if progressValue, ok := resolveToolbarProgressPercent(status.ActiveProgressCurrent, status.ActiveProgressTotal); ok {
+			progress = &progressValue
+			title = fmt.Sprintf("%s %d%%", title, progressValue)
+		} else {
+			indeterminate = true
+		}
+	} else if status.ActiveStage == filesearch.RunStageExecuting {
+		// Run-scoped progress is the stable denominator during execution. The old
+		// root-local counters could jump backwards when the next split job started,
+		// so the toolbar now prefers the sealed run totals once execution begins.
+		// Appending the active root and scope keeps the global percentage stable
+		// while still explaining what the current bounded job is writing.
+		title = c.api.GetTranslation(ctx, "plugin_file_status_writing")
+		icon = fileIcon
+		if progressValue, ok := resolveToolbarProgressPercent(status.RunProgressCurrent, status.RunProgressTotal); ok {
+			progress = &progressValue
+			title = fmt.Sprintf("%s %d%%", title, progressValue)
+		} else {
+			indeterminate = true
+		}
+	} else if status.ActiveStage == filesearch.RunStageFinalizing {
+		title = c.api.GetTranslation(ctx, "plugin_file_status_finalizing")
+		icon = fileIcon
+		if progressValue, ok := resolveToolbarProgressPercent(status.RunProgressCurrent, status.RunProgressTotal); ok {
+			progress = &progressValue
+			title = fmt.Sprintf("%s %d%%", title, progressValue)
+		} else {
+			indeterminate = true
+		}
+	} else if status.ActiveRootStatus == filesearch.RootStatusPreparing {
 		title = c.buildPreparingToolbarTitle(ctx, status)
 		icon = fileIcon
 		indeterminate = true
@@ -470,6 +510,12 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 		return plugin.ToolbarMsg{}, false
 	}
 
+	if status.ErrorRootCount > 0 && !status.IsIndexing {
+		title = decorateRootErrorToolbarTitle(title, status)
+	}
+
+	title = decorateRunToolbarTitle(title, status)
+
 	return plugin.ToolbarMsg{
 		Id:            fileSearchToolbarMsgID,
 		Title:         title,
@@ -482,6 +528,83 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 
 func (c *FileSearchPlugin) handleStatusChanged(status filesearch.StatusSnapshot) {
 	c.syncToolbarMsgWithStatus(util.NewTraceContext(), status, false)
+}
+
+func (c *FileSearchPlugin) takeToolbarMsgUpdate(signature string) bool {
+	c.toolbarMsgStateMu.Lock()
+	defer c.toolbarMsgStateMu.Unlock()
+
+	if c.lastToolbarMsgSignature == signature {
+		return false
+	}
+
+	c.lastToolbarMsgSignature = signature
+	return true
+}
+
+func (c *FileSearchPlugin) resetToolbarMsgState() {
+	c.toolbarMsgStateMu.Lock()
+	defer c.toolbarMsgStateMu.Unlock()
+
+	c.lastToolbarMsgSignature = ""
+}
+
+func (c *FileSearchPlugin) logToolbarStatusSnapshot(ctx context.Context, status filesearch.StatusSnapshot) {
+	c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf(
+		"File search status: roots=%d preparing=%d scanning=%d syncing=%d writing=%d finalizing=%d errors=%d active=%s run=%s stage=%s progress=%d/%d run_progress=%d/%d root=%d/%d dirs=%d/%d items=%d/%d pending=%d/%d discovered=%d initial=%v",
+		status.RootCount,
+		status.PreparingRootCount,
+		status.ScanningRootCount,
+		status.SyncingRootCount,
+		status.WritingRootCount,
+		status.FinalizingRootCount,
+		status.ErrorRootCount,
+		status.ActiveRootStatus,
+		status.ActiveRunStatus,
+		status.ActiveStage,
+		status.ActiveProgressCurrent,
+		status.ActiveProgressTotal,
+		status.RunProgressCurrent,
+		status.RunProgressTotal,
+		status.ActiveRootIndex,
+		status.ActiveRootTotal,
+		status.ActiveDirectoryIndex,
+		status.ActiveDirectoryTotal,
+		status.ActiveItemCurrent,
+		status.ActiveItemTotal,
+		status.PendingDirtyRootCount,
+		status.PendingDirtyPathCount,
+		status.ActiveDiscoveredCount,
+		status.IsInitialIndexing,
+	))
+}
+
+func buildToolbarMsgSignature(msg plugin.ToolbarMsg) string {
+	progress := "nil"
+	if msg.Progress != nil {
+		progress = fmt.Sprintf("%d", *msg.Progress)
+	}
+
+	actionParts := make([]string, 0, len(msg.Actions))
+	for _, action := range msg.Actions {
+		actionParts = append(actionParts, strings.Join([]string{
+			action.Id,
+			action.Name,
+			action.Icon.String(),
+			action.Hotkey,
+			fmt.Sprintf("%t", action.IsDefault),
+			fmt.Sprintf("%t", action.PreventHideAfterAction),
+		}, "|"))
+	}
+
+	return strings.Join([]string{
+		msg.Id,
+		msg.Title,
+		msg.Icon.String(),
+		progress,
+		fmt.Sprintf("%t", msg.Indeterminate),
+		strings.Join(actionParts, "||"),
+	}, ":::")
 }
 
 func (c *FileSearchPlugin) logQueryDiagnostics(ctx context.Context, rawQuery string, diagnostics fileSearchQueryDiagnostics, resultCount int, totalElapsedMs int64) {
@@ -562,6 +685,125 @@ func resolveToolbarProgressPercent(current int64, total int64) (int, bool) {
 	}
 
 	return progressValue, true
+}
+
+func decorateRunToolbarTitle(title string, status filesearch.StatusSnapshot) string {
+	activity := buildRunActivityLabel(status)
+	if strings.TrimSpace(activity) == "" {
+		return title
+	}
+	return title + " · " + activity
+}
+
+func buildRunActivityLabel(status filesearch.StatusSnapshot) string {
+	scopePath := strings.TrimSpace(status.ActiveScopePath)
+	if scopePath == "" {
+		scopePath = strings.TrimSpace(status.ActiveRootPath)
+	}
+	return shortenToolbarPath(scopePath, toolbarActivityPathMaxChars)
+}
+
+func normalizeToolbarPath(value string) string {
+	normalized := strings.TrimSpace(value)
+	normalized = strings.ReplaceAll(normalized, "/", `\`)
+	for strings.Contains(normalized, `\\`) {
+		normalized = strings.ReplaceAll(normalized, `\\`, `\`)
+	}
+	return strings.TrimRight(normalized, `\`)
+}
+
+func shortenToolbarPath(value string, maxChars int) string {
+	normalized := normalizeToolbarPath(value)
+	if normalized == "" || maxChars <= 0 || len(normalized) <= maxChars {
+		return normalized
+	}
+
+	rootPrefix, segments := splitToolbarPath(normalized)
+	if len(segments) == 0 {
+		return normalized
+	}
+	if len(segments) == 1 {
+		// The previous single-segment fallback returned only the tail with a
+		// leading ellipsis, which hid the path head entirely. Keeping both ends
+		// visible makes long file names and deep folder hints easier to
+		// distinguish in the launcher toolbar.
+		return trimToolbarMiddle(normalized, maxChars)
+	}
+
+	first := segments[0]
+	last := segments[len(segments)-1]
+	if candidate := joinToolbarPath(rootPrefix, []string{first, "...", last}); len(candidate) <= maxChars {
+		return candidate
+	}
+	if candidate := joinToolbarPath(rootPrefix, []string{"...", last}); len(candidate) <= maxChars {
+		return candidate
+	}
+	// The previous final fallback still produced `...\\tail`, which made
+	// multiple active roots look identical whenever they shared the same
+	// suffix. Center truncation keeps the drive/root and trailing segment at
+	// the same time, matching the toolbar expectation for scan progress paths.
+	return trimToolbarMiddle(normalized, maxChars)
+}
+
+func splitToolbarPath(normalized string) (string, []string) {
+	if normalized == "" {
+		return "", nil
+	}
+
+	rootPrefix := ""
+	remainder := normalized
+	if len(normalized) >= 3 && normalized[1] == ':' && normalized[2] == '\\' {
+		rootPrefix = normalized[:3]
+		remainder = normalized[3:]
+	} else if strings.HasPrefix(normalized, `\`) {
+		rootPrefix = `\`
+		remainder = strings.TrimLeft(normalized, `\`)
+	}
+
+	rawSegments := strings.Split(remainder, `\`)
+	segments := make([]string, 0, len(rawSegments))
+	for _, segment := range rawSegments {
+		if strings.TrimSpace(segment) == "" {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+	return rootPrefix, segments
+}
+
+func joinToolbarPath(rootPrefix string, segments []string) string {
+	filtered := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if strings.TrimSpace(segment) == "" {
+			continue
+		}
+		filtered = append(filtered, segment)
+	}
+	if len(filtered) == 0 {
+		return strings.TrimRight(rootPrefix, `\`)
+	}
+	if rootPrefix == "" {
+		return strings.Join(filtered, `\`)
+	}
+	return strings.TrimRight(rootPrefix, `\`) + `\` + strings.Join(filtered, `\`)
+}
+
+func trimToolbarMiddle(value string, maxChars int) string {
+	if maxChars <= 0 || len(value) <= maxChars {
+		return value
+	}
+	return util.EllipsisMiddle(value, maxChars)
+}
+
+func decorateRootErrorToolbarTitle(title string, status filesearch.StatusSnapshot) string {
+	errorRootPath := shortenToolbarPath(status.ErrorRootPath, toolbarActivityPathMaxChars)
+	if errorRootPath == "" {
+		return title
+	}
+	// A generic "needs attention" banner was too vague when one configured root
+	// failed. Appending the failing root path makes the recovery target explicit
+	// without expanding the toolbar into a multi-line error surface.
+	return title + " · " + errorRootPath
 }
 
 func (c *FileSearchPlugin) toolbarMsgActions(ctx context.Context, hasPermissionError bool) []plugin.ToolbarMsgAction {

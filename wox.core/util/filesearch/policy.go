@@ -17,6 +17,33 @@ type EngineOptions struct {
 	Policy Policy
 }
 
+const runPlannerSplitPolicyVersionV1 = 1
+
+// splitBudget keeps the version-1 run planner thresholds in code.
+// The previous root-centric planner had no internal job sizing, so one huge
+// root could stay as one opaque workload. Version 1 fixes that with constants
+// first so progress semantics stay predictable before we consider any user
+// settings or adaptive tuning.
+type splitBudget struct {
+	LeafEntryBudget     int64
+	LeafWriteBudget     int64
+	LeafMemoryBudget    int64
+	// Version 1 keeps one direct-files job per directory so delete ownership
+	// stays simple. The older planner split one directory into many jobs, which
+	// made stale direct-file pruning ambiguous. The same limit now only caps the
+	// internal staging batch size inside that single job.
+	DirectFileBatchSize int
+}
+
+func defaultSplitBudget() splitBudget {
+	return splitBudget{
+		LeafEntryBudget:     4096,
+		LeafWriteBudget:     4096,
+		LeafMemoryBudget:    8 << 20,
+		DirectFileBatchSize: 2048,
+	}
+}
+
 func DefaultEngineOptions() EngineOptions {
 	return EngineOptions{}
 }

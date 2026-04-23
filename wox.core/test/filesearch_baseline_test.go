@@ -29,6 +29,8 @@ type fileSearchBaselineArtifact struct {
 	BaselineKind           string                     `json:"baseline_kind"`
 	SteadyStateCPUPercent  float64                    `json:"steady_state_cpu_percent"`
 	SteadyStateMemoryBytes uint64                     `json:"steady_state_memory_bytes"`
+	IndexSnapshotSummary   string                     `json:"index_snapshot_summary"`
+	IndexTopRootsSummary   string                     `json:"index_top_roots_summary"`
 	Queries                []fileSearchBaselineSample `json:"queries"`
 }
 
@@ -162,12 +164,18 @@ func TestCaptureFileSearchIndexedOnlyBaseline(t *testing.T) {
 	}
 
 	steadyStateCPU, steadyStateMemory := captureSteadyStateProcessUsage(t)
+	engine, err := getFileSearchEngine()
+	if err != nil {
+		t.Fatalf("get file search engine for baseline snapshot: %v", err)
+	}
 
 	artifact := fileSearchBaselineArtifact{
 		CapturedAt:             time.Now().UTC().Format(time.RFC3339),
 		BaselineKind:           "indexed-only",
 		SteadyStateCPUPercent:  steadyStateCPU,
 		SteadyStateMemoryBytes: steadyStateMemory,
+		IndexSnapshotSummary:   engine.LocalIndexSnapshotSummary(),
+		IndexTopRootsSummary:   engine.LocalIndexTopRootsSummary(),
 		Queries:                samples,
 	}
 

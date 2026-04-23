@@ -1,5 +1,7 @@
 .PHONY: clean build help woxmr-build
 
+SQLITE_BUILD_TAGS ?= sqlite_fts5
+
 # Determine the current platform
 ifeq ($(OS),Windows_NT)
     PLATFORM := windows
@@ -48,13 +50,13 @@ ifeq ($(PLATFORM),windows)
 		-product-name "Wox" -description "Wox" -internal-name "Wox" -original-name "wox-windows-$(GOARCH).exe" \
 		-product-version "$(VERSION)" -file-version "$(VERSION)" \
 		-propagate-ver-strings
-	CGO_ENABLED=1 GOOS=windows GOARCH=$(GOARCH) go build -ldflags "-H windowsgui -s -w -X 'wox/util.ProdEnv=true'" -o $(RELEASE_DIR)/wox-windows-$(GOARCH).exe
+	CGO_ENABLED=1 GOOS=windows GOARCH=$(GOARCH) go build -tags "$(SQLITE_BUILD_TAGS)" -ldflags "-H windowsgui -s -w -X 'wox/util.ProdEnv=true'" -o $(RELEASE_DIR)/wox-windows-$(GOARCH).exe
 endif
 ifeq ($(PLATFORM),linux)
-	CGO_ENABLED=1 GOOS=linux GOARCH=$(GOARCH) go build -ldflags "-s -w -X 'wox/util.ProdEnv=true'" -o $(RELEASE_DIR)/wox-linux-$(GOARCH)
+	CGO_ENABLED=1 GOOS=linux GOARCH=$(GOARCH) go build -tags "$(SQLITE_BUILD_TAGS)" -ldflags "-s -w -X 'wox/util.ProdEnv=true'" -o $(RELEASE_DIR)/wox-linux-$(GOARCH)
 endif
 ifeq ($(PLATFORM),macos)
-	CGO_ENABLED=1 GOOS=darwin GOARCH=$(GOARCH) CGO_CFLAGS="-mmacosx-version-min=10.15" CGO_LDFLAGS="-mmacosx-version-min=10.15 -Wl,-no_warn_duplicate_libraries" go build -ldflags "-s -w -X 'wox/util.ProdEnv=true'" -o $(RELEASE_DIR)/wox-mac-$(GOARCH)
+	CGO_ENABLED=1 GOOS=darwin GOARCH=$(GOARCH) CGO_CFLAGS="-mmacosx-version-min=10.15" CGO_LDFLAGS="-mmacosx-version-min=10.15 -Wl,-no_warn_duplicate_libraries" go build -tags "$(SQLITE_BUILD_TAGS)" -ldflags "-s -w -X 'wox/util.ProdEnv=true'" -o $(RELEASE_DIR)/wox-mac-$(GOARCH)
 endif
 
 # -----------------------------

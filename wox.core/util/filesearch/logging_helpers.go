@@ -8,11 +8,16 @@ import (
 )
 
 const (
-	maxLoggedPaths                          = 8
-	slowFilesearchProviderQueryThresholdMs  int64 = 40
-	slowFilesearchAggregationThresholdMs    int64 = 10
-	slowFilesearchEngineQueryThresholdMs    int64 = 60
-	slowFilesearchSearchOnceTimeoutMs       int64 = 200
+	maxLoggedPaths                               = 8
+	maxLoggedRoots                               = 5
+	slowFilesearchProviderQueryThresholdMs int64 = 40
+	slowFilesearchAggregationThresholdMs   int64 = 10
+	slowFilesearchEngineQueryThresholdMs   int64 = 60
+	slowFilesearchSearchOnceTimeoutMs      int64 = 200
+	slowFilesearchRunPlannerThresholdMs    int64 = 250
+	slowFilesearchRunExecutionThresholdMs  int64 = 500
+	slowFilesearchJobPhaseThresholdMs      int64 = 150
+	slowFilesearchSQLiteMaintenanceMs      int64 = 250
 )
 
 func summarizeLogPath(path string) string {
@@ -145,4 +150,253 @@ func logSearchOnceWait(ctx context.Context, query SearchQuery, elapsedMs int64, 
 	}
 
 	util.GetLogger().Debug(ctx, msg)
+}
+
+func logLocalIndexSnapshot(ctx context.Context, stage string, snapshot queryIndexSnapshot, info bool) {
+	summary := formatLocalIndexSnapshotSummary(stage, snapshot)
+	topRoots := formatLocalIndexTopRoots(stage, snapshot)
+	if info {
+		util.GetLogger().Info(ctx, summary)
+		if topRoots != "" {
+			util.GetLogger().Info(ctx, topRoots)
+		}
+		return
+	}
+
+	util.GetLogger().Debug(ctx, summary)
+	if topRoots != "" {
+		util.GetLogger().Debug(ctx, topRoots)
+	}
+}
+
+func logSQLiteIndexSnapshot(ctx context.Context, stage string, snapshot sqliteIndexSnapshot, info bool) {
+	summary := formatSQLiteIndexSnapshotSummary(stage, snapshot)
+	topRoots := formatSQLiteIndexTopRoots(stage, snapshot)
+	if info {
+		util.GetLogger().Info(ctx, summary)
+		if topRoots != "" {
+			util.GetLogger().Info(ctx, topRoots)
+		}
+		return
+	}
+
+	util.GetLogger().Debug(ctx, summary)
+	if topRoots != "" {
+		util.GetLogger().Debug(ctx, topRoots)
+	}
+}
+
+func logFilesearchRunStage(ctx context.Context, kind RunKind, stage RunStage, root RootRecord, job Job, rootIndex int, rootTotal int, current int64, total int64) {
+	msg := fmt.Sprintf(
+		"filesearch run stage: kind=%s stage=%s root=%s root_path=%s root_index=%d/%d job=%s job_kind=%s scope=%s progress=%d/%d",
+		kind,
+		stage,
+		root.ID,
+		summarizeLogPath(root.Path),
+		rootIndex,
+		rootTotal,
+		strings.TrimSpace(job.JobID),
+		job.Kind,
+		summarizeLogPath(job.ScopePath),
+		current,
+		total,
+	)
+
+	switch stage {
+	case RunStagePlanning, RunStagePreScan, RunStageFinalizing:
+		util.GetLogger().Info(ctx, msg)
+	default:
+		util.GetLogger().Debug(ctx, msg)
+	}
+}
+
+func logFilesearchRunPlanner(ctx context.Context, kind RunKind, elapsedMs int64, rootCount int, jobCount int, totalUnits int64) {
+	msg := fmt.Sprintf(
+		"filesearch run planner: kind=%s elapsed=%dms roots=%d jobs=%d total_units=%d",
+		kind,
+		elapsedMs,
+		rootCount,
+		jobCount,
+		totalUnits,
+	)
+	if elapsedMs >= slowFilesearchRunPlannerThresholdMs {
+		util.GetLogger().Info(ctx, "filesearch slow run planner: "+msg)
+		return
+	}
+	util.GetLogger().Debug(ctx, msg)
+}
+
+func logFilesearchRunExecution(ctx context.Context, kind RunKind, elapsedMs int64, jobCount int, totalUnits int64) {
+	msg := fmt.Sprintf(
+		"filesearch run execution: kind=%s elapsed=%dms jobs=%d total_units=%d",
+		kind,
+		elapsedMs,
+		jobCount,
+		totalUnits,
+	)
+	if elapsedMs >= slowFilesearchRunExecutionThresholdMs {
+		util.GetLogger().Info(ctx, "filesearch slow run execution: "+msg)
+		return
+	}
+	util.GetLogger().Debug(ctx, msg)
+}
+
+func logFilesearchFullIndexTotal(ctx context.Context, reason string, elapsedMs int64, rootCount int, jobCount int, totalUnits int64) {
+	msg := fmt.Sprintf(
+		"filesearch full index total: reason=%s elapsed=%dms roots=%d jobs=%d total_units=%d",
+		strings.TrimSpace(reason),
+		elapsedMs,
+		rootCount,
+		jobCount,
+		totalUnits,
+	)
+	// This metric is the optimization baseline for one complete full index run, so
+	// emit it at info level every time instead of hiding it behind the generic
+	// slow-log threshold used by the planner and execution phase diagnostics.
+	util.GetLogger().Info(ctx, msg)
+}
+
+func logFilesearchJobPhase(ctx context.Context, root RootRecord, job Job, phase string, elapsedMs int64) {
+	msg := fmt.Sprintf(
+		"filesearch job phase: phase=%s elapsed=%dms root=%s root_path=%s job=%s job_kind=%s scope=%s units=%d",
+		strings.TrimSpace(phase),
+		elapsedMs,
+		root.ID,
+		summarizeLogPath(root.Path),
+		strings.TrimSpace(job.JobID),
+		job.Kind,
+		summarizeLogPath(job.ScopePath),
+		job.PlannedTotalUnits,
+	)
+	if elapsedMs >= slowFilesearchJobPhaseThresholdMs {
+		util.GetLogger().Info(ctx, "filesearch slow job phase: "+msg)
+		return
+	}
+	util.GetLogger().Debug(ctx, msg)
+}
+
+func logFilesearchSQLiteMaintenance(ctx context.Context, operation string, scope string, elapsedMs int64, workCount int) {
+	msg := fmt.Sprintf(
+		"filesearch sqlite maintenance: operation=%s scope=%s elapsed=%dms work_count=%d",
+		strings.TrimSpace(operation),
+		summarizeLogPath(scope),
+		elapsedMs,
+		workCount,
+	)
+	if elapsedMs >= slowFilesearchSQLiteMaintenanceMs {
+		util.GetLogger().Info(ctx, "filesearch slow sqlite maintenance: "+msg)
+		return
+	}
+	util.GetLogger().Debug(ctx, msg)
+}
+
+func formatLocalIndexSnapshotSummary(stage string, snapshot queryIndexSnapshot) string {
+	return fmt.Sprintf(
+		"filesearch index snapshot: stage=%s roots=%d docs=%d live_doc_records=%d path_to_doc_keys=%d freed_doc_ids=%d extension_keys=%d extension_refs=%d name_prefix_keys=%d name_prefix_refs=%d name_bigram_keys=%d name_bigram_refs=%d name_trigram_keys=%d name_trigram_refs=%d path_segment_keys=%d path_segment_refs=%d path_trigram_keys=%d path_trigram_refs=%d pinyin_full_bigram_keys=%d pinyin_full_bigram_refs=%d pinyin_full_trigram_keys=%d pinyin_full_trigram_refs=%d pinyin_initial_trie_nodes=%d pinyin_initial_posting_refs=%d doc_bytes_est=%d posting_bytes_est=%d path_key_bytes_est=%d trie_bytes_est=%d total_bytes_est=%d",
+		strings.TrimSpace(stage),
+		snapshot.RootCount,
+		snapshot.DocCount,
+		snapshot.LiveDocRecords,
+		snapshot.PathToDocKeyCount,
+		snapshot.FreedDocIDCount,
+		snapshot.Extension.PostingKeyCount,
+		snapshot.Extension.PostingRefCount,
+		snapshot.NamePrefix.PostingKeyCount,
+		snapshot.NamePrefix.PostingRefCount,
+		snapshot.NameBigram.PostingKeyCount,
+		snapshot.NameBigram.PostingRefCount,
+		snapshot.NameTrigram.PostingKeyCount,
+		snapshot.NameTrigram.PostingRefCount,
+		snapshot.PathSegment.PostingKeyCount,
+		snapshot.PathSegment.PostingRefCount,
+		snapshot.PathTrigram.PostingKeyCount,
+		snapshot.PathTrigram.PostingRefCount,
+		snapshot.PinyinFullBigram.PostingKeyCount,
+		snapshot.PinyinFullBigram.PostingRefCount,
+		snapshot.PinyinFullTrigram.PostingKeyCount,
+		snapshot.PinyinFullTrigram.PostingRefCount,
+		snapshot.PinyinInitials.NodeCount,
+		snapshot.PinyinInitials.PostingRefCount,
+		snapshot.DocBytesEstimate,
+		snapshot.PostingBytesEstimate,
+		snapshot.PathKeyBytesEstimate,
+		snapshot.TrieBytesEstimate,
+		snapshot.TotalBytesEstimate,
+	)
+}
+
+func formatLocalIndexTopRoots(stage string, snapshot queryIndexSnapshot) string {
+	if len(snapshot.TopRoots) == 0 {
+		return ""
+	}
+
+	limit := len(snapshot.TopRoots)
+	if limit > maxLoggedRoots {
+		limit = maxLoggedRoots
+	}
+
+	roots := make([]string, 0, limit)
+	for _, root := range snapshot.TopRoots[:limit] {
+		roots = append(roots, fmt.Sprintf(
+			"%s(docs=%d,total_bytes_est=%d,path_keys=%d,freed_doc_ids=%d)",
+			summarizeLogPath(root.RootID),
+			root.DocCount,
+			root.TotalBytesEstimate,
+			root.PathToDocKeyCount,
+			root.FreedDocIDCount,
+		))
+	}
+
+	return fmt.Sprintf(
+		"filesearch index snapshot roots: stage=%s top_roots=[%s]",
+		strings.TrimSpace(stage),
+		strings.Join(roots, ", "),
+	)
+}
+
+func formatSQLiteIndexSnapshotSummary(stage string, snapshot sqliteIndexSnapshot) string {
+	return fmt.Sprintf(
+		"filesearch sqlite snapshot: stage=%s roots=%d entries=%d bigram_rows=%d name_fts_vocab=%d path_fts_vocab=%d pinyin_full_fts_vocab=%d initials_fts_vocab=%d fact_bytes_est=%d fts_source_bytes_est=%d bigram_bytes_est=%d total_bytes_est=%d db_main_file_bytes=%d db_wal_file_bytes=%d db_shm_file_bytes=%d db_total_file_bytes=%d",
+		strings.TrimSpace(stage),
+		snapshot.RootCount,
+		snapshot.EntryCount,
+		snapshot.BigramRowCount,
+		snapshot.NameFTSVocab,
+		snapshot.PathFTSVocab,
+		snapshot.PinyinFullFTSVocab,
+		snapshot.InitialsFTSVocab,
+		snapshot.FactBytesEstimate,
+		snapshot.FTSSourceBytesEstimate,
+		snapshot.BigramBytesEstimate,
+		snapshot.TotalBytesEstimate,
+		snapshot.DBMainFileBytes,
+		snapshot.DBWALFileBytes,
+		snapshot.DBSHMFileBytes,
+		snapshot.DBTotalFileBytes,
+	)
+}
+
+func formatSQLiteIndexTopRoots(stage string, snapshot sqliteIndexSnapshot) string {
+	if len(snapshot.TopRoots) == 0 {
+		return ""
+	}
+
+	visible := make([]string, 0, min(len(snapshot.TopRoots), maxLoggedRoots))
+	for _, root := range snapshot.TopRoots[:min(len(snapshot.TopRoots), maxLoggedRoots)] {
+		visible = append(visible, fmt.Sprintf(
+			"%s(docs=%d,bigram_rows=%d,total_bytes_est=%d,fact_bytes_est=%d,fts_source_bytes_est=%d,bigram_bytes_est=%d)",
+			summarizeLogPath(root.Path),
+			root.Docs,
+			root.BigramRows,
+			root.TotalBytesEstimate,
+			root.FactBytesEstimate,
+			root.FTSSourceBytesEstimate,
+			root.BigramBytesEstimate,
+		))
+	}
+	return fmt.Sprintf(
+		"filesearch sqlite snapshot roots: stage=%s top_roots=[%s]",
+		strings.TrimSpace(stage),
+		strings.Join(visible, ", "),
+	)
 }

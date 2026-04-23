@@ -2,7 +2,10 @@ package filesearch
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -270,6 +273,227 @@ func TestScannerStartupRestoreLoadsProviderFromDBWithoutFullScanForFreshCursor(t
 	}
 	if rootAfter.LastFullScanAt != lastFullScanAt {
 		t.Fatalf("expected startup restore to skip full scan and keep LastFullScanAt=%d, got %d", lastFullScanAt, rootAfter.LastFullScanAt)
+	}
+}
+
+func TestScannerFullScanUsesGlobalRunProgress(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootOnePath := filepath.Join(t.TempDir(), "root-global-progress-one")
+	rootTwoPath := filepath.Join(t.TempDir(), "root-global-progress-two")
+
+	mustWriteTestFile(t, filepath.Join(rootOnePath, "nested-a", "alpha.txt"), "alpha")
+	mustWriteTestFile(t, filepath.Join(rootOnePath, "nested-b", "beta.txt"), "beta")
+	mustWriteTestFile(t, filepath.Join(rootTwoPath, "gamma.txt"), "gamma")
+
+	rootOne := RootRecord{ID: "root-global-progress-one", Path: rootOnePath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now, UpdatedAt: now}
+	rootTwo := RootRecord{ID: "root-global-progress-two", Path: rootTwoPath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now, UpdatedAt: now}
+	mustInsertRoot(t, ctx, db, rootOne)
+	mustInsertRoot(t, ctx, db, rootTwo)
+
+	scanner := NewScanner(db, nil)
+	scanner.plannerBudgetOverride = &splitBudget{
+		LeafEntryBudget:     3,
+		LeafWriteBudget:     3,
+		LeafMemoryBudget:    1 << 20,
+		DirectFileBatchSize: 1,
+	}
+	engine := &Engine{db: db, scanner: scanner}
+
+	var (
+		statusesMu sync.Mutex
+		statuses   []StatusSnapshot
+	)
+	scanner.SetStateChangeHandler(func(changeCtx context.Context) {
+		status, err := engine.GetStatus(changeCtx)
+		if err != nil {
+			t.Fatalf("get status during full scan: %v", err)
+		}
+		statusesMu.Lock()
+		statuses = append(statuses, status)
+		statusesMu.Unlock()
+	})
+
+	scanner.scanAllRoots(ctx)
+
+	statusesMu.Lock()
+	defer statusesMu.Unlock()
+
+	lastProgress := int64(-1)
+	sawExecutingProgress := false
+	for _, status := range statuses {
+		if status.RunProgressTotal <= 0 {
+			continue
+		}
+		sawExecutingProgress = true
+		if status.RunProgressCurrent < lastProgress {
+			t.Fatalf("expected run progress to stay monotonic, got %d after %d", status.RunProgressCurrent, lastProgress)
+		}
+		lastProgress = status.RunProgressCurrent
+	}
+	if !sawExecutingProgress {
+		t.Fatal("expected full scan to emit run progress snapshots")
+	}
+	if len(statuses) == 0 {
+		t.Fatal("expected full scan to emit status snapshots")
+	}
+	lastStatus := statuses[len(statuses)-1]
+	if lastStatus.RunProgressTotal <= 0 {
+		t.Fatalf("expected final run progress total > 0, got %d", lastStatus.RunProgressTotal)
+	}
+	if lastStatus.RunProgressCurrent != lastStatus.RunProgressTotal {
+		t.Fatalf("expected final run progress to complete, got %d/%d", lastStatus.RunProgressCurrent, lastStatus.RunProgressTotal)
+	}
+}
+
+func TestScannerFullScanReportsAllRunStages(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootPath := filepath.Join(t.TempDir(), "root-run-stages")
+
+	mustWriteTestFile(t, filepath.Join(rootPath, "nested-a", "alpha.txt"), "alpha")
+	mustWriteTestFile(t, filepath.Join(rootPath, "nested-b", "beta.txt"), "beta")
+
+	root := RootRecord{ID: "root-run-stages", Path: rootPath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now, UpdatedAt: now}
+	mustInsertRoot(t, ctx, db, root)
+
+	scanner := NewScanner(db, nil)
+	scanner.plannerBudgetOverride = &splitBudget{
+		LeafEntryBudget:     3,
+		LeafWriteBudget:     3,
+		LeafMemoryBudget:    1 << 20,
+		DirectFileBatchSize: 1,
+	}
+	engine := &Engine{db: db, scanner: scanner}
+
+	stageSeen := map[RunStage]bool{}
+	sawPlannerActivityContext := false
+	scanner.SetStateChangeHandler(func(changeCtx context.Context) {
+		status, err := engine.GetStatus(changeCtx)
+		if err != nil {
+			t.Fatalf("get status during staged full scan: %v", err)
+		}
+		if status.ActiveStage != "" {
+			stageSeen[status.ActiveStage] = true
+		}
+		if status.ActiveStage == RunStagePlanning || status.ActiveStage == RunStagePreScan {
+			if status.ActiveProgressTotal <= 0 {
+				t.Fatalf("expected planner stages to expose a stable denominator, got %d", status.ActiveProgressTotal)
+			}
+			if strings.TrimSpace(status.ActiveRootPath) == "" || strings.TrimSpace(status.ActiveScopePath) == "" {
+				t.Fatalf("expected planner stages to expose active root and scope paths, got root=%q scope=%q", status.ActiveRootPath, status.ActiveScopePath)
+			}
+			sawPlannerActivityContext = true
+		}
+	})
+
+	scanner.scanAllRoots(ctx)
+
+	for _, stage := range []RunStage{RunStagePlanning, RunStagePreScan, RunStageExecuting, RunStageFinalizing} {
+		if !stageSeen[stage] {
+			t.Fatalf("expected full scan to report stage %q, got %#v", stage, stageSeen)
+		}
+	}
+	if !sawPlannerActivityContext {
+		t.Fatal("expected planner stages to publish root/scope activity context")
+	}
+}
+
+func TestScannerFullScanSplitsLargeRootWithoutChangingRootIdentity(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootPath := filepath.Join(t.TempDir(), "root-split-identity")
+
+	mustWriteTestFile(t, filepath.Join(rootPath, "nested-a", "alpha.txt"), "alpha")
+	mustWriteTestFile(t, filepath.Join(rootPath, "nested-b", "beta.txt"), "beta")
+	mustWriteTestFile(t, filepath.Join(rootPath, "nested-c", "gamma.txt"), "gamma")
+
+	root := RootRecord{ID: "root-split-identity", Path: rootPath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now, UpdatedAt: now}
+	mustInsertRoot(t, ctx, db, root)
+
+	scanner := NewScanner(db, nil)
+	scanner.plannerBudgetOverride = &splitBudget{
+		LeafEntryBudget:     3,
+		LeafWriteBudget:     3,
+		LeafMemoryBudget:    1 << 20,
+		DirectFileBatchSize: 1,
+	}
+	engine := &Engine{db: db, scanner: scanner}
+
+	scopeSet := map[string]struct{}{}
+	scanner.SetStateChangeHandler(func(changeCtx context.Context) {
+		status, err := engine.GetStatus(changeCtx)
+		if err != nil {
+			t.Fatalf("get status during split full scan: %v", err)
+		}
+		if status.ActiveStage != RunStageExecuting {
+			return
+		}
+		if strings.TrimSpace(status.ActiveScopePath) == "" {
+			return
+		}
+		scopeSet[filepath.Clean(status.ActiveScopePath)] = struct{}{}
+	})
+
+	scanner.scanAllRoots(ctx)
+
+	rootsAfter, err := db.ListRoots(ctx)
+	if err != nil {
+		t.Fatalf("list roots after split full scan: %v", err)
+	}
+	if len(rootsAfter) != 1 {
+		t.Fatalf("expected one persisted root after split full scan, got %d", len(rootsAfter))
+	}
+	if rootsAfter[0].ID != root.ID {
+		t.Fatalf("expected persisted root identity %q, got %q", root.ID, rootsAfter[0].ID)
+	}
+	if len(scopeSet) < 2 {
+		t.Fatalf("expected large root execution to span multiple scopes, got %#v", scopeSet)
+	}
+}
+
+func TestScannerFullScanWideDirectFilesPrunesRemovedFiles(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootPath := filepath.Join(t.TempDir(), "root-wide-direct-prune")
+	alphaPath := filepath.Join(rootPath, "alpha.txt")
+	betaPath := filepath.Join(rootPath, "beta.txt")
+
+	mustWriteTestFile(t, alphaPath, "alpha")
+	mustWriteTestFile(t, betaPath, "beta")
+
+	root := RootRecord{ID: "root-wide-direct-prune", Path: rootPath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now, UpdatedAt: now}
+	mustInsertRoot(t, ctx, db, root)
+
+	scanner := NewScanner(db, nil)
+	scanner.plannerBudgetOverride = &splitBudget{
+		LeafEntryBudget:     2,
+		LeafWriteBudget:     2,
+		LeafMemoryBudget:    1 << 20,
+		DirectFileBatchSize: 1,
+	}
+
+	scanner.scanAllRoots(ctx)
+
+	if err := os.Remove(betaPath); err != nil {
+		t.Fatalf("remove beta file: %v", err)
+	}
+
+	scanner.scanAllRoots(ctx)
+
+	entries, err := db.ListEntriesByRoot(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("list entries after direct-files rescan: %v", err)
+	}
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		seen[entry.Path] = struct{}{}
+	}
+	if _, ok := seen[alphaPath]; !ok {
+		t.Fatalf("expected surviving direct file %q after rescan", alphaPath)
+	}
+	if _, ok := seen[betaPath]; ok {
+		t.Fatalf("expected removed direct file %q to be pruned after rescan", betaPath)
 	}
 }
 

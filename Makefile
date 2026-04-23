@@ -1,6 +1,7 @@
 .PHONY: build clean host _bundle_mac_app plugins help dev test test-all test-calculator test-converter test-plugin test-time test-network test-quick test-legacy only_test check_deps release appimage smoke
 
 SMOKE_FILTER := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+SQLITE_BUILD_TAGS ?= sqlite_fts5
 
 # Determine the current platform
 ifeq ($(OS),Windows_NT)
@@ -128,19 +129,19 @@ test: ensure-resources
 
 # Test with custom environment
 test-isolated:
-	cd wox.core && WOX_TEST_DATA_DIR=/tmp/wox-test-isolated WOX_TEST_CLEANUP=true go test ./test -v
+	cd wox.core && WOX_TEST_DATA_DIR=/tmp/wox-test-isolated WOX_TEST_CLEANUP=true go test -tags "$(SQLITE_BUILD_TAGS)" ./test -v
 
 # Test without network dependencies
 test-offline:
-	cd wox.core && WOX_TEST_ENABLE_NETWORK=false go test ./test -v
+	cd wox.core && WOX_TEST_ENABLE_NETWORK=false go test -tags "$(SQLITE_BUILD_TAGS)" ./test -v
 
 # Test with verbose logging
 test-verbose:
-	cd wox.core && WOX_TEST_VERBOSE=true go test ./test -v
+	cd wox.core && WOX_TEST_VERBOSE=true go test -tags "$(SQLITE_BUILD_TAGS)" ./test -v
 
 # Test with custom directories and no cleanup (for debugging)
 test-debug:
-	cd wox.core && WOX_TEST_DATA_DIR=/tmp/wox-test-debug WOX_TEST_CLEANUP=false WOX_TEST_VERBOSE=true go test ./test -v
+	cd wox.core && WOX_TEST_DATA_DIR=/tmp/wox-test-debug WOX_TEST_CLEANUP=false WOX_TEST_VERBOSE=true go test -tags "$(SQLITE_BUILD_TAGS)" ./test -v
 
 smoke:
 	$(MAKE) -C wox.test smoke SMOKE_FILTER="$(SMOKE_FILTER)"
