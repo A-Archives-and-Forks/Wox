@@ -241,6 +241,21 @@ func logFilesearchRunExecution(ctx context.Context, kind RunKind, elapsedMs int6
 	util.GetLogger().Debug(ctx, msg)
 }
 
+func logFilesearchFullIndexTotal(ctx context.Context, reason string, elapsedMs int64, rootCount int, jobCount int, totalUnits int64) {
+	msg := fmt.Sprintf(
+		"filesearch full index total: reason=%s elapsed=%dms roots=%d jobs=%d total_units=%d",
+		strings.TrimSpace(reason),
+		elapsedMs,
+		rootCount,
+		jobCount,
+		totalUnits,
+	)
+	// This metric is the optimization baseline for one complete full index run, so
+	// emit it at info level every time instead of hiding it behind the generic
+	// slow-log threshold used by the planner and execution phase diagnostics.
+	util.GetLogger().Info(ctx, msg)
+}
+
 func logFilesearchJobPhase(ctx context.Context, root RootRecord, job Job, phase string, elapsedMs int64) {
 	msg := fmt.Sprintf(
 		"filesearch job phase: phase=%s elapsed=%dms root=%s root_path=%s job=%s job_kind=%s scope=%s units=%d",

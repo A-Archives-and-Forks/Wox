@@ -81,18 +81,28 @@ func (b *SnapshotBuilder) BuildDirectFilesJobSnapshot(ctx context.Context, root 
 		}
 
 		childPath := filepath.Join(scopePath, dirEntry.Name())
-		childInfo, infoErr := strictDirEntryInfo(scopePath, dirEntry)
+		isDir, childInfo, infoErr := strictDirEntryType(scopePath, dirEntry)
 		if infoErr != nil {
 			return batch, infoErr
 		}
-		if childInfo.IsDir() {
+		if shouldSkipSystemPath(childPath, isDir) {
 			continue
 		}
-		if shouldSkipSystemPath(childPath, false) {
+		if !b.shouldIndexPath(root, childPath, isDir) {
 			continue
 		}
-		if !b.shouldIndexPath(root, childPath, false) {
+		if isDir {
 			continue
+		}
+		if childInfo == nil {
+			// The earlier eager Info() call paid metadata I/O even for entries that
+			// policy or system-path filtering would skip. We only load FileInfo once
+			// the file is confirmed indexable because newEntryRecord needs the full
+			// stat payload for persisted metadata.
+			childInfo, infoErr = strictDirEntryInfo(scopePath, dirEntry)
+			if infoErr != nil {
+				return batch, infoErr
+			}
 		}
 		directFiles = append(directFiles, newEntryRecord(root, childPath, childInfo))
 	}
@@ -186,18 +196,27 @@ func (b *SnapshotBuilder) StreamDirectFilesJobBatches(ctx context.Context, root 
 		}
 
 		childPath := filepath.Join(scopePath, dirEntry.Name())
-		childInfo, infoErr := strictDirEntryInfo(scopePath, dirEntry)
+		isDir, childInfo, infoErr := strictDirEntryType(scopePath, dirEntry)
 		if infoErr != nil {
 			return infoErr
 		}
-		if childInfo.IsDir() {
+		if shouldSkipSystemPath(childPath, isDir) {
 			continue
 		}
-		if shouldSkipSystemPath(childPath, false) {
+		if !b.shouldIndexPath(root, childPath, isDir) {
 			continue
 		}
-		if !b.shouldIndexPath(root, childPath, false) {
+		if isDir {
 			continue
+		}
+		if childInfo == nil {
+			// Streaming direct-files batches now delays Info() until a child file
+			// survives skip/policy checks, because the old eager stat path repeated
+			// metadata work for entries that never reached SQLite staging.
+			childInfo, infoErr = strictDirEntryInfo(scopePath, dirEntry)
+			if infoErr != nil {
+				return infoErr
+			}
 		}
 
 		batch.Entries = append(batch.Entries, newEntryRecord(root, childPath, childInfo))
@@ -244,9 +263,8 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 	}
 
 	type queueItem struct {
-		path     string
-		patterns []gitIgnorePattern
-		info     os.FileInfo
+		path string
+		info os.FileInfo
 	}
 
 	queue := []queueItem{{
@@ -274,9 +292,6 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 		})
 		batch.Entries = append(batch.Entries, newEntryRecord(root, current.path, current.info))
 
-		localPatterns := append([]gitIgnorePattern{}, current.patterns...)
-		localPatterns = append(localPatterns, loadGitIgnorePatterns(current.path)...)
-
 		dirEntries, readErr := os.ReadDir(current.path)
 		if readErr != nil {
 			if current.path == scopePath {
@@ -288,17 +303,25 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 
 		for _, dirEntry := range dirEntries {
 			childPath := filepath.Join(current.path, dirEntry.Name())
-			info, infoErr := dirEntry.Info()
+			isDir, info, infoErr := strictDirEntryType(current.path, dirEntry)
 			if infoErr != nil {
 				continue
 			}
 
-			isDir := info.IsDir()
 			if shouldSkipSystemPath(childPath, isDir) {
 				continue
 			}
 			if !b.shouldIndexPath(root, childPath, isDir) {
 				continue
+			}
+			if info == nil {
+				// Recursive subtree snapshots must still persist real mtime/size data,
+				// but loading FileInfo after skip/policy checks avoids extra stat calls
+				// for entries that would never be indexed.
+				info, infoErr = strictDirEntryInfo(current.path, dirEntry)
+				if infoErr != nil {
+					continue
+				}
 			}
 
 			if !isDir {
@@ -306,10 +329,13 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 				continue
 			}
 
+			// Snapshot execution never consults gitignore patterns here. The previous
+			// traversal still loaded every directory's .gitignore and copied pattern
+			// slices forward, which added filesystem reads and allocations to the
+			// dominant build_snapshot phase without changing which entries were kept.
 			queue = append(queue, queueItem{
-				path:     childPath,
-				patterns: localPatterns,
-				info:     info,
+				path: childPath,
+				info: info,
 			})
 		}
 	}

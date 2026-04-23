@@ -430,7 +430,7 @@ func (d *FileSearchDB) ApplyDirectFilesJobStream(ctx context.Context, root RootR
 		return err
 	}
 
-	if err := replaceDirectFilesEntriesFromStageTx(ctx, tx, job.RootID, job.ScopePath); err != nil {
+	if err := d.replaceDirectFilesEntriesFromStageTx(ctx, tx, job.RootID, job.ScopePath); err != nil {
 		return err
 	}
 

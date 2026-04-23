@@ -459,7 +459,12 @@ func onUIWebsocketRequest(ctx context.Context, request WebsocketMsg) {
 }
 
 func onUIWebsocketResponse(ctx context.Context, response WebsocketMsg) {
-	logger.Debug(ctx, fmt.Sprintf("got <%s> response from ui", response.Method))
+	// ShowToolbarMsg acknowledgements arrive at very high frequency during file
+	// indexing, and logging each one added noise without helping diagnose UI
+	// behavior because the request side already knows which toolbar snapshot it sent.
+	if response.Method != "ShowToolbarMsg" {
+		logger.Debug(ctx, fmt.Sprintf("got <%s> response from ui", response.Method))
+	}
 
 	requestID := response.RequestId
 	if requestID == "" {

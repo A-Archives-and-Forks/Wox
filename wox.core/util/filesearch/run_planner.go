@@ -424,7 +424,6 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 		return PlanTotals{}, nil, fmt.Errorf("read direct-files scope %q: %w", scopePath, err)
 	}
 
-	directFiles := make([]string, 0, len(dirEntries))
 	for _, dirEntry := range dirEntries {
 		select {
 		case <-ctx.Done():
@@ -433,7 +432,7 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 		}
 
 		childPath := filepath.Join(scopePath, dirEntry.Name())
-		info, infoErr := strictDirEntryInfo(scopePath, dirEntry)
+		isDir, _, infoErr := strictDirEntryType(scopePath, dirEntry)
 		if infoErr != nil {
 			// The run planner used to fail the whole root when one child entry under
 			// a readable directory denied metadata access. The older root-centric
@@ -447,7 +446,7 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 			}
 			return PlanTotals{}, nil, infoErr
 		}
-		if info.IsDir() {
+		if isDir {
 			if shouldSkipSystemPath(childPath, true) || !p.policy.shouldIndexPath(root, childPath, true) {
 				totals.SkippedCount++
 			}
@@ -462,15 +461,17 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 			continue
 		}
 
-		directFiles = append(directFiles, childPath)
 		totals.FileCount++
 		totals.IndexableEntryCount++
 		totals.PlannedScanUnits++
 		totals.PlannedWriteUnits++
 	}
 
-	sort.Strings(directFiles)
-	return totals, directFiles, nil
+	// Planner direct-files pre-scan only needs aggregate totals. The previous
+	// implementation still accumulated and sorted every child file path even
+	// though callers discarded that list, so large flat directories paid extra
+	// allocations and comparisons without affecting the sealed plan.
+	return totals, nil, nil
 }
 
 func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scopePath string) (PlanTotals, []string, error) {
@@ -529,7 +530,7 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 
 		for _, dirEntry := range dirEntries {
 			childPath := filepath.Join(current.path, dirEntry.Name())
-			info, infoErr := strictDirEntryInfo(current.path, dirEntry)
+			isDir, _, infoErr := strictDirEntryType(current.path, dirEntry)
 			if infoErr != nil {
 				if shouldSkipUnreadableTraversalError(infoErr) {
 					totals.SkippedCount++
@@ -539,7 +540,6 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 				return PlanTotals{}, nil, infoErr
 			}
 
-			isDir := info.IsDir()
 			if shouldSkipSystemPath(childPath, isDir) {
 				totals.SkippedCount++
 				continue
@@ -819,6 +819,24 @@ func strictDirEntryInfo(parentPath string, dirEntry os.DirEntry) (os.FileInfo, e
 		return nil, fmt.Errorf("read metadata for %q: %w", filepath.Join(parentPath, dirEntry.Name()), err)
 	}
 	return info, nil
+}
+
+func strictDirEntryType(parentPath string, dirEntry os.DirEntry) (bool, os.FileInfo, error) {
+	// Planner and snapshot traversals used to call Info() for every child even
+	// when DirEntry.Type() already proved whether the child was a file or a
+	// directory. Reusing the cheap type bits removes a large amount of metadata
+	// I/O during pre-scan, while symlinks and unknown entries still fall back to
+	// Info() so the previous target-kind behavior stays intact.
+	modeType := dirEntry.Type()
+	if modeType != 0 && modeType&os.ModeSymlink == 0 {
+		return dirEntry.IsDir(), nil, nil
+	}
+
+	info, err := strictDirEntryInfo(parentPath, dirEntry)
+	if err != nil {
+		return false, nil, err
+	}
+	return info.IsDir(), info, nil
 }
 
 func shouldSkipUnreadableTraversalError(err error) bool {

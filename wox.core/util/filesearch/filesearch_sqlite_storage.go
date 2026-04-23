@@ -420,41 +420,8 @@ func rebuildAllSearchArtifactsTx(ctx context.Context, tx *sql.Tx) error {
 	// The SQLite-first search tables are derived data. Rebuilding them during
 	// schema init keeps migrations deterministic and avoids serving stale FTS or
 	// bigram rows from earlier partial schemas.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM entries_bigram`); err != nil {
-		return fmt.Errorf("clear entries_bigram: %w", err)
-	}
-
-	rows, err := tx.QueryContext(ctx, `
-		SELECT entry_id, path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
-		       pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
-		FROM entries
-		ORDER BY entry_id ASC
-	`)
-	if err != nil {
-		return fmt.Errorf("load entries for bigram rebuild: %w", err)
-	}
-	defer rows.Close()
-
-	insertBigramStmt, err := tx.PrepareContext(ctx, `
-		INSERT OR IGNORE INTO entries_bigram (field, gram, entry_id)
-		VALUES (?, ?, ?)
-	`)
-	if err != nil {
-		return fmt.Errorf("prepare bigram rebuild insert: %w", err)
-	}
-	defer insertBigramStmt.Close()
-
-	for rows.Next() {
-		row, err := scanStoredEntryRecord(rows)
-		if err != nil {
-			return err
-		}
-		if err := insertEntryBigramsTx(ctx, insertBigramStmt, row); err != nil {
-			return err
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate entries for bigram rebuild: %w", err)
+	if _, err := rebuildAllBigramsTx(ctx, tx); err != nil {
+		return err
 	}
 
 	for _, tableName := range filesearchFTSTables {
@@ -895,10 +862,11 @@ func (d *FileSearchDB) EndBulkSync(ctx context.Context) error {
 		return nil
 	}
 
-	// Bulk mode skips per-entry FTS maintenance during the scan cycle because
-	// replaying FTS deletes/inserts for every discovered file is much slower than
-	// rebuilding the derived indexes once after the facts settle.
-	if err := d.rebuildFTSTables(ctx, true); err != nil {
+	// Bulk mode now defers both bigram and FTS maintenance until the end of the
+	// scan cycle. Root-local bigram refreshes made full runs stall in every
+	// finalize job, while the final index only needs one consistent rebuild after
+	// the fact table has settled.
+	if err := d.rebuildBulkSearchArtifacts(ctx, true); err != nil {
 		return err
 	}
 	return nil
@@ -929,10 +897,10 @@ func (d *FileSearchDB) applyDirectFilesEntriesTx(ctx context.Context, tx *sql.Tx
 	// from the later diff and replay phases inside the same SQLite transaction.
 	logFilesearchSQLiteMaintenance(ctx, "direct_files_stage_entries", batch.ScopePath, util.GetSystemTimestamp()-stageStartedAt, len(batch.Entries))
 
-	return replaceDirectFilesEntriesFromStageTx(ctx, tx, batch.RootID, batch.ScopePath)
+	return d.replaceDirectFilesEntriesFromStageTx(ctx, tx, batch.RootID, batch.ScopePath)
 }
 
-func replaceDirectFilesEntriesFromStageTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) error {
+func (d *FileSearchDB) replaceDirectFilesEntriesFromStageTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) error {
 	diffStartedAt := util.GetSystemTimestamp()
 	staleRows, changedOldRows, changedOrNewRows, err := collectChangedDirectFilesEntrySetsTx(ctx, tx, rootID, scopePath)
 	if err != nil {
@@ -941,7 +909,11 @@ func replaceDirectFilesEntriesFromStageTx(ctx context.Context, tx *sql.Tx, rootI
 	// The previous stream_apply log only exposed total wall time. This direct-files
 	// diff log shows whether the transaction stalls before row replay even begins.
 	logFilesearchSQLiteMaintenance(ctx, "direct_files_collect_diff", scopePath, util.GetSystemTimestamp()-diffStartedAt, len(staleRows)+len(changedOldRows)+len(changedOrNewRows))
-	return applyChangedEntrySetsTx(ctx, tx, scopePath, staleRows, changedOldRows, changedOrNewRows, true, nil)
+	// Full runs already rebuild derived search structures after facts settle. The
+	// old direct-files path still replayed FTS/bigram rows per file inside bulk
+	// sync, which duplicated the later finalize work and made large roots much
+	// slower without changing the final index shape.
+	return applyChangedEntrySetsTx(ctx, tx, scopePath, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled(), nil)
 }
 
 func collectChangedDirectFilesEntrySetsTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) ([]storedEntryRecord, []storedEntryRecord, []storedEntryRecord, error) {
@@ -1079,12 +1051,9 @@ func (d *FileSearchDB) replaceRootEntriesTx(ctx context.Context, tx *sql.Tx, roo
 	if err := applyChangedEntrySetsTx(ctx, tx, root.Path, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled(), onProgress); err != nil {
 		return err
 	}
-
-	if d.isBulkSyncEnabled() {
-		if err := refreshRootBigramsTx(ctx, tx, root.ID); err != nil {
-			return err
-		}
-	}
+	// Bulk sync now leaves derived bigram rebuilds to EndBulkSync(). Rebuilding
+	// here used to duplicate the later full-index maintenance and made large
+	// roots pay the finalize cost multiple times without changing the final data.
 
 	return nil
 }
@@ -1099,7 +1068,11 @@ func (d *FileSearchDB) replaceSubtreeEntriesTx(ctx context.Context, tx *sql.Tx, 
 		return err
 	}
 
-	return applyChangedEntrySetsTx(ctx, tx, batch.ScopePath, staleRows, changedOldRows, changedOrNewRows, true, nil)
+	// Full runs already defer FTS maintenance to one rebuild at bulk finalize.
+	// The previous subtree path still maintained derived search artifacts row by
+	// row during bulk sync, so large scopes paid the per-entry replay cost and
+	// then paid the global rebuild anyway.
+	return applyChangedEntrySetsTx(ctx, tx, batch.ScopePath, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled(), nil)
 }
 
 func upsertEntryFactsTx(ctx context.Context, tx *sql.Tx, row storedEntryRecord) (storedEntryRecord, error) {
@@ -1642,7 +1615,12 @@ func insertEntryFTSWithSyncTx(ctx context.Context, syncer *entrySearchArtifactSy
 }
 
 func (d *FileSearchDB) finalizeRootRunTx(ctx context.Context, tx *sql.Tx, root RootRecord) error {
-	if !d.isBulkSyncEnabled() {
+	if d.isBulkSyncEnabled() {
+		// Bulk sync no longer rebuilds bigrams per root during finalize. Recent
+		// traces showed those root-local refreshes dominating full runs, and the
+		// final search state only requires one global derived-table rebuild after
+		// every root has committed its facts.
+	} else {
 		// Finalize is the only place allowed to advance the persisted feed cursor.
 		// Applying job rows before this point is safe because a crash can replay
 		// the same writes, but advancing the cursor early would acknowledge
@@ -1719,6 +1697,37 @@ func (d *FileSearchDB) rebuildFTSTables(ctx context.Context, optimize bool) erro
 	return nil
 }
 
+func (d *FileSearchDB) rebuildBulkSearchArtifacts(ctx context.Context, optimize bool) error {
+	bigramStartedAt := util.GetSystemTimestamp()
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	bigramRows, err := rebuildAllBigramsTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	bigramElapsedMs := util.GetSystemTimestamp() - bigramStartedAt
+
+	ftsStartedAt := util.GetSystemTimestamp()
+	if err := rebuildFTSTablesTx(ctx, tx, optimize); err != nil {
+		return err
+	}
+	ftsElapsedMs := util.GetSystemTimestamp() - ftsStartedAt
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Bulk finalization now owns the single source of truth for derived search
+	// artifacts. Split the logs so the next trace can tell whether time is going
+	// into bigram replay or the later FTS rebuild/optimize phase.
+	logFilesearchSQLiteMaintenance(ctx, "rebuild_bigrams", "bulk", bigramElapsedMs, bigramRows)
+	logFilesearchSQLiteMaintenance(ctx, "rebuild_fts", fmt.Sprintf("optimize=%t", optimize), ftsElapsedMs, len(filesearchFTSTables))
+	return nil
+}
+
 func rebuildFTSTablesTx(ctx context.Context, tx *sql.Tx, optimize bool) error {
 	for _, tableName := range filesearchFTSTables {
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s(%s) VALUES('rebuild')`, tableName, tableName)); err != nil {
@@ -1733,4 +1742,47 @@ func rebuildFTSTablesTx(ctx context.Context, tx *sql.Tx, optimize bool) error {
 		}
 	}
 	return nil
+}
+
+func rebuildAllBigramsTx(ctx context.Context, tx *sql.Tx) (int, error) {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM entries_bigram`); err != nil {
+		return 0, fmt.Errorf("clear entries_bigram: %w", err)
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT entry_id, path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+		       pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
+		FROM entries
+		ORDER BY entry_id ASC
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("load entries for bigram rebuild: %w", err)
+	}
+	defer rows.Close()
+
+	insertBigramStmt, err := tx.PrepareContext(ctx, `
+		INSERT OR IGNORE INTO entries_bigram (field, gram, entry_id)
+		VALUES (?, ?, ?)
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare bigram rebuild insert: %w", err)
+	}
+	defer insertBigramStmt.Close()
+
+	processedRows := 0
+	for rows.Next() {
+		row, err := scanStoredEntryRecord(rows)
+		if err != nil {
+			return 0, err
+		}
+		if err := insertEntryBigramsTx(ctx, insertBigramStmt, row); err != nil {
+			return 0, err
+		}
+		processedRows++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate entries for bigram rebuild: %w", err)
+	}
+
+	return processedRows, nil
 }

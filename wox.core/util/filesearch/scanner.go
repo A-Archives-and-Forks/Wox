@@ -234,6 +234,7 @@ func (s *Scanner) scanAllRootsWithReason(ctx context.Context, reason string) {
 }
 
 func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason string, roots []RootRecord, batches []ReconcileBatch) error {
+	totalStartedAt := util.GetSystemTimestamp()
 	planner := NewRunPlanner(s.policy)
 	if s != nil && s.plannerBudgetOverride != nil {
 		planner.budget = *s.plannerBudgetOverride
@@ -307,6 +308,11 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		// settle, so log the boundary explicitly instead of hiding that cost in a
 		// generic "scan cycle completed" message.
 		logFilesearchSQLiteMaintenance(ctx, "bulk_finalize", string(kind), util.GetSystemTimestamp()-bulkFinalizeStartedAt, len(filesearchFTSTables))
+		// The planner, execution, and deferred bulk finalize all belong to one
+		// user-visible full-index attempt. Record that outer elapsed time here,
+		// after bulk finalize succeeds, so later optimizations can compare one
+		// stable end-to-end metric instead of manually summing phase logs.
+		logFilesearchFullIndexTotal(ctx, reason, util.GetSystemTimestamp()-totalStartedAt, len(plan.RootPlans), len(plan.Jobs), plan.TotalWorkUnits)
 	}()
 
 	executionStartedAt := util.GetSystemTimestamp()
@@ -803,8 +809,7 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 	}
 
 	queue := []scanState{{
-		path:     rootPath,
-		patterns: nil,
+		path: rootPath,
 	}}
 	plannedDirectories := make([]plannedDirectory, 0, 64)
 	discoveredDirectories := 1
@@ -833,11 +838,8 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 			continue
 		}
 
-		localPatterns := append([]gitIgnorePattern(nil), state.patterns...)
-		localPatterns = append(localPatterns, loadGitIgnorePatterns(state.path)...)
 		plannedDirectories = append(plannedDirectories, plannedDirectory{
 			path:       state.path,
-			patterns:   localPatterns,
 			childCount: len(dirEntries),
 		})
 		totalItems += int64(len(dirEntries))
@@ -854,9 +856,12 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 			}
 
 			if isDir {
+				// Planner only uses the directory list and child counts to size jobs.
+				// The previous build kept loading and copying .gitignore patterns here,
+				// but nothing in planning or execution consumed them, so we drop that
+				// dead work to reduce per-directory I/O and allocations.
 				queue = append(queue, scanState{
-					path:     fullPath,
-					patterns: localPatterns,
+					path: fullPath,
 				})
 				discoveredDirectories++
 			}
@@ -2040,13 +2045,11 @@ func newTransientSyncState(root RootRecord, rootIndex int, rootTotal int, batch 
 }
 
 type scanState struct {
-	path     string
-	patterns []gitIgnorePattern
+	path string
 }
 
 type plannedDirectory struct {
 	path       string
-	patterns   []gitIgnorePattern
 	childCount int
 }
 
@@ -2054,94 +2057,6 @@ type scanPlan struct {
 	directories    []plannedDirectory
 	DirectoryTotal int
 	TotalItems     int64
-}
-
-type gitIgnorePattern struct {
-	baseDir  string
-	pattern  string
-	negate   bool
-	dirOnly  bool
-	rooted   bool
-	hasSlash bool
-}
-
-func loadGitIgnorePatterns(directory string) []gitIgnorePattern {
-	gitIgnorePath := filepath.Join(directory, ".gitignore")
-	data, err := os.ReadFile(gitIgnorePath)
-	if err != nil {
-		return nil
-	}
-
-	lines := strings.Split(string(data), "\n")
-	patterns := make([]gitIgnorePattern, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		pattern := gitIgnorePattern{baseDir: directory}
-		if strings.HasPrefix(line, "!") {
-			pattern.negate = true
-			line = strings.TrimPrefix(line, "!")
-		}
-		if strings.HasPrefix(line, "/") {
-			pattern.rooted = true
-			line = strings.TrimPrefix(line, "/")
-		}
-		if strings.HasSuffix(line, "/") {
-			pattern.dirOnly = true
-			line = strings.TrimSuffix(line, "/")
-		}
-		pattern.pattern = line
-		pattern.hasSlash = strings.Contains(line, "/")
-		if pattern.pattern != "" {
-			patterns = append(patterns, pattern)
-		}
-	}
-
-	return patterns
-}
-
-func shouldIgnorePath(patterns []gitIgnorePattern, fullPath string, isDir bool) bool {
-	ignored := false
-	for _, pattern := range patterns {
-		if pattern.matches(fullPath, isDir) {
-			ignored = !pattern.negate
-		}
-	}
-	return ignored
-}
-
-func (p gitIgnorePattern) matches(fullPath string, isDir bool) bool {
-	if p.dirOnly && !isDir {
-		return false
-	}
-
-	relPath, err := filepath.Rel(p.baseDir, fullPath)
-	if err != nil || strings.HasPrefix(relPath, "..") {
-		return false
-	}
-	relPath = filepath.ToSlash(relPath)
-	pattern := filepath.ToSlash(p.pattern)
-
-	if p.rooted || p.hasSlash {
-		if ok, _ := filepath.Match(pattern, relPath); ok {
-			return true
-		}
-		if strings.HasPrefix(relPath, pattern+"/") {
-			return true
-		}
-		return false
-	}
-
-	for _, segment := range strings.Split(relPath, "/") {
-		if ok, _ := filepath.Match(pattern, segment); ok {
-			return true
-		}
-	}
-
-	return false
 }
 
 func newEntryRecord(root RootRecord, fullPath string, info os.FileInfo) EntryRecord {

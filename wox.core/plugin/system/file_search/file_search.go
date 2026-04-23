@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"wox/common"
 	"wox/plugin"
 	"wox/setting/definition"
@@ -43,6 +44,8 @@ type FileSearchPlugin struct {
 	api                     plugin.API
 	engine                  *filesearch.Engine
 	unsubscribeStatusChange func()
+	toolbarMsgStateMu       sync.Mutex
+	lastToolbarMsgSignature string
 }
 
 type fileSearchQueryDiagnostics struct {
@@ -126,6 +129,13 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 	// on manager-side ignore behavior instead of blocking every search.
 	c.api.OnEnterPluginQuery(ctx, func(ctx context.Context) {
 		c.syncToolbarMsg(ctx, false)
+	})
+	c.api.OnLeavePluginQuery(ctx, func(ctx context.Context) {
+		// Reset the local de-duplication state when the file-search query session ends.
+		// The manager already clears the visible toolbar msg on leave, so keeping the
+		// old signature here would incorrectly suppress the first toolbar refresh when
+		// the user enters file-search again during the same indexing run.
+		c.resetToolbarMsgState()
 	})
 
 	c.syncUserRoots(ctx)
@@ -391,10 +401,26 @@ func (c *FileSearchPlugin) syncToolbarMsg(ctx context.Context, includeReady bool
 func (c *FileSearchPlugin) syncToolbarMsgWithStatus(ctx context.Context, status filesearch.StatusSnapshot, includeReady bool) {
 	toolbarMsg, found := c.buildToolbarMsgFromStatus(ctx, status, includeReady)
 	if !found {
+		// Avoid repeating the same clear request on every identical idle snapshot.
+		// The previous implementation always cleared and re-sent status updates, which
+		// produced long runs of duplicate file-search and UI bridge logs without any
+		// visible toolbar change.
+		if !c.takeToolbarMsgUpdate("") {
+			return
+		}
 		c.api.ClearToolbarMsg(ctx, fileSearchToolbarMsgID)
 		return
 	}
 
+	signature := buildToolbarMsgSignature(toolbarMsg)
+	// Only push toolbar updates when the rendered snapshot changes. The status
+	// listener can emit many identical planner snapshots, and forwarding each one
+	// forced redundant ShowToolbarMsg round-trips plus duplicate debug logs.
+	if !c.takeToolbarMsgUpdate(signature) {
+		return
+	}
+
+	c.logToolbarStatusSnapshot(ctx, status)
 	c.api.ShowToolbarMsg(ctx, toolbarMsg)
 }
 
@@ -402,34 +428,6 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 	if !includeReady && !status.IsIndexing && status.ErrorRootCount == 0 {
 		return plugin.ToolbarMsg{}, false
 	}
-
-	c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf(
-		"File search status: roots=%d preparing=%d scanning=%d syncing=%d writing=%d finalizing=%d errors=%d active=%s run=%s stage=%s progress=%d/%d run_progress=%d/%d root=%d/%d dirs=%d/%d items=%d/%d pending=%d/%d discovered=%d initial=%v",
-		status.RootCount,
-		status.PreparingRootCount,
-		status.ScanningRootCount,
-		status.SyncingRootCount,
-		status.WritingRootCount,
-		status.FinalizingRootCount,
-		status.ErrorRootCount,
-		status.ActiveRootStatus,
-		status.ActiveRunStatus,
-		status.ActiveStage,
-		status.ActiveProgressCurrent,
-		status.ActiveProgressTotal,
-		status.RunProgressCurrent,
-		status.RunProgressTotal,
-		status.ActiveRootIndex,
-		status.ActiveRootTotal,
-		status.ActiveDirectoryIndex,
-		status.ActiveDirectoryTotal,
-		status.ActiveItemCurrent,
-		status.ActiveItemTotal,
-		status.PendingDirtyRootCount,
-		status.PendingDirtyPathCount,
-		status.ActiveDiscoveredCount,
-		status.IsInitialIndexing,
-	))
 
 	title := c.api.GetTranslation(ctx, "plugin_file_status_error")
 	icon := common.PermissionIcon
@@ -530,6 +528,83 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 
 func (c *FileSearchPlugin) handleStatusChanged(status filesearch.StatusSnapshot) {
 	c.syncToolbarMsgWithStatus(util.NewTraceContext(), status, false)
+}
+
+func (c *FileSearchPlugin) takeToolbarMsgUpdate(signature string) bool {
+	c.toolbarMsgStateMu.Lock()
+	defer c.toolbarMsgStateMu.Unlock()
+
+	if c.lastToolbarMsgSignature == signature {
+		return false
+	}
+
+	c.lastToolbarMsgSignature = signature
+	return true
+}
+
+func (c *FileSearchPlugin) resetToolbarMsgState() {
+	c.toolbarMsgStateMu.Lock()
+	defer c.toolbarMsgStateMu.Unlock()
+
+	c.lastToolbarMsgSignature = ""
+}
+
+func (c *FileSearchPlugin) logToolbarStatusSnapshot(ctx context.Context, status filesearch.StatusSnapshot) {
+	c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf(
+		"File search status: roots=%d preparing=%d scanning=%d syncing=%d writing=%d finalizing=%d errors=%d active=%s run=%s stage=%s progress=%d/%d run_progress=%d/%d root=%d/%d dirs=%d/%d items=%d/%d pending=%d/%d discovered=%d initial=%v",
+		status.RootCount,
+		status.PreparingRootCount,
+		status.ScanningRootCount,
+		status.SyncingRootCount,
+		status.WritingRootCount,
+		status.FinalizingRootCount,
+		status.ErrorRootCount,
+		status.ActiveRootStatus,
+		status.ActiveRunStatus,
+		status.ActiveStage,
+		status.ActiveProgressCurrent,
+		status.ActiveProgressTotal,
+		status.RunProgressCurrent,
+		status.RunProgressTotal,
+		status.ActiveRootIndex,
+		status.ActiveRootTotal,
+		status.ActiveDirectoryIndex,
+		status.ActiveDirectoryTotal,
+		status.ActiveItemCurrent,
+		status.ActiveItemTotal,
+		status.PendingDirtyRootCount,
+		status.PendingDirtyPathCount,
+		status.ActiveDiscoveredCount,
+		status.IsInitialIndexing,
+	))
+}
+
+func buildToolbarMsgSignature(msg plugin.ToolbarMsg) string {
+	progress := "nil"
+	if msg.Progress != nil {
+		progress = fmt.Sprintf("%d", *msg.Progress)
+	}
+
+	actionParts := make([]string, 0, len(msg.Actions))
+	for _, action := range msg.Actions {
+		actionParts = append(actionParts, strings.Join([]string{
+			action.Id,
+			action.Name,
+			action.Icon.String(),
+			action.Hotkey,
+			fmt.Sprintf("%t", action.IsDefault),
+			fmt.Sprintf("%t", action.PreventHideAfterAction),
+		}, "|"))
+	}
+
+	return strings.Join([]string{
+		msg.Id,
+		msg.Title,
+		msg.Icon.String(),
+		progress,
+		fmt.Sprintf("%t", msg.Indeterminate),
+		strings.Join(actionParts, "||"),
+	}, ":::")
 }
 
 func (c *FileSearchPlugin) logQueryDiagnostics(ctx context.Context, rawQuery string, diagnostics fileSearchQueryDiagnostics, resultCount int, totalElapsedMs int64) {
