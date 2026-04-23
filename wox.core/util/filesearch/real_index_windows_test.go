@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -54,13 +58,28 @@ type realIndexRootArtifact struct {
 }
 
 type realIndexArtifact struct {
-	CapturedAt         string                 `json:"captured_at"`
-	Root               realIndexRootArtifact  `json:"root"`
-	TotalElapsedMillis int64                  `json:"total_elapsed_millis"`
-	StageMetrics       []realIndexStageMetric `json:"stage_metrics"`
-	Transitions        []realIndexTransition  `json:"transitions"`
-	SQLiteSnapshot     string                 `json:"sqlite_snapshot"`
-	SQLiteTopRoots     string                 `json:"sqlite_top_roots"`
+	CapturedAt         string                  `json:"captured_at"`
+	Root               realIndexRootArtifact   `json:"root"`
+	TotalElapsedMillis int64                   `json:"total_elapsed_millis"`
+	StageMetrics       []realIndexStageMetric  `json:"stage_metrics"`
+	Transitions        []realIndexTransition   `json:"transitions"`
+	SQLiteSnapshot     string                  `json:"sqlite_snapshot"`
+	SQLiteTopRoots     string                  `json:"sqlite_top_roots"`
+	ExecutionStats     realIndexExecutionStats `json:"execution_stats"`
+}
+
+type realIndexExecutionStats struct {
+	JobCount                   int                  `json:"job_count"`
+	SubtreeApplyTotalP50Millis int64                `json:"subtree_apply_total_p50_millis"`
+	SubtreeApplyTotalP95Millis int64                `json:"subtree_apply_total_p95_millis"`
+	ApplySnapshotP50Millis     int64                `json:"apply_snapshot_p50_millis"`
+	ApplySnapshotP95Millis     int64                `json:"apply_snapshot_p95_millis"`
+	SlowestScopes              []realIndexSlowScope `json:"slowest_scopes"`
+}
+
+type realIndexSlowScope struct {
+	Scope         string `json:"scope"`
+	ElapsedMillis int64  `json:"elapsed_millis"`
 }
 
 type realIndexTimelineEvent struct {
@@ -71,6 +90,49 @@ type realIndexTimelineEvent struct {
 	activeScopePath    string
 	runProgressCurrent int64
 	runProgressTotal   int64
+}
+
+var (
+	realIndexApplySnapshotPattern = regexp.MustCompile(`phase=apply_snapshot elapsed=(\d+)ms .* scope=(.+) units=\d+$`)
+	realIndexSubtreeApplyPattern  = regexp.MustCompile(`operation=subtree_apply_total scope=.* elapsed=(\d+)ms work_count=\d+$`)
+)
+
+func TestSummarizeRealIndexExecutionLog(t *testing.T) {
+	logContent := strings.Join([]string{
+		"2026-04-23 19:14:16.293 G0000008 [DBG] [Wox] filesearch sqlite maintenance: operation=subtree_apply_total scope=batches=1 elapsed=19ms work_count=1",
+		"2026-04-23 19:14:16.293 G0000008 [DBG] [Wox] filesearch job phase: phase=apply_snapshot elapsed=19ms root=real-index-c-dev root_path=C:\\dev job=job-1 job_kind=subtree scope=C:\\dev\\scope-a units=64",
+		"2026-04-23 19:14:16.309 G0000008 [DBG] [Wox] filesearch sqlite maintenance: operation=subtree_apply_total scope=batches=1 elapsed=15ms work_count=1",
+		"2026-04-23 19:14:16.309 G0000008 [DBG] [Wox] filesearch job phase: phase=apply_snapshot elapsed=15ms root=real-index-c-dev root_path=C:\\dev job=job-2 job_kind=subtree scope=C:\\dev\\scope-b units=16",
+		"2026-04-23 19:14:16.329 G0000008 [DBG] [Wox] filesearch sqlite maintenance: operation=subtree_apply_total scope=batches=1 elapsed=27ms work_count=1",
+		"2026-04-23 19:14:16.329 G0000008 [DBG] [Wox] filesearch job phase: phase=apply_snapshot elapsed=27ms root=real-index-c-dev root_path=C:\\dev job=job-3 job_kind=subtree scope=C:\\dev\\scope-c units=18",
+		"2026-04-23 19:14:16.349 G0000008 [DBG] [Wox] filesearch job phase: phase=apply_snapshot elapsed=20ms root=real-index-c-dev root_path=C:\\dev job=job-4 job_kind=subtree scope=C:\\dev\\scope-a units=36",
+	}, "\n")
+
+	stats := summarizeRealIndexExecutionLog(logContent)
+	if stats.JobCount != 4 {
+		t.Fatalf("expected 4 jobs, got %d", stats.JobCount)
+	}
+	if stats.SubtreeApplyTotalP50Millis != 19 {
+		t.Fatalf("expected subtree apply p50 19ms, got %d", stats.SubtreeApplyTotalP50Millis)
+	}
+	if stats.SubtreeApplyTotalP95Millis != 27 {
+		t.Fatalf("expected subtree apply p95 27ms, got %d", stats.SubtreeApplyTotalP95Millis)
+	}
+	if stats.ApplySnapshotP50Millis != 20 {
+		t.Fatalf("expected apply snapshot p50 20ms, got %d", stats.ApplySnapshotP50Millis)
+	}
+	if stats.ApplySnapshotP95Millis != 27 {
+		t.Fatalf("expected apply snapshot p95 27ms, got %d", stats.ApplySnapshotP95Millis)
+	}
+	if len(stats.SlowestScopes) != 3 {
+		t.Fatalf("expected 3 unique slow scopes, got %d", len(stats.SlowestScopes))
+	}
+	if stats.SlowestScopes[0].Scope != `C:\dev\scope-c` || stats.SlowestScopes[0].ElapsedMillis != 27 {
+		t.Fatalf("expected slowest scope C:\\dev\\scope-c at 27ms, got %#v", stats.SlowestScopes[0])
+	}
+	if stats.SlowestScopes[1].Scope != `C:\dev\scope-a` || stats.SlowestScopes[1].ElapsedMillis != 20 {
+		t.Fatalf("expected second scope C:\\dev\\scope-a at 20ms, got %#v", stats.SlowestScopes[1])
+	}
 }
 
 func TestCaptureFileSearchRealIndexForWindowsDevRoot(t *testing.T) {
@@ -178,6 +240,7 @@ func TestCaptureFileSearchRealIndexForWindowsDevRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture sqlite snapshot after real index capture: %v", err)
 	}
+	executionStats := loadRealIndexExecutionStats(t)
 
 	timelineMu.Lock()
 	artifact := realIndexArtifact{
@@ -196,6 +259,7 @@ func TestCaptureFileSearchRealIndexForWindowsDevRoot(t *testing.T) {
 		Transitions:        buildRealIndexTransitions(timeline, scanStartedAt),
 		SQLiteSnapshot:     formatSQLiteIndexSnapshotSummary("actual_root", sqliteSnapshot),
 		SQLiteTopRoots:     formatSQLiteIndexTopRoots("actual_root", sqliteSnapshot),
+		ExecutionStats:     executionStats,
 	}
 	timelineMu.Unlock()
 
@@ -212,6 +276,22 @@ func shouldCaptureRealIndex() bool {
 	// Accepting a `go test -args` flag keeps the real-index capture runnable from
 	// either shell without weakening the default skip guard for CI.
 	return strings.TrimSpace(os.Getenv(actualIndexCaptureEnv)) == "1"
+}
+
+func loadRealIndexExecutionStats(t *testing.T) realIndexExecutionStats {
+	t.Helper()
+
+	logPath := filepath.Join(util.GetLocation().GetLogDirectory(), "log")
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read real index log %q: %v", logPath, err)
+	}
+
+	// The first version of this real-root baseline only emitted stage timelines
+	// and SQLite snapshots, which still left the real hotspot hidden inside the
+	// giant debug log. Parsing the existing log file here keeps the feature
+	// test-only while turning one long trace into a compact performance summary.
+	return summarizeRealIndexExecutionLog(string(content))
 }
 
 func buildRealIndexStageMetrics(timeline []realIndexTimelineEvent, scanFinishedAt time.Time) []realIndexStageMetric {
@@ -302,4 +382,82 @@ func realIndexArtifactPath() string {
 		return path
 	}
 	return strings.TrimSpace(os.Getenv(actualIndexArtifactPathEnv))
+}
+
+func summarizeRealIndexExecutionLog(logContent string) realIndexExecutionStats {
+	lines := strings.Split(logContent, "\n")
+	subtreeApplyTotals := make([]int64, 0)
+	applySnapshots := make([]int64, 0)
+	slowestScopeByPath := map[string]int64{}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if matches := realIndexSubtreeApplyPattern.FindStringSubmatch(line); len(matches) == 2 {
+			subtreeApplyTotals = append(subtreeApplyTotals, mustParseRealIndexMillis(matches[1]))
+		}
+
+		if matches := realIndexApplySnapshotPattern.FindStringSubmatch(line); len(matches) == 3 {
+			elapsed := mustParseRealIndexMillis(matches[1])
+			scope := strings.TrimSpace(matches[2])
+			applySnapshots = append(applySnapshots, elapsed)
+			if elapsed > slowestScopeByPath[scope] {
+				slowestScopeByPath[scope] = elapsed
+			}
+		}
+	}
+
+	stats := realIndexExecutionStats{
+		JobCount:                   len(applySnapshots),
+		SubtreeApplyTotalP50Millis: percentileMillis(subtreeApplyTotals, 0.50),
+		SubtreeApplyTotalP95Millis: percentileMillis(subtreeApplyTotals, 0.95),
+		ApplySnapshotP50Millis:     percentileMillis(applySnapshots, 0.50),
+		ApplySnapshotP95Millis:     percentileMillis(applySnapshots, 0.95),
+	}
+
+	slowestScopes := make([]realIndexSlowScope, 0, len(slowestScopeByPath))
+	for scope, elapsed := range slowestScopeByPath {
+		slowestScopes = append(slowestScopes, realIndexSlowScope{
+			Scope:         scope,
+			ElapsedMillis: elapsed,
+		})
+	}
+
+	sort.Slice(slowestScopes, func(left int, right int) bool {
+		if slowestScopes[left].ElapsedMillis == slowestScopes[right].ElapsedMillis {
+			return slowestScopes[left].Scope < slowestScopes[right].Scope
+		}
+		return slowestScopes[left].ElapsedMillis > slowestScopes[right].ElapsedMillis
+	})
+	if len(slowestScopes) > 20 {
+		slowestScopes = slowestScopes[:20]
+	}
+	stats.SlowestScopes = slowestScopes
+
+	return stats
+}
+
+func mustParseRealIndexMillis(value string) int64 {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		panic(fmt.Sprintf("parse real index millis %q: %v", value, err))
+	}
+	return parsed
+}
+
+func percentileMillis(values []int64, percentile float64) int64 {
+	if len(values) == 0 {
+		return 0
+	}
+
+	sorted := append([]int64(nil), values...)
+	sort.Slice(sorted, func(left int, right int) bool {
+		return sorted[left] < sorted[right]
+	})
+
+	index := int(math.Round(percentile * float64(len(sorted)-1)))
+	return sorted[index]
 }

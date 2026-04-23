@@ -21,6 +21,16 @@ type FileSearchDB struct {
 	// to keep full rescans from thrashing the FTS tables.
 	bulkSyncMu    sync.Mutex
 	bulkSyncDepth int
+	// Full-run leaf scopes are sealed, non-overlapping ownership boundaries.
+	// Remembering which roots started empty lets later subtree/direct-files
+	// applies skip repeated "does this scope already exist?" probes without
+	// widening delete ownership or changing query-time semantics.
+	bulkSyncFullRunRoots map[string]bulkSyncFullRunRootState
+}
+
+type bulkSyncFullRunRootState struct {
+	prepared     bool
+	freshAtStart bool
 }
 
 func NewFileSearchDB(ctx context.Context) (*FileSearchDB, error) {
@@ -500,7 +510,6 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 		return err
 	}
 	defer directoryStmt.Close()
-
 	for _, batch := range batches {
 		lockStartedAt := util.GetSystemTimestamp()
 		root, err := lockRootForSubtreeSnapshot(ctx, tx, batch.RootID)
@@ -520,12 +529,21 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 		}
 
 		tombstoneStartedAt := util.GetSystemTimestamp()
-		if err := tombstoneScopedDirectories(tx, ctx, batch.RootID, batch.ScopePath, subtreeBatchScanTime(batch)); err != nil {
-			return err
+		if d.bulkSyncFullRunRootFresh(batch.RootID) {
+			// Prepared full-run roots only use this shortcut when the root had no
+			// persisted directories before execution started. In that case there is
+			// nothing stale to tombstone inside any later leaf scope, so skipping the
+			// scoped UPDATE removes one fixed SQL write per subtree without changing
+			// which directories survive the run.
+			logFilesearchSQLiteMaintenance(ctx, "subtree_tombstone_directories", batch.ScopePath, 0, 0)
+		} else {
+			if err := tombstoneScopedDirectories(tx, ctx, batch.RootID, batch.ScopePath, subtreeBatchScanTime(batch)); err != nil {
+				return err
+			}
+			// The previous logs only covered entry-table maintenance, so directory tombstones
+			// could hide inside the "apply_snapshot" wall time without attribution.
+			logFilesearchSQLiteMaintenance(ctx, "subtree_tombstone_directories", batch.ScopePath, util.GetSystemTimestamp()-tombstoneStartedAt, len(batch.Directories))
 		}
-		// The previous logs only covered entry-table maintenance, so directory tombstones
-		// could hide inside the "apply_snapshot" wall time without attribution.
-		logFilesearchSQLiteMaintenance(ctx, "subtree_tombstone_directories", batch.ScopePath, util.GetSystemTimestamp()-tombstoneStartedAt, len(batch.Directories))
 
 		upsertDirectoriesStartedAt := util.GetSystemTimestamp()
 		for _, directory := range batch.Directories {
@@ -610,41 +628,20 @@ func subtreeBatchScanTime(batch SubtreeSnapshotBatch) int64 {
 }
 
 func tombstoneScopedDirectories(tx *sql.Tx, ctx context.Context, rootID string, scopePath string, scanTime int64) error {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT path
-		FROM directories
-		WHERE root_id = ? AND "exists" = 1
-	`, rootID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	paths := make([]string, 0)
-	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
-			return err
-		}
-		if pathWithinScope(scopePath, path) {
-			paths = append(paths, path)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	for _, path := range paths {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE directories
-			SET "exists" = 0, last_scan_time = ?
-			WHERE root_id = ? AND path = ?
-		`, scanTime, rootID, path); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	scopeClause, scopeArgs := buildScopedPathQuery(scopePath, "path")
+	// Full rescans were paying root-wide readback and one UPDATE per directory
+	// before any subtree rows were restored. Reusing the same scoped path
+	// predicate inside SQLite keeps the exact ownership boundary while removing
+	// the high fixed cost of filtering and replaying tombstones in Go.
+	args := append([]any{scanTime, rootID}, scopeArgs...)
+	_, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE directories
+		SET "exists" = 0, last_scan_time = ?
+		WHERE root_id = ?
+		  AND "exists" = 1
+		  AND %s
+	`, scopeClause), args...)
+	return err
 }
 
 func (d *FileSearchDB) DeleteDirectoryTombstones(ctx context.Context, rootID string) error {

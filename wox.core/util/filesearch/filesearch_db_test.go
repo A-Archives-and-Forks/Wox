@@ -723,6 +723,242 @@ func TestFileSearchDBApplyDirectFilesJobStreamPrunesRemovedDirectFiles(t *testin
 	}
 }
 
+func TestFileSearchDBApplyDirectFilesJobStreamBulkSyncEmptyScopePreservesEntryCountAndSearch(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootPath := filepath.Join(t.TempDir(), "root-bulk-direct-files")
+	ownedPath := filepath.Join(rootPath, "alpha.txt")
+	mustWriteTestFile(t, ownedPath, "alpha")
+
+	root := RootRecord{
+		ID:        "root-bulk-direct-files",
+		Path:      rootPath,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	job := Job{
+		JobID:     "job-direct-files-bulk",
+		RootID:    root.ID,
+		RootPath:  root.Path,
+		ScopePath: root.Path,
+		Kind:      JobKindDirectFiles,
+	}
+	builder := NewSnapshotBuilder(newPolicyState(Policy{}))
+	builder.SetDirectFileBatchSize(1)
+
+	db.BeginBulkSync()
+	if err := db.ApplyDirectFilesJobStream(ctx, root, job, builder); err != nil {
+		t.Fatalf("apply direct-files stream job in bulk sync: %v", err)
+	}
+	if err := db.EndBulkSync(ctx); err != nil {
+		t.Fatalf("end bulk sync after direct-files stream job: %v", err)
+	}
+
+	entries, err := db.ListEntriesByRoot(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("list root entries after bulk direct-files stream apply: %v", err)
+	}
+	if got, want := len(entries), 2; got != want {
+		t.Fatalf("unexpected entry count after bulk direct-files stream apply: got %d want %d", got, want)
+	}
+
+	provider := NewSQLiteSearchProvider(db)
+	results, err := provider.Search(context.Background(), SearchQuery{Raw: "alpha"}, 10)
+	if err != nil {
+		t.Fatalf("search direct-files bulk-sync entry: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != ownedPath {
+		t.Fatalf("expected alpha.txt to be searchable after bulk direct-files stream apply, got %#v", results)
+	}
+}
+
+func TestFileSearchDBReplaceSubtreeSnapshotBulkSyncEmptyScopePreservesEntryCountAndSearch(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootPath := filepath.Join(t.TempDir(), "root-bulk-subtree")
+	nestedPath := filepath.Join(rootPath, "nested")
+	ownedPath := filepath.Join(nestedPath, "alpha.txt")
+
+	root := RootRecord{
+		ID:        "root-bulk-subtree",
+		Path:      rootPath,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	db.BeginBulkSync()
+	if err := db.ReplaceSubtreeSnapshot(ctx, SubtreeSnapshotBatch{
+		RootID:    root.ID,
+		ScopePath: nestedPath,
+		Directories: []DirectoryRecord{{
+			Path:         nestedPath,
+			RootID:       root.ID,
+			ParentPath:   rootPath,
+			LastScanTime: now,
+			Exists:       true,
+		}},
+		Entries: []EntryRecord{
+			{
+				Path:           nestedPath,
+				RootID:         root.ID,
+				ParentPath:     rootPath,
+				Name:           "nested",
+				NormalizedName: "nested",
+				NormalizedPath: nestedPath,
+				IsDir:          true,
+				Mtime:          now,
+				UpdatedAt:      now,
+			},
+			{
+				Path:           ownedPath,
+				RootID:         root.ID,
+				ParentPath:     nestedPath,
+				Name:           "alpha.txt",
+				NormalizedName: "alpha.txt",
+				NormalizedPath: ownedPath,
+				IsDir:          false,
+				Mtime:          now,
+				Size:           1,
+				UpdatedAt:      now,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("replace subtree snapshot in bulk sync: %v", err)
+	}
+	if err := db.EndBulkSync(ctx); err != nil {
+		t.Fatalf("end bulk sync after subtree replace: %v", err)
+	}
+
+	entries, err := db.ListEntriesByRoot(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("list root entries after bulk subtree replace: %v", err)
+	}
+	if got, want := len(entries), 2; got != want {
+		t.Fatalf("unexpected entry count after bulk subtree replace: got %d want %d", got, want)
+	}
+
+	provider := NewSQLiteSearchProvider(db)
+	results, err := provider.Search(context.Background(), SearchQuery{Raw: "alpha"}, 10)
+	if err != nil {
+		t.Fatalf("search bulk subtree entry: %v", err)
+	}
+	if len(results) != 1 || results[0].Path != ownedPath {
+		t.Fatalf("expected alpha.txt to be searchable after bulk subtree replace, got %#v", results)
+	}
+}
+
+func TestFileSearchDBPrepareBulkSyncFullRunRootPreservesResultsAcrossDisjointScopes(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootPath := filepath.Join(t.TempDir(), "root-bulk-full-run")
+	directFilePath := filepath.Join(rootPath, "top.txt")
+	nestedPath := filepath.Join(rootPath, "nested")
+	nestedFilePath := filepath.Join(nestedPath, "alpha.txt")
+	mustWriteTestFile(t, directFilePath, "top")
+	mustWriteTestFile(t, nestedFilePath, "alpha")
+
+	root := RootRecord{
+		ID:        "root-bulk-full-run",
+		Path:      rootPath,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	directJob := Job{
+		JobID:     "job-direct-files-bulk-full-run",
+		RootID:    root.ID,
+		RootPath:  root.Path,
+		ScopePath: root.Path,
+		Kind:      JobKindDirectFiles,
+	}
+	builder := NewSnapshotBuilder(newPolicyState(Policy{}))
+	builder.SetDirectFileBatchSize(1)
+
+	db.BeginBulkSync()
+	if err := db.prepareBulkSyncFullRunRoot(ctx, root.ID); err != nil {
+		t.Fatalf("prepare bulk-sync full-run root: %v", err)
+	}
+	if err := db.ApplyDirectFilesJobStream(ctx, root, directJob, builder); err != nil {
+		t.Fatalf("apply direct-files stream job after preparing full-run root: %v", err)
+	}
+	if err := db.ReplaceSubtreeSnapshot(ctx, SubtreeSnapshotBatch{
+		RootID:    root.ID,
+		ScopePath: nestedPath,
+		Directories: []DirectoryRecord{{
+			Path:         nestedPath,
+			RootID:       root.ID,
+			ParentPath:   rootPath,
+			LastScanTime: now,
+			Exists:       true,
+		}},
+		Entries: []EntryRecord{
+			{
+				Path:           nestedPath,
+				RootID:         root.ID,
+				ParentPath:     rootPath,
+				Name:           "nested",
+				NormalizedName: "nested",
+				NormalizedPath: nestedPath,
+				IsDir:          true,
+				Mtime:          now,
+				UpdatedAt:      now,
+			},
+			{
+				Path:           nestedFilePath,
+				RootID:         root.ID,
+				ParentPath:     nestedPath,
+				Name:           "alpha.txt",
+				NormalizedName: "alpha.txt",
+				NormalizedPath: nestedFilePath,
+				IsDir:          false,
+				Mtime:          now,
+				Size:           1,
+				UpdatedAt:      now,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("replace subtree after preparing full-run root: %v", err)
+	}
+	if err := db.EndBulkSync(ctx); err != nil {
+		t.Fatalf("end bulk sync after prepared full-run root: %v", err)
+	}
+
+	entries, err := db.ListEntriesByRoot(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("list root entries after prepared full-run bulk sync: %v", err)
+	}
+	if got, want := len(entries), 4; got != want {
+		t.Fatalf("unexpected entry count after prepared full-run bulk sync: got %d want %d", got, want)
+	}
+
+	provider := NewSQLiteSearchProvider(db)
+	directResults, err := provider.Search(context.Background(), SearchQuery{Raw: "top"}, 10)
+	if err != nil {
+		t.Fatalf("search prepared full-run direct file: %v", err)
+	}
+	if len(directResults) != 1 || directResults[0].Path != directFilePath {
+		t.Fatalf("expected top.txt to be searchable after prepared full-run bulk sync, got %#v", directResults)
+	}
+
+	nestedResults, err := provider.Search(context.Background(), SearchQuery{Raw: "alpha"}, 10)
+	if err != nil {
+		t.Fatalf("search prepared full-run subtree file: %v", err)
+	}
+	if len(nestedResults) != 1 || nestedResults[0].Path != nestedFilePath {
+		t.Fatalf("expected alpha.txt to be searchable after prepared full-run bulk sync, got %#v", nestedResults)
+	}
+}
+
 func TestFileSearchDBFinalizeRootCursorIsConservative(t *testing.T) {
 	db, ctx := openTestFileSearchDB(t)
 	now := time.Now().UnixMilli()
@@ -1012,6 +1248,88 @@ func TestFileSearchDBReplaceSubtreeSnapshotsTombstonesMissingDirectories(t *test
 	}
 	if !foundRemoved {
 		t.Fatalf("expected missing directory %q to remain as tombstone", removedPath)
+	}
+}
+
+func TestFileSearchDBReplaceSubtreeSnapshotsTombstonesMissingDirectoriesEscapesLikeWildcards(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootBase := filepath.Join(t.TempDir(), "root-like-tombstone")
+	scopePath := filepath.Join(rootBase, "scope_%_dir")
+	removedPath := filepath.Join(scopePath, "removed")
+	keptPath := filepath.Join(scopePath, "kept")
+	wildcardSiblingPath := filepath.Join(rootBase, "scopeABdir")
+	wildcardSiblingChildPath := filepath.Join(wildcardSiblingPath, "child")
+
+	root := RootRecord{
+		ID:        "root-like-tombstone",
+		Path:      rootBase,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	_, err := db.db.ExecContext(ctx, `
+		INSERT INTO directories (path, root_id, parent_path, last_scan_time, "exists")
+		VALUES (?, ?, ?, ?, ?),
+		       (?, ?, ?, ?, ?),
+		       (?, ?, ?, ?, ?),
+		       (?, ?, ?, ?, ?)
+	`, removedPath, root.ID, scopePath, now, true,
+		keptPath, root.ID, scopePath, now, true,
+		wildcardSiblingPath, root.ID, rootBase, now, true,
+		wildcardSiblingChildPath, root.ID, wildcardSiblingPath, now, true,
+	)
+	if err != nil {
+		t.Fatalf("seed wildcard tombstone directories: %v", err)
+	}
+
+	if err := db.ReplaceSubtreeSnapshots(ctx, []SubtreeSnapshotBatch{{
+		RootID:    root.ID,
+		ScopePath: scopePath,
+		Directories: []DirectoryRecord{
+			{
+				Path:         scopePath,
+				RootID:       root.ID,
+				ParentPath:   rootBase,
+				LastScanTime: now,
+				Exists:       true,
+			},
+			{
+				Path:         keptPath,
+				RootID:       root.ID,
+				ParentPath:   scopePath,
+				LastScanTime: now,
+				Exists:       true,
+			},
+		},
+	}}); err != nil {
+		t.Fatalf("replace subtree snapshots with wildcard tombstone cleanup: %v", err)
+	}
+
+	directories, err := db.ListDirectoriesByRoot(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("list directories after wildcard tombstone replace: %v", err)
+	}
+
+	directorySeen := make(map[string]bool, len(directories))
+	for _, directory := range directories {
+		directorySeen[directory.Path] = directory.Exists
+	}
+
+	if directorySeen[removedPath] {
+		t.Fatalf("expected missing directory %q to be tombstoned", removedPath)
+	}
+	if !directorySeen[keptPath] {
+		t.Fatalf("expected kept directory %q to remain live", keptPath)
+	}
+	if !directorySeen[wildcardSiblingPath] {
+		t.Fatalf("expected wildcard-adjacent sibling %q to remain live", wildcardSiblingPath)
+	}
+	if !directorySeen[wildcardSiblingChildPath] {
+		t.Fatalf("expected wildcard-adjacent sibling child %q to remain live", wildcardSiblingChildPath)
 	}
 }
 

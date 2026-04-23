@@ -842,6 +842,12 @@ func (d *FileSearchDB) BeginBulkSync() {
 		return
 	}
 	d.bulkSyncMu.Lock()
+	if d.bulkSyncDepth == 0 {
+		// Bulk-sync hints describe one sealed full-index attempt. Reset them when
+		// the outermost run starts so a new scan never reuses a previous root's
+		// emptiness decision after facts have already been written.
+		d.bulkSyncFullRunRoots = map[string]bulkSyncFullRunRootState{}
+	}
 	d.bulkSyncDepth++
 	d.bulkSyncMu.Unlock()
 }
@@ -856,6 +862,12 @@ func (d *FileSearchDB) EndBulkSync(ctx context.Context) error {
 		d.bulkSyncDepth--
 	}
 	shouldFinalize := d.bulkSyncDepth == 0
+	if shouldFinalize {
+		// The full-run root hints are only valid while one bulk-sync attempt is
+		// active. Clear them before the deferred rebuild so later ad-hoc writes
+		// fall back to the conservative per-scope diff path.
+		d.bulkSyncFullRunRoots = nil
+	}
 	d.bulkSyncMu.Unlock()
 
 	if !shouldFinalize {
@@ -872,6 +884,49 @@ func (d *FileSearchDB) EndBulkSync(ctx context.Context) error {
 	return nil
 }
 
+func (d *FileSearchDB) prepareBulkSyncFullRunRoot(ctx context.Context, rootID string) error {
+	if d == nil {
+		return nil
+	}
+	if strings.TrimSpace(rootID) == "" {
+		return fmt.Errorf("prepare bulk-sync full-run root requires root id")
+	}
+
+	d.bulkSyncMu.Lock()
+	if d.bulkSyncDepth == 0 {
+		d.bulkSyncMu.Unlock()
+		return nil
+	}
+	if state, ok := d.bulkSyncFullRunRoots[rootID]; ok && state.prepared {
+		d.bulkSyncMu.Unlock()
+		return nil
+	}
+	d.bulkSyncMu.Unlock()
+
+	// Scanner full runs apply each sealed leaf scope exactly once. Capturing the
+	// root's initial emptiness before any write starts lets later scope applies
+	// reuse one root-level answer instead of paying the same scope existence
+	// probe thousands of times during a fresh full rebuild.
+	freshAtStart, err := d.isRootFreshAtBulkSyncStart(ctx, rootID)
+	if err != nil {
+		return err
+	}
+
+	d.bulkSyncMu.Lock()
+	defer d.bulkSyncMu.Unlock()
+	if d.bulkSyncDepth == 0 {
+		return nil
+	}
+	if d.bulkSyncFullRunRoots == nil {
+		d.bulkSyncFullRunRoots = map[string]bulkSyncFullRunRootState{}
+	}
+	d.bulkSyncFullRunRoots[rootID] = bulkSyncFullRunRootState{
+		prepared:     true,
+		freshAtStart: freshAtStart,
+	}
+	return nil
+}
+
 func (d *FileSearchDB) isBulkSyncEnabled() bool {
 	if d == nil {
 		return false
@@ -879,6 +934,16 @@ func (d *FileSearchDB) isBulkSyncEnabled() bool {
 	d.bulkSyncMu.Lock()
 	defer d.bulkSyncMu.Unlock()
 	return d.bulkSyncDepth > 0
+}
+
+func (d *FileSearchDB) bulkSyncFullRunRootFresh(rootID string) bool {
+	if d == nil || strings.TrimSpace(rootID) == "" {
+		return false
+	}
+	d.bulkSyncMu.Lock()
+	defer d.bulkSyncMu.Unlock()
+	state, ok := d.bulkSyncFullRunRoots[rootID]
+	return ok && state.prepared && state.freshAtStart
 }
 
 func (d *FileSearchDB) applyDirectFilesEntriesTx(ctx context.Context, tx *sql.Tx, batch SubtreeSnapshotBatch) error {
@@ -901,6 +966,26 @@ func (d *FileSearchDB) applyDirectFilesEntriesTx(ctx context.Context, tx *sql.Tx
 }
 
 func (d *FileSearchDB) replaceDirectFilesEntriesFromStageTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) error {
+	if d.bulkSyncFullRunRootFresh(rootID) {
+		// Scanner full runs prepare only sealed, non-overlapping leaf scopes here.
+		// When the whole root started empty, this direct-files scope cannot own any
+		// older facts, so replaying the staged rows directly preserves the final
+		// result while removing one scope-existence query per directory.
+		return insertStagedEntriesAsNewFactsTx(ctx, tx, "direct_files_bulk_fresh_root_insert", scopePath)
+	}
+	if d.isBulkSyncEnabled() {
+		// Full runs rebuild search artifacts once at bulk finalize. When this
+		// direct-files scope has no persisted entries yet, diffing against the
+		// empty baseline only burns SQL time without changing the resulting facts.
+		scopeHasEntries, err := hasPersistedDirectFilesEntriesTx(ctx, tx, rootID, scopePath)
+		if err != nil {
+			return err
+		}
+		if !scopeHasEntries {
+			return insertStagedEntriesAsNewFactsTx(ctx, tx, "direct_files_bulk_empty_scope_insert", scopePath)
+		}
+	}
+
 	diffStartedAt := util.GetSystemTimestamp()
 	staleRows, changedOldRows, changedOrNewRows, err := collectChangedDirectFilesEntrySetsTx(ctx, tx, rootID, scopePath)
 	if err != nil {
@@ -1059,6 +1144,26 @@ func (d *FileSearchDB) replaceRootEntriesTx(ctx context.Context, tx *sql.Tx, roo
 }
 
 func (d *FileSearchDB) replaceSubtreeEntriesTx(ctx context.Context, tx *sql.Tx, batch SubtreeSnapshotBatch) error {
+	if d.bulkSyncFullRunRootFresh(batch.RootID) {
+		// Scanner full runs prepare only sealed, non-overlapping subtree scopes
+		// here. Reusing the root-level "fresh at bulk-sync start" fact avoids one
+		// scope probe per subtree while keeping the persisted entry set identical.
+		return insertEntriesAsNewFactsTx(ctx, tx, "subtree_bulk_fresh_root_insert", batch.ScopePath, batch.Entries)
+	}
+	if d.isBulkSyncEnabled() {
+		// Full runs rebuild search artifacts once at bulk finalize. When this
+		// subtree scope has no persisted rows yet, the old fast path still staged
+		// every entry and then copied the same rows into facts. Probe first so new
+		// scopes can insert facts directly without the extra temp-table writes.
+		scopeHasEntries, err := hasPersistedSubtreeEntriesTx(ctx, tx, batch.RootID, batch.ScopePath)
+		if err != nil {
+			return err
+		}
+		if !scopeHasEntries {
+			return insertEntriesAsNewFactsTx(ctx, tx, "subtree_bulk_empty_scope_insert", batch.ScopePath, batch.Entries)
+		}
+	}
+
 	if err := stageEntryRecordsTx(ctx, tx, batch.Entries); err != nil {
 		return err
 	}
@@ -1073,6 +1178,138 @@ func (d *FileSearchDB) replaceSubtreeEntriesTx(ctx context.Context, tx *sql.Tx, 
 	// row during bulk sync, so large scopes paid the per-entry replay cost and
 	// then paid the global rebuild anyway.
 	return applyChangedEntrySetsTx(ctx, tx, batch.ScopePath, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled(), nil)
+}
+
+func hasPersistedDirectFilesEntriesTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) (bool, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT 1
+		FROM entries e
+		WHERE e.root_id = ?
+		  AND (e.path = ? OR (e.parent_path = ? AND e.is_dir = 0))
+		LIMIT 1
+	`, rootID, scopePath, scopePath)
+
+	var exists int
+	if err := row.Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func hasPersistedSubtreeEntriesTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) (bool, error) {
+	scopeQuery, scopeArgs := buildEntryScopeQuery(scopePath, "e.path")
+	args := append([]any{rootID}, scopeArgs...)
+	row := tx.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT 1
+		FROM entries e
+		WHERE e.root_id = ? AND %s
+		LIMIT 1
+	`, scopeQuery), args...)
+
+	var exists int
+	if err := row.Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (d *FileSearchDB) isRootFreshAtBulkSyncStart(ctx context.Context, rootID string) (bool, error) {
+	row := d.db.QueryRowContext(ctx, `
+		SELECT CASE
+			WHEN EXISTS (SELECT 1 FROM entries WHERE root_id = ? LIMIT 1) THEN 0
+			WHEN EXISTS (SELECT 1 FROM directories WHERE root_id = ? LIMIT 1) THEN 0
+			ELSE 1
+		END
+	`, rootID, rootID)
+
+	var fresh int
+	if err := row.Scan(&fresh); err != nil {
+		return false, fmt.Errorf("load bulk-sync full-run root baseline %q: %w", rootID, err)
+	}
+	return fresh == 1, nil
+}
+
+func insertStagedEntriesAsNewFactsTx(ctx context.Context, tx *sql.Tx, operation string, scopePath string) error {
+	startedAt := util.GetSystemTimestamp()
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO entries (
+			path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+			pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
+		)
+		SELECT
+			path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+			pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
+		FROM filesearch_stage_entries
+		ORDER BY path ASC
+	`)
+	if err != nil {
+		return fmt.Errorf("insert staged entries for scope %q: %w", scopePath, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	logFilesearchSQLiteMaintenance(ctx, operation, scopePath, util.GetSystemTimestamp()-startedAt, int(rowsAffected))
+	return nil
+}
+
+func insertEntriesAsNewFactsTx(ctx context.Context, tx *sql.Tx, operation string, scopePath string, entries []EntryRecord) error {
+	startedAt := util.GetSystemTimestamp()
+	if len(entries) == 0 {
+		logFilesearchSQLiteMaintenance(ctx, operation, scopePath, util.GetSystemTimestamp()-startedAt, 0)
+		return nil
+	}
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO entries (
+			path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+			pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare direct entry insert for scope %q: %w", scopePath, err)
+	}
+	defer stmt.Close()
+
+	// The staged fast path inserted facts with ORDER BY path ASC. Preserve that
+	// deterministic order when bypassing the temp table so bulk full scans keep
+	// the same entry_id assignment and derived search rows as before.
+	orderedEntries := append([]EntryRecord(nil), entries...)
+	sort.Slice(orderedEntries, func(left int, right int) bool {
+		return orderedEntries[left].Path < orderedEntries[right].Path
+	})
+
+	for _, entry := range orderedEntries {
+		row := buildStoredEntryRecord(entry)
+		if _, err := stmt.ExecContext(
+			ctx,
+			row.Path,
+			row.RootID,
+			row.ParentPath,
+			row.Name,
+			row.NormalizedName,
+			row.NameKey,
+			row.NormalizedPath,
+			row.PinyinFull,
+			row.PinyinInitials,
+			row.Extension,
+			boolToInt(row.IsDir),
+			row.Mtime,
+			row.Size,
+			row.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("insert direct entry %q for scope %q: %w", row.Path, scopePath, err)
+		}
+	}
+
+	logFilesearchSQLiteMaintenance(ctx, operation, scopePath, util.GetSystemTimestamp()-startedAt, len(orderedEntries))
+	return nil
 }
 
 func upsertEntryFactsTx(ctx context.Context, tx *sql.Tx, row storedEntryRecord) (storedEntryRecord, error) {
@@ -1179,9 +1416,9 @@ func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, scopePath string, 
 		defer artifactSync.Close()
 	}
 	if len(staleRows) > 0 || len(changedOrNewRows) > 0 {
-		// The SQL-side diff reduced how many rows we touch. Reusing the fact
-		// mutation statements preserves that gain instead of reparsing the same
-		// RETURNING upsert for every changed entry.
+		// Bulk sync no longer needs each upserted row echoed back because FTS
+		// maintenance is deferred. Preparing only the statement shape that the
+		// current path needs removes an avoidable RETURNING/scan round-trip.
 		factMutator, err = newEntryFactMutatorTx(ctx, tx)
 		if err != nil {
 			return err
@@ -1331,9 +1568,6 @@ type entrySearchArtifactSyncTx struct {
 	insertPathFTSStmt       *sql.Stmt
 	insertPinyinFullFTSStmt *sql.Stmt
 	insertInitialsFTSStmt   *sql.Stmt
-
-	deleteBigramStmt *sql.Stmt
-	insertBigramStmt *sql.Stmt
 }
 
 func newEntrySearchArtifactSyncTx(ctx context.Context, tx *sql.Tx) (*entrySearchArtifactSyncTx, error) {
@@ -1373,16 +1607,6 @@ func newEntrySearchArtifactSyncTx(ctx context.Context, tx *sql.Tx) (*entrySearch
 	}
 	if syncer.insertInitialsFTSStmt, err = prepare(`INSERT INTO entries_initials_fts(rowid, pinyin_initials) VALUES(?, ?)`); err != nil {
 		return nil, fmt.Errorf("prepare initials fts insert: %w", err)
-	}
-
-	if syncer.deleteBigramStmt, err = prepare(`DELETE FROM entries_bigram WHERE entry_id = ?`); err != nil {
-		return nil, fmt.Errorf("prepare bigram delete: %w", err)
-	}
-	if syncer.insertBigramStmt, err = prepare(`
-		INSERT OR IGNORE INTO entries_bigram (field, gram, entry_id)
-		VALUES (?, ?, ?)
-	`); err != nil {
-		return nil, fmt.Errorf("prepare bigram insert: %w", err)
 	}
 
 	return syncer, nil
@@ -1431,13 +1655,17 @@ func selectStoredEntryByPathTx(ctx context.Context, tx *sql.Tx, path string) (st
 	return rows[0], true, nil
 }
 
-func buildEntryScopeQuery(scopePath string, column string) (string, []any) {
+func buildScopedPathQuery(scopePath string, column string) (string, []any) {
 	cleanScope := filepath.Clean(scopePath)
 	// Escape the scope prefix after appending the platform separator. On Windows
 	// a raw trailing "\" would escape the next LIKE token and make stale rows
 	// invisible to the SQL-side diff, which leaves deleted files behind.
 	scopePrefix := escapeLikePattern(cleanScope+string(filepath.Separator)) + "%"
 	return fmt.Sprintf("(%s = ? OR %s LIKE ? ESCAPE '\\')", column, column), []any{cleanScope, scopePrefix}
+}
+
+func buildEntryScopeQuery(scopePath string, column string) (string, []any) {
+	return buildScopedPathQuery(scopePath, column)
 }
 
 func buildEntryDifferencePredicate(existingAlias string, stagedAlias string) string {
@@ -1469,45 +1697,10 @@ func refreshRootBigramsTx(ctx context.Context, tx *sql.Tx, rootID string) error 
 	`, rootID); err != nil {
 		return fmt.Errorf("clear root bigrams for %s: %w", rootID, err)
 	}
-
-	rows, err := tx.QueryContext(ctx, `
-		SELECT entry_id, path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
-		       pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
-		FROM entries
-		WHERE root_id = ?
-	`, rootID)
-	if err != nil {
-		return fmt.Errorf("load root entries for bigram refresh: %w", err)
-	}
-	defer rows.Close()
-
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR IGNORE INTO entries_bigram (field, gram, entry_id)
-		VALUES (?, ?, ?)
-	`)
-	if err != nil {
-		return fmt.Errorf("prepare root bigram refresh insert: %w", err)
-	}
-	defer stmt.Close()
-
-	processedRows := 0
-	for rows.Next() {
-		row, err := scanStoredEntryRecord(rows)
-		if err != nil {
-			return err
-		}
-		if err := insertEntryBigramsTx(ctx, stmt, row); err != nil {
-			return err
-		}
-		processedRows++
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	// Bulk sync moved bigram work into root-local refresh passes, but the old
-	// logs never showed how expensive those passes were. Record row count and
-	// duration here so a slow root can be separated from the later global FTS rebuild.
-	logFilesearchSQLiteMaintenance(ctx, "refresh_root_bigrams", rootID, util.GetSystemTimestamp()-startedAt, processedRows)
+	// Two-character search no longer uses substring bigrams, so keeping the
+	// table empty avoids rebuild work without affecting the remaining query
+	// paths. The log stays in place so traces still show that the step is cheap.
+	logFilesearchSQLiteMaintenance(ctx, "refresh_root_bigrams", rootID, util.GetSystemTimestamp()-startedAt, 0)
 	return nil
 }
 
@@ -1526,9 +1719,6 @@ func deleteEntrySearchArtifactsWithSyncTx(ctx context.Context, syncer *entrySear
 	}
 	if err := deleteEntryFTSWithSyncTx(ctx, syncer, row); err != nil {
 		return err
-	}
-	if _, err := syncer.deleteBigramStmt.ExecContext(ctx, row.EntryID); err != nil {
-		return fmt.Errorf("delete entry bigrams for %q: %w", row.Path, err)
 	}
 	return nil
 }
@@ -1549,7 +1739,7 @@ func insertEntrySearchArtifactsWithSyncTx(ctx context.Context, syncer *entrySear
 	if err := insertEntryFTSWithSyncTx(ctx, syncer, row); err != nil {
 		return err
 	}
-	return insertEntryBigramsTx(ctx, syncer.insertBigramStmt, row)
+	return nil
 }
 
 func deleteEntryFTSTx(ctx context.Context, tx *sql.Tx, row storedEntryRecord) error {
@@ -1748,41 +1938,8 @@ func rebuildAllBigramsTx(ctx context.Context, tx *sql.Tx) (int, error) {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM entries_bigram`); err != nil {
 		return 0, fmt.Errorf("clear entries_bigram: %w", err)
 	}
-
-	rows, err := tx.QueryContext(ctx, `
-		SELECT entry_id, path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
-		       pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
-		FROM entries
-		ORDER BY entry_id ASC
-	`)
-	if err != nil {
-		return 0, fmt.Errorf("load entries for bigram rebuild: %w", err)
-	}
-	defer rows.Close()
-
-	insertBigramStmt, err := tx.PrepareContext(ctx, `
-		INSERT OR IGNORE INTO entries_bigram (field, gram, entry_id)
-		VALUES (?, ?, ?)
-	`)
-	if err != nil {
-		return 0, fmt.Errorf("prepare bigram rebuild insert: %w", err)
-	}
-	defer insertBigramStmt.Close()
-
-	processedRows := 0
-	for rows.Next() {
-		row, err := scanStoredEntryRecord(rows)
-		if err != nil {
-			return 0, err
-		}
-		if err := insertEntryBigramsTx(ctx, insertBigramStmt, row); err != nil {
-			return 0, err
-		}
-		processedRows++
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterate entries for bigram rebuild: %w", err)
-	}
-
-	return processedRows, nil
+	// Two-character search now uses a narrower prefix-only path, so the bigram
+	// side table is intentionally kept empty. Clearing it here removes the
+	// expensive rebuild step while keeping the on-disk schema compatible.
+	return 0, nil
 }

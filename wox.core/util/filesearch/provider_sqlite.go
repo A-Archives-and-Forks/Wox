@@ -120,36 +120,22 @@ func (p *SQLiteSearchProvider) collectTwoCharacterCandidateIDs(ctx context.Conte
 		return p.queryPathFallbackIDs(ctx, plan.pathQuery, limit)
 	}
 
-	ids := make([]int64, 0, limit)
-	if utf8LenString(plan.rawLower) == 2 {
-		nameIDs, err := p.queryIDs(ctx, `
-			SELECT entry_id
-			FROM entries_bigram
-			WHERE field = ? AND gram = ?
-			ORDER BY entry_id ASC
-			LIMIT ?
-		`, searchBigramFieldName, plan.rawLower, limit)
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, nameIDs...)
+	if !plan.asciiLettersDigits || len(plan.rawLettersDigits) != 2 {
+		return nil, nil
 	}
 
-	if plan.asciiLettersDigits && len(plan.rawLettersDigits) == 2 {
-		pinyinIDs, err := p.queryIDs(ctx, `
-			SELECT entry_id
-			FROM entries_bigram
-			WHERE field = ? AND gram = ?
-			ORDER BY entry_id ASC
-			LIMIT ?
-		`, searchBigramFieldPinyinFull, plan.rawLettersDigits, limit)
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, pinyinIDs...)
-	}
-
-	return trimCandidateIDs(ids, limit), nil
+	// Two-character substring matching produced very broad recall and forced the
+	// indexer to maintain the expensive bigram side table. Tightening short
+	// queries to the same indexed name-key prefix path keeps response time fast
+	// while making the reduced recall explicit and predictable.
+	prefix := plan.rawLettersDigits
+	return p.queryIDs(ctx, `
+		SELECT entry_id
+		FROM entries
+		WHERE name_key >= ? AND name_key < ?
+		ORDER BY name_key ASC, entry_id ASC
+		LIMIT ?
+	`, prefix, nextPrefixUpperBound(prefix), limit)
 }
 
 func (p *SQLiteSearchProvider) collectGeneralCandidateIDs(ctx context.Context, query SearchQuery, limit int) ([]int64, error) {

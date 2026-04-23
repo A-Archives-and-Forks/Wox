@@ -290,6 +290,62 @@ func TestRunPlannerSplitsLargeRootIntoLeafJobs(t *testing.T) {
 	}
 }
 
+func TestRunPlannerReusesImmediateChildTotalsWithoutRescanningLeafChildren(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "planner-root")
+	mustWriteTestFile(t, filepath.Join(rootPath, "child-a", "a.txt"), "a")
+	mustWriteTestFile(t, filepath.Join(rootPath, "child-b", "nested", "b.txt"), "b")
+	mustWriteTestFile(t, filepath.Join(rootPath, "root.txt"), "root")
+
+	planner := &RunPlanner{
+		policy: newPolicyState(Policy{}),
+		budget: splitBudget{
+			LeafEntryBudget:     4,
+			LeafWriteBudget:     4,
+			LeafMemoryBudget:    1 << 20,
+			DirectFileBatchSize: 4,
+		},
+	}
+
+	scanCounts := map[string]int{}
+	planner.onSubtreeScan = func(scopePath string) {
+		scanCounts[scopePath]++
+	}
+
+	plan, err := planner.PlanFullRun(context.Background(), []RootRecord{testRunPlannerRootRecord("root-rescan", rootPath)})
+	if err != nil {
+		t.Fatalf("plan full run: %v", err)
+	}
+
+	if got, want := scanCounts[rootPath], 1; got != want {
+		t.Fatalf("expected root subtree to be scanned once, got %d want %d", got, want)
+	}
+	childAPath := filepath.Join(rootPath, "child-a")
+	childBPath := filepath.Join(rootPath, "child-b")
+	if got := scanCounts[childAPath]; got != 0 {
+		t.Fatalf("expected leaf child subtree %q to reuse parent totals, got %d rescans", childAPath, got)
+	}
+	if got := scanCounts[childBPath]; got != 0 {
+		t.Fatalf("expected leaf child subtree %q to reuse parent totals, got %d rescans", childBPath, got)
+	}
+
+	rootPlan := plan.RootPlans[0]
+	if got, want := rootPlan.Strategy, RootPlanStrategySegmented; got != want {
+		t.Fatalf("unexpected root strategy: got %s want %s", got, want)
+	}
+	if rootPlan.ScopeTree == nil {
+		t.Fatal("expected sealed scope tree")
+	}
+	if got, want := rootPlan.Totals.DirectoryCount, int64(4); got != want {
+		t.Fatalf("unexpected directory count: got %d want %d", got, want)
+	}
+	if got, want := rootPlan.Totals.FileCount, int64(3); got != want {
+		t.Fatalf("unexpected file count: got %d want %d", got, want)
+	}
+	if got, want := rootPlan.Totals.IndexableEntryCount, int64(7); got != want {
+		t.Fatalf("unexpected indexable entry count: got %d want %d", got, want)
+	}
+}
+
 func TestRunPlannerKeepsWideDirectFilesInOneJob(t *testing.T) {
 	rootPath := filepath.Join(t.TempDir(), "wide-root")
 	for i := 0; i < 5; i++ {

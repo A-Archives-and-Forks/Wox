@@ -320,6 +320,184 @@ func TestJobExecutorFinalizeRootAdvancesCursorAfterPriorJobs(t *testing.T) {
 	}
 }
 
+func TestJobExecutorBatchesSmallFullRunSubtreeApplies(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "root-batch")
+	scopeA := filepath.Join(rootPath, "scope-a")
+	scopeB := filepath.Join(rootPath, "scope-b")
+	mustWriteTestFile(t, filepath.Join(scopeA, "alpha.txt"), "alpha")
+	mustWriteTestFile(t, filepath.Join(scopeB, "beta.txt"), "beta")
+
+	root := testRunPlannerRootRecord("root-batch", rootPath)
+	jobA := Job{
+		JobID:             "job-subtree-a",
+		RootID:            root.ID,
+		RootPath:          root.Path,
+		ScopePath:         scopeA,
+		Kind:              JobKindSubtree,
+		PlannedScanUnits:  1,
+		PlannedWriteUnits: 1,
+		PlannedTotalUnits: 2,
+		Status:            JobStatusPending,
+		OrderIndex:        0,
+	}
+	jobB := Job{
+		JobID:             "job-subtree-b",
+		RootID:            root.ID,
+		RootPath:          root.Path,
+		ScopePath:         scopeB,
+		Kind:              JobKindSubtree,
+		PlannedScanUnits:  1,
+		PlannedWriteUnits: 1,
+		PlannedTotalUnits: 2,
+		Status:            JobStatusPending,
+		OrderIndex:        1,
+	}
+	finalizeJob := testFinalizeJob(root, 2)
+	plan := RunPlan{
+		PlanID: "plan-batch-full",
+		RunID:  "run-batch-full",
+		Kind:   RunKindFull,
+		RootPlans: []RootPlan{{
+			RootID:   root.ID,
+			RootPath: root.Path,
+		}},
+		Jobs:           []Job{jobA, jobB, finalizeJob},
+		TotalWorkUnits: jobA.PlannedTotalUnits + jobB.PlannedTotalUnits + finalizeJob.PlannedTotalUnits,
+	}
+
+	executor := NewJobExecutor(NewSnapshotBuilder(newPolicyState(Policy{})))
+	executor.SetSubtreeBatchConfig(subtreeApplyBatchConfig{
+		MaxJobCount:        4,
+		MaxJobTotalUnits:   4,
+		MaxBatchTotalUnits: 8,
+	})
+
+	singleScopes := []string{}
+	batchScopes := [][]string{}
+	executor.SetApplyFunc(func(_ context.Context, _ RootRecord, job Job, _ *SubtreeSnapshotBatch) error {
+		if job.Kind == JobKindSubtree {
+			singleScopes = append(singleScopes, job.ScopePath)
+		}
+		return nil
+	})
+	executor.SetSubtreeBatchApplyFunc(func(_ context.Context, _ RootRecord, batches []SubtreeSnapshotBatch) error {
+		scopes := make([]string, 0, len(batches))
+		for _, batch := range batches {
+			scopes = append(scopes, batch.ScopePath)
+		}
+		batchScopes = append(batchScopes, scopes)
+		return nil
+	})
+
+	finalizeStartProgress := int64(-1)
+	_, executedJobs, err := executor.ExecuteRun(context.Background(), plan, []RootRecord{root}, func(snapshot StatusSnapshot, job Job) {
+		if snapshot.ActiveJobKind == JobKindFinalizeRoot && snapshot.ActiveRunStatus == RunStatusFinalizing && job.Status == JobStatusRunning {
+			finalizeStartProgress = snapshot.RunProgressCurrent
+		}
+	})
+	if err != nil {
+		t.Fatalf("execute run with batched subtree apply: %v", err)
+	}
+
+	if len(singleScopes) != 0 {
+		t.Fatalf("expected full-run subtree jobs to avoid per-job apply, got %v", singleScopes)
+	}
+	if got, want := len(batchScopes), 1; got != want {
+		t.Fatalf("expected one batched subtree apply, got %d want %d", got, want)
+	}
+	if got, want := batchScopes[0], []string{scopeA, scopeB}; !equalPaths(got, want) {
+		t.Fatalf("unexpected batched subtree scopes: got %v want %v", got, want)
+	}
+	if finalizeStartProgress != jobA.PlannedTotalUnits+jobB.PlannedTotalUnits {
+		t.Fatalf(
+			"expected finalize to start after batched subtree jobs completed, got progress %d want %d",
+			finalizeStartProgress,
+			jobA.PlannedTotalUnits+jobB.PlannedTotalUnits,
+		)
+	}
+	for _, job := range executedJobs {
+		if job.Status != JobStatusCompleted {
+			t.Fatalf("expected executed job %q to be completed, got %s", job.JobID, job.Status)
+		}
+	}
+}
+
+func TestJobExecutorIncrementalRunKeepsSubtreeAppliesPerJob(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "root-incremental")
+	scopeA := filepath.Join(rootPath, "scope-a")
+	scopeB := filepath.Join(rootPath, "scope-b")
+	mustWriteTestFile(t, filepath.Join(scopeA, "alpha.txt"), "alpha")
+	mustWriteTestFile(t, filepath.Join(scopeB, "beta.txt"), "beta")
+
+	root := testRunPlannerRootRecord("root-incremental", rootPath)
+	jobA := Job{
+		JobID:             "job-subtree-a",
+		RootID:            root.ID,
+		RootPath:          root.Path,
+		ScopePath:         scopeA,
+		Kind:              JobKindSubtree,
+		PlannedScanUnits:  1,
+		PlannedWriteUnits: 1,
+		PlannedTotalUnits: 2,
+		Status:            JobStatusPending,
+		OrderIndex:        0,
+	}
+	jobB := Job{
+		JobID:             "job-subtree-b",
+		RootID:            root.ID,
+		RootPath:          root.Path,
+		ScopePath:         scopeB,
+		Kind:              JobKindSubtree,
+		PlannedScanUnits:  1,
+		PlannedWriteUnits: 1,
+		PlannedTotalUnits: 2,
+		Status:            JobStatusPending,
+		OrderIndex:        1,
+	}
+	plan := RunPlan{
+		PlanID: "plan-batch-incremental",
+		RunID:  "run-batch-incremental",
+		Kind:   RunKindIncremental,
+		RootPlans: []RootPlan{{
+			RootID:   root.ID,
+			RootPath: root.Path,
+		}},
+		Jobs:           []Job{jobA, jobB},
+		TotalWorkUnits: jobA.PlannedTotalUnits + jobB.PlannedTotalUnits,
+	}
+
+	executor := NewJobExecutor(NewSnapshotBuilder(newPolicyState(Policy{})))
+	executor.SetSubtreeBatchConfig(subtreeApplyBatchConfig{
+		MaxJobCount:        4,
+		MaxJobTotalUnits:   4,
+		MaxBatchTotalUnits: 8,
+	})
+
+	singleScopes := []string{}
+	batchCalls := 0
+	executor.SetApplyFunc(func(_ context.Context, _ RootRecord, job Job, _ *SubtreeSnapshotBatch) error {
+		if job.Kind == JobKindSubtree {
+			singleScopes = append(singleScopes, job.ScopePath)
+		}
+		return nil
+	})
+	executor.SetSubtreeBatchApplyFunc(func(_ context.Context, _ RootRecord, _ []SubtreeSnapshotBatch) error {
+		batchCalls++
+		return nil
+	})
+
+	if _, _, err := executor.ExecuteRun(context.Background(), plan, []RootRecord{root}, nil); err != nil {
+		t.Fatalf("execute incremental run: %v", err)
+	}
+
+	if batchCalls != 0 {
+		t.Fatalf("expected incremental subtree apply to stay per-job, got %d batched calls", batchCalls)
+	}
+	if got, want := singleScopes, []string{scopeA, scopeB}; !equalPaths(got, want) {
+		t.Fatalf("unexpected per-job subtree scopes: got %v want %v", got, want)
+	}
+}
+
 func testFinalizeJob(root RootRecord, orderIndex int) Job {
 	return Job{
 		JobID:             fmt.Sprintf("%s-job-%03d", root.ID, orderIndex),

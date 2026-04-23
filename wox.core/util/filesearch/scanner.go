@@ -276,6 +276,16 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 	executor.SetDirectFilesStreamFunc(func(runCtx context.Context, root RootRecord, job Job, snapshot *SnapshotBuilder) error {
 		return s.db.ApplyDirectFilesJobStream(runCtx, root, job, snapshot)
 	})
+	if kind == RunKindFull {
+		// Full runs are the only place where we deliberately coalesce multiple
+		// small subtree snapshots into one SQLite transaction. Incremental work
+		// keeps its per-batch apply boundary so dirty-path retries and deletes
+		// continue to map 1:1 to the planner-owned reconcile scopes.
+		executor.SetSubtreeBatchConfig(defaultFullRunSubtreeApplyBatchConfig())
+		executor.SetSubtreeBatchApplyFunc(func(runCtx context.Context, _ RootRecord, batches []SubtreeSnapshotBatch) error {
+			return s.db.ReplaceSubtreeSnapshots(runCtx, batches)
+		})
+	}
 	executor.SetApplyFunc(func(runCtx context.Context, root RootRecord, job Job, batch *SubtreeSnapshotBatch) error {
 		if snapshot, ok := s.GetTransientRunState(); ok {
 			snapshot.ActiveRootStatus = RootStatusWriting
@@ -294,6 +304,15 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 	if kind == RunKindFull {
 		s.db.BeginBulkSync()
 		bulkSyncStarted = true
+		for _, root := range roots {
+			// Full-run leaf scopes are sealed before execution and then applied once
+			// each. Preparing the root baseline up front lets the DB layer reuse one
+			// "was this root empty?" answer across the whole run instead of issuing
+			// the same scope-level empty checks for every fresh subtree.
+			if err := s.db.prepareBulkSyncFullRunRoot(ctx, root.ID); err != nil {
+				return err
+			}
+		}
 	}
 	defer func() {
 		if !bulkSyncStarted {

@@ -60,7 +60,7 @@ func TestSQLiteSearchProviderOneCharacterSearchMatchesNamePrefixOnly(t *testing.
 	}
 }
 
-func TestSQLiteSearchProviderTwoCharacterSearchUsesNameBigram(t *testing.T) {
+func TestSQLiteSearchProviderTwoCharacterSearchUsesNamePrefixOnly(t *testing.T) {
 	db, ctx := openTestFileSearchDB(t)
 	provider := NewSQLiteSearchProvider(db)
 	now := time.Now().UnixMilli()
@@ -89,15 +89,23 @@ func TestSQLiteSearchProviderTwoCharacterSearchUsesNameBigram(t *testing.T) {
 			UpdatedAt:      now,
 		},
 	}, nil); err != nil {
-		t.Fatalf("seed sqlite provider bigram entry: %v", err)
+		t.Fatalf("seed sqlite provider two-char entry: %v", err)
 	}
 
-	results, err := provider.Search(context.Background(), SearchQuery{Raw: "ea"}, 10)
+	results, err := provider.Search(context.Background(), SearchQuery{Raw: "re"}, 10)
 	if err != nil {
-		t.Fatalf("search two-char bigram: %v", err)
+		t.Fatalf("search two-char prefix: %v", err)
 	}
 	if len(results) != 1 || results[0].Name != "readme.md" {
-		t.Fatalf("expected two-char bigram search to return readme.md, got %#v", results)
+		t.Fatalf("expected two-char prefix search to return readme.md, got %#v", results)
+	}
+
+	substringResults, err := provider.Search(context.Background(), SearchQuery{Raw: "ea"}, 10)
+	if err != nil {
+		t.Fatalf("search two-char substring: %v", err)
+	}
+	if len(substringResults) != 0 {
+		t.Fatalf("expected two-char substring search to stop matching readme.md, got %#v", substringResults)
 	}
 }
 

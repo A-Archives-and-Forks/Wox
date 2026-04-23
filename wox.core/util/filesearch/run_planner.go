@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"wox/util"
 )
@@ -22,6 +21,10 @@ type RunPlanner struct {
 	policy     *policyState
 	budget     splitBudget
 	onProgress func(RunPlannerProgress)
+	// Tests use this hook to assert when subtree scans actually hit the
+	// filesystem, so planner optimizations can prove they removed redundant
+	// rescans without changing the sealed plan shape.
+	onSubtreeScan func(scopePath string)
 
 	// planningRootBuffers are intentionally released after sealing so the planner
 	// does not retain a second copy of a giant scope tree through execution.
@@ -51,6 +54,11 @@ type runPlannerScopeBuffer struct {
 	totals          PlanTotals
 	splitRequired   bool
 	children        []*runPlannerScopeBuffer
+}
+
+type subtreeChildSummary struct {
+	path   string
+	totals PlanTotals
 }
 
 func NewRunPlanner(policy *policyState) *RunPlanner {
@@ -357,7 +365,7 @@ func (p *RunPlanner) preScanDirectFilesScope(ctx context.Context, root RootRecor
 }
 
 func (p *RunPlanner) preScanSubtreeScope(ctx context.Context, root RootRecord, scope *runPlannerScopeBuffer, budget splitBudget, rootIndex int, rootTotal int) error {
-	totals, childDirs, err := p.scanSubtreeScope(ctx, root, scope.scopePath)
+	totals, childSummaries, err := p.scanSubtreeScope(ctx, root, scope.scopePath)
 	if err != nil {
 		return err
 	}
@@ -367,7 +375,7 @@ func (p *RunPlanner) preScanSubtreeScope(ctx context.Context, root RootRecord, s
 	}
 
 	scope.splitRequired = true
-	scope.children = make([]*runPlannerScopeBuffer, 0, len(childDirs)+1)
+	scope.children = make([]*runPlannerScopeBuffer, 0, len(childSummaries)+1)
 
 	// The old root-centric path could only keep a huge subtree as one future job.
 	// Replacing an oversized subtree with direct files plus child subtrees keeps
@@ -384,17 +392,27 @@ func (p *RunPlanner) preScanSubtreeScope(ctx context.Context, root RootRecord, s
 		scope.children = append(scope.children, directFilesChild)
 	}
 
-	for _, childDir := range childDirs {
+	for _, childSummary := range childSummaries {
 		childScope := &runPlannerScopeBuffer{
-			scopePath:       childDir,
+			scopePath:       childSummary.path,
 			scopeKind:       ScopeKindSubtree,
 			parentScopePath: scope.scopePath,
-		}
-		if err := p.preScanScope(ctx, root, childScope, budget, rootIndex, rootTotal); err != nil {
-			return err
+			totals:          childSummary.totals,
 		}
 		if childScope.totals.IndexableEntryCount == 0 {
 			continue
+		}
+		// The parent subtree scan already counted each immediate child subtree
+		// exactly. Reusing those totals avoids rescanning every child directory
+		// when it already fits the leaf budget, while oversized children still
+		// recurse and preserve the existing split semantics.
+		if scopeExceedsBudget(childScope.totals, budget) {
+			if err := p.preScanScope(ctx, root, childScope, budget, rootIndex, rootTotal); err != nil {
+				return err
+			}
+			if childScope.totals.IndexableEntryCount == 0 {
+				continue
+			}
 		}
 		scope.children = append(scope.children, childScope)
 	}
@@ -474,7 +492,10 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 	return totals, nil, nil
 }
 
-func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scopePath string) (PlanTotals, []string, error) {
+func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scopePath string) (PlanTotals, []subtreeChildSummary, error) {
+	if p != nil && p.onSubtreeScan != nil {
+		p.onSubtreeScan(filepath.Clean(scopePath))
+	}
 	info, err := os.Stat(scopePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -487,11 +508,13 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 	}
 
 	type queueItem struct {
-		path string
+		path       string
+		childScope string
 	}
 
 	totals := PlanTotals{}
-	rootChildDirs := make([]string, 0)
+	rootChildOrder := make([]string, 0)
+	rootChildTotals := make(map[string]PlanTotals)
 	queue := []queueItem{{path: scopePath}}
 
 	for len(queue) > 0 {
@@ -514,6 +537,11 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 			// are now treated as skipped work so the rest of the root can index.
 			if current.path != scopePath && shouldSkipUnreadableTraversalError(readErr) {
 				totals.SkippedCount++
+				if current.childScope != "" {
+					childTotals := rootChildTotals[current.childScope]
+					childTotals.SkippedCount++
+					rootChildTotals[current.childScope] = childTotals
+				}
 				util.GetLogger().Warn(ctx, "filesearch skipped unreadable subtree path "+current.path+": "+readErr.Error())
 				continue
 			}
@@ -524,8 +552,13 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 		totals.IndexableEntryCount++
 		totals.PlannedScanUnits++
 		totals.PlannedWriteUnits++
-		if current.path != scopePath && filepath.Dir(current.path) == scopePath {
-			rootChildDirs = append(rootChildDirs, current.path)
+		if current.childScope != "" {
+			childTotals := rootChildTotals[current.childScope]
+			childTotals.DirectoryCount++
+			childTotals.IndexableEntryCount++
+			childTotals.PlannedScanUnits++
+			childTotals.PlannedWriteUnits++
+			rootChildTotals[current.childScope] = childTotals
 		}
 
 		for _, dirEntry := range dirEntries {
@@ -534,6 +567,11 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 			if infoErr != nil {
 				if shouldSkipUnreadableTraversalError(infoErr) {
 					totals.SkippedCount++
+					if current.childScope != "" {
+						childTotals := rootChildTotals[current.childScope]
+						childTotals.SkippedCount++
+						rootChildTotals[current.childScope] = childTotals
+					}
 					util.GetLogger().Warn(ctx, "filesearch skipped unreadable subtree child "+childPath+": "+infoErr.Error())
 					continue
 				}
@@ -542,15 +580,35 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 
 			if shouldSkipSystemPath(childPath, isDir) {
 				totals.SkippedCount++
+				if current.childScope != "" {
+					childTotals := rootChildTotals[current.childScope]
+					childTotals.SkippedCount++
+					rootChildTotals[current.childScope] = childTotals
+				}
 				continue
 			}
 			if !p.policy.shouldIndexPath(root, childPath, isDir) {
 				totals.SkippedCount++
+				if current.childScope != "" {
+					childTotals := rootChildTotals[current.childScope]
+					childTotals.SkippedCount++
+					rootChildTotals[current.childScope] = childTotals
+				}
 				continue
 			}
 
 			if isDir {
-				queue = append(queue, queueItem{path: childPath})
+				childScope := current.childScope
+				if current.path == scopePath {
+					childScope = childPath
+					if _, exists := rootChildTotals[childScope]; !exists {
+						rootChildOrder = append(rootChildOrder, childScope)
+					}
+				}
+				queue = append(queue, queueItem{
+					path:       childPath,
+					childScope: childScope,
+				})
 				continue
 			}
 
@@ -558,11 +616,25 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 			totals.IndexableEntryCount++
 			totals.PlannedScanUnits++
 			totals.PlannedWriteUnits++
+			if current.childScope != "" {
+				childTotals := rootChildTotals[current.childScope]
+				childTotals.FileCount++
+				childTotals.IndexableEntryCount++
+				childTotals.PlannedScanUnits++
+				childTotals.PlannedWriteUnits++
+				rootChildTotals[current.childScope] = childTotals
+			}
 		}
 	}
 
-	sort.Strings(rootChildDirs)
-	return totals, rootChildDirs, nil
+	childSummaries := make([]subtreeChildSummary, 0, len(rootChildOrder))
+	for _, childScope := range rootChildOrder {
+		childSummaries = append(childSummaries, subtreeChildSummary{
+			path:   childScope,
+			totals: rootChildTotals[childScope],
+		})
+	}
+	return totals, childSummaries, nil
 }
 
 func (p *RunPlanner) buildDraftPlan(kind RunKind, planID string, runID string) (RunPlan, error) {
