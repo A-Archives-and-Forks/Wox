@@ -908,43 +908,142 @@ func (d *FileSearchDB) isBulkSyncEnabled() bool {
 }
 
 func (d *FileSearchDB) applyDirectFilesEntriesTx(ctx context.Context, tx *sql.Tx, batch SubtreeSnapshotBatch) error {
-	if len(batch.Entries) == 0 {
-		return nil
-	}
-
-	artifactSync, err := newEntrySearchArtifactSyncTx(ctx, tx)
+	stageStmt, err := prepareEntryStageInsertStmtTx(ctx, tx)
 	if err != nil {
 		return err
 	}
-	defer artifactSync.Close()
+	defer stageStmt.Close()
 
-	factMutator, err := newEntryFactMutatorTx(ctx, tx)
+	if err := stageEntryRecordsWithStmtTx(ctx, stageStmt, batch.Entries); err != nil {
+		return err
+	}
+
+	return replaceDirectFilesEntriesFromStageTx(ctx, tx, batch.RootID, batch.ScopePath)
+}
+
+func replaceDirectFilesEntriesFromStageTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) error {
+	staleRows, changedOldRows, changedOrNewRows, err := collectChangedDirectFilesEntrySetsTx(ctx, tx, rootID, scopePath)
 	if err != nil {
 		return err
 	}
-	defer factMutator.Close()
+	return applyChangedEntrySetsTx(ctx, tx, staleRows, changedOldRows, changedOrNewRows, true, nil)
+}
 
-	for _, entry := range batch.Entries {
+func collectChangedDirectFilesEntrySetsTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) ([]storedEntryRecord, []storedEntryRecord, []storedEntryRecord, error) {
+	directScopePredicate := "(e.path = ? OR (e.parent_path = ? AND e.is_dir = 0))"
+	directStagePredicate := "(s.path = ? OR (s.parent_path = ? AND s.is_dir = 0))"
+	diffPredicate := buildEntryDifferencePredicate("e", "s")
+
+	staleRows, err := selectStoredEntriesTx(ctx, tx, fmt.Sprintf(`
+		SELECT e.entry_id, e.path, e.root_id, e.parent_path, e.name, e.normalized_name, e.name_key, e.normalized_path,
+		       e.pinyin_full, e.pinyin_initials, e.extension, e.is_dir, e.mtime, e.size, e.updated_at
+		FROM entries e
+		LEFT JOIN filesearch_stage_entries s ON s.path = e.path
+		WHERE e.root_id = ? AND %s AND s.path IS NULL
+		ORDER BY e.path ASC
+	`, directScopePredicate), rootID, scopePath, scopePath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	changedOldRows, err := selectStoredEntriesTx(ctx, tx, fmt.Sprintf(`
+		SELECT e.entry_id, e.path, e.root_id, e.parent_path, e.name, e.normalized_name, e.name_key, e.normalized_path,
+		       e.pinyin_full, e.pinyin_initials, e.extension, e.is_dir, e.mtime, e.size, e.updated_at
+		FROM entries e
+		INNER JOIN filesearch_stage_entries s ON s.path = e.path
+		WHERE e.root_id = ? AND %s AND (%s)
+		ORDER BY e.path ASC
+	`, directScopePredicate, diffPredicate), rootID, scopePath, scopePath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	changedOrNewRows, err := selectStoredEntriesTx(ctx, tx, fmt.Sprintf(`
+		SELECT CAST(COALESCE(e.entry_id, 0) AS INTEGER) AS entry_id,
+		       s.path, s.root_id, s.parent_path, s.name, s.normalized_name, s.name_key, s.normalized_path,
+		       s.pinyin_full, s.pinyin_initials, s.extension, s.is_dir, s.mtime, s.size, s.updated_at
+		FROM filesearch_stage_entries s
+		LEFT JOIN entries e ON e.path = s.path
+		WHERE %s AND (e.entry_id IS NULL OR (%s))
+		ORDER BY s.path ASC
+	`, directStagePredicate, diffPredicate), scopePath, scopePath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return staleRows, changedOldRows, changedOrNewRows, nil
+}
+
+func stageEntryRecordsTx(ctx context.Context, tx *sql.Tx, entries []EntryRecord) error {
+	stmt, err := prepareEntryStageInsertStmtTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	return stageEntryRecordsWithStmtTx(ctx, stmt, entries)
+}
+
+func prepareEntryStageInsertStmtTx(ctx context.Context, tx *sql.Tx) (*sql.Stmt, error) {
+	if _, err := tx.ExecContext(ctx, `
+			CREATE TEMP TABLE IF NOT EXISTS filesearch_stage_entries (
+			path TEXT PRIMARY KEY,
+			root_id TEXT NOT NULL,
+			parent_path TEXT NOT NULL,
+			name TEXT NOT NULL,
+			normalized_name TEXT NOT NULL,
+			name_key TEXT NOT NULL,
+			normalized_path TEXT NOT NULL,
+			pinyin_full TEXT NOT NULL,
+			pinyin_initials TEXT NOT NULL,
+			extension TEXT NOT NULL,
+			is_dir INTEGER NOT NULL,
+			mtime INTEGER NOT NULL,
+			size INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)
+		`); err != nil {
+		return nil, fmt.Errorf("create stage entries table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM filesearch_stage_entries`); err != nil {
+		return nil, fmt.Errorf("clear stage entries table: %w", err)
+	}
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO filesearch_stage_entries (
+			path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+			pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("prepare stage entry insert: %w", err)
+	}
+	return stmt, nil
+}
+
+func stageEntryRecordsWithStmtTx(ctx context.Context, stmt *sql.Stmt, entries []EntryRecord) error {
+	for _, entry := range entries {
 		row := buildStoredEntryRecord(entry)
-		existing, ok, err := selectStoredEntryByPathTx(ctx, tx, row.Path)
-		if err != nil {
-			return err
-		}
-		if ok {
-			if err := deleteEntrySearchArtifactsWithSyncTx(ctx, artifactSync, existing); err != nil {
-				return err
-			}
-		}
-
-		current, err := upsertEntryFactsWithMutatorTx(ctx, factMutator, row)
-		if err != nil {
-			return err
-		}
-		if err := insertEntrySearchArtifactsWithSyncTx(ctx, artifactSync, current); err != nil {
-			return err
+		if _, err := stmt.ExecContext(
+			ctx,
+			row.Path,
+			row.RootID,
+			row.ParentPath,
+			row.Name,
+			row.NormalizedName,
+			row.NameKey,
+			row.NormalizedPath,
+			row.PinyinFull,
+			row.PinyinInitials,
+			row.Extension,
+			boolToInt(row.IsDir),
+			row.Mtime,
+			row.Size,
+			row.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("stage entry %q: %w", row.Path, err)
 		}
 	}
-
 	return nil
 }
 
@@ -986,68 +1085,6 @@ func (d *FileSearchDB) replaceSubtreeEntriesTx(ctx context.Context, tx *sql.Tx, 
 	}
 
 	return applyChangedEntrySetsTx(ctx, tx, staleRows, changedOldRows, changedOrNewRows, true, nil)
-}
-
-func stageEntryRecordsTx(ctx context.Context, tx *sql.Tx, entries []EntryRecord) error {
-	if _, err := tx.ExecContext(ctx, `
-			CREATE TEMP TABLE IF NOT EXISTS filesearch_stage_entries (
-			path TEXT PRIMARY KEY,
-			root_id TEXT NOT NULL,
-			parent_path TEXT NOT NULL,
-			name TEXT NOT NULL,
-			normalized_name TEXT NOT NULL,
-			name_key TEXT NOT NULL,
-			normalized_path TEXT NOT NULL,
-			pinyin_full TEXT NOT NULL,
-			pinyin_initials TEXT NOT NULL,
-			extension TEXT NOT NULL,
-			is_dir INTEGER NOT NULL,
-			mtime INTEGER NOT NULL,
-			size INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
-		)
-		`); err != nil {
-		return fmt.Errorf("create stage entries table: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM filesearch_stage_entries`); err != nil {
-		return fmt.Errorf("clear stage entries table: %w", err)
-	}
-
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO filesearch_stage_entries (
-			path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
-			pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
-	if err != nil {
-		return fmt.Errorf("prepare stage entry insert: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, entry := range entries {
-		row := buildStoredEntryRecord(entry)
-		if _, err := stmt.ExecContext(
-			ctx,
-			row.Path,
-			row.RootID,
-			row.ParentPath,
-			row.Name,
-			row.NormalizedName,
-			row.NameKey,
-			row.NormalizedPath,
-			row.PinyinFull,
-			row.PinyinInitials,
-			row.Extension,
-			boolToInt(row.IsDir),
-			row.Mtime,
-			row.Size,
-			row.UpdatedAt,
-		); err != nil {
-			return fmt.Errorf("stage entry %q: %w", row.Path, err)
-		}
-	}
-
-	return nil
 }
 
 func upsertEntryFactsTx(ctx context.Context, tx *sql.Tx, row storedEntryRecord) (storedEntryRecord, error) {

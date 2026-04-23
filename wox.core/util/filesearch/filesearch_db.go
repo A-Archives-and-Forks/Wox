@@ -372,6 +372,71 @@ func (d *FileSearchDB) ApplyDirectFilesJob(ctx context.Context, job Job, batch S
 	return tx.Commit()
 }
 
+func (d *FileSearchDB) ApplyDirectFilesJobStream(ctx context.Context, root RootRecord, job Job, snapshot *SnapshotBuilder) error {
+	if job.Kind != JobKindDirectFiles {
+		return fmt.Errorf("apply direct-files stream requires kind %q, got %q", JobKindDirectFiles, job.Kind)
+	}
+	if snapshot == nil {
+		return fmt.Errorf("direct-files stream requires a snapshot builder")
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	lockedRoot, err := lockRootForSubtreeSnapshot(ctx, tx, root.ID)
+	if err != nil {
+		return err
+	}
+	if !pathWithinScope(lockedRoot.Path, job.ScopePath) {
+		return fmt.Errorf("direct-files job scope path %q is outside root path %q", job.ScopePath, lockedRoot.Path)
+	}
+
+	directoryStmt, err := prepareDirectoryUpsertStmtTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	defer directoryStmt.Close()
+
+	stageStmt, err := prepareEntryStageInsertStmtTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	defer stageStmt.Close()
+
+	// Direct-files jobs now own the whole directory scope. Streaming each batch
+	// into the temporary stage table keeps SQLite writes bounded without losing
+	// the single-scope stale prune that chunked jobs could not express safely.
+	if err := snapshot.StreamDirectFilesJobBatches(ctx, *lockedRoot, job, func(batch SubtreeSnapshotBatch) error {
+		if err := validateJobSnapshotBatch(job, batch); err != nil {
+			return err
+		}
+		for _, directory := range batch.Directories {
+			if _, err := directoryStmt.ExecContext(
+				ctx,
+				directory.Path,
+				directory.RootID,
+				directory.ParentPath,
+				directory.LastScanTime,
+				boolToInt(directory.Exists),
+			); err != nil {
+				return err
+			}
+		}
+		return stageEntryRecordsWithStmtTx(ctx, stageStmt, batch.Entries)
+	}); err != nil {
+		return err
+	}
+
+	if err := replaceDirectFilesEntriesFromStageTx(ctx, tx, job.RootID, job.ScopePath); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (d *FileSearchDB) ApplySubtreeJob(ctx context.Context, job Job, batch SubtreeSnapshotBatch) error {
 	if job.Kind != JobKindSubtree {
 		return fmt.Errorf("apply subtree job requires kind %q, got %q", JobKindSubtree, job.Kind)

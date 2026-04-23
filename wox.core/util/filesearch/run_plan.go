@@ -1,5 +1,27 @@
 package filesearch
 
+// runRootError keeps the failing root attached to planner or executor errors.
+// Incremental retries need that identity so the failed root can be escalated to
+// a conservative root-level retry while untouched roots keep their queued paths.
+type runRootError struct {
+	RootID string
+	Err    error
+}
+
+func (e *runRootError) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+func (e *runRootError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 // RunPlan holds one sealed indexing workload.
 // Root-local progress was not enough because a single logical root can fan out
 // into many bounded execution jobs, so this plan owns the immutable workload
@@ -77,13 +99,6 @@ type ScopeNode struct {
 	ScopePath       string
 	ScopeKind       ScopeKind
 	ParentScopePath string
-	// Chunk metadata is only populated for split direct-files scopes. The older
-	// planner reused the same scope path for every chunk, which made future
-	// execution unable to tell chunk ownership apart even though the planner had
-	// already decided to split the work.
-	DirectFileChunkIndex  int
-	DirectFileChunkOffset int
-	DirectFileChunkCount  int
 	Children              []ScopeNode
 	DirectoryCount        int64
 	FileCount             int64
@@ -116,12 +131,6 @@ type Job struct {
 	RootPath  string
 	ScopePath string
 	Kind      JobKind
-	// Chunk metadata is only populated for split direct-files jobs. Future
-	// execution needs a concrete sorted-file range so chunked jobs remain
-	// distinguishable and actionable after planning has sealed.
-	DirectFileChunkIndex  int
-	DirectFileChunkOffset int
-	DirectFileChunkCount  int
 	PlannedScanUnits      int64
 	PlannedWriteUnits     int64
 	PlannedTotalUnits     int64

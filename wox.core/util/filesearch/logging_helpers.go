@@ -182,6 +182,30 @@ func logSQLiteIndexSnapshot(ctx context.Context, stage string, snapshot sqliteIn
 	}
 }
 
+func logFilesearchRunStage(ctx context.Context, kind RunKind, stage RunStage, root RootRecord, job Job, rootIndex int, rootTotal int, current int64, total int64) {
+	msg := fmt.Sprintf(
+		"filesearch run stage: kind=%s stage=%s root=%s root_path=%s root_index=%d/%d job=%s job_kind=%s scope=%s progress=%d/%d",
+		kind,
+		stage,
+		root.ID,
+		summarizeLogPath(root.Path),
+		rootIndex,
+		rootTotal,
+		strings.TrimSpace(job.JobID),
+		job.Kind,
+		summarizeLogPath(job.ScopePath),
+		current,
+		total,
+	)
+
+	switch stage {
+	case RunStagePlanning, RunStagePreScan, RunStageFinalizing:
+		util.GetLogger().Info(ctx, msg)
+	default:
+		util.GetLogger().Debug(ctx, msg)
+	}
+}
+
 func formatLocalIndexSnapshotSummary(stage string, snapshot queryIndexSnapshot) string {
 	return fmt.Sprintf(
 		"filesearch index snapshot: stage=%s roots=%d docs=%d live_doc_records=%d path_to_doc_keys=%d freed_doc_ids=%d extension_keys=%d extension_refs=%d name_prefix_keys=%d name_prefix_refs=%d name_bigram_keys=%d name_bigram_refs=%d name_trigram_keys=%d name_trigram_refs=%d path_segment_keys=%d path_segment_refs=%d path_trigram_keys=%d path_trigram_refs=%d pinyin_full_bigram_keys=%d pinyin_full_bigram_refs=%d pinyin_full_trigram_keys=%d pinyin_full_trigram_refs=%d pinyin_initial_trie_nodes=%d pinyin_initial_posting_refs=%d doc_bytes_est=%d posting_bytes_est=%d path_key_bytes_est=%d trie_bytes_est=%d total_bytes_est=%d",
@@ -248,7 +272,7 @@ func formatLocalIndexTopRoots(stage string, snapshot queryIndexSnapshot) string 
 
 func formatSQLiteIndexSnapshotSummary(stage string, snapshot sqliteIndexSnapshot) string {
 	return fmt.Sprintf(
-		"filesearch sqlite snapshot: stage=%s roots=%d entries=%d bigram_rows=%d name_fts_vocab=%d path_fts_vocab=%d pinyin_full_fts_vocab=%d initials_fts_vocab=%d db_file_bytes=%d",
+		"filesearch sqlite snapshot: stage=%s roots=%d entries=%d bigram_rows=%d name_fts_vocab=%d path_fts_vocab=%d pinyin_full_fts_vocab=%d initials_fts_vocab=%d fact_bytes_est=%d fts_source_bytes_est=%d bigram_bytes_est=%d total_bytes_est=%d db_main_file_bytes=%d db_wal_file_bytes=%d db_shm_file_bytes=%d db_total_file_bytes=%d",
 		strings.TrimSpace(stage),
 		snapshot.RootCount,
 		snapshot.EntryCount,
@@ -257,7 +281,14 @@ func formatSQLiteIndexSnapshotSummary(stage string, snapshot sqliteIndexSnapshot
 		snapshot.PathFTSVocab,
 		snapshot.PinyinFullFTSVocab,
 		snapshot.InitialsFTSVocab,
-		snapshot.DBFileBytes,
+		snapshot.FactBytesEstimate,
+		snapshot.FTSSourceBytesEstimate,
+		snapshot.BigramBytesEstimate,
+		snapshot.TotalBytesEstimate,
+		snapshot.DBMainFileBytes,
+		snapshot.DBWALFileBytes,
+		snapshot.DBSHMFileBytes,
+		snapshot.DBTotalFileBytes,
 	)
 }
 
@@ -267,11 +298,20 @@ func formatSQLiteIndexTopRoots(stage string, snapshot sqliteIndexSnapshot) strin
 	}
 
 	visible := make([]string, 0, min(len(snapshot.TopRoots), maxLoggedRoots))
-	for _, root := range snapshot.TopRoots {
-		visible = append(visible, fmt.Sprintf("%s(docs=%d)", summarizeLogPath(root.Path), root.Docs))
+	for _, root := range snapshot.TopRoots[:min(len(snapshot.TopRoots), maxLoggedRoots)] {
+		visible = append(visible, fmt.Sprintf(
+			"%s(docs=%d,bigram_rows=%d,total_bytes_est=%d,fact_bytes_est=%d,fts_source_bytes_est=%d,bigram_bytes_est=%d)",
+			summarizeLogPath(root.Path),
+			root.Docs,
+			root.BigramRows,
+			root.TotalBytesEstimate,
+			root.FactBytesEstimate,
+			root.FTSSourceBytesEstimate,
+			root.BigramBytesEstimate,
+		))
 	}
 	return fmt.Sprintf(
-		"filesearch sqlite top roots: stage=%s roots=%s",
+		"filesearch sqlite snapshot roots: stage=%s top_roots=[%s]",
 		strings.TrimSpace(stage),
 		strings.Join(visible, ", "),
 	)

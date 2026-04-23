@@ -352,15 +352,17 @@ Then pre-scan repeats on the new children.
 
 This continues until every leaf scope is within budget or further splitting provides no practical reduction.
 
-### Direct Files Chunking
+### Direct Files Streaming
 
-A directory may be wide rather than deep. If one `direct_files(dir)` scope still exceeds budget because the directory contains too many direct files, it must be split into multiple deterministic chunks.
+A directory may be wide rather than deep. Version 1 does not split one `direct_files(dir)` scope into multiple jobs.
 
-The chunk key should be stable and cheap to compute, for example:
+Instead:
 
-- sorted path order with fixed-size ranges
+- one directory owns exactly one `DirectFilesJob`
+- that job streams its direct files to SQLite in bounded staging batches
+- stale direct-file pruning happens once for the whole directory scope owned by that single job
 
-This avoids the failure mode where a flat directory remains one giant job even though subtree splitting succeeded elsewhere.
+This keeps delete ownership unambiguous. The earlier chunked design reduced batch size, but it also split stale-file ownership across sibling jobs and made direct-file pruning harder to reason about.
 
 ### Root Strategy
 
@@ -377,12 +379,14 @@ The strategy is descriptive only. Execution still happens through the same job r
 
 #### `DirectFilesJob`
 
-Processes only direct files for one directory or one direct-file chunk.
+Processes only direct files for one directory.
 
 Use when:
 
 - the directory itself should not imply recursive traversal
-- a wide directory needs bounded file chunks
+- the planner needs a bounded ownership scope for direct-file pruning
+
+Execution may still stream that one job in smaller SQLite staging batches, but those batches are execution-local and do not become separate jobs.
 
 #### `SubtreeJob`
 
@@ -480,12 +484,14 @@ The run exposes four top-level stages:
 3. `executing`
 4. `finalizing`
 
-Each stage has a fixed denominator:
+Each stage has a stable denominator:
 
 - `planning`: roots processed / total roots
-- `pre_scan`: scopes pre-scanned / total scopes
+- `pre_scan`: roots pre-scanned / total roots
 - `executing`: completed job work units / total job work units
 - `finalizing`: completed finalize steps / total finalize steps
+
+Version 1 deliberately keeps `pre_scan` on a root-level denominator. Recursive split discovery can grow the scope frontier while pre-scan is still running, so a scope-count percentage would move backwards. The current root path and active scope path still surface which subtree is being measured.
 
 ### Stable Percentage Rule
 
@@ -507,7 +513,7 @@ The UI should show:
 
 - global percentage from the run
 - current root path
-- current job scope
+- current job or planner scope
 - current stage
 
 Example:
@@ -543,7 +549,7 @@ The existing `StatusSnapshot` should be extended rather than replaced in version
 - apply recursive split policy
 - seal `RunPlan`
 
-Once `JobBuilder` has emitted the sealed job list, the planner must release the expanded `ScopeNode` tree and any traversal buffers that are no longer needed. Keeping the entire scope tree alive through execution would recreate the same memory-retention problem that this design is trying to solve.
+Once `JobBuilder` has emitted the sealed job list, the planner must release the mutable traversal buffers that are no longer needed. Version 1 may still keep a sealed `ScopeNode` tree inside `RootPlan` for diagnostics and status inspection, but it must not retain the planner's mutable working buffers or duplicate scope trees through execution.
 
 ### Executor Responsibilities
 
@@ -590,7 +596,7 @@ Implementation should verify the following behaviors:
 4. global progress never decreases
 5. root switches do not reset global percentage
 6. `99%` only occurs when the remaining frozen work is small
-7. wide directories can be chunked even without deeper subdirectories
+7. wide directories keep one direct-files job while streaming bounded SQLite staging batches
 8. bounded job execution reduces peak in-memory snapshot size compared with whole-root execution
 9. a crash before `FinalizeRootJob` may replay changefeed input but must not skip it
 
@@ -607,6 +613,6 @@ Version 1 should prefer the simplest readable control flow:
 
 `JobBuilder` is responsible for producing jobs in final execution order and assigning `order_index`. `JobExecutor` must consume jobs in slice order and must not apply a second sorting layer.
 
-Direct-file chunk boundaries are execution-local only. They are not persisted identities and are not used as diff keys across runs. If file additions or removals shift chunk membership between two runs, the next incremental or full planner simply computes a fresh set of chunks from the affected scope frontier.
+Direct-file staging batches are execution-local only. They are not persisted identities and are not used as diff keys across runs. If file additions or removals change the number of streamed staging batches between two runs, the next incremental or full planner still computes the same single `DirectFilesJob` ownership scope for that directory.
 
 This design intentionally avoids parallel job execution, dynamic replanning, and user-configurable split thresholds because those would make progress semantics and debugging harder before the basic run model is proven.

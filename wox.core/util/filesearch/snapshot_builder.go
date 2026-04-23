@@ -12,14 +12,25 @@ import (
 )
 
 type SnapshotBuilder struct {
-	policy *policyState
+	policy              *policyState
+	directFileBatchSize int
 }
 
 func NewSnapshotBuilder(policy *policyState) *SnapshotBuilder {
 	if policy == nil {
 		policy = newPolicyState(Policy{})
 	}
-	return &SnapshotBuilder{policy: policy}
+	return &SnapshotBuilder{
+		policy:              policy,
+		directFileBatchSize: defaultSplitBudget().DirectFileBatchSize,
+	}
+}
+
+func (b *SnapshotBuilder) SetDirectFileBatchSize(size int) {
+	if b == nil || size <= 0 {
+		return
+	}
+	b.directFileBatchSize = size
 }
 
 func (b *SnapshotBuilder) BuildRootEntries(ctx context.Context, root RootRecord) ([]EntryRecord, error) {
@@ -36,10 +47,11 @@ func (b *SnapshotBuilder) BuildRootEntries(ctx context.Context, root RootRecord)
 	return snapshot.Entries, nil
 }
 
-// BuildDirectFilesJobSnapshot materializes only the direct-file slice owned by
-// one sealed job. The previous whole-root snapshot flow kept every sibling
-// entry alive until writeback, which is why large roots caused indexing-time
-// memory spikes even after the planner had already split the work into chunks.
+// BuildDirectFilesJobSnapshot materializes the full direct-files scope owned by
+// one sealed job. The planner no longer splits one directory into many direct-
+// files jobs because that older shape made stale-file pruning ambiguous. This
+// helper remains for tests and small direct-files paths; runtime execution now
+// prefers StreamDirectFilesJobBatches to keep SQLite staging bounded in memory.
 func (b *SnapshotBuilder) BuildDirectFilesJobSnapshot(ctx context.Context, root RootRecord, job Job) (SubtreeSnapshotBatch, error) {
 	scopePath := filepath.Clean(job.ScopePath)
 	batch := SubtreeSnapshotBatch{
@@ -89,25 +101,53 @@ func (b *SnapshotBuilder) BuildDirectFilesJobSnapshot(ctx context.Context, root 
 		return directFiles[left].Path < directFiles[right].Path
 	})
 
-	start := 0
-	end := len(directFiles)
-	if job.DirectFileChunkCount > 0 {
-		start = job.DirectFileChunkOffset
-		end = start + job.DirectFileChunkCount
-		if start < 0 || start > len(directFiles) {
-			return batch, fmt.Errorf("direct-files chunk offset %d is outside %q", job.DirectFileChunkOffset, scopePath)
-		}
-		if end > len(directFiles) {
-			return batch, fmt.Errorf("direct-files chunk end %d exceeds %d files in %q", end, len(directFiles), scopePath)
-		}
+	scanTimestamp := time.Now().UnixMilli()
+	batch.Directories = append(batch.Directories, DirectoryRecord{
+		Path:         scopePath,
+		RootID:       root.ID,
+		ParentPath:   filepath.Dir(scopePath),
+		LastScanTime: scanTimestamp,
+		Exists:       true,
+	})
+	batch.Entries = append(batch.Entries, newEntryRecord(root, scopePath, info))
+	batch.Entries = append(batch.Entries, directFiles...)
+	return batch, nil
+}
+
+// StreamDirectFilesJobBatches emits one directory-owned direct-files job as
+// bounded staging batches. The older planner solved memory pressure by turning
+// one directory into many jobs, but that split stale-file ownership and made
+// direct-file pruning ambiguous. Keeping one job per directory and streaming
+// its files in small batches keeps ownership correct without rebuilding the
+// original whole-directory memory spike.
+func (b *SnapshotBuilder) StreamDirectFilesJobBatches(ctx context.Context, root RootRecord, job Job, onBatch func(SubtreeSnapshotBatch) error) error {
+	if onBatch == nil {
+		return fmt.Errorf("direct-files batch callback is required")
 	}
 
-	// Chunk zero still owns the directory record because the planner counted the
-	// scope directory itself once. Later chunks intentionally skip that record so
-	// execution can honor the sealed chunk budget without rebuilding a full
-	// directory snapshot for every direct-file chunk.
-	if job.DirectFileChunkCount == 0 || job.DirectFileChunkIndex == 0 {
-		scanTimestamp := time.Now().UnixMilli()
+	scopePath := filepath.Clean(job.ScopePath)
+	info, err := b.validateScopePath(root, scopePath)
+	if err != nil || info == nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("direct-files scope %q is not a directory", scopePath)
+	}
+
+	dirEntries, err := os.ReadDir(scopePath)
+	if err != nil {
+		return fmt.Errorf("failed to read direct-files scope %s: %w", scopePath, err)
+	}
+
+	scanTimestamp := time.Now().UnixMilli()
+	newBatch := func(includeScope bool) SubtreeSnapshotBatch {
+		batch := SubtreeSnapshotBatch{
+			RootID:    root.ID,
+			ScopePath: scopePath,
+		}
+		if !includeScope {
+			return batch
+		}
 		batch.Directories = append(batch.Directories, DirectoryRecord{
 			Path:         scopePath,
 			RootID:       root.ID,
@@ -116,10 +156,63 @@ func (b *SnapshotBuilder) BuildDirectFilesJobSnapshot(ctx context.Context, root 
 			Exists:       true,
 		})
 		batch.Entries = append(batch.Entries, newEntryRecord(root, scopePath, info))
+		return batch
+	}
+	flushBatch := func(batch *SubtreeSnapshotBatch) error {
+		if batch == nil {
+			return nil
+		}
+		if len(batch.Directories) == 0 && len(batch.Entries) == 0 {
+			return nil
+		}
+		return onBatch(*batch)
 	}
 
-	batch.Entries = append(batch.Entries, directFiles[start:end]...)
-	return batch, nil
+	batch := newBatch(true)
+	filesInBatch := 0
+	maxFilesPerBatch := b.directFileBatchSize
+	if maxFilesPerBatch <= 0 {
+		maxFilesPerBatch = defaultSplitBudget().DirectFileBatchSize
+	}
+	if maxFilesPerBatch <= 0 {
+		maxFilesPerBatch = 1024
+	}
+
+	for _, dirEntry := range dirEntries {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		childPath := filepath.Join(scopePath, dirEntry.Name())
+		childInfo, infoErr := strictDirEntryInfo(scopePath, dirEntry)
+		if infoErr != nil {
+			return infoErr
+		}
+		if childInfo.IsDir() {
+			continue
+		}
+		if shouldSkipSystemPath(childPath, false) {
+			continue
+		}
+		if !b.shouldIndexPath(root, childPath, false) {
+			continue
+		}
+
+		batch.Entries = append(batch.Entries, newEntryRecord(root, childPath, childInfo))
+		filesInBatch++
+		if filesInBatch < maxFilesPerBatch {
+			continue
+		}
+		if err := flushBatch(&batch); err != nil {
+			return err
+		}
+		batch = newBatch(false)
+		filesInBatch = 0
+	}
+
+	return flushBatch(&batch)
 }
 
 // BuildSubtreeJobSnapshot materializes only the subtree owned by one planned

@@ -33,12 +33,14 @@ type StatusSnapshot struct {
 	// Root-local progress was no longer enough once one logical root could fan
 	// out into many execution jobs, so these fields expose the active run state
 	// without removing the existing root-centric compatibility data.
+	ActiveRootPath     string
 	ActiveRunStatus    RunStatus
 	ActiveJobKind      JobKind
 	ActiveScopePath    string
 	ActiveStage        RunStage
 	RunProgressCurrent int64
 	RunProgressTotal   int64
+	ErrorRootPath      string
 	IsIndexing         bool
 	IsInitialIndexing  bool
 	LastError          string

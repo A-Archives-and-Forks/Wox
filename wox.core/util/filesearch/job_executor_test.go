@@ -40,33 +40,16 @@ func TestJobExecutorOrderIsStable(t *testing.T) {
 			Status:            JobStatusPending,
 			OrderIndex:        11,
 		}, {
-			JobID:                 "job-direct-files-0",
-			RootID:                rootOne.ID,
-			RootPath:              rootOne.Path,
-			ScopePath:             rootOne.Path,
-			Kind:                  JobKindDirectFiles,
-			DirectFileChunkIndex:  0,
-			DirectFileChunkOffset: 0,
-			DirectFileChunkCount:  2,
-			PlannedScanUnits:      3,
-			PlannedWriteUnits:     3,
-			PlannedTotalUnits:     6,
-			Status:                JobStatusPending,
-			OrderIndex:            3,
-		}, {
-			JobID:                 "job-direct-files-1",
-			RootID:                rootOne.ID,
-			RootPath:              rootOne.Path,
-			ScopePath:             rootOne.Path,
-			Kind:                  JobKindDirectFiles,
-			DirectFileChunkIndex:  1,
-			DirectFileChunkOffset: 2,
-			DirectFileChunkCount:  1,
-			PlannedScanUnits:      1,
-			PlannedWriteUnits:     1,
-			PlannedTotalUnits:     2,
-			Status:                JobStatusPending,
-			OrderIndex:            7,
+			JobID:             "job-direct-files",
+			RootID:            rootOne.ID,
+			RootPath:          rootOne.Path,
+			ScopePath:         rootOne.Path,
+			Kind:              JobKindDirectFiles,
+			PlannedScanUnits:  4,
+			PlannedWriteUnits: 4,
+			PlannedTotalUnits: 8,
+			Status:            JobStatusPending,
+			OrderIndex:        3,
 		}, {
 			JobID:             "job-finalize",
 			RootID:            rootTwo.ID,
@@ -82,32 +65,21 @@ func TestJobExecutorOrderIsStable(t *testing.T) {
 	}
 
 	builder := NewSnapshotBuilder(newPolicyState(Policy{}))
-	chunkZeroBatch, err := builder.BuildDirectFilesJobSnapshot(context.Background(), rootOne, plan.Jobs[1])
+	directFilesBatch, err := builder.BuildDirectFilesJobSnapshot(context.Background(), rootOne, plan.Jobs[1])
 	if err != nil {
-		t.Fatalf("build chunk zero snapshot: %v", err)
-	}
-	chunkOneBatch, err := builder.BuildDirectFilesJobSnapshot(context.Background(), rootOne, plan.Jobs[2])
-	if err != nil {
-		t.Fatalf("build chunk one snapshot: %v", err)
+		t.Fatalf("build direct-files snapshot: %v", err)
 	}
 
-	if got, want := snapshotEntryPaths(chunkZeroBatch), []string{
+	if got, want := snapshotEntryPaths(directFilesBatch), []string{
 		rootOnePath,
 		filepath.Join(rootOnePath, "alpha.txt"),
 		filepath.Join(rootOnePath, "beta.txt"),
-	}; !equalPaths(got, want) {
-		t.Fatalf("unexpected chunk zero entry paths: got %v want %v", got, want)
-	}
-	if got, want := snapshotEntryPaths(chunkOneBatch), []string{
 		filepath.Join(rootOnePath, "gamma.txt"),
 	}; !equalPaths(got, want) {
-		t.Fatalf("unexpected chunk one entry paths: got %v want %v", got, want)
+		t.Fatalf("unexpected direct-files entry paths: got %v want %v", got, want)
 	}
-	if got, want := snapshotDirectoryPaths(chunkZeroBatch), []string{rootOnePath}; !equalPaths(got, want) {
-		t.Fatalf("unexpected chunk zero directory paths: got %v want %v", got, want)
-	}
-	if got := len(chunkOneBatch.Directories); got != 0 {
-		t.Fatalf("expected chunk one to skip directory ownership, got %d directories", got)
+	if got, want := snapshotDirectoryPaths(directFilesBatch), []string{rootOnePath}; !equalPaths(got, want) {
+		t.Fatalf("unexpected direct-files directory paths: got %v want %v", got, want)
 	}
 
 	executor := NewJobExecutor(builder)
@@ -128,7 +100,7 @@ func TestJobExecutorOrderIsStable(t *testing.T) {
 	}
 
 	gotOrder := completedOrder
-	wantOrder := []int{11, 3, 7, 19}
+	wantOrder := []int{11, 3, 19}
 	if len(gotOrder) != len(wantOrder) {
 		t.Fatalf("unexpected completed job count: got %d want %d", len(gotOrder), len(wantOrder))
 	}
@@ -279,19 +251,16 @@ func TestJobExecutorFinalizeRootAdvancesCursorAfterPriorJobs(t *testing.T) {
 
 	root := testRunPlannerRootRecord("root-finalize", rootPath)
 	directFilesJob := Job{
-		JobID:                 "job-direct-files",
-		RootID:                root.ID,
-		RootPath:              root.Path,
-		ScopePath:             root.Path,
-		Kind:                  JobKindDirectFiles,
-		DirectFileChunkIndex:  0,
-		DirectFileChunkOffset: 0,
-		DirectFileChunkCount:  1,
-		PlannedScanUnits:      1,
-		PlannedWriteUnits:     1,
-		PlannedTotalUnits:     2,
-		Status:                JobStatusPending,
-		OrderIndex:            0,
+		JobID:             "job-direct-files",
+		RootID:            root.ID,
+		RootPath:          root.Path,
+		ScopePath:         root.Path,
+		Kind:              JobKindDirectFiles,
+		PlannedScanUnits:  1,
+		PlannedWriteUnits: 1,
+		PlannedTotalUnits: 2,
+		Status:            JobStatusPending,
+		OrderIndex:        0,
 	}
 	subtreeJob := Job{
 		JobID:             "job-subtree",

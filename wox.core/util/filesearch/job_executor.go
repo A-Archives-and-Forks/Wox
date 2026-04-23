@@ -6,7 +6,9 @@ import (
 )
 
 type JobExecutor struct {
-	snapshot *SnapshotBuilder
+	snapshot          *SnapshotBuilder
+	apply             func(context.Context, RootRecord, Job, *SubtreeSnapshotBatch) error
+	streamDirectFiles func(context.Context, RootRecord, Job, *SnapshotBuilder) error
 }
 
 func NewJobExecutor(snapshot *SnapshotBuilder) *JobExecutor {
@@ -14,6 +16,20 @@ func NewJobExecutor(snapshot *SnapshotBuilder) *JobExecutor {
 		snapshot = NewSnapshotBuilder(nil)
 	}
 	return &JobExecutor{snapshot: snapshot}
+}
+
+func (e *JobExecutor) SetApplyFunc(apply func(context.Context, RootRecord, Job, *SubtreeSnapshotBatch) error) {
+	if e == nil {
+		return
+	}
+	e.apply = apply
+}
+
+func (e *JobExecutor) SetDirectFilesStreamFunc(stream func(context.Context, RootRecord, Job, *SnapshotBuilder) error) {
+	if e == nil {
+		return
+	}
+	e.streamDirectFiles = stream
 }
 
 func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []RootRecord, onSnapshot func(StatusSnapshot, Job)) (Run, []Job, error) {
@@ -72,7 +88,10 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 
 		root, ok := rootByID[job.RootID]
 		if !ok {
-			err := fmt.Errorf("root %q not found for job %q", job.RootID, job.JobID)
+			err := &runRootError{
+				RootID: job.RootID,
+				Err:    fmt.Errorf("root %q not found for job %q", job.RootID, job.JobID),
+			}
 			job.Status = JobStatusFailed
 			run.Status = RunStatusFailed
 			run.LastError = err.Error()
@@ -80,12 +99,38 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 			return run, jobs, err
 		}
 
-		if err := e.executeJobSnapshot(ctx, root, *job); err != nil {
-			job.Status = JobStatusFailed
-			run.Status = RunStatusFailed
-			run.LastError = err.Error()
-			emitJobExecutorSnapshot(run, plan, rootOrder, *job, onSnapshot)
-			return run, jobs, err
+		if job.Kind == JobKindDirectFiles && e.streamDirectFiles != nil {
+			// Direct-files jobs keep delete ownership at directory scope. Streaming
+			// them directly avoids rebuilding the earlier whole-directory memory
+			// spike while preserving that single authoritative prune boundary.
+			if err := e.streamDirectFiles(ctx, root, *job, e.snapshot); err != nil {
+				err = &runRootError{RootID: job.RootID, Err: err}
+				job.Status = JobStatusFailed
+				run.Status = RunStatusFailed
+				run.LastError = err.Error()
+				emitJobExecutorSnapshot(run, plan, rootOrder, *job, onSnapshot)
+				return run, jobs, err
+			}
+		} else {
+			batch, err := e.buildJobSnapshot(ctx, root, *job)
+			if err != nil {
+				err = &runRootError{RootID: job.RootID, Err: err}
+				job.Status = JobStatusFailed
+				run.Status = RunStatusFailed
+				run.LastError = err.Error()
+				emitJobExecutorSnapshot(run, plan, rootOrder, *job, onSnapshot)
+				return run, jobs, err
+			}
+			if e.apply != nil {
+				if err := e.apply(ctx, root, *job, batch); err != nil {
+					err = &runRootError{RootID: job.RootID, Err: err}
+					job.Status = JobStatusFailed
+					run.Status = RunStatusFailed
+					run.LastError = err.Error()
+					emitJobExecutorSnapshot(run, plan, rootOrder, *job, onSnapshot)
+					return run, jobs, err
+				}
+			}
 		}
 
 		// Run-scoped progress must advance from sealed work totals instead of
@@ -105,18 +150,24 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 	return run, jobs, nil
 }
 
-func (e *JobExecutor) executeJobSnapshot(ctx context.Context, root RootRecord, job Job) error {
+func (e *JobExecutor) buildJobSnapshot(ctx context.Context, root RootRecord, job Job) (*SubtreeSnapshotBatch, error) {
 	switch job.Kind {
 	case JobKindDirectFiles:
-		_, err := e.snapshot.BuildDirectFilesJobSnapshot(ctx, root, job)
-		return err
+		batch, err := e.snapshot.BuildDirectFilesJobSnapshot(ctx, root, job)
+		if err != nil {
+			return nil, err
+		}
+		return &batch, nil
 	case JobKindSubtree:
-		_, err := e.snapshot.BuildSubtreeJobSnapshot(ctx, root, job)
-		return err
+		batch, err := e.snapshot.BuildSubtreeJobSnapshot(ctx, root, job)
+		if err != nil {
+			return nil, err
+		}
+		return &batch, nil
 	case JobKindFinalizeRoot:
-		return nil
+		return nil, nil
 	default:
-		return fmt.Errorf("unsupported job kind %q", job.Kind)
+		return nil, fmt.Errorf("unsupported job kind %q", job.Kind)
 	}
 }
 
@@ -148,6 +199,7 @@ func buildJobExecutorStatusSnapshot(run Run, plan RunPlan, rootOrder map[string]
 		ActiveProgressTotal:   activeProgressTotal,
 		ActiveRootIndex:       rootOrder[job.RootID],
 		ActiveRootTotal:       len(plan.RootPlans),
+		ActiveRootPath:        job.RootPath,
 		ActiveRunStatus:       run.Status,
 		ActiveJobKind:         job.Kind,
 		ActiveScopePath:       job.ScopePath,

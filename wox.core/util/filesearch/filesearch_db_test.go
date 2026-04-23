@@ -503,12 +503,12 @@ func TestFileSearchDBReplaceSubtreeSnapshotReplacesOnlyScopedPaths(t *testing.T)
 	}
 }
 
-func TestFileSearchDBApplyJobPreservesSiblingScopes(t *testing.T) {
+func TestFileSearchDBApplyDirectFilesJobPrunesRemovedDirectFiles(t *testing.T) {
 	db, ctx := openTestFileSearchDB(t)
 	now := time.Now().UnixMilli()
 	rootPath := filepath.Join(t.TempDir(), "root-apply-job")
 	nestedPath := filepath.Join(rootPath, "nested")
-	chunkOwnedPath := filepath.Join(rootPath, "alpha.txt")
+	ownedDirectPath := filepath.Join(rootPath, "alpha.txt")
 	siblingDirectPath := filepath.Join(rootPath, "beta.txt")
 	siblingSubtreePath := filepath.Join(nestedPath, "keep.txt")
 	root := RootRecord{
@@ -523,12 +523,12 @@ func TestFileSearchDBApplyJobPreservesSiblingScopes(t *testing.T) {
 
 	mustInsertEntrySnapshots(t, ctx, db,
 		EntryRecord{
-			Path:           chunkOwnedPath,
+			Path:           ownedDirectPath,
 			RootID:         root.ID,
 			ParentPath:     rootPath,
 			Name:           "alpha.txt",
 			NormalizedName: "alpha.txt",
-			NormalizedPath: chunkOwnedPath,
+			NormalizedPath: ownedDirectPath,
 			IsDir:          false,
 			Mtime:          now,
 			Size:           1,
@@ -561,14 +561,11 @@ func TestFileSearchDBApplyJobPreservesSiblingScopes(t *testing.T) {
 	)
 
 	job := Job{
-		JobID:                 "job-direct-files",
-		RootID:                root.ID,
-		RootPath:              root.Path,
-		ScopePath:             root.Path,
-		Kind:                  JobKindDirectFiles,
-		DirectFileChunkIndex:  0,
-		DirectFileChunkOffset: 0,
-		DirectFileChunkCount:  1,
+		JobID:     "job-direct-files",
+		RootID:    root.ID,
+		RootPath:  root.Path,
+		ScopePath: root.Path,
+		Kind:      JobKindDirectFiles,
 	}
 	batch := SubtreeSnapshotBatch{
 		RootID:    root.ID,
@@ -593,12 +590,12 @@ func TestFileSearchDBApplyJobPreservesSiblingScopes(t *testing.T) {
 				UpdatedAt:      now + 10,
 			},
 			{
-				Path:           chunkOwnedPath,
+				Path:           ownedDirectPath,
 				RootID:         root.ID,
 				ParentPath:     root.Path,
 				Name:           "alpha.txt",
 				NormalizedName: "alpha.txt",
-				NormalizedPath: chunkOwnedPath,
+				NormalizedPath: ownedDirectPath,
 				IsDir:          false,
 				Mtime:          now + 10,
 				Size:           99,
@@ -620,14 +617,109 @@ func TestFileSearchDBApplyJobPreservesSiblingScopes(t *testing.T) {
 		seen[entry.Path] = entry
 	}
 
-	if got := seen[chunkOwnedPath].Size; got != 99 {
+	if got := seen[ownedDirectPath].Size; got != 99 {
 		t.Fatalf("expected owned direct file to be updated, got size %d", got)
 	}
-	if _, ok := seen[siblingDirectPath]; !ok {
-		t.Fatalf("expected sibling direct file to remain after bounded job")
+	if _, ok := seen[siblingDirectPath]; ok {
+		t.Fatalf("expected removed direct file to be pruned after direct-files job")
 	}
 	if _, ok := seen[siblingSubtreePath]; !ok {
-		t.Fatalf("expected sibling subtree entry to remain after bounded job")
+		t.Fatalf("expected sibling subtree entry to remain after direct-files prune")
+	}
+}
+
+func TestFileSearchDBApplyDirectFilesJobStreamPrunesRemovedDirectFiles(t *testing.T) {
+	db, ctx := openTestFileSearchDB(t)
+	now := time.Now().UnixMilli()
+	rootPath := filepath.Join(t.TempDir(), "root-apply-job-stream")
+	nestedPath := filepath.Join(rootPath, "nested")
+	ownedPath := filepath.Join(rootPath, "alpha.txt")
+	removedDirectPath := filepath.Join(rootPath, "beta.txt")
+	siblingSubtreePath := filepath.Join(nestedPath, "keep.txt")
+
+	mustWriteTestFile(t, ownedPath, "alpha-new")
+	mustWriteTestFile(t, siblingSubtreePath, "keep")
+
+	root := RootRecord{
+		ID:        "root-apply-job-stream",
+		Path:      rootPath,
+		Kind:      RootKindUser,
+		Status:    RootStatusIdle,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	mustInsertRoot(t, ctx, db, root)
+
+	mustInsertEntrySnapshots(t, ctx, db,
+		EntryRecord{
+			Path:           ownedPath,
+			RootID:         root.ID,
+			ParentPath:     rootPath,
+			Name:           "alpha.txt",
+			NormalizedName: "alpha.txt",
+			NormalizedPath: ownedPath,
+			IsDir:          false,
+			Mtime:          now,
+			Size:           1,
+			UpdatedAt:      now,
+		},
+		EntryRecord{
+			Path:           removedDirectPath,
+			RootID:         root.ID,
+			ParentPath:     rootPath,
+			Name:           "beta.txt",
+			NormalizedName: "beta.txt",
+			NormalizedPath: removedDirectPath,
+			IsDir:          false,
+			Mtime:          now,
+			Size:           2,
+			UpdatedAt:      now,
+		},
+		EntryRecord{
+			Path:           siblingSubtreePath,
+			RootID:         root.ID,
+			ParentPath:     nestedPath,
+			Name:           "keep.txt",
+			NormalizedName: "keep.txt",
+			NormalizedPath: siblingSubtreePath,
+			IsDir:          false,
+			Mtime:          now,
+			Size:           3,
+			UpdatedAt:      now,
+		},
+	)
+
+	job := Job{
+		JobID:     "job-direct-files-stream",
+		RootID:    root.ID,
+		RootPath:  root.Path,
+		ScopePath: root.Path,
+		Kind:      JobKindDirectFiles,
+	}
+	builder := NewSnapshotBuilder(newPolicyState(Policy{}))
+	builder.SetDirectFileBatchSize(1)
+
+	if err := db.ApplyDirectFilesJobStream(ctx, root, job, builder); err != nil {
+		t.Fatalf("apply direct-files stream job: %v", err)
+	}
+
+	entries, err := db.ListEntriesByRoot(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("list root entries after stream apply: %v", err)
+	}
+	seen := map[string]EntryRecord{}
+	for _, entry := range entries {
+		seen[entry.Path] = entry
+	}
+
+	if _, ok := seen[ownedPath]; !ok {
+		t.Fatalf("expected streamed direct file %q to remain", ownedPath)
+	}
+	if _, ok := seen[removedDirectPath]; ok {
+		t.Fatalf("expected removed direct file %q to be pruned by stream apply", removedDirectPath)
+	}
+	if _, ok := seen[siblingSubtreePath]; !ok {
+		t.Fatalf("expected sibling subtree entry %q to remain after stream apply", siblingSubtreePath)
 	}
 }
 
@@ -661,14 +753,11 @@ func TestFileSearchDBFinalizeRootCursorIsConservative(t *testing.T) {
 	mustInsertRoot(t, ctx, db, root)
 
 	job := Job{
-		JobID:                 "job-direct-files",
-		RootID:                root.ID,
-		RootPath:              root.Path,
-		ScopePath:             root.Path,
-		Kind:                  JobKindDirectFiles,
-		DirectFileChunkIndex:  0,
-		DirectFileChunkOffset: 0,
-		DirectFileChunkCount:  1,
+		JobID:     "job-direct-files",
+		RootID:    root.ID,
+		RootPath:  root.Path,
+		ScopePath: root.Path,
+		Kind:      JobKindDirectFiles,
 	}
 	batch := SubtreeSnapshotBatch{
 		RootID:    root.ID,

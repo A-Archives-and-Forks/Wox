@@ -28,7 +28,11 @@ type splitBudget struct {
 	LeafEntryBudget     int64
 	LeafWriteBudget     int64
 	LeafMemoryBudget    int64
-	DirectFileChunkSize int
+	// Version 1 keeps one direct-files job per directory so delete ownership
+	// stays simple. The older planner split one directory into many jobs, which
+	// made stale direct-file pruning ambiguous. The same limit now only caps the
+	// internal staging batch size inside that single job.
+	DirectFileBatchSize int
 }
 
 func defaultSplitBudget() splitBudget {
@@ -36,7 +40,7 @@ func defaultSplitBudget() splitBudget {
 		LeafEntryBudget:     4096,
 		LeafWriteBudget:     4096,
 		LeafMemoryBudget:    8 << 20,
-		DirectFileChunkSize: 2048,
+		DirectFileBatchSize: 2048,
 	}
 }
 

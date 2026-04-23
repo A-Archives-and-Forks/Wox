@@ -56,20 +56,38 @@ func NewEngineWithOptions(ctx context.Context, options EngineOptions) (*Engine, 
 	}
 	engine.scanner.SetStateChangeHandler(engine.notifyStatusChanged)
 
-	if snapshot, err := engine.db.SearchIndexSnapshot(ctx); err == nil {
-		logSQLiteIndexSnapshot(ctx, "engine_initialized", snapshot, true)
-	} else {
-		util.GetLogger().Warn(ctx, "filesearch failed to capture sqlite snapshot during init: "+err.Error())
-	}
-
 	// Keep the built-in file engine focused on the persisted SQLite search index.
 	// The previous runtime mirrored every entry into a second in-memory provider,
 	// which doubled storage responsibilities and made memory usage scale with the
 	// number of indexed roots.
 	engine.scanner.Start(util.NewTraceContext())
 	util.GetLogger().Info(ctx, "filesearch engine initialized: indexed_provider=sqlite-search")
+	engine.logInitSnapshotAsync(ctx)
 
 	return engine, nil
+}
+
+func (e *Engine) logInitSnapshotAsync(ctx context.Context) {
+	if e == nil || e.db == nil {
+		return
+	}
+
+	// Capture the heavy SQLite snapshot after engine init returns because the
+	// previous synchronous fts5vocab sampling blocked plugin initialization on
+	// large databases. That prevented the file plugin instance from registering,
+	// so `f ` stopped entering file-plugin query mode even though the engine was
+	// otherwise healthy.
+	util.Go(ctx, "filesearch init sqlite snapshot", func() {
+		snapshotCtx, cancel := context.WithTimeout(util.NewTraceContext(), 30*time.Second)
+		defer cancel()
+
+		snapshot, err := e.db.SearchIndexSnapshot(snapshotCtx)
+		if err != nil {
+			util.GetLogger().Warn(snapshotCtx, "filesearch failed to capture sqlite snapshot during init: "+err.Error())
+			return
+		}
+		logSQLiteIndexSnapshot(snapshotCtx, "engine_initialized", snapshot, true)
+	})
 }
 
 func (e *Engine) UpdatePolicy(policy Policy) {
@@ -211,6 +229,9 @@ func (e *Engine) GetStatus(ctx context.Context) (StatusSnapshot, error) {
 			if status.LastError == "" && root.LastError != nil {
 				status.LastError = strings.TrimSpace(*root.LastError)
 			}
+			if status.ErrorRootPath == "" {
+				status.ErrorRootPath = root.Path
+			}
 		}
 
 		if isActiveRootStatus(root.Status) && activeRootStatusPriority(root.Status) >= activeRootStatusPriority(status.ActiveRootStatus) {
@@ -238,9 +259,65 @@ func (e *Engine) GetStatus(ctx context.Context) (StatusSnapshot, error) {
 		}
 	}
 
+	var activeRun StatusSnapshot
+	hasActiveRun := false
+	if e.scanner != nil {
+		if currentRun, ok := e.scanner.GetTransientRunState(); ok {
+			activeRun = currentRun
+			hasActiveRun = true
+			mergeTransientRunStatus(&status, activeRun)
+		}
+	}
+
+	// Planner/executor runs own the live indexing state. The previous code
+	// merged the active run and then immediately overwrote IsIndexing from the
+	// persisted root counters, which made the toolbar treat a live pre-scan as
+	// "not indexing" whenever another root was already in error.
+	if hasActiveRun {
+		status.IsInitialIndexing = activeRun.IsIndexing &&
+			(activeRun.ActiveStage == RunStagePlanning || activeRun.ActiveStage == RunStagePreScan) &&
+			activeRun.ActiveProgressCurrent == 0
+		status.IsIndexing = activeRun.IsIndexing
+		return status, nil
+	}
+
 	status.IsInitialIndexing = status.RootCount > 0 && (status.ActiveRootStatus == RootStatusPreparing || status.ActiveRootStatus == RootStatusScanning) && status.ActiveProgressCurrent == 0 && (status.PreparingRootCount > 0 || status.ScanningRootCount > 0)
 	status.IsIndexing = status.PreparingRootCount > 0 || status.ScanningRootCount > 0 || status.SyncingRootCount > 0 || status.WritingRootCount > 0 || status.FinalizingRootCount > 0 || status.IsInitialIndexing
 	return status, nil
+}
+
+func mergeTransientRunStatus(status *StatusSnapshot, activeRun StatusSnapshot) {
+	if status == nil {
+		return
+	}
+
+	// Run-scoped progress now owns the user-facing denominator because one
+	// logical root can expand into many jobs. The legacy root counters remain in
+	// the snapshot as diagnostics, but active status/progress should prefer the
+	// sealed run state whenever a planner/executor run is in flight.
+	status.ProgressCurrent = activeRun.ProgressCurrent
+	status.ProgressTotal = activeRun.ProgressTotal
+	status.ActiveRootStatus = activeRun.ActiveRootStatus
+	status.ActiveProgressCurrent = activeRun.ActiveProgressCurrent
+	status.ActiveProgressTotal = activeRun.ActiveProgressTotal
+	status.ActiveRootIndex = activeRun.ActiveRootIndex
+	status.ActiveRootTotal = activeRun.ActiveRootTotal
+	status.ActiveDiscoveredCount = activeRun.ActiveDiscoveredCount
+	status.ActiveDirectoryIndex = activeRun.ActiveDirectoryIndex
+	status.ActiveDirectoryTotal = activeRun.ActiveDirectoryTotal
+	status.ActiveItemCurrent = activeRun.ActiveItemCurrent
+	status.ActiveItemTotal = activeRun.ActiveItemTotal
+	status.ActiveRootPath = activeRun.ActiveRootPath
+	status.ActiveRunStatus = activeRun.ActiveRunStatus
+	status.ActiveJobKind = activeRun.ActiveJobKind
+	status.ActiveScopePath = activeRun.ActiveScopePath
+	status.ActiveStage = activeRun.ActiveStage
+	status.RunProgressCurrent = activeRun.RunProgressCurrent
+	status.RunProgressTotal = activeRun.RunProgressTotal
+	status.IsIndexing = activeRun.IsIndexing
+	if strings.TrimSpace(activeRun.LastError) != "" {
+		status.LastError = activeRun.LastError
+	}
 }
 
 func mergeTransientRootState(roots []RootRecord, transientRoot RootRecord) {
