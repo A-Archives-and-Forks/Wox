@@ -334,6 +334,12 @@ func createEntriesTable(ctx context.Context, tx *sql.Tx) error {
 func createEntriesIndexes(ctx context.Context, tx *sql.Tx) error {
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_entries_root_id ON entries(root_id)`,
+		// collect_diff_stale/changed_old always constrain by root_id and a scope path
+		// prefix together. The previous root_id-only index forced tiny subtree diffs
+		// under large roots such as C:\Windows to rescan far too much of the root on
+		// every job, so this composite index gives SQLite one access path that matches
+		// both predicates without changing query behavior.
+		`CREATE INDEX IF NOT EXISTS idx_entries_root_id_path ON entries(root_id, path)`,
 		`CREATE INDEX IF NOT EXISTS idx_entries_parent_path ON entries(parent_path)`,
 		`CREATE INDEX IF NOT EXISTS idx_entries_name_key ON entries(name_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_entries_extension ON entries(extension)`,
@@ -914,19 +920,28 @@ func (d *FileSearchDB) applyDirectFilesEntriesTx(ctx context.Context, tx *sql.Tx
 	}
 	defer stageStmt.Close()
 
+	stageStartedAt := util.GetSystemTimestamp()
 	if err := stageEntryRecordsWithStmtTx(ctx, stageStmt, batch.Entries); err != nil {
 		return err
 	}
+	// Direct-files jobs can spend tens of seconds inside one stream_apply. Record
+	// the staging boundary so the next trace can separate temp-table population
+	// from the later diff and replay phases inside the same SQLite transaction.
+	logFilesearchSQLiteMaintenance(ctx, "direct_files_stage_entries", batch.ScopePath, util.GetSystemTimestamp()-stageStartedAt, len(batch.Entries))
 
 	return replaceDirectFilesEntriesFromStageTx(ctx, tx, batch.RootID, batch.ScopePath)
 }
 
 func replaceDirectFilesEntriesFromStageTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) error {
+	diffStartedAt := util.GetSystemTimestamp()
 	staleRows, changedOldRows, changedOrNewRows, err := collectChangedDirectFilesEntrySetsTx(ctx, tx, rootID, scopePath)
 	if err != nil {
 		return err
 	}
-	return applyChangedEntrySetsTx(ctx, tx, staleRows, changedOldRows, changedOrNewRows, true, nil)
+	// The previous stream_apply log only exposed total wall time. This direct-files
+	// diff log shows whether the transaction stalls before row replay even begins.
+	logFilesearchSQLiteMaintenance(ctx, "direct_files_collect_diff", scopePath, util.GetSystemTimestamp()-diffStartedAt, len(staleRows)+len(changedOldRows)+len(changedOrNewRows))
+	return applyChangedEntrySetsTx(ctx, tx, scopePath, staleRows, changedOldRows, changedOrNewRows, true, nil)
 }
 
 func collectChangedDirectFilesEntrySetsTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) ([]storedEntryRecord, []storedEntryRecord, []storedEntryRecord, error) {
@@ -1061,7 +1076,7 @@ func (d *FileSearchDB) replaceRootEntriesTx(ctx context.Context, tx *sql.Tx, roo
 	// which said "writing 100%" before SQLite had applied the expensive delta.
 	// Report progress from the actual changed-set replay so large roots expose
 	// meaningful write progress while FTS/bigram updates are running.
-	if err := applyChangedEntrySetsTx(ctx, tx, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled(), onProgress); err != nil {
+	if err := applyChangedEntrySetsTx(ctx, tx, root.Path, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled(), onProgress); err != nil {
 		return err
 	}
 
@@ -1084,7 +1099,7 @@ func (d *FileSearchDB) replaceSubtreeEntriesTx(ctx context.Context, tx *sql.Tx, 
 		return err
 	}
 
-	return applyChangedEntrySetsTx(ctx, tx, staleRows, changedOldRows, changedOrNewRows, true, nil)
+	return applyChangedEntrySetsTx(ctx, tx, batch.ScopePath, staleRows, changedOldRows, changedOrNewRows, true, nil)
 }
 
 func upsertEntryFactsTx(ctx context.Context, tx *sql.Tx, row storedEntryRecord) (storedEntryRecord, error) {
@@ -1126,6 +1141,7 @@ func collectChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, rootID string, s
 	// Compare the staged snapshot against persisted facts inside SQLite so no-op
 	// subtree refreshes do not have to materialize every root row back into Go
 	// just to discover that nothing changed.
+	staleRowsStartedAt := util.GetSystemTimestamp()
 	staleRows, err := selectStoredEntriesTx(ctx, tx, fmt.Sprintf(`
 		SELECT e.entry_id, e.path, e.root_id, e.parent_path, e.name, e.normalized_name, e.name_key, e.normalized_path,
 		       e.pinyin_full, e.pinyin_initials, e.extension, e.is_dir, e.mtime, e.size, e.updated_at
@@ -1133,12 +1149,17 @@ func collectChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, rootID string, s
 		LEFT JOIN filesearch_stage_entries s ON s.path = e.path
 		WHERE e.root_id = ? AND %s AND s.path IS NULL
 		ORDER BY e.path ASC
-	`, scopeQuery), append([]any{rootID}, scopeArgs...)...)
+		`, scopeQuery), append([]any{rootID}, scopeArgs...)...)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// The previous diagnostics only exposed the combined changed-set apply time. These
+	// query-level timings identify whether subtree jobs are stalling before replay,
+	// especially for tiny scopes where SQL diff collection can dominate the wall time.
+	logFilesearchSQLiteMaintenance(ctx, "collect_diff_stale", scopePath, util.GetSystemTimestamp()-staleRowsStartedAt, len(staleRows))
 
 	diffPredicate := buildEntryDifferencePredicate("e", "s")
+	changedOldRowsStartedAt := util.GetSystemTimestamp()
 	changedOldRows, err := selectStoredEntriesTx(ctx, tx, fmt.Sprintf(`
 		SELECT e.entry_id, e.path, e.root_id, e.parent_path, e.name, e.normalized_name, e.name_key, e.normalized_path,
 		       e.pinyin_full, e.pinyin_initials, e.extension, e.is_dir, e.mtime, e.size, e.updated_at
@@ -1146,11 +1167,13 @@ func collectChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, rootID string, s
 		INNER JOIN filesearch_stage_entries s ON s.path = e.path
 		WHERE e.root_id = ? AND %s AND (%s)
 		ORDER BY e.path ASC
-	`, scopeQuery, diffPredicate), append([]any{rootID}, scopeArgs...)...)
+		`, scopeQuery, diffPredicate), append([]any{rootID}, scopeArgs...)...)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	logFilesearchSQLiteMaintenance(ctx, "collect_diff_changed_old", scopePath, util.GetSystemTimestamp()-changedOldRowsStartedAt, len(changedOldRows))
 
+	changedOrNewRowsStartedAt := util.GetSystemTimestamp()
 	changedOrNewRows, err := selectStoredEntriesTx(ctx, tx, fmt.Sprintf(`
 		SELECT CAST(COALESCE(e.entry_id, 0) AS INTEGER) AS entry_id,
 		       s.path, s.root_id, s.parent_path, s.name, s.normalized_name, s.name_key, s.normalized_path,
@@ -1159,15 +1182,16 @@ func collectChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, rootID string, s
 		LEFT JOIN entries e ON e.path = s.path
 		WHERE e.entry_id IS NULL OR (%s)
 		ORDER BY s.path ASC
-	`, diffPredicate), nil...)
+		`, diffPredicate), nil...)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	logFilesearchSQLiteMaintenance(ctx, "collect_diff_changed_or_new", scopePath, util.GetSystemTimestamp()-changedOrNewRowsStartedAt, len(changedOrNewRows))
 
 	return staleRows, changedOldRows, changedOrNewRows, nil
 }
 
-func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, staleRows []storedEntryRecord, changedOldRows []storedEntryRecord, changedOrNewRows []storedEntryRecord, syncSearchArtifacts bool, onProgress func(current int64, total int64)) error {
+func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, scopePath string, staleRows []storedEntryRecord, changedOldRows []storedEntryRecord, changedOrNewRows []storedEntryRecord, syncSearchArtifacts bool, onProgress func(current int64, total int64)) error {
 	var artifactSync *entrySearchArtifactSyncTx
 	var factMutator *entryFactMutatorTx
 	var err error
@@ -1212,6 +1236,7 @@ func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, staleRows []stored
 	}
 	reportProgress(true)
 
+	deleteArtifactsStartedAt := util.GetSystemTimestamp()
 	if syncSearchArtifacts {
 		for _, existing := range staleRows {
 			if err := deleteEntrySearchArtifactsWithSyncTx(ctx, artifactSync, existing); err != nil {
@@ -1224,7 +1249,14 @@ func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, staleRows []stored
 			}
 		}
 	}
+	// Direct-files hot scopes such as WinSxS can spend most of their write time
+	// replaying derived search artifacts. Logging each replay block clarifies
+	// whether the stall is in FTS/bigram cleanup or the fact-table mutations.
+	if syncSearchArtifacts {
+		logFilesearchSQLiteMaintenance(ctx, "changed_set_delete_artifacts", scopePath, util.GetSystemTimestamp()-deleteArtifactsStartedAt, len(staleRows)+len(changedOldRows))
+	}
 
+	deleteFactsStartedAt := util.GetSystemTimestamp()
 	for _, existing := range staleRows {
 		if _, err := factMutator.deleteStmt.ExecContext(ctx, existing.EntryID); err != nil {
 			return fmt.Errorf("delete stale entry %q: %w", existing.Path, err)
@@ -1232,7 +1264,9 @@ func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, staleRows []stored
 		completedRows++
 		reportProgress(false)
 	}
+	logFilesearchSQLiteMaintenance(ctx, "changed_set_delete_facts", scopePath, util.GetSystemTimestamp()-deleteFactsStartedAt, len(staleRows))
 
+	upsertFactsStartedAt := util.GetSystemTimestamp()
 	for _, staged := range changedOrNewRows {
 		current, err := upsertEntryFactsWithMutatorTx(ctx, factMutator, staged)
 		if err != nil {
@@ -1246,6 +1280,7 @@ func applyChangedEntrySetsTx(ctx context.Context, tx *sql.Tx, staleRows []stored
 		completedRows++
 		reportProgress(false)
 	}
+	logFilesearchSQLiteMaintenance(ctx, "changed_set_upsert_facts", scopePath, util.GetSystemTimestamp()-upsertFactsStartedAt, len(changedOrNewRows))
 
 	reportProgress(true)
 
@@ -1454,6 +1489,7 @@ func buildEntryDifferencePredicate(existingAlias string, stagedAlias string) str
 }
 
 func refreshRootBigramsTx(ctx context.Context, tx *sql.Tx, rootID string) error {
+	startedAt := util.GetSystemTimestamp()
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM entries_bigram
 		WHERE entry_id IN (SELECT entry_id FROM entries WHERE root_id = ?)
@@ -1481,6 +1517,7 @@ func refreshRootBigramsTx(ctx context.Context, tx *sql.Tx, rootID string) error 
 	}
 	defer stmt.Close()
 
+	processedRows := 0
 	for rows.Next() {
 		row, err := scanStoredEntryRecord(rows)
 		if err != nil {
@@ -1489,8 +1526,16 @@ func refreshRootBigramsTx(ctx context.Context, tx *sql.Tx, rootID string) error 
 		if err := insertEntryBigramsTx(ctx, stmt, row); err != nil {
 			return err
 		}
+		processedRows++
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// Bulk sync moved bigram work into root-local refresh passes, but the old
+	// logs never showed how expensive those passes were. Record row count and
+	// duration here so a slow root can be separated from the later global FTS rebuild.
+	logFilesearchSQLiteMaintenance(ctx, "refresh_root_bigrams", rootID, util.GetSystemTimestamp()-startedAt, processedRows)
+	return nil
 }
 
 func deleteEntrySearchArtifactsTx(ctx context.Context, tx *sql.Tx, row storedEntryRecord) error {
@@ -1652,6 +1697,7 @@ func (d *FileSearchDB) checkpointWALAfterFinalize(ctx context.Context) {
 }
 
 func (d *FileSearchDB) rebuildFTSTables(ctx context.Context, optimize bool) error {
+	startedAt := util.GetSystemTimestamp()
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1662,7 +1708,15 @@ func (d *FileSearchDB) rebuildFTSTables(ctx context.Context, optimize bool) erro
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Full runs deliberately defer FTS maintenance, so log the rebuild cost at
+	// the storage boundary instead of attributing the whole pause to generic
+	// "finalizing" time higher in the stack.
+	logFilesearchSQLiteMaintenance(ctx, "rebuild_fts", fmt.Sprintf("optimize=%t", optimize), util.GetSystemTimestamp()-startedAt, len(filesearchFTSTables))
+	return nil
 }
 
 func rebuildFTSTablesTx(ctx context.Context, tx *sql.Tx, optimize bool) error {

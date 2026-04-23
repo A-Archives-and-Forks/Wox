@@ -3,6 +3,7 @@ package filesearch
 import (
 	"context"
 	"fmt"
+	"wox/util"
 )
 
 type JobExecutor struct {
@@ -103,7 +104,12 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 			// Direct-files jobs keep delete ownership at directory scope. Streaming
 			// them directly avoids rebuilding the earlier whole-directory memory
 			// spike while preserving that single authoritative prune boundary.
+			// Root-level totals were not enough to explain where long runs stalled,
+			// so each job now records its own apply duration to separate snapshot
+			// building cost from SQLite write cost when one scope becomes hot.
+			streamStartedAt := util.GetSystemTimestamp()
 			if err := e.streamDirectFiles(ctx, root, *job, e.snapshot); err != nil {
+				logFilesearchJobPhase(ctx, root, *job, "stream_apply", util.GetSystemTimestamp()-streamStartedAt)
 				err = &runRootError{RootID: job.RootID, Err: err}
 				job.Status = JobStatusFailed
 				run.Status = RunStatusFailed
@@ -111,8 +117,11 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 				emitJobExecutorSnapshot(run, plan, rootOrder, *job, onSnapshot)
 				return run, jobs, err
 			}
+			logFilesearchJobPhase(ctx, root, *job, "stream_apply", util.GetSystemTimestamp()-streamStartedAt)
 		} else {
+			buildStartedAt := util.GetSystemTimestamp()
 			batch, err := e.buildJobSnapshot(ctx, root, *job)
+			logFilesearchJobPhase(ctx, root, *job, "build_snapshot", util.GetSystemTimestamp()-buildStartedAt)
 			if err != nil {
 				err = &runRootError{RootID: job.RootID, Err: err}
 				job.Status = JobStatusFailed
@@ -122,7 +131,9 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 				return run, jobs, err
 			}
 			if e.apply != nil {
+				applyStartedAt := util.GetSystemTimestamp()
 				if err := e.apply(ctx, root, *job, batch); err != nil {
+					logFilesearchJobPhase(ctx, root, *job, "apply_snapshot", util.GetSystemTimestamp()-applyStartedAt)
 					err = &runRootError{RootID: job.RootID, Err: err}
 					job.Status = JobStatusFailed
 					run.Status = RunStatusFailed
@@ -130,6 +141,7 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 					emitJobExecutorSnapshot(run, plan, rootOrder, *job, onSnapshot)
 					return run, jobs, err
 				}
+				logFilesearchJobPhase(ctx, root, *job, "apply_snapshot", util.GetSystemTimestamp()-applyStartedAt)
 			}
 		}
 

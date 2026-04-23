@@ -488,6 +488,7 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 		return nil
 	}
 
+	startedAt := util.GetSystemTimestamp()
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -501,10 +502,15 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 	defer directoryStmt.Close()
 
 	for _, batch := range batches {
+		lockStartedAt := util.GetSystemTimestamp()
 		root, err := lockRootForSubtreeSnapshot(ctx, tx, batch.RootID)
 		if err != nil {
 			return err
 		}
+		// Small subtree jobs were still taking ~0.8s even when the changed-set replay
+		// itself was cheap. Logging the root lock separately shows whether the fixed
+		// cost starts with transaction-level contention before any diff work runs.
+		logFilesearchSQLiteMaintenance(ctx, "subtree_lock_root", batch.ScopePath, util.GetSystemTimestamp()-lockStartedAt, 1)
 		if !pathWithinScope(root.Path, batch.ScopePath) {
 			return fmt.Errorf("subtree snapshot scope path %q is outside root path %q", batch.ScopePath, root.Path)
 		}
@@ -513,10 +519,15 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 			return err
 		}
 
+		tombstoneStartedAt := util.GetSystemTimestamp()
 		if err := tombstoneScopedDirectories(tx, ctx, batch.RootID, batch.ScopePath, subtreeBatchScanTime(batch)); err != nil {
 			return err
 		}
+		// The previous logs only covered entry-table maintenance, so directory tombstones
+		// could hide inside the "apply_snapshot" wall time without attribution.
+		logFilesearchSQLiteMaintenance(ctx, "subtree_tombstone_directories", batch.ScopePath, util.GetSystemTimestamp()-tombstoneStartedAt, len(batch.Directories))
 
+		upsertDirectoriesStartedAt := util.GetSystemTimestamp()
 		for _, directory := range batch.Directories {
 			if _, err := directoryStmt.ExecContext(
 				ctx,
@@ -529,17 +540,35 @@ func (d *FileSearchDB) ReplaceSubtreeSnapshots(ctx context.Context, batches []Su
 				return err
 			}
 		}
+		// Tiny WinSxS subtree scopes often carry very few entries, so even directory
+		// upserts need their own timing to tell whether the fixed overhead is in
+		// directory bookkeeping or later entry diff/commit work.
+		logFilesearchSQLiteMaintenance(ctx, "subtree_upsert_directories", batch.ScopePath, util.GetSystemTimestamp()-upsertDirectoriesStartedAt, len(batch.Directories))
 
 		// Subtree refreshes can update, delete, and rename within the scope. The
 		// explicit delete-old -> upsert -> insert-new order keeps FTS and bigram
 		// rows aligned with the fact table so incremental reconcile does not leave
 		// stale matches behind.
+		replaceEntriesStartedAt := util.GetSystemTimestamp()
 		if err := d.replaceSubtreeEntriesTx(ctx, tx, batch); err != nil {
 			return err
 		}
+		// The changed-set replay now has inner logs, but the subtree wrapper still owns
+		// all entry-side work for a batch. Keeping a parent phase here makes it obvious
+		// whether the missing time is inside diff collection or outside the entry path.
+		logFilesearchSQLiteMaintenance(ctx, "subtree_replace_entries", batch.ScopePath, util.GetSystemTimestamp()-replaceEntriesStartedAt, len(batch.Entries))
 	}
 
-	return tx.Commit()
+	commitStartedAt := util.GetSystemTimestamp()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Recent traces showed many tiny subtree batches paying a near-constant ~0.8s.
+	// Logging commit separately distinguishes SQLite flush/lock cost from the batch
+	// body so we can tell whether transaction finalization dominates the slowdown.
+	logFilesearchSQLiteMaintenance(ctx, "subtree_commit", fmt.Sprintf("batches=%d", len(batches)), util.GetSystemTimestamp()-commitStartedAt, len(batches))
+	logFilesearchSQLiteMaintenance(ctx, "subtree_apply_total", fmt.Sprintf("batches=%d", len(batches)), util.GetSystemTimestamp()-startedAt, len(batches))
+	return nil
 }
 
 func prepareDirectoryUpsertStmtTx(ctx context.Context, tx *sql.Tx) (*sql.Stmt, error) {

@@ -598,8 +598,13 @@ func (p *RunPlanner) buildDraftPlan(kind RunKind, planID string, runID string) (
 
 		plan.PreScanTotals = mergePlanTotals(plan.PreScanTotals, rootPlan.Totals)
 
+		// The grouped full-run leaf experiment did not reduce the dominant SQLite
+		// cost enough to justify a wider multi-scope job contract. Returning to
+		// one sealed job per planned leaf keeps the planner/executor/data path
+		// straightforward while preserving the SQLite path index improvement that
+		// did measurably reduce collect_diff cost.
 		for _, leaf := range leafScopes {
-			if leaf.totals.IndexableEntryCount == 0 {
+			if leaf == nil || leaf.totals.IndexableEntryCount == 0 {
 				continue
 			}
 

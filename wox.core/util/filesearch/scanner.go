@@ -248,6 +248,7 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		plan RunPlan
 		err  error
 	)
+	plannerStartedAt := util.GetSystemTimestamp()
 	switch kind {
 	case RunKindIncremental:
 		plan, err = planner.PlanIncrementalRun(ctx, roots, batches)
@@ -258,6 +259,10 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		s.clearTransientRunState()
 		return err
 	}
+	// Planner and pre-scan can traverse large trees before execution starts, but
+	// the old logs only showed coarse stage labels. Record the sealed workload
+	// timing so slow runs reveal whether the stall starts before any SQLite write.
+	logFilesearchRunPlanner(ctx, kind, util.GetSystemTimestamp()-plannerStartedAt, len(plan.RootPlans), len(plan.Jobs), plan.TotalWorkUnits)
 
 	snapshotBuilder := NewSnapshotBuilder(s.policy)
 	if s.plannerBudgetOverride != nil && s.plannerBudgetOverride.DirectFileBatchSize > 0 {
@@ -293,16 +298,24 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		if !bulkSyncStarted {
 			return
 		}
+		bulkFinalizeStartedAt := util.GetSystemTimestamp()
 		if err := s.db.EndBulkSync(ctx); err != nil {
 			util.GetLogger().Warn(ctx, "filesearch failed to finalize bulk sqlite search sync: "+err.Error())
+			return
 		}
+		// Full runs intentionally defer the global FTS rebuild until the facts
+		// settle, so log the boundary explicitly instead of hiding that cost in a
+		// generic "scan cycle completed" message.
+		logFilesearchSQLiteMaintenance(ctx, "bulk_finalize", string(kind), util.GetSystemTimestamp()-bulkFinalizeStartedAt, len(filesearchFTSTables))
 	}()
 
+	executionStartedAt := util.GetSystemTimestamp()
 	run, _, err := executor.ExecuteRun(ctx, plan, roots, func(snapshot StatusSnapshot, job Job) {
 		s.setTransientRunState(snapshot)
 		s.emitStateChange(ctx)
 		logFilesearchRunStage(ctx, kind, snapshot.ActiveStage, rootRecordForRunLog(roots, job.RootID), job, snapshot.ActiveRootIndex, snapshot.ActiveRootTotal, snapshot.RunProgressCurrent, snapshot.RunProgressTotal)
 	})
+	logFilesearchRunExecution(ctx, kind, util.GetSystemTimestamp()-executionStartedAt, len(plan.Jobs), plan.TotalWorkUnits)
 	if err != nil {
 		s.handleRunFailure(ctx, run, roots)
 		return err

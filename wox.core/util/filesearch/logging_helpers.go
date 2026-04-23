@@ -14,6 +14,10 @@ const (
 	slowFilesearchAggregationThresholdMs   int64 = 10
 	slowFilesearchEngineQueryThresholdMs   int64 = 60
 	slowFilesearchSearchOnceTimeoutMs      int64 = 200
+	slowFilesearchRunPlannerThresholdMs    int64 = 250
+	slowFilesearchRunExecutionThresholdMs  int64 = 500
+	slowFilesearchJobPhaseThresholdMs      int64 = 150
+	slowFilesearchSQLiteMaintenanceMs      int64 = 250
 )
 
 func summarizeLogPath(path string) string {
@@ -204,6 +208,71 @@ func logFilesearchRunStage(ctx context.Context, kind RunKind, stage RunStage, ro
 	default:
 		util.GetLogger().Debug(ctx, msg)
 	}
+}
+
+func logFilesearchRunPlanner(ctx context.Context, kind RunKind, elapsedMs int64, rootCount int, jobCount int, totalUnits int64) {
+	msg := fmt.Sprintf(
+		"filesearch run planner: kind=%s elapsed=%dms roots=%d jobs=%d total_units=%d",
+		kind,
+		elapsedMs,
+		rootCount,
+		jobCount,
+		totalUnits,
+	)
+	if elapsedMs >= slowFilesearchRunPlannerThresholdMs {
+		util.GetLogger().Info(ctx, "filesearch slow run planner: "+msg)
+		return
+	}
+	util.GetLogger().Debug(ctx, msg)
+}
+
+func logFilesearchRunExecution(ctx context.Context, kind RunKind, elapsedMs int64, jobCount int, totalUnits int64) {
+	msg := fmt.Sprintf(
+		"filesearch run execution: kind=%s elapsed=%dms jobs=%d total_units=%d",
+		kind,
+		elapsedMs,
+		jobCount,
+		totalUnits,
+	)
+	if elapsedMs >= slowFilesearchRunExecutionThresholdMs {
+		util.GetLogger().Info(ctx, "filesearch slow run execution: "+msg)
+		return
+	}
+	util.GetLogger().Debug(ctx, msg)
+}
+
+func logFilesearchJobPhase(ctx context.Context, root RootRecord, job Job, phase string, elapsedMs int64) {
+	msg := fmt.Sprintf(
+		"filesearch job phase: phase=%s elapsed=%dms root=%s root_path=%s job=%s job_kind=%s scope=%s units=%d",
+		strings.TrimSpace(phase),
+		elapsedMs,
+		root.ID,
+		summarizeLogPath(root.Path),
+		strings.TrimSpace(job.JobID),
+		job.Kind,
+		summarizeLogPath(job.ScopePath),
+		job.PlannedTotalUnits,
+	)
+	if elapsedMs >= slowFilesearchJobPhaseThresholdMs {
+		util.GetLogger().Info(ctx, "filesearch slow job phase: "+msg)
+		return
+	}
+	util.GetLogger().Debug(ctx, msg)
+}
+
+func logFilesearchSQLiteMaintenance(ctx context.Context, operation string, scope string, elapsedMs int64, workCount int) {
+	msg := fmt.Sprintf(
+		"filesearch sqlite maintenance: operation=%s scope=%s elapsed=%dms work_count=%d",
+		strings.TrimSpace(operation),
+		summarizeLogPath(scope),
+		elapsedMs,
+		workCount,
+	)
+	if elapsedMs >= slowFilesearchSQLiteMaintenanceMs {
+		util.GetLogger().Info(ctx, "filesearch slow sqlite maintenance: "+msg)
+		return
+	}
+	util.GetLogger().Debug(ctx, msg)
 }
 
 func formatLocalIndexSnapshotSummary(stage string, snapshot queryIndexSnapshot) string {

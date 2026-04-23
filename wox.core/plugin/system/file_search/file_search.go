@@ -648,7 +648,11 @@ func shortenToolbarPath(value string, maxChars int) string {
 		return normalized
 	}
 	if len(segments) == 1 {
-		return trimToolbarTail(normalized, maxChars)
+		// The previous single-segment fallback returned only the tail with a
+		// leading ellipsis, which hid the path head entirely. Keeping both ends
+		// visible makes long file names and deep folder hints easier to
+		// distinguish in the launcher toolbar.
+		return trimToolbarMiddle(normalized, maxChars)
 	}
 
 	first := segments[0]
@@ -659,7 +663,11 @@ func shortenToolbarPath(value string, maxChars int) string {
 	if candidate := joinToolbarPath(rootPrefix, []string{"...", last}); len(candidate) <= maxChars {
 		return candidate
 	}
-	return trimToolbarTail(joinToolbarPath(rootPrefix, []string{"...", last}), maxChars)
+	// The previous final fallback still produced `...\\tail`, which made
+	// multiple active roots look identical whenever they shared the same
+	// suffix. Center truncation keeps the drive/root and trailing segment at
+	// the same time, matching the toolbar expectation for scan progress paths.
+	return trimToolbarMiddle(normalized, maxChars)
 }
 
 func splitToolbarPath(normalized string) (string, []string) {
@@ -705,14 +713,11 @@ func joinToolbarPath(rootPrefix string, segments []string) string {
 	return strings.TrimRight(rootPrefix, `\`) + `\` + strings.Join(filtered, `\`)
 }
 
-func trimToolbarTail(value string, maxChars int) string {
+func trimToolbarMiddle(value string, maxChars int) string {
 	if maxChars <= 0 || len(value) <= maxChars {
 		return value
 	}
-	if maxChars <= 3 {
-		return value[len(value)-maxChars:]
-	}
-	return "..." + value[len(value)-(maxChars-3):]
+	return util.EllipsisMiddle(value, maxChars)
 }
 
 func decorateRootErrorToolbarTitle(title string, status filesearch.StatusSnapshot) string {
