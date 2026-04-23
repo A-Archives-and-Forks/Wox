@@ -2,6 +2,7 @@ package test
 
 import (
 	"testing"
+	"time"
 	"wox/plugin"
 	"wox/util"
 )
@@ -31,6 +32,24 @@ func setCalculatorSeparators(t *testing.T, decimalMode string, thousandsMode str
 func TestCalculatorBasic(t *testing.T) {
 	suite := NewTestSuite(t)
 	setCalculatorSeparators(t, "Dot", "Comma")
+
+	// The first triggerless calculator expression can race the package-start plugin warmup
+	// and fall through to generic fallback providers. Wait until a simple expression is
+	// claimed by Calculator before running the broader arithmetic assertions below.
+	if err := pollUntil(5*time.Second, 100*time.Millisecond, func() (bool, error) {
+		results, err := runQuery(suite.ctx, "1+1")
+		if err != nil {
+			return false, err
+		}
+		for _, result := range results {
+			if result.Title == "2" && hasAction(result, "Copy") {
+				return true, nil
+			}
+		}
+		return false, nil
+	}); err != nil {
+		t.Fatalf("calculator warm-up query did not become ready: %v", err)
+	}
 
 	tests := []QueryTest{
 		{

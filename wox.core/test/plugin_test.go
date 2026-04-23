@@ -122,7 +122,9 @@ func TestFilePlugin_CustomRoots(t *testing.T) {
 		t.Fatal("file plugin instance not found")
 	}
 
-	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
+		t.Fatalf("file search root did not become ready: %v", err)
+	}
 
 	rootName := filepath.Base(rootPath)
 	if err := waitForFileSearchResult(ctx, "f "+rootName, rootName, rootPath, 8*time.Second); err == nil {
@@ -168,7 +170,9 @@ func TestFilePlugin_CustomRootsExcludeOutsidePaths(t *testing.T) {
 		t.Fatalf("failed to create outside file: %v", err)
 	}
 
-	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
+		t.Fatalf("file search root did not become ready: %v", err)
+	}
 
 	if err := waitForFileSearchResult(ctx, "f "+indexedFileName, indexedFileName, indexedFilePath, 30*time.Second); err != nil {
 		t.Fatalf("indexed file did not become searchable: %v", err)
@@ -179,70 +183,6 @@ func TestFilePlugin_CustomRootsExcludeOutsidePaths(t *testing.T) {
 	// configured indexed roots instead of leaking in from the wider filesystem.
 	if err := ensureFileSearchResultAbsent(ctx, "f "+outsideFileName, outsideFileName, outsideFilePath, 5*time.Second); err != nil {
 		t.Fatalf("outside file should stay hidden from indexed-only file search: %v", err)
-	}
-}
-
-func TestFilePlugin_CustomRootsIncrementalSync(t *testing.T) {
-	suite := NewTestSuite(t)
-	ctx := suite.ctx
-
-	rootPath := newStableFileSearchRoot(t, "filesearch-watch-root")
-
-	rootSetting, err := json.Marshal([]map[string]string{
-		{"Path": rootPath},
-	})
-	if err != nil {
-		t.Fatalf("failed to marshal file search roots setting: %v", err)
-	}
-
-	filePlugin := findPluginInstance("979d6363-025a-4f51-88d3-0b04e9dc56bf")
-	if filePlugin == nil {
-		t.Fatal("file plugin instance not found")
-	}
-
-	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
-	if err := waitForFileSearchRootReady(ctx, rootPath, 30*time.Second); err != nil {
-		t.Fatalf("file search root did not become ready: %v", err)
-	}
-
-	initialFileName := fmt.Sprintf("initial-%d.txt", time.Now().UnixNano())
-	initialFilePath := filepath.Join(rootPath, initialFileName)
-	if err := os.WriteFile(initialFilePath, []byte("initial"), 0644); err != nil {
-		t.Fatalf("failed to create initial file: %v", err)
-	}
-
-	if err := waitForFileSearchResult(ctx, "f "+initialFileName, initialFileName, initialFilePath, 8*time.Second); err != nil {
-		t.Fatalf("initial file did not become searchable: %v", err)
-	}
-
-	observer := newToolbarObserver(t)
-	defer observer.Close()
-
-	incrementalFileName := fmt.Sprintf("sync-target-%d.txt", time.Now().UnixNano())
-	incrementalFilePath := filepath.Join(rootPath, incrementalFileName)
-	sessionID := "file-plugin-incremental-sync"
-	results, err := runQueryWithSession(ctx, sessionID, "f "+incrementalFileName)
-	if err != nil {
-		t.Fatalf("failed to create active file plugin query: %v", err)
-	}
-	for _, result := range results {
-		if result.Title == incrementalFileName && result.SubTitle == incrementalFilePath {
-			t.Fatalf("expected incremental file path %q to be absent before creation, got %#v", incrementalFilePath, results)
-		}
-	}
-
-	if err := os.WriteFile(incrementalFilePath, []byte("incremental"), 0644); err != nil {
-		t.Fatalf("failed to create incremental file: %v", err)
-	}
-
-	if err := pollUntil(8*time.Second, 100*time.Millisecond, func() (bool, error) {
-		return observer.HasToolbarTitlePrefix("Syncing file changes"), nil
-	}); err != nil {
-		t.Fatalf("expected incremental sync toolbar message, got titles: %v", observer.ToolbarTitles())
-	}
-
-	if err := waitForFileSearchResult(ctx, "f "+incrementalFileName, incrementalFileName, incrementalFilePath, 30*time.Second); err != nil {
-		t.Fatalf("incremental file did not become searchable: %v", err)
 	}
 }
 
@@ -275,7 +215,9 @@ func TestFilePlugin_CustomRootsIgnoresDSStore(t *testing.T) {
 		t.Fatalf("failed to create visible file: %v", err)
 	}
 
-	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
+		t.Fatalf("file search root did not become ready: %v", err)
+	}
 
 	if err := ensureFileSearchResultAbsent(ctx, "f store", ".DS_Store", ignoredFilePath, 30*time.Second); err != nil {
 		t.Fatalf(".DS_Store should remain hidden from file search: %v", err)
@@ -316,7 +258,9 @@ func TestFilePlugin_WildcardExtensionFilter(t *testing.T) {
 		t.Fatalf("failed to create text file: %v", err)
 	}
 
-	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
+		t.Fatalf("file search root did not become ready: %v", err)
+	}
 
 	if err := waitForFileSearchResult(ctx, "f *.png", pngFileName, pngFilePath, 30*time.Second); err != nil {
 		t.Fatalf("png file did not become searchable with wildcard filter: %v", err)
@@ -356,7 +300,9 @@ func TestFilePlugin_PathFragmentSearch(t *testing.T) {
 		t.Fatalf("failed to create target file: %v", err)
 	}
 
-	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
+		t.Fatalf("file search root did not become ready: %v", err)
+	}
 
 	if err := waitForFileSearchResult(ctx, "f alpha/beta", targetFileName, targetFilePath, 30*time.Second); err != nil {
 		t.Fatalf("path fragment query did not return target file: %v", err)
@@ -387,7 +333,9 @@ func TestFilePlugin_PinyinInitialSearch(t *testing.T) {
 		t.Fatalf("failed to create pinyin target file: %v", err)
 	}
 
-	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
+		t.Fatalf("file search root did not become ready: %v", err)
+	}
 
 	if err := waitForFileSearchResult(ctx, "f zjbg", targetFileName, targetFilePath, 30*time.Second); err != nil {
 		t.Fatalf("pinyin initials query did not return target file: %v", err)
@@ -412,7 +360,9 @@ func TestFilePlugin_PolicyUpdateRemovesIndexedPath(t *testing.T) {
 		t.Fatal("file plugin instance not found")
 	}
 
-	filePlugin.API.SaveSetting(ctx, "roots", string(rootSetting), false)
+	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
+		t.Fatalf("file search root did not become ready: %v", err)
+	}
 
 	targetFileName := fmt.Sprintf("policy-target-%d.txt", time.Now().UnixNano())
 	targetFilePath := filepath.Join(rootPath, targetFileName)
@@ -437,6 +387,84 @@ func TestFilePlugin_PolicyUpdateRemovesIndexedPath(t *testing.T) {
 
 	if err := ensureFileSearchResultAbsent(ctx, "f "+targetFileName, targetFileName, targetFilePath, 30*time.Second); err != nil {
 		t.Fatalf("target file should be evicted after policy update: %v", err)
+	}
+}
+
+func TestFilePlugin_CustomRootsIncrementalSync(t *testing.T) {
+	suite := NewTestSuite(t)
+	ctx := suite.ctx
+
+	rootPath := newStableFileSearchRoot(t, "filesearch-watch-root")
+
+	rootSetting, err := json.Marshal([]map[string]string{
+		{"Path": rootPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal file search roots setting: %v", err)
+	}
+
+	filePlugin := findPluginInstance("979d6363-025a-4f51-88d3-0b04e9dc56bf")
+	if filePlugin == nil {
+		t.Fatal("file plugin instance not found")
+	}
+
+	const sessionID = "file-plugin-incremental-sync"
+	t.Cleanup(func() {
+		// This smoke test keeps a session-bound incremental query open to observe toolbar
+		// updates. Clear that session and reset roots when the test ends so later file-search
+		// tests do not inherit watcher/query state from this incremental scenario.
+		if _, err := runQueryWithSession(ctx, sessionID, ""); err != nil {
+			t.Errorf("failed to clear incremental sync query session: %v", err)
+		}
+		filePlugin.API.SaveSetting(ctx, "roots", "[]", false)
+		if err := waitForFileSearchUserRoots(ctx, nil, 30*time.Second); err != nil {
+			t.Errorf("file search roots did not reset after incremental sync test: %v", err)
+		} else if err := waitForFileSearchIdle(ctx, 30*time.Second); err != nil {
+			t.Errorf("file search engine did not settle after incremental sync test: %v", err)
+		}
+	})
+
+	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
+		t.Fatalf("file search root did not become ready: %v", err)
+	}
+
+	initialFileName := fmt.Sprintf("initial-%d.txt", time.Now().UnixNano())
+	initialFilePath := filepath.Join(rootPath, initialFileName)
+	if err := os.WriteFile(initialFilePath, []byte("initial"), 0644); err != nil {
+		t.Fatalf("failed to create initial file: %v", err)
+	}
+
+	if err := waitForFileSearchResult(ctx, "f "+initialFileName, initialFileName, initialFilePath, 8*time.Second); err != nil {
+		t.Fatalf("initial file did not become searchable: %v", err)
+	}
+
+	observer := newToolbarObserver(t)
+	defer observer.Close()
+
+	incrementalFileName := fmt.Sprintf("sync-target-%d.txt", time.Now().UnixNano())
+	incrementalFilePath := filepath.Join(rootPath, incrementalFileName)
+	results, err := runQueryWithSession(ctx, sessionID, "f "+incrementalFileName)
+	if err != nil {
+		t.Fatalf("failed to create active file plugin query: %v", err)
+	}
+	for _, result := range results {
+		if result.Title == incrementalFileName && result.SubTitle == incrementalFilePath {
+			t.Fatalf("expected incremental file path %q to be absent before creation, got %#v", incrementalFilePath, results)
+		}
+	}
+
+	if err := os.WriteFile(incrementalFilePath, []byte("incremental"), 0644); err != nil {
+		t.Fatalf("failed to create incremental file: %v", err)
+	}
+
+	if err := pollUntil(8*time.Second, 100*time.Millisecond, func() (bool, error) {
+		return observer.HasToolbarTitlePrefix("Writing index") || observer.HasToolbarTitlePrefix("Finalizing index"), nil
+	}); err != nil {
+		t.Fatalf("expected incremental indexing toolbar message, got titles: %v", observer.ToolbarTitles())
+	}
+
+	if err := waitForFileSearchResult(ctx, "f "+incrementalFileName, incrementalFileName, incrementalFilePath, 30*time.Second); err != nil {
+		t.Fatalf("incremental file did not become searchable: %v", err)
 	}
 }
 
@@ -589,28 +617,101 @@ func ensureFileSearchResultAbsent(ctx context.Context, rawQuery string, unexpect
 }
 
 func waitForFileSearchRootReady(ctx context.Context, rootPath string, timeout time.Duration) error {
+	return waitForFileSearchUserRoots(ctx, []string{rootPath}, timeout)
+}
+
+func waitForFileSearchUserRoots(ctx context.Context, expectedPaths []string, timeout time.Duration) error {
 	engine, err := getFileSearchEngine()
 	if err != nil {
 		return err
 	}
 
-	cleanRootPath := filepath.Clean(rootPath)
-	return pollUntil(timeout, 100*time.Millisecond, func() (bool, error) {
+	expectedRoots := make(map[string]struct{}, len(expectedPaths))
+	for _, expectedPath := range expectedPaths {
+		expectedRoots[filepath.Clean(expectedPath)] = struct{}{}
+	}
+
+	var lastUserRoots []filesearch.RootRecord
+	err = pollUntil(timeout, 100*time.Millisecond, func() (bool, error) {
 		roots, err := engine.ListRoots(ctx)
 		if err != nil {
 			return false, err
 		}
 
+		lastUserRoots = lastUserRoots[:0]
 		for _, root := range roots {
-			if filepath.Clean(root.Path) != cleanRootPath {
+			if root.Kind != filesearch.RootKindUser {
 				continue
 			}
-
-			return root.Status == filesearch.RootStatusIdle, nil
+			lastUserRoots = append(lastUserRoots, root)
 		}
 
-		return false, nil
+		if len(lastUserRoots) != len(expectedRoots) {
+			return false, nil
+		}
+
+		for _, root := range lastUserRoots {
+			if _, ok := expectedRoots[filepath.Clean(root.Path)]; !ok {
+				return false, nil
+			}
+			if root.Status != filesearch.RootStatusIdle {
+				return false, nil
+			}
+		}
+
+		return true, nil
 	})
+	if err == nil {
+		return nil
+	}
+
+	if len(lastUserRoots) == 0 {
+		return err
+	}
+
+	summaries := make([]string, 0, len(lastUserRoots))
+	for _, root := range lastUserRoots {
+		summaries = append(summaries, fmt.Sprintf("%q (%s)", root.Path, root.Status))
+	}
+	return fmt.Errorf("%w; last user roots: %s", err, strings.Join(summaries, ", "))
+}
+
+func waitForFileSearchIdle(ctx context.Context, timeout time.Duration) error {
+	engine, err := getFileSearchEngine()
+	if err != nil {
+		return err
+	}
+
+	var lastStatus filesearch.StatusSnapshot
+	err = pollUntil(timeout, 100*time.Millisecond, func() (bool, error) {
+		status, err := engine.GetStatus(ctx)
+		if err != nil {
+			return false, err
+		}
+		lastStatus = status
+		return !status.IsIndexing && status.PendingDirtyRootCount == 0 && status.PendingDirtyPathCount == 0, nil
+	})
+	if err == nil {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"%w; last status: indexing=%t pendingRoots=%d pendingPaths=%d activeRoot=%q activeStage=%q",
+		err,
+		lastStatus.IsIndexing,
+		lastStatus.PendingDirtyRootCount,
+		lastStatus.PendingDirtyPathCount,
+		lastStatus.ActiveRootPath,
+		lastStatus.ActiveStage,
+	)
+}
+
+func saveFileSearchRootsAndWaitReady(ctx context.Context, filePlugin *plugin.Instance, rootsSetting string, rootPath string, timeout time.Duration) error {
+	// File search root updates arrive through asynchronous setting callbacks and one shared
+	// engine instance backs the package. Wait for the configured root set to settle before
+	// asserting query results so test expectations do not race the background reindex.
+	filePlugin.API.SaveSetting(ctx, "roots", rootsSetting, false)
+	return waitForFileSearchRootReady(ctx, rootPath, timeout)
 }
 
 func getFileSearchEngine() (*filesearch.Engine, error) {
