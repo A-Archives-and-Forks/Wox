@@ -35,3 +35,4 @@ wox.ui.windows/obj/
 wox.test/artifacts
 .tmp
 .worktrees/
+.tmp-*
