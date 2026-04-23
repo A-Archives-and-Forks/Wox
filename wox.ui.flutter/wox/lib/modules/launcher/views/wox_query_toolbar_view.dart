@@ -54,13 +54,17 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
                   return Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Toolbar progress now renders before the message text because the previous
-                      // order put the activity state after the label, which made the status read
-                      // later than intended. Keeping the indicator as a fixed leading element
-                      // preserves the existing icon/overflow behavior while matching the new UI.
+                      Flexible(
+                        child: Text(
+                          text,
+                          style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarFontColor)),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
                       if (hasToolbarProgress)
                         Padding(
-                          padding: const EdgeInsets.only(right: 8),
+                          padding: const EdgeInsets.only(left: 8),
                           child: SizedBox(
                             width: 14,
                             height: 14,
@@ -72,14 +76,6 @@ class WoxQueryToolbarView extends GetView<WoxLauncherController> {
                             ),
                           ),
                         ),
-                      Flexible(
-                        child: Text(
-                          text,
-                          style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.toolbarFontColor)),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                        ),
-                      ),
                       if (isTextOverflow && !controller.hasVisibleToolbarMsg)
                         MouseRegion(
                           cursor: SystemMouseCursors.click,
