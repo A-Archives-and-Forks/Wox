@@ -322,11 +322,19 @@ class WoxScreenshotController extends GetxController {
   }
 
   Future<void> cancelSession(String traceId, {String reason = 'unspecified'}) async {
-    await _finishSession(traceId, CaptureScreenshotResult.cancelled(), ScreenshotSessionStage.cancelled, reason: reason);
+    await _hideScreenshotWindowBeforeFinish(traceId);
+    await _finishSession(traceId, CaptureScreenshotResult.cancelled(), ScreenshotSessionStage.cancelled, windowAlreadyHidden: true, reason: reason);
   }
 
   Future<void> failSession(String traceId, {required String errorCode, required String errorMessage}) async {
-    await _finishSession(traceId, CaptureScreenshotResult.failed(errorCode: errorCode, errorMessage: errorMessage), ScreenshotSessionStage.failed, reason: 'failure:$errorCode');
+    await _hideScreenshotWindowBeforeFinish(traceId);
+    await _finishSession(
+      traceId,
+      CaptureScreenshotResult.failed(errorCode: errorCode, errorMessage: errorMessage),
+      ScreenshotSessionStage.failed,
+      windowAlreadyHidden: true,
+      reason: 'failure:$errorCode',
+    );
   }
 
   Future<void> confirmSelection(String traceId) async {
@@ -337,7 +345,7 @@ class WoxScreenshotController extends GetxController {
 
     stage.value = ScreenshotSessionStage.exporting;
     try {
-      await _hideCompletedScreenshotWindow(traceId);
+      await _hideScreenshotWindowBeforeFinish(traceId);
       await _ensureSelectionSnapshotsReady(currentSelection);
 
       // Screenshot completion used to push full PNG/base64 payloads back through the websocket
@@ -454,10 +462,10 @@ class WoxScreenshotController extends GetxController {
     }
   }
 
-  Future<void> _hideCompletedScreenshotWindow(String traceId) async {
-    // Confirmed captures no longer need to keep the editor visible while PNG export and restore
-    // bookkeeping finish. Hiding the window up front removes the perceived lag between clicking
-    // confirm and the screenshot UI disappearing, while the export still runs against in-memory data.
+  Future<void> _hideScreenshotWindowBeforeFinish(String traceId) async {
+    // Finishing a screenshot changes the reused Wox window back from fullscreen capture bounds to
+    // the saved launcher bounds. Hide first so cancel/failure/confirm do not visibly shrink the
+    // capture surface before the normal restore path decides whether to show the launcher again.
     final isVisible = await windowManager.isVisible();
     if (!isVisible) {
       return;
