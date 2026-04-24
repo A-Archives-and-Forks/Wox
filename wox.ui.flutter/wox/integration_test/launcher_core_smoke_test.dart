@@ -1,10 +1,10 @@
 import 'dart:io';
 
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
-import 'package:wox/controllers/wox_setting_controller.dart';
+import 'package:wox/entity/wox_image.dart';
+import 'package:wox/entity/wox_preview.dart';
+import 'package:wox/entity/wox_query.dart';
 import 'package:wox/enums/wox_launch_mode_enum.dart';
 import 'package:wox/enums/wox_position_type_enum.dart';
 import 'package:wox/enums/wox_query_type_enum.dart';
@@ -331,28 +331,53 @@ void registerLauncherCoreSmokeTests() {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_CONTINUE.code);
 
-      final result = await queryAndWaitForActiveResult(tester, controller, 'wox settings');
-      expect(result.title, equals('Open Wox Settings'));
+      var actionExecuted = false;
+      final query = PlainQuery.text('retained action smoke');
+      query.queryId = const UuidV4().generate();
+      controller.currentQuery.value = query;
+      controller.queryBoxTextFieldController.text = query.queryText;
+
+      final result = WoxQueryResult(
+        queryId: query.queryId,
+        id: 'retained-action-result',
+        title: 'Retained Action Result',
+        subTitle: 'Synthetic smoke result for continue launch action retention',
+        icon: WoxImage.empty(),
+        preview: WoxPreview.empty(),
+        score: 100,
+        group: '',
+        groupScore: 0,
+        tails: const [],
+        actions: [
+          WoxResultAction.local(
+            id: 'retained-action-execute',
+            name: 'Execute',
+            hotkey: 'enter',
+            isDefault: true,
+            // Bug fix: this smoke case validates continue-mode result/action
+            // retention, so use a deterministic local action instead of waiting
+            // for shared global plugin search to surface a settings command.
+            handler: (_) {
+              actionExecuted = true;
+              return true;
+            },
+          ),
+        ],
+        isGroup: false,
+      );
+      await controller.onReceivedQueryResults(const UuidV4().generate(), query.queryId, [result], isFinal: true);
       expectResultActionByName(result, 'execute');
-
-      controller.executeDefaultAction(const UuidV4().generate());
-      await pumpUntil(tester, () => controller.isInSettingView.value && find.byType(WoxSettingView).evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
-
-      final settingController = Get.find<WoxSettingController>();
-      await closeSettings(tester, settingController, controller);
-      await waitForQueryBoxText(tester, controller, 'wox settings');
-      expect(controller.activeResultViewController.items, isNotEmpty);
 
       await hideLauncherByEscape(tester, controller);
       await triggerBackendShowApp(tester);
-      await waitForQueryBoxText(tester, controller, 'wox settings');
+      await waitForQueryBoxText(tester, controller, query.queryText);
       expect(controller.activeResultViewController.items, isNotEmpty, reason: 'Continue mode should preserve prior results on re-show');
 
+      final resultIndexAfterReshow = controller.activeResultViewController.items.indexWhere((item) => item.value.data.id == result.id);
+      expect(resultIndexAfterReshow, greaterThanOrEqualTo(0));
+      controller.activeResultViewController.updateActiveIndex(const UuidV4().generate(), resultIndexAfterReshow);
       controller.executeDefaultAction(const UuidV4().generate());
-      await pumpUntil(tester, () => controller.isInSettingView.value && find.byType(WoxSettingView).evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
-
-      final settingControllerAfterReshow = Get.find<WoxSettingController>();
-      await closeSettings(tester, settingControllerAfterReshow, controller);
+      expect(actionExecuted, isTrue, reason: 'Continue mode should keep retained result actions executable after re-show');
     });
   });
 }

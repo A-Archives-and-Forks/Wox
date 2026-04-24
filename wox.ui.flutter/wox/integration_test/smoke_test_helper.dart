@@ -339,6 +339,14 @@ Future<void> enterQueryAndWaitForResults(WidgetTester tester, WoxLauncherControl
   tester.testTextInput.enterText(query);
   await tester.pump();
 
+  // Bug fix: continue-launch smoke cases can intentionally keep the previous
+  // result snapshot visible while the next query is still in flight. Waiting
+  // for any active result made callers proceed against stale results, so wait
+  // until the controller has accepted this query and then require a result that
+  // belongs to the current query id.
+  await pumpUntil(tester, () => controller.queryBoxTextFieldController.text == query && controller.currentQuery.value.queryText == query, timeout: timeout);
+  final currentQueryId = controller.currentQuery.value.queryId;
+
   // Suppress transient overflow errors that occur during the window resize
   // transition when results first appear and the layout hasn't settled yet.
   final oldHandler = FlutterError.onError;
@@ -349,7 +357,7 @@ Future<void> enterQueryAndWaitForResults(WidgetTester tester, WoxLauncherControl
     oldHandler?.call(details);
   };
 
-  await waitForActiveResults(tester, controller, timeout: timeout);
+  await pumpUntil(tester, () => controller.activeResultViewController.items.any((item) => item.value.data.queryId == currentQueryId), timeout: timeout);
 
   // Pump a few more frames to let the resize settle before restoring the error handler.
   await tester.pump(const Duration(milliseconds: 500));
@@ -622,9 +630,5 @@ Future<void> pumpUntil(WidgetTester tester, bool Function() condition, {required
 }
 
 Future<Map<String, dynamic>> triggerTestScreenshot() async {
-  return await WoxHttpUtil.instance.postData<Map<String, dynamic>>(
-    const UuidV4().generate(),
-    '/test/trigger/screenshot',
-    {},
-  );
+  return await WoxHttpUtil.instance.postData<Map<String, dynamic>>(const UuidV4().generate(), '/test/trigger/screenshot', {});
 }

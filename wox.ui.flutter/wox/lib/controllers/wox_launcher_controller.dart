@@ -112,13 +112,17 @@ class WoxLauncherController extends GetxController {
   /// Grace window before dropping stale visible results for a new query.
   /// This avoids immediate clear/fill flashes when the next snapshot arrives quickly.
   Timer clearQueryResultsTimer = Timer(const Duration(), () => {});
+  Timer queryTransitionShrinkTimer = Timer(const Duration(), () => {});
   static const staleVisibleResultsDuration = Duration(milliseconds: 80);
+  static const queryTransitionShrinkDelay = Duration(milliseconds: 250);
   final windowFlickerDetector = WindowFlickerDetector();
   Size? ongoingResizeTargetSize;
   int resizeRequestToken = 0;
   bool isShowingPendingResultPlaceholder = false;
   double? pendingResultPlaceholderHeight;
   double? committedWindowHeight;
+  String? pendingQueryTransitionMinHeightQueryId;
+  double? pendingQueryTransitionMinHeight;
 
   /// This flag is used to control whether the user can arrow up to show history when the app is first shown.
   var canArrowUpHistory = true;
@@ -409,7 +413,10 @@ class WoxLauncherController extends GetxController {
 
   void cancelPendingResultTransitions() {
     clearQueryResultsTimer.cancel();
+    queryTransitionShrinkTimer.cancel();
     resetPendingResultPlaceholder();
+    pendingQueryTransitionMinHeightQueryId = null;
+    pendingQueryTransitionMinHeight = null;
   }
 
   // Keep a temporary "empty but still tall" transition state while a new query
@@ -440,13 +447,20 @@ class WoxLauncherController extends GetxController {
     refreshToolbarActionsForCurrentState(traceId);
   }
 
-  Future<void> resizeHeightForResultUpdate({required String traceId, required String reason}) async {
+  Future<void> resizeHeightForResultUpdate({required String traceId, required String reason, double? minTargetHeight}) async {
     // Bug fix: result updates used to delay shrink while still applying growth
     // immediately. That made the window height lag behind the current result
     // snapshot, so result-driven resize now always applies the latest target
     // height right away. The pending-result placeholder above still handles the
     // separate cross-query flicker case without reintroducing shrink debounce.
-    final targetHeight = calculateWindowHeight();
+    var targetHeight = calculateWindowHeight();
+    if (minTargetHeight != null && targetHeight < minTargetHeight) {
+      // Bug fix: early non-final results for a new query can be smaller than
+      // the previous query's settled snapshot. Keep that transition at the old
+      // height until the backend sends a final snapshot so stale rows disappear
+      // without a visible shrink-then-expand jump while plugins are still racing.
+      targetHeight = minTargetHeight;
+    }
     await resizeHeight(traceId: traceId, reason: reason, overrideTargetHeight: targetHeight);
   }
 
@@ -508,6 +522,22 @@ class WoxLauncherController extends GetxController {
     }
 
     if (receivedResults.isEmpty) {
+      final transitionMinHeight = pendingQueryTransitionMinHeightQueryId == queryId ? pendingQueryTransitionMinHeight : null;
+      if (isFinal && transitionMinHeight != null) {
+        pendingQueryTransitionMinHeightQueryId = null;
+        pendingQueryTransitionMinHeight = null;
+        queryTransitionShrinkTimer.cancel();
+        queryTransitionShrinkTimer = Timer(queryTransitionShrinkDelay, () {
+          if (isClosed || currentQuery.value.queryId != queryId) {
+            return;
+          }
+          // Bug fix: final empty results for a new query can arrive before the
+          // query-transition grace window is visually complete. Hold the old
+          // height briefly, then settle to the real empty height.
+          unawaited(resizeHeightForResultUpdate(traceId: traceId, reason: "settle empty query transition shrink", minTargetHeight: null));
+        });
+      }
+
       // Empty responses must clear stale items from the previous query state,
       // otherwise plugin-scoped toolbar messages cannot be shown without results.
       resultListViewController.clearItems();
@@ -520,7 +550,7 @@ class WoxLauncherController extends GetxController {
       // Bug fix: empty terminal snapshots used to wait until the next frame
       // before shrinking, which still let the old geometry flash once. Resize
       // in the same async flow so the empty state is committed immediately.
-      await resizeHeightForResultUpdate(traceId: traceId, reason: "empty query results received");
+      await resizeHeightForResultUpdate(traceId: traceId, reason: "empty query results received", minTargetHeight: transitionMinHeight);
       return;
     }
 
@@ -545,7 +575,23 @@ class WoxLauncherController extends GetxController {
     updateActiveResultIndex(traceId);
     updateDoctorToolbarIfNeeded(traceId);
 
-    unawaited(resizeHeightForResultUpdate(traceId: traceId, reason: "query results updated"));
+    final transitionMinHeight = pendingQueryTransitionMinHeightQueryId == queryId ? pendingQueryTransitionMinHeight : null;
+    if (isFinal && transitionMinHeight != null) {
+      pendingQueryTransitionMinHeightQueryId = null;
+      pendingQueryTransitionMinHeight = null;
+      queryTransitionShrinkTimer.cancel();
+      queryTransitionShrinkTimer = Timer(queryTransitionShrinkDelay, () {
+        if (isClosed || currentQuery.value.queryId != queryId) {
+          return;
+        }
+        // Bug fix: final fallback rows for a new query can arrive before the
+        // stale-result grace window has visibly completed. Hold the previous
+        // height for one short transition, then apply the real final height so
+        // the UI does not stay oversized after the query has settled.
+        unawaited(resizeHeightForResultUpdate(traceId: traceId, reason: "settle query transition shrink", minTargetHeight: null));
+      });
+    }
+    unawaited(resizeHeightForResultUpdate(traceId: traceId, reason: "query results updated", minTargetHeight: transitionMinHeight));
   }
 
   void updateActiveResultIndex(String traceId) {
@@ -1071,6 +1117,10 @@ class WoxLauncherController extends GetxController {
     }
 
     focusQueryBox(selectAll: params.selectAll);
+    // Bug fix: on Windows the native show/focus call can complete before the
+    // Flutter editable text is ready to accept keyboard focus. Retry once after
+    // the first visible frame so re-show keeps immediate typing reliable.
+    unawaited(Future.delayed(const Duration(milliseconds: 100), () => focusQueryBox(selectAll: params.selectAll)));
 
     if (params.isQueryFocus) {
       Logger.instance.debug(traceId, "need to auto focus to chat input on show app (query focus)");
@@ -1710,6 +1760,15 @@ class WoxLauncherController extends GetxController {
       await clearQueryResults(traceId);
       Logger.instance.debug(traceId, "clear query results immediately because window is hidden");
     } else {
+      if (activeResultViewController.items.isNotEmpty) {
+        queryTransitionShrinkTimer.cancel();
+        // Bug fix: a visible query transition needs the previous settled height
+        // even if the backend returns a small non-final fallback before the
+        // stale-result grace timer fires. Store it per query so same-query result
+        // updates can still shrink immediately.
+        pendingQueryTransitionMinHeightQueryId = query.queryId;
+        pendingQueryTransitionMinHeight = committedWindowHeight ?? calculateWindowHeight();
+      }
       refreshToolbarActionsForCurrentState(traceId);
       // Delay the stale-content clear slightly so queries that return almost
       // immediately can replace the old snapshot without showing an empty gap.
@@ -2656,6 +2715,10 @@ class WoxLauncherController extends GetxController {
     await windowManager.setPosition(positionBeforeOpenSetting);
     await windowManager.focus();
     focusQueryBox(selectAll: true);
+    // Bug fix: after leaving settings, Windows can report window focus before
+    // Flutter has rebuilt the launcher query box. Retry once after the view
+    // switch so immediate typing works consistently.
+    unawaited(Future.delayed(const Duration(milliseconds: 100), () => focusQueryBox(selectAll: true)));
   }
 
   void closeAllDialogsInSetting() {

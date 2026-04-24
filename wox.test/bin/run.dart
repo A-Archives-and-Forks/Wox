@@ -453,7 +453,7 @@ Future<_SmokeTemplatePluginPackage> _prepareSmokeTemplatePlugin({
     prefix: '[template-plugin:${definition.runtime}]',
     stdinData: '$initInput\n',
   );
-  await _runLoggedCommand('make', ['install'], workingDirectory: pluginRoot.path, environment: environment, outputFile: logFile, prefix: '[template-plugin:${definition.runtime}]');
+  await _runTemplateInstallWithRetry(definition: definition, pluginRoot: pluginRoot, environment: environment, logFile: logFile);
   await _runLoggedCommand('make', ['package'], workingDirectory: pluginRoot.path, environment: environment, outputFile: logFile, prefix: '[template-plugin:${definition.runtime}]');
 
   final pluginJson = jsonDecode(await File('${pluginRoot.path}${Platform.pathSeparator}plugin.json').readAsString()) as Map<String, dynamic>;
@@ -477,6 +477,52 @@ Future<_SmokeTemplatePluginPackage> _prepareSmokeTemplatePlugin({
           return keywords.first.toString();
         })(),
   );
+}
+
+Future<void> _runTemplateInstallWithRetry({
+  required _SmokeTemplatePluginDefinition definition,
+  required Directory pluginRoot,
+  required Map<String, String> environment,
+  required File logFile,
+}) async {
+  const maxAttempts = 3;
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await _runLoggedCommand(
+        'make',
+        ['install'],
+        workingDirectory: pluginRoot.path,
+        environment: environment,
+        outputFile: logFile,
+        prefix: '[template-plugin:${definition.runtime}]',
+      );
+      return;
+    } on ProcessException {
+      final canRetry = definition.runtime == 'nodejs' && attempt < maxAttempts && await _logContainsPnpmBusyFailure(logFile);
+      if (!canRetry) {
+        rethrow;
+      }
+
+      stderr.writeln('[template-plugin:${definition.runtime}] pnpm hit a transient EBUSY symlink failure; retrying install (${attempt + 1}/$maxAttempts).');
+      final nodeModules = Directory('${pluginRoot.path}${Platform.pathSeparator}node_modules');
+      if (await nodeModules.exists()) {
+        // Bug fix: Windows can leave a partially-created pnpm symlink tree after
+        // EBUSY. Removing node_modules before retrying avoids reusing the broken
+        // install state while keeping the retry scoped to smoke setup only.
+        await nodeModules.delete(recursive: true);
+      }
+      await Future<void>.delayed(Duration(seconds: attempt * 2));
+    }
+  }
+}
+
+Future<bool> _logContainsPnpmBusyFailure(File logFile) async {
+  if (!await logFile.exists()) {
+    return false;
+  }
+
+  final contents = await logFile.readAsString();
+  return contents.contains('ERR_PNPM_EBUSY') || contents.contains('EBUSY: resource busy or locked');
 }
 
 Future<void> _installLocalPluginPackage({required int serverPort, required String packagePath}) async {

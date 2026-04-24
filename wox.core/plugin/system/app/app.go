@@ -947,6 +947,7 @@ func (a *ApplicationPlugin) getAppPaths(ctx context.Context, appDirectories []ap
 			a.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("error reading directory %s: %s", dir.Path, readErr.Error()))
 			continue
 		}
+		ignoreMatchers := a.getIgnoreRuleMatchersSnapshot()
 
 		matchCount := 0
 		for _, entry := range appPath {
@@ -954,7 +955,14 @@ func (a *ApplicationPlugin) getAppPaths(ctx context.Context, appDirectories []ap
 				return strings.HasSuffix(strings.ToLower(entry.Name()), fmt.Sprintf(".%s", strings.ToLower(ext)))
 			})
 			if isExtensionMatch {
-				fullPath := path.Join(dir.Path, entry.Name())
+				fullPath := filepath.Join(dir.Path, entry.Name())
+				if _, ignored := a.matchIgnoreRuleCandidates([]string{fullPath}, ignoreMatchers); ignored {
+					// Bug fix: IgnoreRules previously filtered query results only after the full app
+					// crawl had already parsed every ignored file. Skipping matching paths here keeps
+					// deterministic smoke fixtures from waiting on large default Windows directories
+					// while preserving the same pattern contract used by query filtering.
+					continue
+				}
 				appPaths = append(appPaths, fullPath)
 				matchCount++
 
@@ -962,9 +970,15 @@ func (a *ApplicationPlugin) getAppPaths(ctx context.Context, appDirectories []ap
 			}
 
 			// check if it's a directory
-			subDir := path.Join(dir.Path, entry.Name())
+			subDir := filepath.Join(dir.Path, entry.Name())
 			isDirectory, dirErr := util.IsDirectory(subDir)
 			if dirErr != nil || !isDirectory {
+				continue
+			}
+			if _, ignored := a.matchIgnoreRuleCandidates([]string{subDir}, ignoreMatchers); ignored {
+				// Bug fix: directory-wide ignore patterns such as "C:\Program Files\*" should stop
+				// recursion before expensive default roots are walked. Filtering only leaf apps was
+				// correct functionally but not enough for bounded smoke-test indexing.
 				continue
 			}
 
