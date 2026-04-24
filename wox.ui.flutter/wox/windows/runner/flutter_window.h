@@ -95,6 +95,7 @@ private:
 
   // Sync the hosted Flutter child window with the root client area.
   void SyncFlutterChildWindowToClientArea(HWND hwnd, const char *source, bool engine_handled);
+  void FocusFlutterViewOrRoot(HWND hwnd);
 
   // Helpers for logging native geometry.
   std::string RectToString(const RECT &rect) const;

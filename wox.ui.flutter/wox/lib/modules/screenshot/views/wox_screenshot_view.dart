@@ -50,6 +50,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   final controller = Get.find<WoxScreenshotController>();
   final focusNode = FocusNode(debugLabel: 'screenshot-workspace');
   bool _isCancellingSession = false;
+  bool _isConfirmingSession = false;
 
   _InteractionMode? _interactionMode;
   _ResizeHandle? _resizeHandle;
@@ -82,17 +83,28 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   }
 
   bool _handleGlobalScreenshotKeyEvent(KeyEvent event) {
-    if ((event is! KeyDownEvent && event is! KeyRepeatEvent) || event.logicalKey != LogicalKeyboardKey.escape) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return false;
     }
 
-    // The screenshot workflow used to rely on the workspace Focus node receiving Escape. That was
-    // not reliable once annotation text fields took focus or a toolbar click left the page without a
-    // stable primary focus, so Escape stopped dismissing the active screenshot session. A dedicated
-    // screenshot-level HardwareKeyboard handler keeps the cancel shortcut working anywhere inside the
-    // annotation UI without changing the rest of the keyboard flow.
-    _cancelSessionFromKeyboard();
-    return true;
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      // The screenshot workflow used to rely on the workspace Focus node receiving Escape. That was
+      // not reliable once annotation text fields took focus or a toolbar click left the page without a
+      // stable primary focus, so Escape stopped dismissing the active screenshot session. A dedicated
+      // screenshot-level HardwareKeyboard handler keeps the cancel shortcut working anywhere inside the
+      // annotation UI without changing the rest of the keyboard flow.
+      _cancelSessionFromKeyboard();
+      return true;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.enter) {
+      // Confirming a screenshot is a session-level action just like Escape. Keeping Enter in the
+      // global screenshot handler avoids the focus-dependent path where toolbar clicks or stale
+      // launcher focus made the workspace Focus node miss the key press entirely.
+      return _confirmSelectionFromKeyboard();
+    }
+
+    return false;
   }
 
   void _cancelSessionFromKeyboard() {
@@ -106,6 +118,20 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         _isCancellingSession = false;
       }
     });
+  }
+
+  bool _confirmSelectionFromKeyboard() {
+    if (_isConfirmingSession || !controller.isSessionActive.value || controller.selectionRect == null || controller.textDraftPosition.value != null) {
+      return false;
+    }
+
+    _isConfirmingSession = true;
+    controller.confirmSelection(const UuidV4().generate()).whenComplete(() {
+      if (mounted) {
+        _isConfirmingSession = false;
+      }
+    });
+    return true;
   }
 
   @override
@@ -141,10 +167,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     }
 
     if (event.logicalKey == LogicalKeyboardKey.enter) {
-      if (controller.selectionRect != null) {
-        controller.confirmSelection(const UuidV4().generate());
-      }
-      return KeyEventResult.handled;
+      return _confirmSelectionFromKeyboard() ? KeyEventResult.handled : KeyEventResult.ignored;
     }
 
     if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {

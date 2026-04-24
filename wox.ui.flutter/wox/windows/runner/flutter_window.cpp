@@ -714,6 +714,21 @@ void FlutterWindow::SyncFlutterChildWindowToClientArea(HWND hwnd, const char *so
   Log(oss.str());
 }
 
+void FlutterWindow::FocusFlutterViewOrRoot(HWND hwnd)
+{
+  // Keyboard shortcuts are delivered to Flutter through the hosted child HWND, not the top-level
+  // runner HWND. Screenshot reveal used to focus the root window after WM_ACTIVATE had already
+  // focused the child, so Escape/Enter never reached Dart during capture. Prefer the child and only
+  // fall back to the root before Flutter has created or retained a valid view handle.
+  if (child_window_ != nullptr && IsWindow(child_window_))
+  {
+    SetFocus(child_window_);
+    return;
+  }
+
+  SetFocus(hwnd);
+}
+
 void FlutterWindow::TrackChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam)
 {
   if (!IsKeyDownMessage(message))
@@ -1421,7 +1436,7 @@ void FlutterWindow::RevealPreparedCaptureWorkspace(HWND hwnd)
     AllowSetForegroundWindow(ASFW_ANY);
     SetForegroundWindow(hwnd);
   }
-  SetFocus(hwnd);
+  FocusFlutterViewOrRoot(hwnd);
   BringWindowToTop(hwnd);
   blur_guard_active_ = false;
 
@@ -2441,7 +2456,7 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       // which can block for seconds if the foreground window is hung.
       if (SetForegroundWindow(hwnd))
       {
-        SetFocus(hwnd);
+        FocusFlutterViewOrRoot(hwnd);
         BringWindowToTop(hwnd);
         blur_guard_active_ = false;
         result->Success();
@@ -2463,7 +2478,7 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       }
 
       SetForegroundWindow(hwnd);
-      SetFocus(hwnd);
+      FocusFlutterViewOrRoot(hwnd);
       BringWindowToTop(hwnd);
 
       if (attached)
@@ -2494,7 +2509,7 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       Sleep(10);
 
       SetForegroundWindow(hwnd);
-      SetFocus(hwnd);
+      FocusFlutterViewOrRoot(hwnd);
       BringWindowToTop(hwnd);
 
       if (GetForegroundWindow() == hwnd)
@@ -2508,7 +2523,7 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       Log("Focus: both methods failed, trying AllowSetForegroundWindow");
       AllowSetForegroundWindow(ASFW_ANY);
       SetForegroundWindow(hwnd);
-      SetFocus(hwnd);
+      FocusFlutterViewOrRoot(hwnd);
 
       Log("Focus: final attempt completed");
       blur_guard_active_ = false;
