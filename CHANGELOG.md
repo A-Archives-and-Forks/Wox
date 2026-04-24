@@ -2,6 +2,34 @@
 
 ## v2.0.3 -
 
+- Add
+  - [`Screenshot`] Add screenshot plugin with annotation, history, export path, clipboard handoff, keyboard confirmation, and multi-display handling. 
+  Tips: Use it with Query Hotkey to capture screenshots with a single shortcut
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/screenshot.png)
+  - [`WebView`] Add configurable website previews with navigation actions, preview toolbar, cache controls, and Windows support. 
+  Tips:Use it with Query Hotkey to open frequently used websites with one shortcut, such as Ctrl+Shift+I to quickly check Instagram and hide it again
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/webview_with_hotkey.png)
+  - [`Converter`] Add unit conversion support for length, weight, and temperature #4390
+  - [`File Search`] Add native indexed file search with database-backed scanning, wildcard search, incremental changefeed sync, startup restore, and cross-platform providers. Everything plugin has been moved to [here](https://github.com/qianlifeng/Wox.Plugin.Everything)
+  - [`Toolbar`] Add plugin toolbar messages API so long-running tasks can show progress and actions in the launcher
+  - [`App`] Add customizable ignore rules for app indexing #4375
+  - [`System`] Add shutdown and restart commands with confirmation prompts
+  - [`Query Hotkey`] Add per-hotkey position, query box, toolbar, width, and result count options
+  - [`Tray`] Add context menus and configurable result limits for tray queries
+
+- Improve
+  - [`Launcher`] Improve query result handling, height preservation, and resize timing to reduce flicker and input lag
+  - [`Query`] Improve temporary query restoration, debounced plugin fallback, and result tracking for more stable query transitions
+  - [`Plugin`] Improve uninstall progress reporting and host cleanup
+  - [`File Icon`] Improve Windows file icon retrieval with associated file type fallback
+  - [`Updater`] Improve macOS app replacement and Linux updater logging
+  - [`Settings`] Improve loading of settings and AI model data
+
+- Fix
+  - [`Launcher`] Fix resize regressions, first-result painting flicker, and delayed window hiding on Windows
+  - [`Tray`] Fix preview padding when tray query results only contain a preview
+  - [`App`] Fix application indexing issues and query handling edge cases
+
 
 ## v2.0.2 - 2026-03-23
 
