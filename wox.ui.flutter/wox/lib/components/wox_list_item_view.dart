@@ -57,9 +57,11 @@ class WoxListItemView extends StatelessWidget {
     final tailTextColor = isActive ? woxTheme.resultItemActiveTailTextColorParsed : woxTheme.resultItemTailTextColorParsed;
     final activeBgColor = woxTheme.resultItemActiveBackgroundColorParsed;
     final actionBgColor = woxTheme.actionContainerBackgroundColorParsed;
+    final maxTailWidth = WoxSettingUtil.instance.currentSetting.appWidth / 3;
+    final maxTextTailWidth = math.max(0.0, maxTailWidth - _tailPadding.horizontal - _tailItemPadding.horizontal);
 
     return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: WoxSettingUtil.instance.currentSetting.appWidth / 2),
+      constraints: BoxConstraints(maxWidth: maxTailWidth),
       child: Padding(
         padding: _tailPadding,
         child: SingleChildScrollView(
@@ -68,7 +70,7 @@ class WoxListItemView extends StatelessWidget {
             children: [
               for (final tail in item.tails)
                 if (tail.type == WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_TEXT.code && tail.text != null)
-                  Padding(padding: _tailItemPadding, child: buildTextTailTag(tail.text!, tail.textCategory, tailTextColor))
+                  Padding(padding: _tailItemPadding, child: buildTextTailTag(tail.text!, tail.textCategory, tailTextColor, maxTextTailWidth))
                 else if (tail.type == WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_HOTKEY.code && tail.hotkey != null)
                   Padding(
                     padding: _tailItemPadding,
@@ -109,14 +111,25 @@ class WoxListItemView extends StatelessWidget {
     );
   }
 
-  Widget buildTextTailTag(String text, String textCategory, Color defaultTextColor) {
+  Widget buildTextTailTag(String text, String textCategory, Color defaultTextColor, double maxTailWidth) {
     final tailStyle = _getTextTailStyle(textCategory, defaultTextColor);
 
-    return DecoratedBox(
-      decoration: BoxDecoration(color: tailStyle.backgroundColor, borderRadius: _textTailBorderRadius, border: Border.all(color: tailStyle.borderColor)),
-      child: Padding(
-        padding: _textTailPadding,
-        child: Center(widthFactor: 1, heightFactor: 1, child: Text(text, style: TextStyle(color: tailStyle.textColor, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis)),
+    // Text tails live inside a horizontal scroll view, whose child receives unbounded
+    // width. The old unconstrained Text made ellipsis impossible and clipped long
+    // pill borders into a thin line, so each text tail is capped to the visible tail
+    // area while the tail row can still scroll when there are multiple tail items.
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxTailWidth),
+      child: DecoratedBox(
+        decoration: BoxDecoration(color: tailStyle.backgroundColor, borderRadius: _textTailBorderRadius, border: Border.all(color: tailStyle.borderColor)),
+        child: Padding(
+          padding: _textTailPadding,
+          child: Center(
+            widthFactor: 1,
+            heightFactor: 1,
+            child: Text(text, style: TextStyle(color: tailStyle.textColor, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+        ),
       ),
     );
   }
