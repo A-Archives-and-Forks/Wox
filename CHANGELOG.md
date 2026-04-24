@@ -3,12 +3,12 @@
 ## v2.0.3 -
 
 - Add
-  - [`Screenshot`] Add screenshot plugin with annotation, history, export path, clipboard handoff, keyboard confirmation, and multi-display handling. 
-  Tips: Use it with Query Hotkey to capture screenshots with a single shortcut
-    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/screenshot.png)
-  - [`WebView`] Add configurable website previews with navigation actions, preview toolbar, cache controls, and Windows support. 
-  Tips:Use it with Query Hotkey to open frequently used websites with one shortcut, such as Ctrl+Shift+I to quickly check Instagram and hide it again
-    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/webview_with_hotkey.png)
+  - [`Screenshot`] Add screenshot plugin with annotation, history, export path, clipboard handoff, keyboard confirmation, and multi-display handling. One more app to remove from startup list!  
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/screenshot.png)  
+  **Tips**: Use it with Query Hotkey to capture screenshots with a single shortcut
+  - [`WebView`] Add configurable website previews with navigation actions, preview toolbar, cache controls, and Windows support.   
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/webview_with_hotkey.png)  
+  **Tips**: Use it with Query Hotkey to open frequently used websites with one shortcut, such as Ctrl+Shift+I to quickly check Instagram and hide it again
   - [`Converter`] Add unit conversion support for length, weight, and temperature #4390
   - [`File Search`] Add native indexed file search with database-backed scanning, wildcard search, incremental changefeed sync, startup restore, and cross-platform providers. Everything plugin has been moved to [here](https://github.com/qianlifeng/Wox.Plugin.Everything)
   - [`Toolbar`] Add plugin toolbar messages API so long-running tasks can show progress and actions in the launcher

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"wox/common"
 	"wox/plugin"
@@ -19,13 +20,16 @@ import (
 
 var screenshotIcon = common.PluginScreenshotIcon
 var screenshotCommandNew = "new"
+var screenshotHistoryPreviewWidth = 400
+var screenshotHistoryIconWidth = 40
 
 func init() {
 	plugin.AllSystemPlugin = append(plugin.AllSystemPlugin, &ScreenshotPlugin{})
 }
 
 type ScreenshotPlugin struct {
-	api plugin.API
+	api        plugin.API
+	thumbnailM sync.Mutex
 }
 
 func (p *ScreenshotPlugin) GetMetadata() plugin.Metadata {
@@ -59,6 +63,12 @@ func (p *ScreenshotPlugin) GetMetadata() plugin.Metadata {
 
 func (p *ScreenshotPlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 	p.api = initParams.API
+
+	// Screenshot history thumbnails are warmed during plugin startup so the first user query does
+	// not pay the old cost of decoding every original screenshot through the generic icon pipeline.
+	util.Go(ctx, "warm screenshot history thumbnails", func() {
+		p.warmScreenshotHistoryThumbnails(ctx)
+	})
 }
 
 func (p *ScreenshotPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
@@ -179,14 +189,130 @@ func (p *ScreenshotPlugin) listScreenshotHistory() ([]screenshotHistoryItem, err
 	return items, nil
 }
 
+func (p *ScreenshotPlugin) warmScreenshotHistoryThumbnails(ctx context.Context) {
+	items, err := p.listScreenshotHistory()
+	if err != nil {
+		p.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to warm screenshot history thumbnails: %s", err.Error()))
+		return
+	}
+
+	for _, item := range items {
+		if err := p.ensureScreenshotHistoryThumbnails(ctx, item); err != nil {
+			p.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to warm screenshot history thumbnail: path=%s err=%s", item.path, err.Error()))
+		}
+	}
+}
+
+func (p *ScreenshotPlugin) ensureScreenshotHistoryThumbnailsForPath(ctx context.Context, screenshotPath string) error {
+	item, err := p.screenshotHistoryItemFromPath(screenshotPath)
+	if err != nil {
+		return err
+	}
+
+	return p.ensureScreenshotHistoryThumbnails(ctx, item)
+}
+
+func (p *ScreenshotPlugin) screenshotHistoryItemFromPath(screenshotPath string) (screenshotHistoryItem, error) {
+	info, err := os.Stat(screenshotPath)
+	if err != nil {
+		return screenshotHistoryItem{}, fmt.Errorf("failed to read screenshot file info: %w", err)
+	}
+	if info.IsDir() {
+		return screenshotHistoryItem{}, fmt.Errorf("screenshot path is a directory")
+	}
+	if !strings.EqualFold(filepath.Ext(screenshotPath), ".png") {
+		return screenshotHistoryItem{}, fmt.Errorf("screenshot path is not a png")
+	}
+	if info.Size() == 0 {
+		return screenshotHistoryItem{}, fmt.Errorf("screenshot file is empty")
+	}
+
+	return screenshotHistoryItem{
+		path:      screenshotPath,
+		fileName:  filepath.Base(screenshotPath),
+		size:      info.Size(),
+		timestamp: info.ModTime().UnixMilli(),
+	}, nil
+}
+
+func (p *ScreenshotPlugin) ensureScreenshotHistoryThumbnails(ctx context.Context, item screenshotHistoryItem) error {
+	previewPath, iconPath := p.screenshotHistoryThumbnailPaths(item)
+	if util.IsFileExists(previewPath) && util.IsFileExists(iconPath) {
+		p.warmScreenshotHistoryManagerIconCache(ctx, iconPath)
+		return nil
+	}
+
+	p.thumbnailM.Lock()
+	defer p.thumbnailM.Unlock()
+
+	if util.IsFileExists(previewPath) && util.IsFileExists(iconPath) {
+		p.warmScreenshotHistoryManagerIconCache(ctx, iconPath)
+		return nil
+	}
+	if err := util.GetLocation().EnsureDirectoryExist(util.GetLocation().GetImageCacheDirectory()); err != nil {
+		return fmt.Errorf("failed to ensure image cache directory: %w", err)
+	}
+
+	sourceImage, err := imaging.Open(item.path)
+	if err != nil {
+		return fmt.Errorf("failed to decode screenshot image: %w", err)
+	}
+
+	// Screenshot history now owns its thumbnails instead of relying on Manager.ConvertIcon.
+	// The old path decoded full-size screenshots during query polishing; generating bounded
+	// cache files here moves that work to init/capture time and keeps query latency stable.
+	previewImage := imaging.Resize(sourceImage, screenshotHistoryPreviewWidth, 0, imaging.Lanczos)
+	if err := imaging.Save(previewImage, previewPath); err != nil {
+		return fmt.Errorf("failed to save screenshot preview thumbnail: %w", err)
+	}
+
+	iconImage := imaging.Resize(sourceImage, screenshotHistoryIconWidth, 0, imaging.Lanczos)
+	if err := imaging.Save(iconImage, iconPath); err != nil {
+		return fmt.Errorf("failed to save screenshot icon thumbnail: %w", err)
+	}
+
+	p.warmScreenshotHistoryManagerIconCache(ctx, iconPath)
+	return nil
+}
+
+func (p *ScreenshotPlugin) warmScreenshotHistoryManagerIconCache(ctx context.Context, iconPath string) {
+	// Manager.PolishResult always normalizes result icons with ConvertIcon. Running the same
+	// conversion on the already-small screenshot icon during warm-up prevents query-time cache
+	// generation while keeping the normal UI icon contract unchanged.
+	common.ConvertIcon(ctx, common.NewWoxImageAbsolutePath(iconPath), "")
+}
+
+func (p *ScreenshotPlugin) getScreenshotHistoryThumbnails(item screenshotHistoryItem) (previewImage common.WoxImage, iconImage common.WoxImage, ok bool) {
+	previewPath, iconPath := p.screenshotHistoryThumbnailPaths(item)
+	if !util.IsFileExists(previewPath) || !util.IsFileExists(iconPath) {
+		return common.WoxImage{}, common.WoxImage{}, false
+	}
+
+	return common.NewWoxImageAbsolutePath(previewPath), common.NewWoxImageAbsolutePath(iconPath), true
+}
+
+func (p *ScreenshotPlugin) screenshotHistoryThumbnailPaths(item screenshotHistoryItem) (previewPath string, iconPath string) {
+	cacheKey := util.Md5([]byte(fmt.Sprintf("%s:%d:%d", item.path, item.size, item.timestamp)))
+	cacheDirectory := util.GetLocation().GetImageCacheDirectory()
+	return filepath.Join(cacheDirectory, fmt.Sprintf("screenshot_%s_preview.png", cacheKey)),
+		filepath.Join(cacheDirectory, fmt.Sprintf("screenshot_%s_icon.png", cacheKey))
+}
+
 func (p *ScreenshotPlugin) screenshotHistoryResult(item screenshotHistoryItem) plugin.QueryResult {
 	group, groupScore := p.screenshotHistoryGroup(item.timestamp)
-	previewImage := common.NewWoxImageAbsolutePath(item.path)
+	previewImage, iconImage, thumbnailsReady := p.getScreenshotHistoryThumbnails(item)
+	if !thumbnailsReady {
+		// Query must never generate thumbnails: doing image decode/write work here made the first
+		// screenshot search slow. A default icon keeps listing responsive while init/new-capture
+		// warm-up finishes; preview can still open the original file on explicit selection.
+		previewImage = common.NewWoxImageAbsolutePath(item.path)
+		iconImage = screenshotIcon
+	}
 
 	return plugin.QueryResult{
 		Title:      item.fileName,
 		SubTitle:   util.FormatTimestamp(item.timestamp),
-		Icon:       previewImage,
+		Icon:       iconImage,
 		Group:      group,
 		GroupScore: groupScore,
 		Preview: plugin.WoxPreview{
@@ -288,6 +414,12 @@ func (p *ScreenshotPlugin) captureScreenshot(ctx context.Context, actionContext 
 			p.api.Log(ctx, plugin.LogLevelError, "screenshot completed without an export path")
 			p.api.Notify(ctx, "plugin_screenshot_capture_failed")
 			return
+		}
+		if err := p.ensureScreenshotHistoryThumbnailsForPath(ctx, result.ScreenshotPath); err != nil {
+			// A thumbnail failure should not turn a successful capture into a failed screenshot. The
+			// history result will temporarily fall back to the default icon and the next init warm-up
+			// can repair the cache.
+			p.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to generate screenshot history thumbnails: path=%s err=%s", result.ScreenshotPath, err.Error()))
 		}
 
 		p.api.Notify(ctx, "plugin_screenshot_capture_success")
