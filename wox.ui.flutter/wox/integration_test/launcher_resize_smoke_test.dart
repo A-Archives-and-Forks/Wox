@@ -97,9 +97,13 @@ void registerLauncherResizeSmokeTests() {
 
       // Global queries can surface fallback rows for the new query during the
       // grace window. What must disappear here is the stale snapshot from the
-      // previous query, not necessarily every visible row.
+      // previous query, not necessarily every visible row or every shrink. The
+      // production bug fix keeps real final/current-query snapshots responsive
+      // so the launcher can still shrink as soon as the backend has settled.
       expect(controller.activeResultViewController.items.where((item) => item.value.data.queryId == queryId), isEmpty);
-      expect((heightAfterGrace - oldHeight).abs(), lessThanOrEqualTo(2));
+      if (!controller.isCurrentQueryReturned) {
+        expect((heightAfterGrace - oldHeight).abs(), lessThanOrEqualTo(2));
+      }
     });
 
     testWidgets('T7-04: final empty snapshots shrink immediately', (tester) async {
