@@ -909,6 +909,13 @@ func (m *Manager) queryForPlugin(ctx context.Context, pluginInstance *Instance, 
 		}
 	})
 
+	// if plugin query requirement not met, return requirement result without calling plugin.Query
+	if requirementResult, blocked := m.buildQueryRequirementSettingsResult(ctx, pluginInstance, query); blocked {
+		return []QueryResult{
+			m.PolishResult(ctx, pluginInstance, query, requirementResult),
+		}
+	}
+
 	logger.Info(ctx, fmt.Sprintf("<%s> start query: %s", pluginInstance.GetName(ctx), query.RawQuery))
 	start := util.GetSystemTimestamp()
 
@@ -1349,7 +1356,13 @@ func (m *Manager) IsCurrentQuery(sessionId string, queryId string) bool {
 
 func (m *Manager) buildResultUI(resultCache *QueryResultCache, queryId string) QueryResultUI {
 	uiResult := resultCache.Result
-	if !uiResult.Preview.IsEmpty() && uiResult.Preview.PreviewType != WoxPreviewTypeRemote && len(uiResult.Preview.PreviewData) > previewDataMaxSize {
+	// Requirement settings must keep their concrete preview type in the result
+	// payload. If they were wrapped as remote previews, the Flutter grid path
+	// would not know to force the fullscreen settings form.
+	if !uiResult.Preview.IsEmpty() &&
+		uiResult.Preview.PreviewType != WoxPreviewTypeRemote &&
+		uiResult.Preview.PreviewType != WoxPreviewTypeQueryRequirementSettings &&
+		len(uiResult.Preview.PreviewData) > previewDataMaxSize {
 		uiResult.Preview = WoxPreview{
 			PreviewType: WoxPreviewTypeRemote,
 			PreviewData: fmt.Sprintf("/preview?sessionId=%s&queryId=%s&id=%s", resultCache.Query.SessionId, queryId, uiResult.Id),
@@ -1595,8 +1608,10 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 		result.Actions[actionIndex].Hotkey = normalizeHotkeyForPlatform(result.Actions[actionIndex].Hotkey)
 	}
 
-	// if query is input and trigger keyword is global, disable preview and group
-	if query.IsGlobalQuery() {
+	// if query is input and trigger keyword is global, disable preview and group.
+	// Query requirement settings keep their preview even in global queries because
+	// stripping it would hide the system form that can unblock the query.
+	if query.IsGlobalQuery() && result.Preview.PreviewType != WoxPreviewTypeQueryRequirementSettings {
 		result.Preview = WoxPreview{}
 		result.Group = ""
 		result.GroupScore = 0
@@ -1606,7 +1621,12 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 	// because preview may contain some heavy data (E.g. image or large text),
 	// we will store preview in cache and only send preview to ui when user select the result
 	var originalPreview = result.Preview
-	if !result.Preview.IsEmpty() && result.Preview.PreviewType != WoxPreviewTypeRemote && len(result.Preview.PreviewData) > previewDataMaxSize {
+	// Query requirement settings intentionally bypass remote wrapping so the UI
+	// can detect the type before deciding whether grid previews are allowed.
+	if !result.Preview.IsEmpty() &&
+		result.Preview.PreviewType != WoxPreviewTypeRemote &&
+		result.Preview.PreviewType != WoxPreviewTypeQueryRequirementSettings &&
+		len(result.Preview.PreviewData) > previewDataMaxSize {
 		result.Preview = WoxPreview{
 			PreviewType: WoxPreviewTypeRemote,
 			PreviewData: fmt.Sprintf("/preview?sessionId=%s&queryId=%s&id=%s", query.SessionId, query.Id, result.Id),

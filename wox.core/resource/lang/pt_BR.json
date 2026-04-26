@@ -864,6 +864,8 @@
   "plugin_manager_pin_in_query_success": "Fixado, será priorizado na consulta atual",
   "plugin_manager_unpin_in_query_success": "Desafixado",
   "plugin_manager_invalid_query_type": "Tipo de consulta inválido",
+  "plugin_query_requirement_settings_title": "%s precisa de configuração",
+  "plugin_query_requirement_settings_message": "Complete as configurações obrigatórias antes de pesquisar.",
   "plugin_ai_chat_agents": "Agentes",
   "plugin_ai_chat_agents_tooltip": "Configure agentes de IA com prompts e ferramentas personalizados",
   "plugin_ai_chat_agent_name": "Nome",

@@ -127,7 +127,25 @@ Plugins must declare metadata in a `plugin.json` file:
     "TriggerKeywords": ["my"],
     "Description": "My awesome Wox plugin",
     "Website": "https://github.com/user/myplugin",
-    "Icon": "https://example.com/icon.png"
+    "Icon": "https://example.com/icon.png",
+    "QueryRequirements": {
+        "AnyQuery": [
+            {
+                "SettingKey": "apiKey",
+                "Validators": [{"Type": "not_empty"}],
+                "Message": "i18n:my_plugin_api_key_required"
+            }
+        ],
+        "QueryWithoutCommand": [],
+        "QueryWithCommand": {
+            "download": [
+                {
+                    "SettingKey": "downloadPath",
+                    "Validators": [{"Type": "not_empty"}]
+                }
+            ]
+        }
+    }
 }
 ```
 
@@ -224,6 +242,8 @@ from .models.toolbar_msg import (
     ToolbarMsgActionContext,
 )
 from .models.setting import (
+    PluginQueryRequirement,
+    PluginQueryRequirements,
     PluginSettingDefinitionItem,
     PluginSettingDefinitionType,
     PluginSettingDefinitionValue,
@@ -264,6 +284,8 @@ __all__: List[str] = [
     "ToolbarMsgActionContext",
     "MetadataCommand",
     "PluginSettingDefinitionItem",
+    "PluginQueryRequirement",
+    "PluginQueryRequirements",
     "PluginSettingValueStyle",
     # AI
     "AIModel",
@@ -302,6 +324,8 @@ __all__: List[str] = [
     "MRURestoreCallback",
     # Settings
     "PluginSettingDefinitionItem",
+    "PluginQueryRequirement",
+    "PluginQueryRequirements",
     "PluginSettingDefinitionType",
     "PluginSettingDefinitionValue",
     "PluginSettingValueStyle",

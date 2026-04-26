@@ -94,6 +94,54 @@ All methods are async and require `ctx`.
 - For advanced settings such as `select`, `table`, validators, or `dynamic`, construct `PluginSettingDefinitionItem` and the corresponding value objects directly, or emit the expected JSON shape manually.
 - For the exact `plugin.json` and validator shape, read `references/plugin_json_schema.md`.
 - For ready-to-copy advanced settings examples, read `references/settings_patterns.md`.
+- Use static `QueryRequirements` in `plugin.json` when a query requires settings such as API keys. Wox blocks the query before calling `query()` and shows the built-in `query_requirement_settings` setup preview.
+- There is no runtime `register_query_requirements` API. Declare query requirements in metadata.
+
+## QueryRequirements Dataclasses
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class PluginQueryRequirement:
+    setting_key: str
+    validators: list[dict] = field(default_factory=list)
+    message: str = ""
+
+@dataclass
+class PluginQueryRequirements:
+    any_query: list[PluginQueryRequirement] = field(default_factory=list)
+    query_without_command: list[PluginQueryRequirement] = field(default_factory=list)
+    query_with_command: dict[str, list[PluginQueryRequirement]] = field(default_factory=dict)
+```
+
+Metadata example:
+
+```json
+{
+  "SettingDefinitions": [
+    {
+      "Type": "textbox",
+      "Value": {
+        "Key": "accessKey",
+        "Label": "i18n:access_key",
+        "DefaultValue": "",
+        "Validators": [{ "Type": "not_empty", "Value": {} }]
+      }
+    }
+  ],
+  "QueryRequirements": {
+    "AnyQuery": [
+      {
+        "SettingKey": "accessKey",
+        "Message": "i18n:access_key_required"
+      }
+    ],
+    "QueryWithoutCommand": [],
+    "QueryWithCommand": {}
+  }
+}
+```
 
 ## Dynamic Setting Example
 

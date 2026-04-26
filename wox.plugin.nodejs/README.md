@@ -217,7 +217,25 @@ Plugins must declare metadata in a `plugin.json` file:
   "TriggerKeywords": ["my"],
   "Description": "My awesome Wox plugin",
   "Website": "https://github.com/user/myplugin",
-  "Icon": "https://example.com/icon.png"
+  "Icon": "https://example.com/icon.png",
+  "QueryRequirements": {
+    "AnyQuery": [
+      {
+        "SettingKey": "apiKey",
+        "Validators": [{ "Type": "not_empty" }],
+        "Message": "i18n:my_plugin_api_key_required"
+      }
+    ],
+    "QueryWithoutCommand": [],
+    "QueryWithCommand": {
+      "download": [
+        {
+          "SettingKey": "downloadPath",
+          "Validators": [{ "Type": "not_empty" }]
+        }
+      ]
+    }
+  }
 }
 ```
 

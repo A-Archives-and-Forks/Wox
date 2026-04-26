@@ -866,6 +866,8 @@
   "plugin_manager_pin_in_query_success": "Закреплено, будет приоритетным в текущем запросе",
   "plugin_manager_unpin_in_query_success": "Откреплено",
   "plugin_manager_invalid_query_type": "Недопустимый тип запроса",
+  "plugin_query_requirement_settings_title": "%s требует настройки",
+  "plugin_query_requirement_settings_message": "Заполните обязательные настройки перед поиском.",
   "plugin_ai_chat_agents": "Агенты",
   "plugin_ai_chat_agents_tooltip": "Настройте ИИ-агентов с пользовательскими подсказками и инструментами",
   "plugin_ai_chat_agent_name": "Имя",

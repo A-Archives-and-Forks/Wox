@@ -147,6 +147,45 @@ export interface MetadataCommand {
 }
 
 /**
+ * A setting requirement that must pass before Wox runs a plugin query.
+ *
+ * Query requirements are evaluated by Wox core before calling `query()`. Use
+ * them for credentials, directories, or other settings that make the query
+ * impossible to run when missing.
+ */
+export interface PluginQueryRequirement {
+  /**
+   * Setting key that must be present and valid.
+   */
+  SettingKey: string
+  /**
+   * Optional validators for this query requirement.
+   *
+   * If omitted, Wox falls back to validators declared on the matching setting
+   * definition. If neither side provides validators, the requirement is ignored
+   * and Wox logs a metadata error.
+   */
+  Validators?: PluginSettingValidator[]
+  /**
+   * Optional user-facing message. Supports i18n keys.
+   */
+  Message?: string
+}
+
+/**
+ * Query-scoped plugin setting requirements.
+ *
+ * - `AnyQuery`: checked for every query to the plugin.
+ * - `QueryWithoutCommand`: checked only when the query has no command.
+ * - `QueryWithCommand`: checked only for the matching command.
+ */
+export interface PluginQueryRequirements {
+  AnyQuery?: PluginQueryRequirement[]
+  QueryWithoutCommand?: PluginQueryRequirement[]
+  QueryWithCommand?: Record<string, PluginQueryRequirement[]>
+}
+
+/**
  * Checkbox setting value configuration.
  *
  * Represents a boolean toggle switch in the settings UI.

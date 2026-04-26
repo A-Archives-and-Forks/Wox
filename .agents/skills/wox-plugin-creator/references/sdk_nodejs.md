@@ -114,6 +114,52 @@ The `ctx` object is required for all API calls.
 - Read `references/plugin_json_schema.md` before writing `plugin.json` settings.
 - For ready-to-copy settings examples and advanced patterns, read `references/settings_patterns.md`.
 - `OnGetDynamicSetting` is used together with a `dynamic` entry in `SettingDefinitions`.
+- Use static `QueryRequirements` in `plugin.json` when a query requires settings such as API keys. Wox blocks the query before calling `query()` and shows the built-in `query_requirement_settings` setup preview.
+- There is no runtime `register_query_requirements` API. Declare query requirements in metadata.
+
+### QueryRequirements Types
+
+```typescript
+export interface PluginQueryRequirement {
+  SettingKey: string;
+  Validators?: PluginSettingValidator[];
+  Message?: string;
+}
+
+export interface PluginQueryRequirements {
+  AnyQuery?: PluginQueryRequirement[];
+  QueryWithoutCommand?: PluginQueryRequirement[];
+  QueryWithCommand?: Record<string, PluginQueryRequirement[]>;
+}
+```
+
+Metadata example:
+
+```json
+{
+  "SettingDefinitions": [
+    {
+      "Type": "textbox",
+      "Value": {
+        "Key": "accessKey",
+        "Label": "i18n:access_key",
+        "DefaultValue": "",
+        "Validators": [{ "Type": "not_empty", "Value": {} }]
+      }
+    }
+  ],
+  "QueryRequirements": {
+    "AnyQuery": [
+      {
+        "SettingKey": "accessKey",
+        "Message": "i18n:access_key_required"
+      }
+    ],
+    "QueryWithoutCommand": [],
+    "QueryWithCommand": {}
+  }
+}
+```
 
 ## Usage Example
 

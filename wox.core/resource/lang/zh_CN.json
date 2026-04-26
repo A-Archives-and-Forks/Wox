@@ -925,6 +925,8 @@
   "plugin_manager_pin_in_query_success": "已置顶，将在当前查询中优先显示",
   "plugin_manager_unpin_in_query_success": "已取消置顶",
   "plugin_manager_invalid_query_type": "无效的查询类型",
+  "plugin_query_requirement_settings_title": "%s 需要配置",
+  "plugin_query_requirement_settings_message": "请先完成必要配置后再查询。",
   "mru_remove_action": "从最近使用中移除",
   "plugin_ai_chat_agents": "智能体",
   "plugin_ai_chat_agents_tooltip": "配置具有自定义提示词和工具的AI智能体",

@@ -19,6 +19,7 @@ import 'package:wox/components/wox_ai_chat_view.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
 import 'package:wox/components/wox_markdown.dart';
 import 'package:wox/components/wox_plugin_detail_view.dart';
+import 'package:wox/components/wox_query_requirement_settings_preview_view.dart';
 import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/components/wox_update_view.dart';
 import 'package:wox/components/wox_webview_preview.dart';
@@ -28,6 +29,7 @@ import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/wox_preview.dart';
+import 'package:wox/entity/wox_query_requirement_settings_preview.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/enums/wox_preview_scroll_position_enum.dart';
 import 'package:wox/enums/wox_preview_type_enum.dart';
@@ -190,6 +192,16 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
         return WoxUpdateView(data: previewData);
       } catch (e) {
         contentWidget = buildText("Invalid update preview data: $e");
+      }
+    } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_QUERY_REQUIREMENT_SETTINGS.code) {
+      try {
+        // Core generates this preview when query prerequisites block plugin
+        // execution. Rendering it as a native settings form keeps users inside
+        // the query flow instead of forcing a separate settings-window detour.
+        final previewData = QueryRequirementSettingsPreviewData.fromPreviewData(widget.woxPreview.previewData);
+        return WoxQueryRequirementSettingsPreviewView(data: previewData);
+      } catch (e) {
+        contentWidget = buildText("Invalid query requirement settings preview data: $e");
       }
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_TERMINAL.code) {
       isCustomScrollable = true;

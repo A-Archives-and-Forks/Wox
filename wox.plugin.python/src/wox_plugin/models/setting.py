@@ -236,6 +236,58 @@ class PluginSettingDefinitionValue:
 
 
 @dataclass
+class PluginQueryRequirement:
+    """
+    A setting requirement that must pass before Wox runs a plugin query.
+
+    Query requirements are evaluated by Wox core before `query()` is called.
+    They are intended for credentials, directories, or other settings that make
+    the query impossible to run when missing.
+    """
+
+    setting_key: str
+    validators: List[Dict[str, Any]] = field(default_factory=list)
+    message: str = field(default="")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert to dictionary with Wox plugin.json field names.
+        """
+        return {
+            "SettingKey": self.setting_key,
+            "Validators": self.validators,
+            "Message": self.message,
+        }
+
+
+@dataclass
+class PluginQueryRequirements:
+    """
+    Query-scoped plugin setting requirements.
+
+    any_query applies to every query, query_without_command applies only when
+    the query has no command, and query_with_command applies only for the
+    matching command key.
+    """
+
+    any_query: List[PluginQueryRequirement] = field(default_factory=list)
+    query_without_command: List[PluginQueryRequirement] = field(default_factory=list)
+    query_with_command: Dict[str, List[PluginQueryRequirement]] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert to dictionary with Wox plugin.json field names.
+        """
+        return {
+            "AnyQuery": [item.to_dict() for item in self.any_query],
+            "QueryWithoutCommand": [item.to_dict() for item in self.query_without_command],
+            "QueryWithCommand": {
+                command: [item.to_dict() for item in requirements] for command, requirements in self.query_with_command.items()
+            },
+        }
+
+
+@dataclass
 class PluginSettingValueTextBox(PluginSettingDefinitionValue):
     """
     Text box setting for single or multi-line text input.

@@ -16,6 +16,7 @@ import (
 	"wox/i18n"
 	"wox/resource"
 	"wox/setting/definition"
+	"wox/setting/validator"
 	"wox/util"
 )
 
@@ -77,6 +78,7 @@ type Metadata struct {
 	SupportedOS        []string
 	Features           []MetadataFeature
 	SettingDefinitions definition.PluginSettingDefinitions
+	QueryRequirements  MetadataQueryRequirements
 
 	// I18n holds inline translations for the plugin.
 	// Map structure: langCode -> key -> translatedValue
@@ -302,6 +304,38 @@ type MetadataFeature struct {
 type MetadataCommand struct {
 	Command     string
 	Description common.I18nString // support i18n: prefix
+}
+
+// MetadataQueryRequirement declares a setting that must pass validation before
+// a plugin query is allowed to run. This is separate from setting definitions
+// because normal setting validators describe form validity, while query
+// requirements describe runtime readiness for a specific query scope.
+type MetadataQueryRequirement struct {
+	SettingKey string
+	Validators []validator.PluginSettingValidator
+	Message    common.I18nString
+}
+
+// MetadataQueryRequirements groups query prerequisites by the exact query scope
+// that activates them. The explicit names avoid overloading Commands and make
+// the no-command query case readable in plugin.json.
+type MetadataQueryRequirements struct {
+	AnyQuery            []MetadataQueryRequirement
+	QueryWithoutCommand []MetadataQueryRequirement
+	QueryWithCommand    map[string][]MetadataQueryRequirement
+}
+
+func (m MetadataQueryRequirements) GetRequirementsForQuery(query Query) []MetadataQueryRequirement {
+	requirements := append([]MetadataQueryRequirement{}, m.AnyQuery...)
+	if query.Command == "" {
+		requirements = append(requirements, m.QueryWithoutCommand...)
+		return requirements
+	}
+
+	if commandRequirements, ok := m.QueryWithCommand[query.Command]; ok {
+		requirements = append(requirements, commandRequirements...)
+	}
+	return requirements
 }
 
 type MetadataFeatureParamsDebounce struct {

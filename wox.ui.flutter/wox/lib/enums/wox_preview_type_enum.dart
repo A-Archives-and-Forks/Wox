@@ -12,7 +12,8 @@ enum WoxPreviewTypeEnum {
   WOX_PREVIEW_TYPE_WEBVIEW("webview", "webview"),
   WOX_PREVIEW_TYPE_PLUGIN_DETAIL("plugin_detail", "plugin_detail"),
   WOX_PREVIEW_TYPE_CHAT("chat", "chat"),
-  WOX_PREVIEW_TYPE_UPDATE("update", "update");
+  WOX_PREVIEW_TYPE_UPDATE("update", "update"),
+  WOX_PREVIEW_TYPE_QUERY_REQUIREMENT_SETTINGS("query_requirement_settings", "query_requirement_settings");
 
   final String code;
   final String value;

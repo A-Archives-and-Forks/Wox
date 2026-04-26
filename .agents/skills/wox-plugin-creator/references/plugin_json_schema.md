@@ -35,6 +35,78 @@ The `plugin.json` file must be a valid JSON object located in the root of your p
 | `Commands`           | `Command[]`            | List of specific commands provided by the plugin.                                              |
 | `Features`           | `Feature[]`            | List of advanced features enabled for the plugin.                                              |
 | `SettingDefinitions` | `Setting[]`            | Definition of user-configurable settings. See [SettingDefinitions](#settingdefinitions) below. |
+| `QueryRequirements`  | `QueryRequirements`    | Static query preconditions for required settings. See [QueryRequirements](#queryrequirements). |
+
+### QueryRequirements
+
+Use `QueryRequirements` when a plugin query cannot run until one or more settings are configured. Wox checks these requirements before calling the plugin `query()` method. If a requirement fails, Wox returns a system setup result with the `query_requirement_settings` preview and shows a focused settings form for only the missing fields.
+
+Do not return a custom "please configure this plugin" result from `query()` for these cases. Static metadata gives grid results and normal list results the same setup flow.
+
+#### Scopes
+
+| Field                 | Type                                  | Checked when                                                                 |
+| --------------------- | ------------------------------------- | ---------------------------------------------------------------------------- |
+| `AnyQuery`            | `QueryRequirement[]`                  | Every query for the plugin.                                                  |
+| `QueryWithoutCommand` | `QueryRequirement[]`                  | Query has no command. Wox checks `AnyQuery + QueryWithoutCommand`.           |
+| `QueryWithCommand`    | `map[command]QueryRequirement[]`      | Query has that command. Wox checks `AnyQuery + QueryWithCommand[command]`.   |
+
+If a query has a command that is not declared in `QueryWithCommand`, Wox checks only `AnyQuery`.
+
+#### Requirement Shape
+
+```json
+{
+  "SettingKey": "accessKey",
+  "Validators": [{ "Type": "not_empty", "Value": {} }],
+  "Message": "i18n:access_key_required"
+}
+```
+
+Rules:
+
+- `SettingKey` must match a configurable setting key from `SettingDefinitions`.
+- `Validators` is optional. If omitted or empty, Wox reuses the validators from the matching setting definition.
+- If both the requirement and setting definition have no validators, Wox logs a metadata issue and does not block the query.
+- `Message` is optional and supports `i18n:` keys. Use it for field-specific setup guidance.
+
+Example:
+
+```json
+{
+  "SettingDefinitions": [
+    {
+      "Type": "textbox",
+      "Value": {
+        "Key": "accessKey",
+        "Label": "i18n:access_key",
+        "DefaultValue": "",
+        "Tooltip": "i18n:access_key_tooltip",
+        "Validators": [{ "Type": "not_empty", "Value": {} }],
+        "Style": { "Width": 400 }
+      }
+    }
+  ],
+  "QueryRequirements": {
+    "AnyQuery": [
+      {
+        "SettingKey": "accessKey",
+        "Message": "i18n:access_key_required"
+      }
+    ],
+    "QueryWithoutCommand": [],
+    "QueryWithCommand": {
+      "download": [
+        {
+          "SettingKey": "downloadDirectory",
+          "Validators": [{ "Type": "not_empty", "Value": {} }],
+          "Message": "i18n:download_directory_required"
+        }
+      ]
+    }
+  }
+}
+```
 
 ### SettingDefinitions
 

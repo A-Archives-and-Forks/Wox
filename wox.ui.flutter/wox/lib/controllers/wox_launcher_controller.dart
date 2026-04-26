@@ -2082,7 +2082,47 @@ class WoxLauncherController extends GetxController {
   }
 
   bool supportsPreviewFullscreen(WoxPreview preview) {
-    return preview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_TERMINAL.code || preview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_CHAT.code;
+    return preview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_TERMINAL.code ||
+        preview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_CHAT.code ||
+        preview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_QUERY_REQUIREMENT_SETTINGS.code;
+  }
+
+  bool isQueryRequirementSettingsPreview(WoxPreview preview) {
+    return preview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_QUERY_REQUIREMENT_SETTINGS.code;
+  }
+
+  bool shouldShowPreviewPanelForPreview(WoxPreview preview) {
+    if (preview.previewData.isEmpty) {
+      return false;
+    }
+
+    // Query requirement settings are the exception to the normal grid rule:
+    // grid items cannot carry enough text to explain missing credentials, so
+    // the system settings preview must be visible even while the plugin uses
+    // grid layout for successful results.
+    if (isQueryRequirementSettingsPreview(preview)) {
+      return true;
+    }
+
+    return !isInGridMode();
+  }
+
+  void syncPreviewModeForActivePreview(String traceId) {
+    if (isShowPreviewPanel.value && isQueryRequirementSettingsPreview(currentPreview.value)) {
+      // This preview type owns the full query result area. The previous generic
+      // preview behavior kept grid/list results visible, which left too little
+      // space for an actionable settings form.
+      if (!isPreviewFullscreen.value) {
+        final restoreRatio = resultPreviewRatio.value > 0 ? resultPreviewRatio.value : getPreferredResultPreviewRatio();
+        lastResultPreviewRatioBeforePreviewFullscreen = restoreRatio;
+        resultPreviewRatio.value = 0;
+        isPreviewFullscreen.value = true;
+        Logger.instance.debug(traceId, "query requirement settings preview enter fullscreen");
+      }
+      return;
+    }
+
+    syncPreviewFullscreenState();
   }
 
   double getPreferredResultPreviewRatio() {
@@ -2446,9 +2486,11 @@ class WoxLauncherController extends GetxController {
           if (updatableResult.preview != null) {
             final oldShowPreview = isShowPreviewPanel.value;
             currentPreview.value = updatableResult.preview!;
-            // Grid layout doesn't support preview panel
-            isShowPreviewPanel.value = !isInGridMode() && currentPreview.value.previewData != "";
-            syncPreviewFullscreenState();
+            // Query requirement settings override the normal grid-preview
+            // restriction so users can fix missing settings without leaving the
+            // current query.
+            isShowPreviewPanel.value = shouldShowPreviewPanelForPreview(currentPreview.value);
+            syncPreviewModeForActivePreview(traceId);
 
             // If preview panel visibility changed, resize window height
             if (oldShowPreview != isShowPreviewPanel.value) {
@@ -2825,9 +2867,8 @@ class WoxLauncherController extends GetxController {
 
   void onResultItemActivated(String traceId, WoxListItem<WoxQueryResult> item) {
     currentPreview.value = item.data.preview;
-    // Grid layout doesn't support preview panel
-    isShowPreviewPanel.value = !isInGridMode() && currentPreview.value.previewData != "";
-    syncPreviewFullscreenState();
+    isShowPreviewPanel.value = shouldShowPreviewPanelForPreview(currentPreview.value);
+    syncPreviewModeForActivePreview(traceId);
     refreshActionsForActiveResult(traceId, preserveSelection: false);
   }
 

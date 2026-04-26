@@ -43,6 +43,33 @@ class MyPlugin(BasePlugin):
 plugin = MyPlugin()
 ```
 
+## Query Requirements
+
+Plugins can declare settings that must be configured before Wox calls `query()`:
+
+```json
+{
+  "QueryRequirements": {
+    "AnyQuery": [
+      {
+        "SettingKey": "apiKey",
+        "Validators": [{ "Type": "not_empty" }],
+        "Message": "i18n:my_plugin_api_key_required"
+      }
+    ],
+    "QueryWithoutCommand": [],
+    "QueryWithCommand": {
+      "download": [
+        {
+          "SettingKey": "downloadPath",
+          "Validators": [{ "Type": "not_empty" }]
+        }
+      ]
+    }
+  }
+}
+```
+
 ## License
 
 MIT 
