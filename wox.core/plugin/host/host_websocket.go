@@ -54,7 +54,12 @@ func (w *WebsocketHost) StartHost(ctx context.Context, executablePath string, en
 	util.GetLogger().Info(ctx, fmt.Sprintf("<%s> host pid: %d", w.getHostName(ctx), cmd.Process.Pid))
 
 	time.Sleep(time.Second) // wait for host to start
-	w.startWebsocketServer(ctx, port)
+	if connectErr := w.startWebsocketServer(ctx, port); connectErr != nil {
+		if killErr := cmd.Process.Kill(); killErr != nil {
+			util.GetLogger().Error(ctx, fmt.Sprintf("<%s> failed to kill disconnected host process(%d): %s", w.getHostName(ctx), cmd.Process.Pid, killErr))
+		}
+		return connectErr
+	}
 
 	w.hostProcess = cmd.Process
 	return nil
@@ -169,27 +174,31 @@ func (w *WebsocketHost) decodeHostResult(result any, target any) error {
 	return nil
 }
 
-func (w *WebsocketHost) startWebsocketServer(ctx context.Context, port int) {
+func (w *WebsocketHost) startWebsocketServer(ctx context.Context, port int) error {
 	w.ws = util.NewWebsocketClient(fmt.Sprintf("ws://127.0.0.1:%d", port))
 	w.ws.OnMessage(ctx, func(data []byte) {
 		util.Go(ctx, fmt.Sprintf("<%s> onMessage", w.getHostName(ctx)), func() {
 			w.onMessage(string(data))
 		})
 	})
-	const maxAttempts = 10
+	const maxAttempts = 30
 	const baseDelay = 200 * time.Millisecond
+	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		connErr := w.ws.Connect(ctx)
 		if connErr == nil {
-			return
+			return nil
 		}
+		lastErr = connErr
 		if attempt == maxAttempts {
 			util.GetLogger().Error(ctx, fmt.Sprintf("<%s> failed to connect to host after %d attempts: %s", w.getHostName(ctx), maxAttempts, connErr))
-			return
+			break
 		}
 		util.GetLogger().Info(ctx, fmt.Sprintf("<%s> failed to connect to host (attempt %d/%d): %s", w.getHostName(ctx), attempt, maxAttempts, connErr))
 		time.Sleep(time.Duration(attempt) * baseDelay)
 	}
+
+	return fmt.Errorf("failed to connect to host websocket on port %d after %d attempts: %w", port, maxAttempts, lastErr)
 }
 
 func (w *WebsocketHost) onMessage(data string) {

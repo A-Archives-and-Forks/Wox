@@ -4,6 +4,7 @@ import 'dart:io';
 
 const int defaultDevServerPort = 34987;
 const Duration coreStartupTimeout = Duration(minutes: 3);
+const Duration runtimeStartupTimeout = Duration(minutes: 2);
 const String testWoxDataDirEnv = 'WOX_TEST_DATA_DIR';
 const String testUserDataDirEnv = 'WOX_TEST_USER_DIR';
 const String testServerPortEnv = 'WOX_TEST_SERVER_PORT';
@@ -154,6 +155,19 @@ Future<int> _runSmoke({String? testName}) async {
     final ready = await _waitForPingReady(serverPort: serverPort, timeout: coreStartupTimeout);
     if (!ready) {
       stderr.writeln('wox.core did not become ready on port $serverPort.');
+      return 1;
+    }
+
+    // Bug fix: /ping only proves the core HTTP server is ready. Template plugin
+    // installation depends on the NodeJS/Python runtime hosts, which start
+    // asynchronously after core startup, so wait for those hosts explicitly.
+    final runtimeReady = await _waitForRuntimeHostsReady(
+      serverPort: serverPort,
+      runtimes: templatePlugins.map((plugin) => plugin.definition.runtime),
+      timeout: runtimeStartupTimeout,
+    );
+    if (!runtimeReady) {
+      await _printRuntimeStartupDiagnostics(woxDataDir);
       return 1;
     }
 
@@ -416,6 +430,125 @@ Future<bool> _isPingReady(int serverPort) async {
     return false;
   } finally {
     client.close(force: true);
+  }
+}
+
+class _RuntimeHostStatus {
+  const _RuntimeHostStatus({required this.runtime, required this.isStarted});
+
+  final String runtime;
+  final bool isStarted;
+}
+
+Future<bool> _waitForRuntimeHostsReady({required int serverPort, required Iterable<String> runtimes, required Duration timeout}) async {
+  final requiredRuntimes = runtimes.map((runtime) => runtime.toUpperCase()).toSet();
+  final deadline = DateTime.now().add(timeout);
+  var nextStatusLogAt = DateTime.now();
+  var lastStatusSummary = 'runtime status unavailable';
+
+  while (DateTime.now().isBefore(deadline)) {
+    final statuses = await _fetchRuntimeStatuses(serverPort);
+    if (statuses != null) {
+      lastStatusSummary = _formatRuntimeStatusSummary(statuses);
+      final startedRuntimes = statuses.where((status) => status.isStarted).map((status) => status.runtime.toUpperCase()).toSet();
+      if (requiredRuntimes.every(startedRuntimes.contains)) {
+        stdout.writeln('Runtime hosts ready: $lastStatusSummary');
+        return true;
+      }
+    }
+
+    if (!DateTime.now().isBefore(nextStatusLogAt)) {
+      stdout.writeln('Waiting for runtime hosts (${requiredRuntimes.join(', ')}): $lastStatusSummary');
+      nextStatusLogAt = DateTime.now().add(const Duration(seconds: 5));
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+  }
+
+  stderr.writeln('Runtime hosts did not become ready within ${timeout.inSeconds}s: $lastStatusSummary');
+  return false;
+}
+
+Future<List<_RuntimeHostStatus>?> _fetchRuntimeStatuses(int serverPort) async {
+  final client = HttpClient();
+  try {
+    final request = await client.getUrl(Uri.parse('http://127.0.0.1:$serverPort/runtime/status'));
+    final response = await request.close();
+    final body = await response.transform(utf8.decoder).join();
+    if (response.statusCode != 200 || !_isSuccessfulRestResponse(body)) {
+      return null;
+    }
+
+    final decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) {
+      return null;
+    }
+    final data = decoded['Data'];
+    if (data is! List<dynamic>) {
+      return null;
+    }
+
+    return data
+        .whereType<Map<String, dynamic>>()
+        .map((item) {
+          return _RuntimeHostStatus(runtime: item['Runtime']?.toString() ?? '', isStarted: item['IsStarted'] == true);
+        })
+        .where((status) => status.runtime.isNotEmpty)
+        .toList();
+  } catch (_) {
+    return null;
+  } finally {
+    client.close(force: true);
+  }
+}
+
+String _formatRuntimeStatusSummary(List<_RuntimeHostStatus> statuses) {
+  if (statuses.isEmpty) {
+    return 'no runtime statuses returned';
+  }
+
+  return statuses.map((status) => '${status.runtime}=${status.isStarted ? 'started' : 'stopped'}').join(', ');
+}
+
+Future<void> _printRuntimeStartupDiagnostics(Directory woxDataDir) async {
+  // Bug fix: runtime startup failures used to surface as a generic install
+  // error. Printing the relevant log tails in CI keeps the failure actionable
+  // without requiring a separate artifact download for the common case.
+  stdout.writeln('Runtime startup diagnostics:');
+  await _printLogTail(File('${woxDataDir.path}${Platform.pathSeparator}log${Platform.pathSeparator}log'), 'wox log');
+
+  final hostLogDir = Directory('${woxDataDir.path}${Platform.pathSeparator}log${Platform.pathSeparator}hosts');
+  if (!await hostLogDir.exists()) {
+    stdout.writeln('[host logs] directory does not exist: ${hostLogDir.path}');
+    return;
+  }
+
+  final hostLogs = await hostLogDir.list().where((entry) => entry is File && entry.path.endsWith('.log')).cast<File>().toList();
+  hostLogs.sort((a, b) => a.path.compareTo(b.path));
+  if (hostLogs.isEmpty) {
+    stdout.writeln('[host logs] no host log files found in ${hostLogDir.path}');
+    return;
+  }
+  for (final hostLog in hostLogs) {
+    await _printLogTail(hostLog, hostLog.uri.pathSegments.last);
+  }
+}
+
+Future<void> _printLogTail(File file, String label, {int maxLines = 80}) async {
+  if (!await file.exists()) {
+    stdout.writeln('[$label] file does not exist: ${file.path}');
+    return;
+  }
+
+  try {
+    final lines = await file.readAsLines();
+    final start = lines.length > maxLines ? lines.length - maxLines : 0;
+    stdout.writeln('--- $label tail (${lines.length - start} lines) ---');
+    for (final line in lines.skip(start)) {
+      stdout.writeln(line);
+    }
+    stdout.writeln('--- end $label tail ---');
+  } catch (error) {
+    stdout.writeln('[$label] failed to read ${file.path}: $error');
   }
 }
 
