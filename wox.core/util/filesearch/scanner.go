@@ -17,6 +17,9 @@ import (
 const (
 	defaultScanInterval                = 24 * time.Hour
 	defaultDirtyDebounceWindow         = 750 * time.Millisecond
+	defaultMaxDirtyDebounceWindow      = 3 * time.Minute
+	defaultDirtyBackpressurePathCount  = 64
+	defaultDirtyBackpressureRootCount  = 2
 	defaultRootReloadWorkerIdleTimeout = 30 * time.Second
 	progressBatchSize                  = 256
 	progressUpdateGap                  = 250 * time.Millisecond
@@ -46,6 +49,8 @@ type Scanner struct {
 	transientRootState          *TransientRootState
 	transientSyncMu             sync.RWMutex
 	transientSyncState          *TransientSyncState
+	dirtyBackpressureMu         sync.Mutex
+	lastDirtyRunElapsed         time.Duration
 	loggedRootBytesMu           sync.Mutex
 	loggedRootBytes             map[string]uint64
 	// Tests override the planner budget so run-based smoke coverage can force
@@ -78,6 +83,9 @@ type rootReloadResult struct {
 func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
 	dirtyQueueConfig := DirtyQueueConfig{
 		DebounceWindow:               defaultDirtyDebounceWindow,
+		MaxDebounceWindow:            defaultMaxDirtyDebounceWindow,
+		BackpressurePathThreshold:    defaultDirtyBackpressurePathCount,
+		BackpressureRootThreshold:    defaultDirtyBackpressureRootCount,
 		SiblingMergeThreshold:        8,
 		RootEscalationPathThreshold:  512,
 		RootEscalationDirectoryRatio: 0.10,
@@ -148,6 +156,9 @@ func (s *Scanner) Start(ctx context.Context) {
 			case <-dirtyTimer.C:
 				if err := s.processDirtyQueue(util.NewTraceContext(), time.Now()); err != nil {
 					util.GetLogger().Warn(ctx, "filesearch failed to process dirty queue: "+err.Error())
+				}
+				if pendingRootCount, pendingPathCount := s.pendingDirtyCounts(); pendingRootCount > 0 || pendingPathCount > 0 {
+					s.resetDirtyTimer(dirtyTimer)
 				}
 			case <-s.stopCh:
 				s.closeChangeFeed()
@@ -1070,16 +1081,21 @@ func (s *Scanner) shouldProcessChange(root RootRecord, signal ChangeSignal) bool
 	if signal.Kind == ChangeSignalKindRequiresRootReconcile || signal.Kind == ChangeSignalKindFeedUnavailable {
 		return true
 	}
+	if s.policy != nil && !s.policy.shouldProcessChange(root, signal) {
+		// Bug fix: remove/rename events were previously accepted before the plugin
+		// policy ran, so ignored paths such as repository internals and generated
+		// build outputs still re-queued incremental scans. Run the policy first for
+		// path-scoped changes, then keep the remove/rename fast path for valid files
+		// that may no longer exist on disk.
+		return false
+	}
 	if signal.SemanticKind == ChangeSemanticKindRemove || signal.SemanticKind == ChangeSemanticKindRename {
 		return true
 	}
 	if root.FeedState != RootFeedStateReady {
 		return true
 	}
-	if s.policy == nil {
-		return true
-	}
-	return s.policy.shouldProcessChange(root, signal)
+	return true
 }
 
 func (s *Scanner) enqueueDirty(signal DirtySignal) {
@@ -1198,7 +1214,7 @@ func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
 	}
 
 	queuedRootCount, queuedPathCount := s.pendingDirtyCounts()
-	batches := s.dirtyQueue.FlushReady(now, rootDirectoryCounts)
+	batches := s.dirtyQueue.FlushReadyWithDebounce(now, rootDirectoryCounts, s.currentDirtyDebounceWindow())
 	if len(batches) == 0 {
 		return nil
 	}
@@ -1225,10 +1241,13 @@ func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
 		return nil
 	}
 
+	runStartedAt := time.Now()
 	if err := s.executePlannedRun(ctx, RunKindIncremental, "dirty_queue", runRoots, batches); err != nil {
+		s.recordDirtyRunElapsed(time.Since(runStartedAt))
 		s.handleIncrementalRunFailure(ctx, runRoots, batches, err)
 		return err
 	}
+	s.recordDirtyRunElapsed(time.Since(runStartedAt))
 
 	if s.localProvider != nil {
 		if _, err := s.reloadLocalProviderFromDB(ctx); err != nil {
@@ -1583,14 +1602,113 @@ func (s *Scanner) resetDirtyTimer(timer *time.Timer) {
 		default:
 		}
 	}
-	timer.Reset(s.dirtyDebounceWindow())
+	window := s.dirtyDebounceWindow()
+	if window <= 0 {
+		window = defaultDirtyDebounceWindow
+	}
+	timer.Reset(window)
 }
 
 func (s *Scanner) dirtyDebounceWindow() time.Duration {
-	if s.dirtyQueue != nil && s.dirtyQueue.debounceWindow() > 0 {
+	if s.dirtyQueue == nil {
+		return 0
+	}
+
+	stats := s.dirtyQueue.Stats()
+	if stats.RootCount == 0 && stats.PathCount == 0 {
 		return s.dirtyQueue.debounceWindow()
 	}
-	return 0
+
+	window := s.currentDirtyDebounceWindow()
+	if !stats.LatestSignal.IsZero() {
+		// Bug fix: the timer can be scheduled before a later event arrives. Recompute
+		// the remaining quiet-window delay each time instead of firing with an older
+		// debounce value, otherwise bursty build output still flushes too early.
+		remaining := window - time.Since(stats.LatestSignal)
+		if remaining > 0 {
+			return remaining
+		}
+	}
+	return time.Millisecond
+}
+
+func (s *Scanner) currentDirtyDebounceWindow() time.Duration {
+	if s.dirtyQueue == nil {
+		return 0
+	}
+
+	baseWindow := s.dirtyQueue.debounceWindow()
+	if baseWindow <= 0 {
+		baseWindow = defaultDirtyDebounceWindow
+	}
+	return s.dirtyBackpressureWindow(s.dirtyQueue.Stats(), baseWindow)
+}
+
+func (s *Scanner) dirtyBackpressureWindow(stats DirtyQueueStats, baseWindow time.Duration) time.Duration {
+	window := baseWindow
+	maxWindow := s.dirtyQueue.config.MaxDebounceWindow
+	if maxWindow <= 0 {
+		maxWindow = defaultMaxDirtyDebounceWindow
+	}
+
+	pathThreshold := s.dirtyQueue.config.BackpressurePathThreshold
+	rootThreshold := s.dirtyQueue.config.BackpressureRootThreshold
+
+	pathPressureMax := pathThreshold > 0 && stats.PathCount >= pathThreshold*8
+	rootPressureMax := rootThreshold > 0 && stats.RootCount >= rootThreshold*4
+	pathPressureHigh := pathThreshold > 0 && stats.PathCount >= pathThreshold*2
+	rootPressureHigh := rootThreshold > 0 && stats.RootCount >= rootThreshold*2
+	pathPressureLow := pathThreshold > 0 && stats.PathCount >= pathThreshold
+	rootPressureLow := rootThreshold > 0 && stats.RootCount >= rootThreshold
+
+	if pathPressureMax || rootPressureMax {
+		window = maxDuration(window, maxWindow)
+	} else if pathPressureHigh || rootPressureHigh {
+		window = maxDuration(window, minDuration(30*time.Second, maxWindow))
+	} else if pathPressureLow || rootPressureLow {
+		// Optimization: keep small edits responsive, but once the queue crosses the
+		// first pressure threshold, wait long enough for build tools to finish a
+		// burst before starting another incremental run.
+		window = maxDuration(window, minDuration(10*time.Second, maxWindow))
+	}
+
+	lastElapsed := s.lastDirtyRunDuration()
+	if lastElapsed >= 15*time.Second {
+		window = maxDuration(window, minDuration(30*time.Second, maxWindow))
+	} else if lastElapsed >= 5*time.Second {
+		window = maxDuration(window, minDuration(10*time.Second, maxWindow))
+	}
+
+	if window > maxWindow {
+		return maxWindow
+	}
+	return window
+}
+
+func (s *Scanner) recordDirtyRunElapsed(elapsed time.Duration) {
+	s.dirtyBackpressureMu.Lock()
+	s.lastDirtyRunElapsed = elapsed
+	s.dirtyBackpressureMu.Unlock()
+}
+
+func (s *Scanner) lastDirtyRunDuration() time.Duration {
+	s.dirtyBackpressureMu.Lock()
+	defer s.dirtyBackpressureMu.Unlock()
+	return s.lastDirtyRunElapsed
+}
+
+func maxDuration(left time.Duration, right time.Duration) time.Duration {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func minDuration(left time.Duration, right time.Duration) time.Duration {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func (s *Scanner) resetDirtyQueue() {

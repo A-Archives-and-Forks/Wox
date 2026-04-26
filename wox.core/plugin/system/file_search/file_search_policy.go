@@ -56,17 +56,26 @@ func (p *fileSearchIndexPolicy) shouldProcessChange(root filesearch.RootRecord, 
 }
 
 func shouldIgnoreFileSearchSystemPath(fullPath string, isDir bool) bool {
-	base := strings.ToLower(filepath.Base(fullPath))
+	cleanPath := filepath.Clean(strings.TrimSpace(fullPath))
+	base := strings.ToLower(filepath.Base(cleanPath))
 	if base == ".ds_store" {
+		return true
+	}
+
+	if hasFileSearchSystemDirectorySegment(cleanPath) {
+		return true
+	}
+
+	if hasFileSearchGeneratedDirectorySegment(cleanPath) {
+		return true
+	}
+
+	if util.IsMacOS() && hasMacPackageDirectorySegment(cleanPath) {
 		return true
 	}
 
 	if !isDir {
 		return false
-	}
-
-	if base == ".git" || base == ".hg" || base == ".svn" {
-		return true
 	}
 
 	if !util.IsMacOS() {
@@ -76,6 +85,61 @@ func shouldIgnoreFileSearchSystemPath(fullPath string, isDir bool) bool {
 	return strings.HasSuffix(base, ".photoslibrary") ||
 		strings.HasSuffix(base, ".lrlibrary") ||
 		strings.HasSuffix(base, ".lrdata")
+}
+
+func hasFileSearchSystemDirectorySegment(fullPath string) bool {
+	for _, segment := range splitFileSearchPathSegments(fullPath) {
+		switch strings.ToLower(segment) {
+		case ".git", ".hg", ".svn":
+			// macOS FSEvents can report descendants such as .git/objects/... without
+			// first reporting the .git directory itself. Checking every path segment
+			// keeps repository internals out of the dirty queue instead of only
+			// ignoring direct .git directory scan entries.
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasFileSearchGeneratedDirectorySegment(fullPath string) bool {
+	for _, segment := range splitFileSearchPathSegments(fullPath) {
+		switch strings.ToLower(segment) {
+		case "build", "dist", "node_modules", ".dart_tool", ".gradle", ".swiftpm", ".build", "deriveddata":
+			// Optimization: build tools can emit hundreds of FSEvents per second under
+			// generated directories. These paths are noisy search results and were the
+			// main source of repeated incremental file-search runs on macOS, so ignore
+			// them at the segment level before they reach the dirty queue.
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasMacPackageDirectorySegment(fullPath string) bool {
+	for _, segment := range splitFileSearchPathSegments(fullPath) {
+		lowerSegment := strings.ToLower(segment)
+		if strings.HasSuffix(lowerSegment, ".photoslibrary") ||
+			strings.HasSuffix(lowerSegment, ".lrlibrary") ||
+			strings.HasSuffix(lowerSegment, ".lrdata") {
+			// macOS package directories can also surface child paths directly through
+			// FSEvents. Segment-level matching prevents package internals from
+			// re-queueing scans after the top-level package directory was skipped.
+			return true
+		}
+	}
+
+	return false
+}
+
+func splitFileSearchPathSegments(fullPath string) []string {
+	normalized := filepath.ToSlash(filepath.Clean(strings.TrimSpace(fullPath)))
+	if normalized == "." || normalized == "" {
+		return nil
+	}
+
+	return strings.Split(normalized, "/")
 }
 
 func (p *fileSearchIndexPolicy) shouldIgnoreByGitIgnore(rootPath string, fullPath string, isDir bool) bool {

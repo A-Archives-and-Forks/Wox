@@ -10,6 +10,9 @@ import (
 
 type DirtyQueueConfig struct {
 	DebounceWindow               time.Duration
+	MaxDebounceWindow            time.Duration
+	BackpressurePathThreshold    int
+	BackpressureRootThreshold    int
 	SiblingMergeThreshold        int
 	RootEscalationPathThreshold  int
 	RootEscalationDirectoryRatio float64
@@ -19,6 +22,13 @@ type DirtyQueue struct {
 	config  DirtyQueueConfig
 	mu      sync.Mutex
 	pending map[string][]DirtySignal
+}
+
+type DirtyQueueStats struct {
+	RootCount      int
+	PathCount      int
+	LatestSignal   time.Time
+	EarliestSignal time.Time
 }
 
 func NewDirtyQueue(config DirtyQueueConfig) *DirtyQueue {
@@ -44,6 +54,10 @@ func (q *DirtyQueue) Push(signal DirtySignal) {
 }
 
 func (q *DirtyQueue) FlushReady(now time.Time, rootDirectoryCounts map[string]int) []ReconcileBatch {
+	return q.FlushReadyWithDebounce(now, rootDirectoryCounts, q.debounceWindow())
+}
+
+func (q *DirtyQueue) FlushReadyWithDebounce(now time.Time, rootDirectoryCounts map[string]int, debounceWindow time.Duration) []ReconcileBatch {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -53,7 +67,7 @@ func (q *DirtyQueue) FlushReady(now time.Time, rootDirectoryCounts map[string]in
 			continue
 		}
 		latest := latestDirtySignalAt(signals)
-		if q.debounceWindow() > 0 && now.Sub(latest) < q.debounceWindow() {
+		if debounceWindow > 0 && now.Sub(latest) < debounceWindow {
 			continue
 		}
 		rootIDs = append(rootIDs, rootID)
@@ -72,6 +86,44 @@ func (q *DirtyQueue) FlushReady(now time.Time, rootDirectoryCounts map[string]in
 
 func (q *DirtyQueue) debounceWindow() time.Duration {
 	return q.config.DebounceWindow
+}
+
+func (q *DirtyQueue) Stats() DirtyQueueStats {
+	if q == nil {
+		return DirtyQueueStats{}
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	return q.statsLocked()
+}
+
+func (q *DirtyQueue) statsLocked() DirtyQueueStats {
+	stats := DirtyQueueStats{}
+	pathSet := map[string]struct{}{}
+	for _, signals := range q.pending {
+		if len(signals) == 0 {
+			continue
+		}
+
+		stats.RootCount++
+		for _, signal := range signals {
+			if stats.LatestSignal.IsZero() || signal.At.After(stats.LatestSignal) {
+				stats.LatestSignal = signal.At
+			}
+			if stats.EarliestSignal.IsZero() || signal.At.Before(stats.EarliestSignal) {
+				stats.EarliestSignal = signal.At
+			}
+			if signal.Kind != DirtySignalKindPath || signal.Path == "" {
+				continue
+			}
+			pathSet[signal.Path] = struct{}{}
+		}
+	}
+
+	stats.PathCount = len(pathSet)
+	return stats
 }
 
 func buildReconcileBatch(rootID string, signals []DirtySignal, directoryCount int, config DirtyQueueConfig) ReconcileBatch {

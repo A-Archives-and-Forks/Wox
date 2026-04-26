@@ -425,7 +425,8 @@ func (c *FileSearchPlugin) syncToolbarMsgWithStatus(ctx context.Context, status 
 }
 
 func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status filesearch.StatusSnapshot, includeReady bool) (plugin.ToolbarMsg, bool) {
-	if !includeReady && !status.IsIndexing && status.ErrorRootCount == 0 {
+	hasPendingDirty := status.PendingDirtyRootCount > 0 || status.PendingDirtyPathCount > 0
+	if !includeReady && !status.IsIndexing && status.ErrorRootCount == 0 && !hasPendingDirty {
 		return plugin.ToolbarMsg{}, false
 	}
 
@@ -502,6 +503,14 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 		}
 	} else if status.IsIndexing {
 		title = c.api.GetTranslation(ctx, "plugin_file_status_indexing")
+		icon = fileIcon
+		indeterminate = true
+	} else if hasPendingDirty {
+		// Keep the toolbar visible while the dirty queue is waiting for its debounce
+		// window. Previously the completed run cleared the message even though queued
+		// FSEvents were about to start another incremental run, which made the toolbar
+		// disappear and reappear between adjacent file-search updates.
+		title = c.buildSyncingToolbarTitle(ctx, status)
 		icon = fileIcon
 		indeterminate = true
 	} else if hasPermissionError {
