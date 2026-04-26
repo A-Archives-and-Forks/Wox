@@ -1,12 +1,10 @@
 {
-  "Version": "2.0.2",
-  "MacArm64DownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.2/wox-mac-arm64.dmg",
-  "MacArm64Checksum": "a0bf6a482030e356cb10d38d3abd9436",
-  "MacAmd64DownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.2/wox-mac-amd64.dmg",
-  "MacAmd64Checksum": "3d8cfef1a81a0934714f7f99421d5b29",
-  "WindowsDownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.2/wox-windows-amd64.exe",
-  "WindowsChecksum": "880066d6270a7702b03a4c2da5c91394",
-  "LinuxDownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.2/wox-linux-amd64",
-  "LinuxChecksum": "cff93e4617667ebd3d212e6adabcfbb8",
-  "ReleaseNotes": "v2.0.2\n\nAdd\n- [Plugin] Add action to open a plugin's settings directly from query results\n- [Clipboard] Add action to open directory paths directly from clipboard results\n- [AI] Add MiniMax provider support\n- [Privacy] Add optional anonymous usage statistics with privacy controls\n- [Hotkey] Add ignored application list for global hotkeys #4372\n- [Tray] Add Show Query Box option for tray queries\n\nImprove\n- [App] Improve app search metadata and indexing on macOS and Windows, including System32 apps, Windows .url shortcuts, and cleaner Windows icons #4291 #4367\n- [Plugin Setting] Improve required-value validation in plugin tables and make AI model selection fall back to available provider configs #4365\n- [AI] Improve provider setup with default host configs and clearer provider icons\n- [URL] Improve URL results with dynamic website icons\n- Improve restoring the previously active window when Wox hides, with better tray interaction and Quick Select behavior on Windows\n- Improve locale detection when choosing the app language #4371\n- Improve switching to existing windows by matching window titles more reliably\n\nFix\n- Fix opening URLs and file paths on Windows when the target contains & or quotes #4360\n- [Clipboard] Fix cross-platform clipboard handling for text, images, and file paths #4309\n- Fix Windows DWM refresh and acrylic resize jitter issues\n- Fix Linux release bundles so bundled shared libraries can resolve their packaged dependencies correctly #4347\n- [Python Plugin] Fix compatibility on modern macOS by requiring a newer Python runtime #4374"
+  "Version": "2.0.3",
+  "MacArm64DownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.3/wox-mac-arm64.dmg",
+  "MacArm64Checksum": "",
+  "WindowsDownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.3/wox-windows-amd64.exe",
+  "WindowsChecksum": "",
+  "LinuxDownloadUrl": "https://github.com/Wox-launcher/Wox/releases/download/v2.0.3/wox-linux-amd64",
+  "LinuxChecksum": "",
+  "ReleaseNotes": ""
 }
