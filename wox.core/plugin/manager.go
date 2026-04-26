@@ -2861,13 +2861,15 @@ func (m *Manager) resolveActiveToolbarMsgContext(ctx context.Context, pluginId s
 	return resolvedCtx, true
 }
 
-// normalizeToolbarMsg translates user-facing text, clones context data, and backfills host proxies
-// for external plugin action callbacks.
+// normalizeToolbarMsg translates user-facing text, normalizes UI-facing icons, clones context data,
+// and backfills host proxies for external plugin action callbacks.
 func (m *Manager) normalizeToolbarMsg(ctx context.Context, pluginInstance *Instance, msg ToolbarMsg) ToolbarMsg {
+	normalizedIcon := common.ConvertIcon(ctx, msg.Icon, pluginInstance.PluginDirectory)
+
 	normalized := ToolbarMsg{
 		Id:            msg.Id,
 		Title:         pluginInstance.translateMetadataText(ctx, common.I18nString(msg.Title)),
-		Icon:          msg.Icon,
+		Icon:          normalizedIcon,
 		Progress:      msg.Progress,
 		Indeterminate: msg.Indeterminate,
 		Actions:       make([]ToolbarMsgAction, 0, len(msg.Actions)),
@@ -2879,6 +2881,11 @@ func (m *Manager) normalizeToolbarMsg(ctx context.Context, pluginInstance *Insta
 		}
 		action.Name = pluginInstance.translateMetadataText(ctx, common.I18nString(action.Name))
 		action.ContextData = common.ContextData(lo.Assign(map[string]string{}, action.ContextData))
+		if !action.Icon.IsEmpty() {
+			// Action icons share the same toolbar payload path as the message icon. Normalize them
+			// before storing callbacks so plugin-relative assets stay usable when actions are shown.
+			action.Icon = common.ConvertIcon(ctx, action.Icon, pluginInstance.PluginDirectory)
+		}
 
 		if action.Action == nil {
 			if proxyCreator, ok := pluginInstance.Plugin.(ToolbarMsgActionProxyCreator); ok {

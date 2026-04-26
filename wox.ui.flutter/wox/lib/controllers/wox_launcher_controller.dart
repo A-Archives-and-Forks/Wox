@@ -412,6 +412,21 @@ class WoxLauncherController extends GetxController {
     resetPendingResultPlaceholder();
   }
 
+  void clearStaleResultsForLayoutTransition(String traceId) {
+    if (isCurrentQueryReturned || currentQuery.value.isEmpty || !hasVisibleStaleResultsDuringQueryTransition) {
+      return;
+    }
+
+    // Bug fix: the stale-results grace window is only safe while the result
+    // layout keeps the same meaning. When metadata switches list/grid before
+    // slow plugin results arrive, the old snapshot would be re-rendered in the
+    // new layout and look like fresh plugin content. Reuse the pending
+    // placeholder path so outdated items disappear immediately while the
+    // window height remains stable until real results replace them.
+    clearQueryResultsTimer.cancel();
+    showPendingResultPlaceholder(traceId);
+  }
+
   // Keep a temporary "empty but still tall" transition state while a new query
   // is waiting for results. We intentionally clear stale items, actions, and
   // preview immediately so the UI no longer exposes outdated content, but we
@@ -2982,6 +2997,15 @@ class WoxLauncherController extends GetxController {
       }
     }
 
+    if (currentQuery.value.queryId != query.queryId) {
+      // Bug fix: metadata requests are asynchronous and can finish after the
+      // user has already typed another query. Applying stale metadata would
+      // switch the icon, preview ratio, or list/grid layout for the wrong
+      // query, so only the still-current query is allowed to update UI state.
+      Logger.instance.debug(traceId, "ignore stale query metadata for queryId=${query.queryId}");
+      return false;
+    }
+
     updateQueryIconOnQueryChanged(traceId, query, queryMetadata);
     updateResultPreviewWidthRatioOnQueryChanged(traceId, query, queryMetadata);
     updateGridLayoutParamsOnQueryChanged(traceId, query, queryMetadata);
@@ -3082,6 +3106,7 @@ class WoxLauncherController extends GetxController {
     Logger.instance.debug(traceId, "update grid layout params: columns=${queryMetadata.gridLayoutParams.columns}");
 
     if (wasGridLayout != isGridLayout.value) {
+      clearStaleResultsForLayoutTransition(traceId);
       if (!isGridLayout.value) {
         resizeHeight(traceId: traceId, reason: "switch from grid layout to list layout");
       } else if (resultGridViewController.rowHeight > 0) {
