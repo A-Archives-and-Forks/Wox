@@ -62,10 +62,15 @@ void registerLauncherCoreSmokeTests() {
       await waitForQueryBoxFocus(tester, controller);
 
       final initialIndex = controller.activeResultViewController.activeIndex.value;
+      final resultCount = controller.activeResultViewController.items.length;
+      expect(resultCount, greaterThan(0));
 
       controller.handleQueryBoxArrowDown();
       await tester.pump();
-      expect(controller.activeResultViewController.activeIndex.value, equals(initialIndex + 1));
+      // Bug fix: smoke fixtures can produce a single deterministic result on
+      // macOS. ArrowDown should move to the next result when one exists and
+      // wrap to the same index when there is only one result.
+      expect(controller.activeResultViewController.activeIndex.value, equals((initialIndex + 1) % resultCount));
 
       controller.handleQueryBoxArrowUp();
       await tester.pump();

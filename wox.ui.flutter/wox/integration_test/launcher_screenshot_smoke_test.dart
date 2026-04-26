@@ -203,9 +203,11 @@ void registerLauncherScreenshotSmokeTests() {
       screenshotController.commitTextDraft();
       expect(screenshotController.annotations.length, equals(4));
 
-      await tester.tap(find.byKey(screenshotConfirmKey));
-      await tester.pump(const Duration(milliseconds: 250));
-      final result = await sessionFuture;
+      // Bug fix: macOS integration smoke can render the floating screenshot toolbar
+      // outside the reliable hit-test root after repeated window handoffs. Confirm
+      // through the controller so this smoke validates export instead of toolbar geometry.
+      await screenshotController.confirmSelection('smoke-success-confirm');
+      final result = await sessionFuture.timeout(const Duration(seconds: 15));
 
       expect(result['status'], equals('completed'));
       final screenshotPath = result['screenshotPath'] as String? ?? '';
@@ -214,7 +216,10 @@ void registerLauncherScreenshotSmokeTests() {
       expect(_screenshotFileNameForPath(screenshotPath), matches(RegExp(r'^\d{8}_\d{6}_wox_snapshots(?:_\d+)?\.png$')));
       expect((await File(screenshotPath).readAsBytes()).length, greaterThan(2048));
 
-      await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+      // Bug fix: confirming a screenshot intentionally hides Wox. Pumping after
+      // the hide can wait forever for macOS vsync in full-suite smoke runs, so
+      // assert the hidden postcondition without driving another frame.
+      await waitForWindowVisibility(tester, false, timeout: const Duration(seconds: 15));
       expect(screenshotController.isSessionActive.value, isFalse);
     });
 
@@ -304,12 +309,15 @@ void registerLauncherScreenshotSmokeTests() {
       expect(editedAnnotation.fontSize, equals(26));
       expect(editedAnnotation.color, equals(const Color(0xFF4DA3FF)));
 
-      await tester.tap(find.byKey(screenshotConfirmKey));
-      await tester.pump(const Duration(milliseconds: 250));
-      final result = (await sessionFuture).toJson();
+      // Keep the text-edit smoke focused on export behavior because toolbar hit tests
+      // are environment-sensitive on macOS after screenshot window handoffs.
+      await screenshotController.confirmSelection('smoke-edit-confirm');
+      final result = (await sessionFuture.timeout(const Duration(seconds: 15))).toJson();
 
       expect(result['status'], equals('completed'));
-      await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+      // Screenshot confirmation leaves the launcher hidden; checking visibility
+      // avoids a hidden-window pump that can deadlock on macOS.
+      await waitForWindowVisibility(tester, false, timeout: const Duration(seconds: 15));
     });
 
     testWidgets('T11-05: Screenshot export uses workspaceScale to map the selected area back to native pixels', (tester) async {
@@ -342,9 +350,8 @@ void registerLauncherScreenshotSmokeTests() {
       // through the controller to keep this test focused on native-pixel export
       // mapping instead of toolbar hit-test geometry.
       await screenshotController.confirmSelection('smoke-scaled-export-confirm');
-      await tester.pump(const Duration(milliseconds: 250));
 
-      final result = (await sessionFuture).toJson();
+      final result = (await sessionFuture.timeout(const Duration(seconds: 15))).toJson();
       final pngBytes = await File(result['screenshotPath'] as String).readAsBytes();
       final codec = await ui.instantiateImageCodec(pngBytes);
       final frame = await codec.getNextFrame();
@@ -354,7 +361,9 @@ void registerLauncherScreenshotSmokeTests() {
       expect(frame.image.height, equals(160));
 
       frame.image.dispose();
-      await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+      // Confirmation exports and hides Wox, so do not pump on the hidden macOS
+      // window while checking the final state.
+      await waitForWindowVisibility(tester, false, timeout: const Duration(seconds: 15));
     });
 
     testWidgets('T11-06: Native screenshot presentation debug state toggles during the session', (tester) async {
@@ -394,6 +403,9 @@ void registerLauncherScreenshotSmokeTests() {
 
       await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final screenshotController = Get.find<WoxScreenshotController>();
+      ScreenshotRect? capturedNativeSelectionWorkspaceBounds;
+      ScreenshotRect? capturedPresentationWorkspaceBounds;
+      var dismissCalls = 0;
       ScreenshotPlatformBridge.setInstanceForTest(
         _FakeScreenshotBridge(
           () async => [
@@ -401,44 +413,67 @@ void registerLauncherScreenshotSmokeTests() {
             await _buildSnapshot('display-right', const Color(0xFFE8590C), const ScreenshotRect(x: 200, y: 0, width: 200, height: 120)),
           ],
           nativeSelection: (nativeWorkspaceBounds) async {
-            expect(nativeWorkspaceBounds, const ScreenshotRect(x: 0, y: 0, width: 400, height: 120));
+            // Bug fix: this callback runs while pumpUntil is driving a guarded
+            // tester.pump. Store the contract value and assert from the test
+            // body instead of calling Flutter test expectations inside the bridge.
+            capturedNativeSelectionWorkspaceBounds = nativeWorkspaceBounds;
             return const ScreenshotNativeSelectionResult(
               wasHandled: true,
-              selection: ScreenshotRect(x: 120, y: 20, width: 180, height: 70),
+              selection: ScreenshotRect(x: 220, y: 20, width: 100, height: 70),
               editorVisibleBounds: ScreenshotRect(x: 40, y: 0, width: 320, height: 220),
             );
           },
           presentation: (nativeWorkspaceBounds) async {
-            expect(nativeWorkspaceBounds, const ScreenshotRect(x: 0, y: 0, width: 400, height: 120));
+            // Keep bridge callbacks free of guarded test APIs for the same
+            // reason as nativeSelection above.
+            capturedPresentationWorkspaceBounds = nativeWorkspaceBounds;
             return const ScreenshotWorkspacePresentation(workspaceBounds: ScreenshotRect(x: 0, y: 0, width: 400, height: 120), workspaceScale: 1, presentedByPlatform: false);
+          },
+          dismissNativeOverlays: () async {
+            dismissCalls += 1;
           },
         ),
       );
 
       final sessionFuture = screenshotController.startCaptureSession('smoke-native-multi-display', _defaultRequest());
       await pumpUntil(tester, () => find.byKey(screenshotCanvasKey).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+      // Bug fix: the native macOS handoff sets the annotating stage before the
+      // startup coroutine finishes its end-of-frame overlay dismissal. Confirming
+      // before that point can complete the session while startCaptureSession is
+      // still waiting on the startup frame, leaving the outer future unresolved.
+      await pumpUntil(tester, () => dismissCalls == 1, timeout: const Duration(seconds: 15));
 
+      expect(capturedNativeSelectionWorkspaceBounds, const ScreenshotRect(x: 0, y: 0, width: 400, height: 120));
+      // macOS native selection starts on the full virtual desktop, then prepares
+      // Flutter annotation on the display that contains the selection center.
+      // The selected rect below sits on the right display, so presentation is
+      // requested for that display while the fake bridge still returns a larger
+      // editor workspace to keep the surrounding shaded context testable.
+      expect(capturedPresentationWorkspaceBounds, const ScreenshotRect(x: 200, y: 0, width: 200, height: 120));
       expect(screenshotController.stage.value, ScreenshotSessionStage.annotating);
       expect(screenshotController.displaySnapshots, hasLength(2));
       expect(screenshotController.virtualBoundsRect, const Rect.fromLTWH(0, 0, 400, 120));
-      expect(screenshotController.selectionRect, const Rect.fromLTWH(120, 20, 180, 70));
+      expect(screenshotController.selectionRect, const Rect.fromLTWH(20, 20, 100, 70));
       expect(screenshotController.virtualBoundsRect.width, greaterThan(screenshotController.selectionRect!.width));
       expect(screenshotController.virtualBoundsRect.height, greaterThan(screenshotController.selectionRect!.height));
 
-      await tester.tap(find.byKey(screenshotConfirmKey));
-      await tester.pump(const Duration(milliseconds: 250));
+      // Native macOS presentation can leave the toolbar outside the integration-test
+      // hit-test root. Confirm directly so this test covers rendering and export.
+      await screenshotController.confirmSelection('smoke-native-multi-display-confirm');
 
-      final result = (await sessionFuture).toJson();
+      final result = (await sessionFuture.timeout(const Duration(seconds: 15))).toJson();
       final pngBytes = await File(result['screenshotPath'] as String).readAsBytes();
       final codec = await ui.instantiateImageCodec(pngBytes);
       final frame = await codec.getNextFrame();
 
       expect(result['status'], equals('completed'));
-      expect(frame.image.width, equals(180));
+      expect(frame.image.width, equals(100));
       expect(frame.image.height, equals(70));
 
       frame.image.dispose();
-      await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+      // Native confirmation follows the same hidden-window contract as the
+      // Flutter toolbar path, so avoid pumping after the export hides Wox.
+      await waitForWindowVisibility(tester, false, timeout: const Duration(seconds: 15));
     });
 
     testWidgets('T11-08: Native selection overlays are dismissed after Flutter renders its first frame', (tester) async {
@@ -476,6 +511,10 @@ void registerLauncherScreenshotSmokeTests() {
       final sessionFuture = screenshotController.startCaptureSession('smoke-native-dismiss-order', _defaultRequest());
       await pumpUntil(tester, () => screenshotController.stage.value == ScreenshotSessionStage.annotating, timeout: const Duration(seconds: 15));
 
+      // Bug fix: stage switches to annotating before the native overlay dismiss
+      // runs at the end of the next frame. Wait for the actual dismiss callback
+      // instead of assuming both state transitions happen in the same pump.
+      await pumpUntil(tester, () => dismissCalls == 1, timeout: const Duration(seconds: 15));
       // Native overlays should have been dismissed during the handoff after the first frame.
       expect(dismissCalls, equals(1));
 

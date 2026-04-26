@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:extended_text_field/extended_text_field.dart';
@@ -89,16 +90,45 @@ void registerLauncherTestCleanup(WidgetTester tester, WoxLauncherController cont
   });
 }
 
+Future<void> ensureSmokeWindowReadyForFirstPump() async {
+  // Bug fix: Flutter's macOS test attach only best-effort foregrounds the app
+  // with `open`, and that can fail while the window still reports visible. A
+  // visible but non-frontmost macOS panel can stop the first tester.pump() from
+  // receiving vsync, so force the native show path on macOS instead of relying
+  // on visibility alone. The native show implementation is used because it also
+  // calls makeKeyAndOrderFront and NSApp.activate.
+  if (Platform.isMacOS || !await windowManager.isVisible()) {
+    await windowManager.show();
+  }
+}
+
+Future<void> startSmokeAppBeforeFirstPump({required Duration timeout}) async {
+  await ensureSmokeWindowReadyForFirstPump();
+
+  try {
+    // Bug fix: app.main performs asynchronous startup before runApp. Letting
+    // the first tester.pump race that initialization is fragile on macOS
+    // because a non-frontmost panel can block vsync before the widget tree is
+    // mounted. Await main explicitly so the first pump only runs after runApp
+    // has scheduled a frame, and bound the wait so startup failures report at
+    // the real blocking point.
+    await app.main([WoxTestConfig.serverPort.toString(), '-1', 'true']).timeout(timeout);
+  } on TimeoutException {
+    fail('Wox app main did not complete before the first pump within $timeout.');
+  }
+
+  // waitUntilReadyToShow can adjust macOS panel flags after the earlier show
+  // call. Re-activate once runApp has been scheduled so the first pump has a
+  // foreground window to drive vsync.
+  await ensureSmokeWindowReadyForFirstPump();
+}
+
 Future<WoxLauncherController> launchLauncherApp(WidgetTester tester) async {
   // Ensure the window is visible before any pump() call.  On macOS, a hidden
   // window stops delivering vsync signals, which causes pump() to block.
   // The previous test's tearDown hides the window for backend state cleanup.
-  if (!await windowManager.isVisible()) {
-    await windowManager.show();
-  }
-
   await resetSmokeAppState();
-  app.main([WoxTestConfig.serverPort.toString(), '-1', 'true']);
+  await startSmokeAppBeforeFirstPump(timeout: const Duration(seconds: 30));
 
   final launcherFinder = find.byType(WoxLauncherView);
   await pumpUntil(tester, () => launcherFinder.evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
@@ -110,14 +140,10 @@ Future<WoxLauncherController> launchLauncherApp(WidgetTester tester) async {
 }
 
 Future<SmokeLaunchResult> launchLauncherAppAndMeasureStartup(WidgetTester tester, {Duration timeout = const Duration(seconds: 5)}) async {
-  if (!await windowManager.isVisible()) {
-    await windowManager.show();
-  }
-
   await resetSmokeAppState();
 
   final stopwatch = Stopwatch()..start();
-  app.main([WoxTestConfig.serverPort.toString(), '-1', 'true']);
+  await startSmokeAppBeforeFirstPump(timeout: timeout);
 
   final launcherFinder = find.byType(WoxLauncherView);
   await pumpUntil(tester, () => launcherFinder.evaluate().isNotEmpty, timeout: timeout);
@@ -360,6 +386,11 @@ Future<void> enterQueryAndWaitForResults(WidgetTester tester, WoxLauncherControl
   await pumpUntil(tester, () => controller.activeResultViewController.items.any((item) => item.value.data.queryId == currentQueryId), timeout: timeout);
 
   // Pump a few more frames to let the resize settle before restoring the error handler.
+  // Bug fix: screenshot smoke can leave the macOS panel visible but non-frontmost
+  // before later system-plugin queries run. Re-activate before the settling pump
+  // so this shared helper does not block forever waiting for hidden/non-frontmost
+  // vsync after results have already arrived.
+  await ensureSmokeWindowReadyForFirstPump();
   await tester.pump(const Duration(milliseconds: 500));
   FlutterError.onError = oldHandler;
 }

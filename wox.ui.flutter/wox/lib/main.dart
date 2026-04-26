@@ -23,7 +23,7 @@ import 'package:wox/utils/wox_setting_util.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/wox_websocket_msg_util.dart';
 
-void main(List<String> arguments) async {
+Future<void> main(List<String> arguments) async {
   await initialServices(arguments);
   await initWindow();
 
@@ -83,9 +83,17 @@ Future<void> initialServices(List<String> arguments) async {
 }
 
 Future<void> initDeepLink() async {
-  // Register a custom protocol
-  // For macOS platform needs to declare the scheme in ios/Runner/Info.plist
-  await protocolHandler.register('wox');
+  // Bug fix: macOS smoke startup can leave plugin method calls unresolved when
+  // Flutter's foreground handoff fails. Deep-link registration is useful but
+  // not required for drawing the first frame, so bound the wait to avoid
+  // blocking runApp forever during startup smoke runs.
+  try {
+    // Register a custom protocol
+    // For macOS platform needs to declare the scheme in ios/Runner/Info.plist
+    await protocolHandler.register('wox').timeout(const Duration(seconds: 3));
+  } catch (e) {
+    Logger.instance.error(const UuidV4().generate(), "Error registering deep link protocol: $e");
+  }
 }
 
 Future<void> initWindow() async {

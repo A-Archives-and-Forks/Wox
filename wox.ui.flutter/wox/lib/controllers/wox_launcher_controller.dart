@@ -2716,10 +2716,11 @@ class WoxLauncherController extends GetxController {
     await resizeHeight(traceId: traceId, reason: "exit setting view");
     await windowManager.setPosition(positionBeforeOpenSetting);
     await windowManager.focus();
-    focusQueryBox(selectAll: true);
-    // Bug fix: after leaving settings, Windows can report window focus before
-    // Flutter has rebuilt the launcher query box. Retry once after the view
-    // switch so immediate typing works consistently.
+    // Bug fix: leaving settings marks the launcher visible before query-box
+    // focus has finished. Await the first focus request so callers and smoke
+    // tests observe the real postcondition, then keep the delayed retry for
+    // platforms that report window focus before the launcher text field rebuilds.
+    await focusQueryBox(selectAll: true);
     unawaited(Future.delayed(const Duration(milliseconds: 100), () => focusQueryBox(selectAll: true)));
   }
 
