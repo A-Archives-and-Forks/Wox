@@ -149,18 +149,25 @@ void registerSystemPluginSmokeTests() {
       }
 
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      const smokeUrl = 'https://githubgithugithub.com';
       // Bug fix: web-search fallback results can rank ahead of the URL plugin
       // on macOS smoke runs. Find the URL result explicitly so this test checks
       // URL plugin wiring instead of result ordering.
+      //
+      // Bug fix: action names are localized by the backend (for example "Open"
+      // in English), so the previous exact lowercase name check could time out
+      // even after the URL result appeared. The URL action context is the stable
+      // plugin contract, so use it for the wait predicate and keep the later
+      // action-name assertion focused on user-visible text.
       final result = await queryAndWaitForResultWhere(
         tester,
         controller,
-        'https://githubgithugithub.com',
-        (result) => result.title == 'https://githubgithugithub.com' && result.actions.any((action) => action.name == 'open'),
+        smokeUrl,
+        (result) => result.title == smokeUrl && result.actions.any((action) => action.contextData['url'] == smokeUrl),
         description: 'Expected URL plugin result with an open action.',
       );
 
-      expect(result.title, equals('https://githubgithugithub.com'));
+      expect(result.title, equals(smokeUrl));
       expect(result.isGroup, isFalse);
       expectResultActionByName(result, 'open');
       expectQueryLatencyWithinThreshold(result);
