@@ -565,8 +565,12 @@ class WoxSettingController extends GetxController {
     activePlugin.value = PluginDetail.empty();
   }
 
-  void syncActivePluginWithFilteredList({String? currentActivePluginId}) {
+  void syncActivePluginWithFilteredList({String? currentActivePluginId, bool preserveActivePlugin = false}) {
     if (filteredPluginList.isEmpty) {
+      if (preserveActivePlugin) {
+        return;
+      }
+
       activePlugin.value = PluginDetail.empty();
       return;
     }
@@ -579,11 +583,29 @@ class WoxSettingController extends GetxController {
 
     final idx = filteredPluginList.indexWhere((plugin) => plugin.id == targetPluginId);
     if (idx >= 0) {
-      activePlugin.value = filteredPluginList[idx];
+      final matchedPlugin = filteredPluginList[idx];
+      if (currentActivePluginId == null && activePlugin.value.id == matchedPlugin.id) {
+        return;
+      }
+
+      activePlugin.value = matchedPlugin;
+      return;
+    }
+
+    // Search filtering should not switch the detail pane while the user is
+    // typing. The old fallback selected the first matching plugin on every
+    // filter miss, rebuilding the right-side settings and causing the root
+    // settings focus node to interrupt text input.
+    if (preserveActivePlugin) {
       return;
     }
 
     setFirstFilteredPluginDetailActive();
+  }
+
+  void handlePluginSearchChanged() {
+    filterPlugins();
+    syncActivePluginWithFilteredList(preserveActivePlugin: true);
   }
 
   bool get hasInstalledRuntimePluginFilterApplied =>

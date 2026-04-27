@@ -202,8 +202,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                 ],
               ),
               onChanged: (value) {
-                controller.filterPlugins();
-                controller.syncActivePluginWithFilteredList();
+                controller.handlePluginSearchChanged();
               },
             );
           }),

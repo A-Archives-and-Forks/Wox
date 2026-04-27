@@ -1268,17 +1268,9 @@ func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
 
 func (s *Scanner) handleChangeSignal(ctx context.Context, signal ChangeSignal) {
 	s.updateRootFeedMetadata(ctx, signal.RootID, signal.FeedType, signal.Cursor)
-	util.GetLogger().Debug(ctx, fmt.Sprintf(
-		"filesearch change signal received: kind=%s semantic=%s root=%s path=%s feed_type=%s reason=%q path_is_dir=%t path_type_known=%t",
-		signal.Kind,
-		signal.SemanticKind,
-		signal.RootID,
-		summarizeLogPath(signal.Path),
-		signal.FeedType,
-		strings.TrimSpace(signal.Reason),
-		signal.PathIsDir,
-		signal.PathTypeKnown,
-	))
+	// File watchers can emit thousands of valid change signals in a short burst.
+	// The raw per-event trace made focused debugging harder without adding a
+	// decision point, so keep logging on policy drops and batch failures instead.
 
 	root, rootFound := s.findRootByID(ctx, signal.RootID)
 	if rootFound && !s.shouldProcessChange(root, signal) {
