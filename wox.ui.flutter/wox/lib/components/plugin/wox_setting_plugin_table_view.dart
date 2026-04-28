@@ -497,13 +497,18 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
             final freshRows = decodeRowsJson(getSetting(key));
 
             final idx = _findRowIndex(freshRows, originalRow);
-            if (idx >= 0) {
-              final updatedRow = Map<String, dynamic>.from(value);
-              updatedRow.remove(rowUniqueIdKey);
-              freshRows[idx] = updatedRow;
+            if (idx < 0) {
+              // Report row-match failures instead of saving unchanged data and closing
+              // the dialog. A stale table snapshot previously looked like a successful
+              // save while the visible row stayed unchanged.
+              return "Failed to save row: the original row was not found";
             }
 
-            updateConfig(key, json.encode(freshRows));
+            final updatedRow = Map<String, dynamic>.from(value);
+            updatedRow.remove(rowUniqueIdKey);
+            freshRows[idx] = updatedRow;
+
+            return updateConfig(key, json.encode(freshRows));
           },
         );
       },
@@ -949,7 +954,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                               item: item,
                               row: const {},
                               onUpdateValidate: onUpdateValidate,
-                              onUpdate: (key, row) {
+                              onUpdate: (key, row) async {
                                 final rows = decodeRowsJson(getSetting(key));
                                 rows.add(row);
                                 //remove the unique key
@@ -957,7 +962,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                                   element.remove(rowUniqueIdKey);
                                 }
 
-                                updateConfig(key, json.encode(rows));
+                                return updateConfig(key, json.encode(rows));
                               },
                             );
                           },

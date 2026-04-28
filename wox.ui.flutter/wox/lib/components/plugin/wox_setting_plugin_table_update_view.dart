@@ -32,7 +32,7 @@ import 'package:get/get.dart';
 class WoxSettingPluginTableUpdate extends StatefulWidget {
   final PluginSettingValueTable item;
   final Map<String, dynamic> row;
-  final Function onUpdate;
+  final Future<String?> Function(String key, Map<String, dynamic> row) onUpdate;
   final Future<List<PluginSettingTableValidationError>> Function(Map<String, dynamic> rowValues)? onUpdateValidate;
 
   const WoxSettingPluginTableUpdate({super.key, required this.item, required this.row, required this.onUpdate, this.onUpdateValidate});
@@ -44,6 +44,8 @@ class WoxSettingPluginTableUpdate extends StatefulWidget {
 class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdate> {
   Map<String, dynamic> values = {};
   bool isUpdate = false;
+  bool isSaving = false;
+  String saveErrorMessage = "";
   Map<String, String> fieldValidationErrors = {};
   Map<String, TextEditingController> textboxEditingController = {};
   final Map<String, FocusNode> _focusNodes = {};
@@ -374,6 +376,14 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
   }
 
   Future<void> _saveData(BuildContext context) async {
+    if (isSaving) {
+      return;
+    }
+
+    setState(() {
+      saveErrorMessage = "";
+    });
+
     // validate field validators first
     for (var column in columns) {
       if (column.validators.isNotEmpty) {
@@ -411,7 +421,34 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
       }
     }
 
-    widget.onUpdate(widget.item.key, values);
+    // Await the real table save result so a failed plugin setting update cannot look
+    // successful. The previous fire-and-forget flow closed the dialog immediately,
+    // which made row-match or backend errors appear as a silent no-op.
+    setState(() {
+      isSaving = true;
+    });
+    String? saveError;
+    try {
+      saveError = await widget.onUpdate(widget.item.key, Map<String, dynamic>.from(values));
+    } catch (e) {
+      saveError = e.toString().replaceFirst('Exception: ', '');
+    } finally {
+      if (mounted) {
+        setState(() {
+          isSaving = false;
+        });
+      }
+    }
+
+    if (saveError != null && saveError.trim().isNotEmpty) {
+      if (mounted) {
+        setState(() {
+          saveErrorMessage = saveError!;
+        });
+      }
+      return;
+    }
+
     if (mounted && context.mounted) {
       Navigator.pop(context);
     }
@@ -755,6 +792,11 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
                             ],
                           ),
                         ),
+                    if (saveErrorMessage.isNotEmpty)
+                      Padding(
+                        padding: EdgeInsets.only(top: 2, left: maxLabelWidth + 10),
+                        child: Text(tr(saveErrorMessage), style: const TextStyle(color: Colors.red, fontSize: 12)),
+                      ),
                   ],
                 ),
               ),
@@ -763,11 +805,14 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
               WoxButton.secondary(text: tr("ui_cancel"), padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12), onPressed: () => Navigator.pop(context)),
               const SizedBox(width: 12),
               WoxButton.primary(
-                text: tr("ui_save"),
+                text: isSaving ? "${tr("ui_save")}..." : tr("ui_save"),
                 padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
-                onPressed: () {
-                  _saveData(context);
-                },
+                onPressed:
+                    isSaving
+                        ? null
+                        : () {
+                          _saveData(context);
+                        },
               ),
             ],
           ),

@@ -646,7 +646,23 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
     }
 
     // Filterable dropdown with custom overlay
-    final selectedItem = widget.items.firstWhere((item) => item.value == widget.value, orElse: () => widget.items.first);
+    WoxDropdownItem<T>? selectedItem;
+    for (final item in widget.items) {
+      if (item.value == widget.value) {
+        selectedItem = item;
+        break;
+      }
+    }
+
+    // Do not display the first item when the current value is not in the option list.
+    // Settings can legitimately hold a custom or temporarily unavailable value, and the
+    // old fallback made that persisted value look like it had silently changed.
+    final selectedChild =
+        selectedItem != null
+            ? Text(selectedItem.label)
+            : widget.value != null
+            ? Text(widget.value.toString())
+            : (widget.hint ?? const SizedBox.shrink());
 
     return CompositedTransformTarget(
       link: _layerLink,
@@ -664,12 +680,7 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
                 padding: const EdgeInsets.fromLTRB(8.0, 4.0, 8.0, 4.0),
                 child: Row(
                   children: [
-                    Expanded(
-                      child: DefaultTextStyle(
-                        style: TextStyle(color: textColor, fontSize: widget.fontSize).useSystemChineseFont(),
-                        child: widget.value != null ? Text(selectedItem.label) : (widget.hint ?? const SizedBox.shrink()),
-                      ),
-                    ),
+                    Expanded(child: DefaultTextStyle(style: TextStyle(color: textColor, fontSize: widget.fontSize).useSystemChineseFont(), child: selectedChild)),
                     Icon(Icons.arrow_drop_down, color: widget.onChanged != null ? textColor : textColor.withValues(alpha: 0.5), size: widget.iconSize ?? 24.0),
                   ],
                 ),
