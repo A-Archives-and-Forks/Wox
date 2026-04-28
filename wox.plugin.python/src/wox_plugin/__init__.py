@@ -61,6 +61,7 @@ Methods for interacting with Wox:
 - **Callbacks**: `on_unload()`, `on_deep_link()`
 - **Commands**: `register_query_commands()`
 - **Clipboard**: `copy()`
+- **Screenshot**: `screenshot()`
 
 ### Models
 
@@ -73,6 +74,8 @@ Methods for interacting with Wox:
 - `ChangeQueryParam`: Parameters to change the query
 - `RefreshQueryParam`: Parameters to refresh the query
 - `CopyParams`: Parameters for clipboard operations
+- `ScreenshotOption`: Options for the screenshot workflow
+- `ScreenshotResult`: Result returned by the screenshot workflow
 
 #### Result Models (`models/result.py`)
 - `Result`: Search result with title, icon, preview, actions
@@ -199,7 +202,7 @@ settings = [
 
 from typing import List
 
-from .api import ChatStreamCallback, PublicAPI
+from .api import ChatStreamCallback, PublicAPI, ScreenshotOption, ScreenshotResult
 from .models.ai import (
     AIModel,
     ChatStreamData,
@@ -215,6 +218,8 @@ from .models.mru import MRUData, MRURestoreCallback
 from .models.preview import WoxPreview, WoxPreviewScrollPosition, WoxPreviewType
 from .models.query import (
     ChangeQueryParam,
+    CopyParams,
+    CopyType,
     MetadataCommand,
     Query,
     QueryEnv,
@@ -222,8 +227,6 @@ from .models.query import (
     RefreshQueryParam,
     Selection,
     SelectionType,
-    CopyParams,
-    CopyType,
 )
 from .models.result import (
     ActionContext,
@@ -235,11 +238,6 @@ from .models.result import (
     ResultTailTextCategory,
     ResultTailType,
     UpdatableResult,
-)
-from .models.toolbar_msg import (
-    ToolbarMsg,
-    ToolbarMsgAction,
-    ToolbarMsgActionContext,
 )
 from .models.setting import (
     PluginQueryRequirement,
@@ -255,6 +253,11 @@ from .models.setting import (
     create_label_setting,
     create_textbox_setting,
 )
+from .models.toolbar_msg import (
+    ToolbarMsg,
+    ToolbarMsgAction,
+    ToolbarMsgActionContext,
+)
 from .plugin import Plugin, PluginInitParams
 
 __all__: List[str] = [
@@ -264,6 +267,8 @@ __all__: List[str] = [
     # API
     "PublicAPI",
     "ChatStreamCallback",
+    "ScreenshotOption",
+    "ScreenshotResult",
     # Models
     "Context",
     "Query",

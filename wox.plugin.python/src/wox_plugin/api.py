@@ -6,16 +6,37 @@ to interact with Wox. The API is passed to plugins during initialization
 and provides access to UI control, settings, logging, and more.
 """
 
+from dataclasses import dataclass
 from typing import Awaitable, Callable, Dict, List, Optional, Protocol
 
 from .models.ai import AIModel, ChatStreamCallback, Conversation
 from .models.context import Context
 from .models.log import LogLevel
 from .models.mru import MRUData
-from .models.query import ChangeQueryParam, MetadataCommand, Query, RefreshQueryParam, CopyParams
+from .models.query import ChangeQueryParam, CopyParams, MetadataCommand, Query, RefreshQueryParam
 from .models.result import Result, UpdatableResult  # noqa: F401
-from .models.toolbar_msg import ToolbarMsg
 from .models.setting import PluginSettingDefinitionItem
+from .models.toolbar_msg import ToolbarMsg
+
+
+@dataclass
+class ScreenshotOption:
+    """
+    Options for the built-in screenshot workflow.
+
+    The object shape is reserved for future screenshot fields.
+    """
+
+
+@dataclass
+class ScreenshotResult:
+    """
+    Result of a plugin-triggered screenshot workflow.
+    """
+
+    success: bool = False
+    screenshot_path: str = ""
+    errmsg: str = ""
 
 
 class PublicAPI(Protocol):
@@ -38,6 +59,7 @@ class PublicAPI(Protocol):
         - Callbacks: on_unload, on_deep_link
         - Commands: register_query_commands
         - Clipboard: copy
+        - Screenshot: screenshot
 
     Example:
         class MyPlugin:
@@ -637,5 +659,18 @@ class PublicAPI(Protocol):
                 type=CopyType.IMAGE,
                 wox_image=WoxImage.new_absolute("/path/to/image.png").to_dict()
             ))
+        """
+        ...
+
+    async def screenshot(self, ctx: Context, option: ScreenshotOption) -> ScreenshotResult:
+        """
+        Start the built-in screenshot workflow.
+
+        Args:
+            ctx: Context
+            option: Screenshot options
+
+        Returns:
+            ScreenshotResult: success state, saved PNG path, and error message
         """
         ...

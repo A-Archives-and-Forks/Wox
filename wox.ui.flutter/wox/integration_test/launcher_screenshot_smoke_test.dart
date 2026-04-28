@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/controllers/wox_screenshot_controller.dart';
+import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/screenshot_session.dart';
 import 'package:wox/modules/launcher/views/wox_launcher_view.dart';
 import 'package:wox/modules/screenshot/views/wox_screenshot_view.dart';
@@ -258,6 +260,37 @@ void registerLauncherScreenshotSmokeTests() {
       expect(result['status'], equals('cancelled'));
       await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
       expect(Get.find<WoxScreenshotController>().isSessionActive.value, isFalse);
+    });
+
+    testWidgets('T11-02A: Plugin-triggered screenshot shows the caller icon before the tools', (tester) async {
+      await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final screenshotController = Get.find<WoxScreenshotController>();
+      final callerIcon = WoxImage(imageType: 'emoji', imageData: 'P');
+      ScreenshotPlatformBridge.setInstanceForTest(
+        _FakeScreenshotBridge(() async => [await _buildSnapshot('display-plugin-icon', const Color(0xFF345995), const ScreenshotRect(x: 0, y: 0, width: 360, height: 240))]),
+      );
+
+      final request = CaptureScreenshotRequest.fromJson({
+        'sessionId': 'smoke-plugin-icon',
+        'trigger': 'plugin',
+        'scope': 'all_displays',
+        'output': 'clipboard',
+        'tools': ['rect', 'ellipse', 'arrow', 'text'],
+        'exportFilePath': _smokeScreenshotExportPath(),
+        'callerIcon': callerIcon.toJson(),
+      });
+      final sessionFuture = screenshotController.startCaptureSession('smoke-plugin-icon', request);
+      await pumpUntil(tester, () => find.byKey(screenshotToolbarKey).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+
+      final callerIconFinder = find.byWidgetPredicate((widget) => widget is WoxImageView && widget.woxImage == callerIcon);
+      expect(callerIconFinder, findsOneWidget);
+      expect(tester.getRect(callerIconFinder).left, lessThan(tester.getRect(find.byKey(screenshotToolSelectKey)).left));
+
+      await screenshotController.cancelSession('smoke-plugin-icon-cancel');
+      await tester.pump(const Duration(milliseconds: 250));
+      final result = (await sessionFuture).toJson();
+
+      expect(result['status'], equals('cancelled'));
     });
 
     testWidgets('T11-03: Screenshot bridge failure restores launcher and returns failed status', (tester) async {

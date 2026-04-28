@@ -20,6 +20,8 @@ from wox_plugin import (
     RefreshQueryParam,
     Result,
     ResultActionType,
+    ScreenshotOption,
+    ScreenshotResult,
     UpdatableResult,
     WoxImage,
 )
@@ -352,4 +354,24 @@ class PluginAPI(PublicAPI):
                 "text": params.text,
                 "woxImage": (json.dumps(params.wox_image) if params.wox_image else ""),
             },
+        )
+
+    async def screenshot(self, ctx: Context, option: ScreenshotOption) -> ScreenshotResult:
+        """Start the built-in screenshot workflow."""
+        response = await self.invoke_method(
+            ctx,
+            "Screenshot",
+            {
+                # Keep options as one JSON object so future fields do not change the method signature.
+                "option": json.dumps({}),
+            },
+        )
+
+        if not isinstance(response, dict):
+            return ScreenshotResult(success=False, errmsg="invalid screenshot response")
+
+        return ScreenshotResult(
+            success=bool(response.get("Success", False)),
+            screenshot_path=str(response.get("ScreenshotPath", "") or ""),
+            errmsg=str(response.get("ErrMsg", "") or ""),
         )

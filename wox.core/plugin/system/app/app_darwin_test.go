@@ -101,6 +101,10 @@ func (e emptyAPIImpl) RefreshQuery(ctx context.Context, params plugin.RefreshQue
 func (e emptyAPIImpl) Copy(ctx context.Context, params plugin.CopyParams) {
 }
 
+func (e emptyAPIImpl) Screenshot(ctx context.Context, option plugin.ScreenshotOption) plugin.ScreenshotResult {
+	return plugin.ScreenshotResult{}
+}
+
 func TestMacRetriever_ParseAppInfo(t *testing.T) {
 	if util.IsMacOS() {
 		util.GetLocation().Init()

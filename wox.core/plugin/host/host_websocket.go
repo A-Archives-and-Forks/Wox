@@ -343,6 +343,20 @@ func (w *WebsocketHost) handleRequestFromPlugin(ctx context.Context, request Jso
 
 		pluginInstance.API.Copy(ctx, params)
 		w.sendResponseToHost(ctx, request, "")
+	case "Screenshot":
+		var option plugin.ScreenshotOption
+		if optionStr, exists := request.Params["option"]; exists && strings.TrimSpace(optionStr) != "" {
+			// The public plugin API keeps screenshot options in a single JSON object so new fields
+			// can be added without growing the websocket method signature for every SDK runtime.
+			if err := json.Unmarshal([]byte(optionStr), &option); err != nil {
+				util.GetLogger().Error(ctx, fmt.Sprintf("[%s] failed to unmarshal screenshot option: %s", request.PluginName, err))
+				w.sendResponseErrToHost(ctx, request, fmt.Errorf("failed to unmarshal screenshot option: %w", err))
+				return
+			}
+		}
+
+		result := pluginInstance.API.Screenshot(ctx, option)
+		w.sendResponseToHost(ctx, request, result)
 	case "Notify":
 		message, exist := request.Params["message"]
 		if !exist {

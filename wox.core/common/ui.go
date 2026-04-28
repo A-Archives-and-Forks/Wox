@@ -158,6 +158,10 @@ type CaptureScreenshotRequest struct {
 	Output         string   `json:"output"`
 	Tools          []string `json:"tools"`
 	ExportFilePath string   `json:"exportFilePath"`
+	// CallerIcon is set only by plugin-originated screenshot API calls. The previous request did not
+	// carry caller identity, so Flutter could not visually distinguish a third-party capture from the
+	// built-in Wox screenshot flow; passing the already-resolved icon keeps that decision in Go.
+	CallerIcon *WoxImage `json:"callerIcon,omitempty"`
 }
 
 // DisplaySnapshot describes one native capture surface that Flutter can render and crop from.

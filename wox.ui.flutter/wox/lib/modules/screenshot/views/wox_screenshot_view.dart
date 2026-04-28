@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
+import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/controllers/wox_screenshot_controller.dart';
+import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/screenshot_session.dart';
 
 const Key screenshotCanvasKey = Key('screenshot-canvas');
@@ -285,6 +287,13 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (controller.activeRequest?.callerIcon != null) ...[
+                  // Plugin API screenshot sessions carry the resolved caller icon so users can tell
+                  // this toolbox belongs to a third-party request. Wox-owned captures omit the field,
+                  // which keeps the built-in screenshot toolbar unchanged.
+                  _CallerIcon(icon: controller.activeRequest!.callerIcon!),
+                  const SizedBox(width: 10),
+                ],
                 _ToolButton(
                   key: screenshotToolSelectKey,
                   icon: Icons.select_all,
@@ -1247,6 +1256,23 @@ class _LoadingView extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _CallerIcon extends StatelessWidget {
+  const _CallerIcon({required this.icon});
+
+  final WoxImage icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 28,
+      height: 28,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(color: const Color(0x2EFFFFFF), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0x33FFFFFF))),
+      child: WoxImageView(woxImage: icon, width: 20, height: 20),
     );
   }
 }

@@ -55,6 +55,11 @@ class WoxScreenshotController extends GetxController {
 
   String tr(String key) => Get.find<WoxSettingController>().tr(key);
 
+  // The screenshot view needs read-only access to caller metadata such as the plugin icon. Keeping
+  // mutation inside the controller preserves the existing session lifecycle while allowing the
+  // toolbox to render request-scoped identity details.
+  CaptureScreenshotRequest? get activeRequest => _activeRequest;
+
   Rect get virtualBoundsRect => virtualBounds.value?.toRect() ?? Rect.zero;
 
   Rect? get selectionRect => selection.value?.toRect();

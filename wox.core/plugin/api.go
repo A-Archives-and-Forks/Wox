@@ -182,12 +182,25 @@ type API interface {
 	// Copy copies the given content to the system clipboard.
 	// Supports text, image, or both simultaneously.
 	Copy(ctx context.Context, params CopyParams)
+
+	// Screenshot captures a user-selected screen area and returns the saved PNG path.
+	Screenshot(ctx context.Context, option ScreenshotOption) ScreenshotResult
 }
 
 type CopyParams struct {
 	Type     CopyType
 	Text     string
 	WoxImage *common.WoxImage
+}
+
+// ScreenshotOption controls optional screenshot behavior.
+type ScreenshotOption struct{}
+
+// ScreenshotResult reports the screenshot capture outcome and saved PNG path.
+type ScreenshotResult struct {
+	Success        bool
+	ScreenshotPath string
+	ErrMsg         string
 }
 
 // APIImpl is the concrete API implementation bound to one plugin instance.
@@ -555,6 +568,62 @@ func (a *APIImpl) Copy(ctx context.Context, params CopyParams) {
 			a.Log(ctx, LogLevelError, fmt.Sprintf("failed to copy image to clipboard: %v", err))
 		}
 		return
+	}
+}
+
+func (a *APIImpl) Screenshot(ctx context.Context, option ScreenshotOption) ScreenshotResult {
+	request := common.DefaultCaptureScreenshotRequest()
+	// Plugin screenshots return a saved file path and leave clipboard handling to the caller.
+	request.Output = "file"
+	if !a.pluginInstance.IsSystemPlugin {
+		// Third-party screenshot callers need a visible identity marker in the floating toolbox.
+		// The UI cannot reliably infer the plugin from the generic CaptureScreenshot websocket method,
+		// so core resolves the metadata icon here and sends only the render-ready WoxImage.
+		callerIcon := a.pluginInstance.Metadata.GetIconOrDefault(a.pluginInstance.PluginDirectory, common.WoxIcon)
+		request.CallerIcon = &callerIcon
+	}
+
+	result, err := GetPluginManager().GetUI().CaptureScreenshot(ctx, request)
+	if err != nil {
+		return ScreenshotResult{
+			Success: false,
+			ErrMsg:  err.Error(),
+		}
+	}
+
+	switch result.Status {
+	case common.CaptureScreenshotStatusCompleted:
+		if result.ScreenshotPath == "" {
+			return ScreenshotResult{
+				Success: false,
+				ErrMsg:  "screenshot completed without an export path",
+			}
+		}
+
+		return ScreenshotResult{
+			Success:        true,
+			ScreenshotPath: result.ScreenshotPath,
+			ErrMsg:         result.ClipboardWarningMessage,
+		}
+	case common.CaptureScreenshotStatusCancelled:
+		return ScreenshotResult{
+			Success: false,
+			ErrMsg:  "cancelled",
+		}
+	case common.CaptureScreenshotStatusFailed:
+		errMsg := result.ErrorMessage
+		if errMsg == "" {
+			errMsg = "screenshot session failed"
+		}
+		return ScreenshotResult{
+			Success: false,
+			ErrMsg:  errMsg,
+		}
+	default:
+		return ScreenshotResult{
+			Success: false,
+			ErrMsg:  fmt.Sprintf("unexpected screenshot status: %s", result.Status),
+		}
 	}
 }
 

@@ -128,3 +128,7 @@ func (e *mockAPI) RefreshQuery(ctx context.Context, params plugin.RefreshQueryPa
 
 func (m *mockAPI) Copy(ctx context.Context, params plugin.CopyParams) {
 }
+
+func (m *mockAPI) Screenshot(ctx context.Context, option plugin.ScreenshotOption) plugin.ScreenshotResult {
+	return plugin.ScreenshotResult{}
+}

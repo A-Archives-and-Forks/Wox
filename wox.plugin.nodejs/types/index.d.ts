@@ -1167,6 +1167,23 @@ export interface CopyParams {
   woxImage?: WoxImage
 }
 
+/**
+ * Options for the built-in screenshot workflow.
+ *
+ * The object shape is reserved for future screenshot fields.
+ */
+export interface ScreenshotOption {}
+
+/**
+ * Result of a plugin-triggered screenshot workflow.
+ * Contains the screenshot file path and any error message if the workflow failed.
+ */
+export interface ScreenshotResult {
+  Success: boolean
+  ScreenshotPath: string
+  ErrMsg: string
+}
+
 export interface PublicAPI {
   /**
    * Change Wox query
@@ -1396,6 +1413,13 @@ export interface PublicAPI {
    * @param params CopyParams
    */
   Copy: (ctx: Context, params: CopyParams) => Promise<void>
+
+  /**
+   * Start the built-in screenshot workflow.
+   * @param ctx Context
+   * @param option Screenshot options
+   */
+  Screenshot: (ctx: Context, option: ScreenshotOption) => Promise<ScreenshotResult>
 }
 
 /**

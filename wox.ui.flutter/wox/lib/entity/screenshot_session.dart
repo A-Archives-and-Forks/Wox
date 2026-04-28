@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:wox/entity/wox_image.dart';
 
 enum ScreenshotSessionStage { idle, loading, selecting, annotating, exporting, done, cancelled, failed }
 
@@ -31,6 +32,31 @@ dynamic _normalizeJsonValue(dynamic value) {
     return value.map(_normalizeJsonValue).toList();
   }
   return value;
+}
+
+WoxImage? _parseOptionalWoxImage(dynamic value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is String) {
+    return WoxImage.parse(value);
+  }
+
+  final iconJson = _normalizeJsonMap(value);
+  if (iconJson == null) {
+    return null;
+  }
+
+  final imageType = iconJson['ImageType'] as String? ?? iconJson['imageType'] as String? ?? '';
+  final imageData = iconJson['ImageData'] as String? ?? iconJson['imageData'] as String? ?? '';
+  if (imageType.isEmpty || imageData.isEmpty) {
+    return null;
+  }
+
+  // Screenshot requests can arrive from Go JSON, Dart tests, or platform-like maps. Constructing
+  // the WoxImage at the model boundary keeps toolbar rendering typed instead of spreading raw map
+  // parsing through the screenshot view.
+  return WoxImage(imageType: imageType, imageData: imageData);
 }
 
 class ScreenshotPoint {
@@ -149,7 +175,15 @@ class ScreenshotSelectionDisplayHint {
 }
 
 class CaptureScreenshotRequest {
-  const CaptureScreenshotRequest({required this.sessionId, required this.trigger, required this.scope, required this.output, required this.tools, required this.exportFilePath});
+  const CaptureScreenshotRequest({
+    required this.sessionId,
+    required this.trigger,
+    required this.scope,
+    required this.output,
+    required this.tools,
+    required this.exportFilePath,
+    this.callerIcon,
+  });
 
   final String sessionId;
   final String trigger;
@@ -157,6 +191,7 @@ class CaptureScreenshotRequest {
   final String output;
   final List<String> tools;
   final String exportFilePath;
+  final WoxImage? callerIcon;
 
   factory CaptureScreenshotRequest.fromJson(Map<String, dynamic> json) {
     return CaptureScreenshotRequest(
@@ -166,11 +201,20 @@ class CaptureScreenshotRequest {
       output: json['Output'] as String? ?? json['output'] as String? ?? 'clipboard',
       tools: ((json['Tools'] ?? json['tools']) as List<dynamic>? ?? const []).map((tool) => tool.toString()).toList(),
       exportFilePath: json['ExportFilePath'] as String? ?? json['exportFilePath'] as String? ?? '',
+      callerIcon: _parseOptionalWoxImage(json['CallerIcon'] ?? json['callerIcon']),
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {'sessionId': sessionId, 'trigger': trigger, 'scope': scope, 'output': output, 'tools': tools, 'exportFilePath': exportFilePath};
+    return {
+      'sessionId': sessionId,
+      'trigger': trigger,
+      'scope': scope,
+      'output': output,
+      'tools': tools,
+      'exportFilePath': exportFilePath,
+      if (callerIcon != null) 'callerIcon': callerIcon!.toJson(),
+    };
   }
 }
 

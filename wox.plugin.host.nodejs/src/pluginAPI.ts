@@ -10,6 +10,14 @@ import { MRUData } from "@wox-launcher/wox-plugin"
 import { PluginJsonRpcTypeRequest, pluginInstances } from "./jsonrpc"
 import { PluginJsonRpcRequest } from "./types"
 
+type ScreenshotOption = Record<string, never>
+
+type ScreenshotResult = {
+  Success: boolean
+  ScreenshotPath: string
+  ErrMsg: string
+}
+
 export class PluginAPI implements PublicAPI {
   ws: WebSocket
   pluginId: string
@@ -93,7 +101,7 @@ export class PluginAPI implements PublicAPI {
   async ShowToolbarMsg(ctx: Context, msg: unknown): Promise<void> {
     const pluginInstance = pluginInstances.get(this.pluginId)
     if (pluginInstance && msg && typeof msg === "object") {
-      const maybeMsg = msg as { Actions?: Array<{ Id?: string, Action?: unknown }> }
+      const maybeMsg = msg as { Actions?: Array<{ Id?: string; Action?: unknown }> }
       for (const action of maybeMsg.Actions ?? []) {
         if (!action.Id) {
           action.Id = crypto.randomUUID()
@@ -101,7 +109,7 @@ export class PluginAPI implements PublicAPI {
         if (typeof action.Action === "function") {
           pluginInstance.ToolbarMsgActions.set(
             action.Id,
-            action.Action as (ctx: Context, actionContext: { ToolbarMsgId: string, ToolbarMsgActionId: string, ContextData: MapString }) => Promise<void> | void
+            action.Action as (ctx: Context, actionContext: { ToolbarMsgId: string; ToolbarMsgActionId: string; ContextData: MapString }) => Promise<void> | void
           )
         }
       }
@@ -293,5 +301,13 @@ export class PluginAPI implements PublicAPI {
       text: params.text,
       woxImage: params.woxImage ? JSON.stringify(params.woxImage) : ""
     })
+  }
+
+  async Screenshot(ctx: Context, option: ScreenshotOption): Promise<ScreenshotResult> {
+    // Keep screenshot options as one JSON payload so the host/core boundary can
+    // add fields later without changing the websocket method's parameter list.
+    return (await this.invokeMethod(ctx, "Screenshot", {
+      option: JSON.stringify(option)
+    })) as ScreenshotResult
   }
 }
