@@ -1,4 +1,17 @@
-import { ChangeQueryParam, Context, CopyParams, MapString, PublicAPI, Query, RefreshQueryParam, Result, ResultAction, UpdatableResult } from "@wox-launcher/wox-plugin"
+import {
+  ChangeQueryParam,
+  Context,
+  CopyParams,
+  MapString,
+  PublicAPI,
+  Query,
+  RefreshQueryParam,
+  Result,
+  ResultAction,
+  ScreenshotOption,
+  ScreenshotResult,
+  UpdatableResult
+} from "@wox-launcher/wox-plugin"
 import { WebSocket } from "ws"
 import * as crypto from "crypto"
 import { waitingForResponse } from "./index"
@@ -9,14 +22,6 @@ import { AI } from "@wox-launcher/wox-plugin/types/ai"
 import { MRUData } from "@wox-launcher/wox-plugin"
 import { PluginJsonRpcTypeRequest, pluginInstances } from "./jsonrpc"
 import { PluginJsonRpcRequest } from "./types"
-
-type ScreenshotOption = Record<string, never>
-
-type ScreenshotResult = {
-  Success: boolean
-  ScreenshotPath: string
-  ErrMsg: string
-}
 
 export class PluginAPI implements PublicAPI {
   ws: WebSocket
