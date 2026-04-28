@@ -12,6 +12,7 @@ const (
 	ShowSourceQueryHotkey ShowSource = "query_hotkey"
 	ShowSourceSelection   ShowSource = "selection"
 	ShowSourceTrayQuery   ShowSource = "tray_query"
+	ShowSourceExplorer    ShowSource = "explorer"
 )
 
 type PlainQuery struct {

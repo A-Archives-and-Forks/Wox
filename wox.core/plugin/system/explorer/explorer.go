@@ -745,6 +745,7 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 				HideToolbar:      true,
 				QueryBoxAtBottom: true,
 				HideOnBlur:       true,
+				ShowSource:       common.ShowSourceExplorer,
 				WindowPosition:   &position,
 				WindowWidth:      woxSetting.AppWidth.Get() / 2,
 			})

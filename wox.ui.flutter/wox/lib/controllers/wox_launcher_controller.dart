@@ -996,7 +996,7 @@ class WoxLauncherController extends GetxController {
     }
 
     // Query preservation has two different sources and they solve different cases:
-    // 1. Explicit incoming query source: query hotkey, selection query, and tray query inject a
+    // 1. Explicit incoming query source: query hotkey, selection query, tray query, and explorer type-to-search inject a
     //    new query for this show action, so fresh mode must preserve that incoming query.
     // 2. Continue-mode fallback: when show source is default, reopening the launcher in continue
     //    mode should keep the existing query already stored in the controller.
@@ -1015,7 +1015,8 @@ class WoxLauncherController extends GetxController {
     final shouldPreserveIncomingQuery =
         params.showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_QUERY_HOTKEY.code ||
         params.showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_SELECTION.code ||
-        params.showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_TRAY_QUERY.code;
+        params.showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_TRAY_QUERY.code ||
+        params.showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_EXPLORER.code;
     final shouldPreserveQueryOnShow =
         shouldPreserveIncomingQuery || (lastLaunchMode == WoxLaunchModeEnum.WOX_LAUNCH_MODE_CONTINUE.code && (hasCurrentInputQuery || hasCurrentSelectionQuery));
 
@@ -1165,7 +1166,8 @@ class WoxLauncherController extends GetxController {
   bool shouldRestoreQueryAfterHide(String showSource) {
     return showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_TRAY_QUERY.code ||
         showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_QUERY_HOTKEY.code ||
-        showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_SELECTION.code;
+        showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_SELECTION.code ||
+        showSource == WoxShowSourceEnum.WOX_SHOW_SOURCE_EXPLORER.code;
   }
 
   void preserveQueryBeforeTemporaryQuery(String traceId, String showSource) {

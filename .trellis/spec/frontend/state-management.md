@@ -62,6 +62,59 @@ Examples:
 
 ---
 
+## Scenario: Launcher Temporary Query Sources
+
+### 1. Scope / Trigger
+
+- Trigger: a backend caller opens Wox and will inject or has already injected a temporary query, such as query hotkey, tray query, selection query, or explorer type-to-search.
+
+### 2. Signatures
+
+- Backend payload: `wox.core/common.ShowContext.ShowSource`
+- Frontend enum: `wox.ui.flutter/wox/lib/enums/wox_show_source_enum.dart`
+- Frontend state gates: `WoxLauncherController.showApp()` and `WoxLauncherController.shouldRestoreQueryAfterHide()`
+
+### 3. Contracts
+
+- `ShowSource=default`: normal launcher open; continue mode may reuse the current query and visible results when calculating initial height.
+- Temporary query sources: must be listed in both `shouldPreserveIncomingQuery` and `shouldRestoreQueryAfterHide`.
+- Delayed-query sources, such as explorer type-to-search, must still use a non-default source before calling `ShowApp`; otherwise stale continue-mode results can affect initial bounds before `ChangeQuery` arrives.
+
+### 4. Validation & Error Matrix
+
+| Case                                          | Expected Behavior                                                                   |
+| --------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Temporary source is known                     | Initial height ignores stale results, then the injected query drives result height. |
+| Temporary source is missing from restore gate | Hiding Wox leaves the temporary query as the main session.                          |
+| Delayed-query source uses `default`           | Continue-mode stale results can make anchored windows open at the wrong position.   |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `ShowSource=explorer` for type-to-search before the later `ChangeQuery("explorer ...")`.
+- Base: `ShowSource=default` for a normal launcher toggle with no injected query.
+- Bad: a new temporary source only added to the backend enum without adding the matching Dart enum and controller gates.
+
+### 6. Tests Required
+
+- For new temporary launcher sources, add or update smoke coverage that verifies initial window height, injected query display, and previous-query restoration after hide.
+- If the source depends on native OS focus hooks and cannot be fully automated, verify with the closest backend/frontend build checks and document the manual scenario.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```go
+ShowContext{ShowSource: common.ShowSourceDefault}
+```
+
+#### Correct
+
+```go
+ShowContext{ShowSource: common.ShowSourceExplorer}
+```
+
+---
+
 ## Common Mistakes
 
 - Do not use `setState` for data that already belongs to a controller.
