@@ -3,6 +3,9 @@ class WoxUsageStats {
   late int totalAppLaunch;
   late int totalActions;
   late int totalAppsUsed;
+  // Real usage duration from the backend lets the share image show "days with Wox"
+  // without estimating from local UI state or hardcoded sample data.
+  late int usageDays;
   late int mostActiveHour;
   late int mostActiveDay;
   late List<int> openedByHour;
@@ -15,6 +18,7 @@ class WoxUsageStats {
     required this.totalAppLaunch,
     required this.totalActions,
     required this.totalAppsUsed,
+    required this.usageDays,
     required this.mostActiveHour,
     required this.mostActiveDay,
     required this.openedByHour,
@@ -28,6 +32,7 @@ class WoxUsageStats {
     totalAppLaunch = 0;
     totalActions = 0;
     totalAppsUsed = 0;
+    usageDays = 0;
     mostActiveHour = -1;
     mostActiveDay = -1;
     openedByHour = List<int>.filled(24, 0);
@@ -41,37 +46,34 @@ class WoxUsageStats {
     totalAppLaunch = json['TotalAppLaunch'] ?? 0;
     totalActions = json['TotalActions'] ?? 0;
     totalAppsUsed = json['TotalAppsUsed'] ?? 0;
+    usageDays = json['UsageDays'] ?? 0;
     mostActiveHour = json['MostActiveHour'] ?? -1;
     mostActiveDay = json['MostActiveDay'] ?? -1;
 
-    openedByHour =
-        (json['OpenedByHour'] as List?)?.map((e) => e as int).toList() ??
-            List<int>.filled(24, 0);
+    openedByHour = (json['OpenedByHour'] as List?)?.map((e) => e as int).toList() ?? List<int>.filled(24, 0);
     if (openedByHour.length != 24) {
       openedByHour = List<int>.filled(24, 0);
     }
 
-    openedByWeekday =
-        (json['OpenedByWeekday'] as List?)?.map((e) => e as int).toList() ??
-            List<int>.filled(7, 0);
+    openedByWeekday = (json['OpenedByWeekday'] as List?)?.map((e) => e as int).toList() ?? List<int>.filled(7, 0);
     if (openedByWeekday.length != 7) {
       openedByWeekday = List<int>.filled(7, 0);
     }
 
     if (json['TopApps'] != null) {
       topApps = <WoxUsageStatsItem>[];
-      (json['TopApps'] as List).forEach((v) {
+      for (final v in json['TopApps'] as List) {
         topApps.add(WoxUsageStatsItem.fromJson(v));
-      });
+      }
     } else {
       topApps = <WoxUsageStatsItem>[];
     }
 
     if (json['TopPlugins'] != null) {
       topPlugins = <WoxUsageStatsItem>[];
-      (json['TopPlugins'] as List).forEach((v) {
+      for (final v in json['TopPlugins'] as List) {
         topPlugins.add(WoxUsageStatsItem.fromJson(v));
-      });
+      }
     } else {
       topPlugins = <WoxUsageStatsItem>[];
     }
@@ -83,11 +85,7 @@ class WoxUsageStatsItem {
   late String name;
   late int count;
 
-  WoxUsageStatsItem({
-    required this.id,
-    required this.name,
-    required this.count,
-  });
+  WoxUsageStatsItem({required this.id, required this.name, required this.count});
 
   WoxUsageStatsItem.fromJson(Map<String, dynamic> json) {
     id = json['Id'] ?? '';

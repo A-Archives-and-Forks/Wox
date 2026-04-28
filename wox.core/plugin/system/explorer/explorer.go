@@ -713,6 +713,7 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 			active         bool
 			waitingVisible bool
 			waitingSince   time.Time
+			handoffUntil   time.Time
 			pending        string
 			pendingCtx     context.Context
 		)
@@ -720,8 +721,21 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 		resetState := func() {
 			waitingVisible = false
 			waitingSince = time.Time{}
+			handoffUntil = time.Time{}
 			pending = ""
 			pendingCtx = nil
+		}
+
+		changeExplorerQuery := func(localCtx context.Context) {
+			if pending == "" {
+				return
+			}
+			queryText := "explorer " + pending
+			c.typeToSearchDebugLog(localCtx, "changeQuery %q", queryText)
+			c.api.ChangeQuery(localCtx, common.PlainQuery{
+				QueryType: plugin.QueryTypeInput,
+				QueryText: queryText,
+			})
 		}
 
 		showOverlay := func(localCtx context.Context) bool {
@@ -764,16 +778,17 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 				case overlayEventActivate:
 					c.typeToSearchDebugLog(ctx, "event activate active=%v waitingVisible=%v pending=%q", active, waitingVisible, pending)
 					active = true
-					// Don't reset state when we're waiting for the overlay to become visible.
-					// ShowApp steals focus from Explorer, which triggers deactivated → activated cycling.
-					// Resetting here would clear pending keys before the ticker can send changeQuery.
-					if !waitingVisible {
+					// Bug fix: keep pending keys while waiting for visible and during the handoff
+					// grace window. ShowApp can trigger activation churn before all fast-typed
+					// keys have either been pushed through ChangeQuery or handed to Flutter's
+					// EditableText, so the old eager reset still dropped early characters.
+					if !waitingVisible && handoffUntil.IsZero() {
 						resetState()
 					}
 				case overlayEventDeactivate:
 					c.typeToSearchDebugLog(ctx, "event deactivate active=%v waitingVisible=%v pending=%q", active, waitingVisible, pending)
 					active = false
-					if !waitingVisible {
+					if !waitingVisible && handoffUntil.IsZero() {
 						resetState()
 					}
 				case overlayEventKey:
@@ -783,12 +798,27 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 					}
 					visible := c.api.IsVisible(localCtx)
 					c.typeToSearchDebugLog(localCtx, "event key=%q active=%v visible=%v waitingVisible=%v pending=%q", ev.key, active, visible, waitingVisible, pending)
-					if !active || ev.key == "" {
-						c.typeToSearchDebugLog(localCtx, "ignore key=%q active=%v", ev.key, active)
+					inHandoff := !handoffUntil.IsZero() && time.Now().Before(handoffUntil)
+					canCaptureHandoffKey := waitingVisible || inHandoff
+					if (!active && !canCaptureHandoffKey) || ev.key == "" {
+						c.typeToSearchDebugLog(localCtx, "ignore key=%q active=%v waitingVisible=%v handoff=%v", ev.key, active, waitingVisible, inHandoff)
 						continue
 					}
 					if visible {
-						c.typeToSearchDebugLog(localCtx, "ignore key=%q (wox visible)", ev.key)
+						if !canCaptureHandoffKey {
+							c.typeToSearchDebugLog(localCtx, "ignore key=%q (wox visible)", ev.key)
+							continue
+						}
+						// Bug fix: Finder-to-Wox focus handoff is not atomic on macOS. Wox can
+						// become visible before the ticker starts the grace window and before
+						// Flutter's EditableText is ready, so fast typing after the first key was
+						// ignored here and also missed by Flutter. Treat waitingVisible as part of
+						// the handoff and push the full query immediately.
+						pending += strings.ToLower(ev.key)
+						changeExplorerQuery(localCtx)
+						waitingVisible = false
+						waitingSince = time.Time{}
+						handoffUntil = time.Now().Add(350 * time.Millisecond)
 						continue
 					}
 					if pendingCtx == nil {
@@ -808,6 +838,10 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 					}
 				}
 			case <-ticker.C:
+				if !handoffUntil.IsZero() && time.Now().After(handoffUntil) {
+					resetState()
+					continue
+				}
 				if !waitingVisible {
 					continue
 				}
@@ -818,15 +852,14 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 				visible := c.api.IsVisible(tickCtx)
 				c.typeToSearchDebugLog(tickCtx, "ticker waitingVisible=%v visible=%v pending=%q active=%v", waitingVisible, visible, pending, active)
 				if visible {
-					if pending != "" {
-						queryText := "explorer " + pending
-						c.typeToSearchDebugLog(tickCtx, "changeQuery %q", queryText)
-						c.api.ChangeQuery(tickCtx, common.PlainQuery{
-							QueryType: plugin.QueryTypeInput,
-							QueryText: queryText,
-						})
-					}
-					resetState()
+					changeExplorerQuery(tickCtx)
+					// Keep a short raw-key capture window after the first ChangeQuery. The
+					// previous immediate reset assumed Flutter had already taken keyboard focus,
+					// but macOS can still deliver the next few Finder key events before the
+					// launcher text input is ready, which dropped characters in fast typing.
+					waitingVisible = false
+					waitingSince = time.Time{}
+					handoffUntil = time.Now().Add(350 * time.Millisecond)
 					continue
 				}
 				if !waitingSince.IsZero() && time.Since(waitingSince) > 2*time.Second {

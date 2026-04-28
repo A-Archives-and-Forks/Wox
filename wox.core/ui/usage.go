@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"net/http"
+	"time"
 	"wox/analytics"
 	"wox/database"
 	"wox/util"
@@ -24,6 +25,7 @@ type usageStatsResponse struct {
 	TotalAppLaunch  int64            `json:"TotalAppLaunch"`
 	TotalActions    int64            `json:"TotalActions"`
 	TotalAppsUsed   int64            `json:"TotalAppsUsed"`
+	UsageDays       int              `json:"UsageDays"`
 	MostActiveHour  int              `json:"MostActiveHour"`
 	MostActiveDay   int              `json:"MostActiveDay"`
 	OpenedByHour    []int            `json:"OpenedByHour"`
@@ -52,10 +54,34 @@ func handleUsageStats(w http.ResponseWriter, r *http.Request) {
 	resp.MostActiveHour = -1
 	resp.MostActiveDay = -1
 
+	fillUsageDays(ctx, &resp)
 	fillOpenedBuckets(ctx, &resp)
 	fillTopItems(ctx, &resp)
 
 	writeSuccessResponse(w, resp)
+}
+
+func fillUsageDays(ctx context.Context, resp *usageStatsResponse) {
+	db := database.GetDB()
+	if db == nil {
+		return
+	}
+
+	var firstTimestamp int64
+	if err := db.Model(&analytics.Event{}).Select("MIN(timestamp)").Scan(&firstTimestamp).Error; err != nil || firstTimestamp <= 0 {
+		resp.UsageDays = 0
+		return
+	}
+
+	// Usage days are derived from the first real analytics event instead of install metadata because
+	// Wox does not persist an install timestamp. Rounding up makes a same-day first use show as 1 day,
+	// which matches how users read "already used Wox for N days".
+	elapsed := time.Since(time.UnixMilli(firstTimestamp))
+	if elapsed <= 0 {
+		resp.UsageDays = 1
+		return
+	}
+	resp.UsageDays = int(elapsed/(24*time.Hour)) + 1
 }
 
 func fillOpenedBuckets(ctx context.Context, resp *usageStatsResponse) {

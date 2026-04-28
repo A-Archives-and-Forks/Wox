@@ -36,3 +36,4 @@ wox.test/artifacts
 .tmp
 .worktrees/
 .tmp-*
+.superpowers
