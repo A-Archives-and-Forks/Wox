@@ -30,6 +30,8 @@ class WoxSetting {
   late bool enableAnonymousUsageStats;
   late String customPythonPath;
   late String customNodejsPath;
+  late bool showScoreTail;
+  late bool showPerformanceTail;
 
   WoxSetting({
     required this.enableAutostart,
@@ -61,6 +63,8 @@ class WoxSetting {
     required this.enableAnonymousUsageStats,
     required this.customPythonPath,
     required this.customNodejsPath,
+    required this.showScoreTail,
+    required this.showPerformanceTail,
   });
 
   WoxSetting.fromJson(Map<String, dynamic> json) {
@@ -133,6 +137,8 @@ class WoxSetting {
     enableAnonymousUsageStats = json['EnableAnonymousUsageStats'] ?? true;
     customPythonPath = json['CustomPythonPath'] ?? '';
     customNodejsPath = json['CustomNodejsPath'] ?? '';
+    showScoreTail = json['ShowScoreTail'] ?? false;
+    showPerformanceTail = json['ShowPerformanceTail'] ?? false;
   }
 
   Map<String, dynamic> toJson() {
@@ -166,6 +172,8 @@ class WoxSetting {
     data['EnableAnonymousUsageStats'] = enableAnonymousUsageStats;
     data['CustomPythonPath'] = customPythonPath;
     data['CustomNodejsPath'] = customNodejsPath;
+    data['ShowScoreTail'] = showScoreTail;
+    data['ShowPerformanceTail'] = showPerformanceTail;
     return data;
   }
 }

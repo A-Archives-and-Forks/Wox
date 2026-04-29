@@ -14,12 +14,14 @@ import 'package:wox/modules/setting/views/wox_setting_privacy_view.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/color_util.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/env.dart';
 import 'package:wox/utils/log.dart';
 
 import 'wox_setting_plugin_view.dart';
 import 'wox_setting_general_view.dart';
 import 'wox_setting_network_view.dart';
 import 'wox_setting_runtime_view.dart';
+import 'wox_setting_debug_view.dart';
 
 class WoxSettingView extends StatefulWidget {
   const WoxSettingView({super.key});
@@ -85,14 +87,14 @@ class _WoxSettingViewState extends State<WoxSettingView> {
         },
         child: Container(
           padding: EdgeInsets.only(left: 16.0 + (flatItem.depth * 16.0), right: 16.0, top: 10.0, bottom: 10.0),
-          decoration: BoxDecoration(color: isSelected ? getThemeActiveBackgroundColor().withOpacity(0.15) : Colors.transparent, borderRadius: BorderRadius.circular(6)),
+          decoration: BoxDecoration(color: isSelected ? getThemeActiveBackgroundColor().withValues(alpha: 0.15) : Colors.transparent, borderRadius: BorderRadius.circular(6)),
           margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           child: Row(
             children: [
               Icon(item.icon, color: getThemeTextColor(), size: 18),
               const SizedBox(width: 12),
               Expanded(child: Text(item.title, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal))),
-              if (isParent) Icon(item.isExpanded ? Icons.expand_more : Icons.chevron_right, color: getThemeTextColor().withOpacity(0.6), size: 18),
+              if (isParent) Icon(item.isExpanded ? Icons.expand_more : Icons.chevron_right, color: getThemeTextColor().withValues(alpha: 0.6), size: 18),
             ],
           ),
         ),
@@ -165,6 +167,11 @@ class _WoxSettingViewState extends State<WoxSettingView> {
           ],
         ),
         _NavItem(id: 'usage', icon: Icons.query_stats_outlined, title: controller.tr('ui_usage'), body: const WoxSettingUsageView()),
+        if (Env.isDev)
+          // New dev-only settings entry: these controls expose backend debug
+          // tails without leaking internal instrumentation switches into
+          // packaged user builds.
+          _NavItem(id: 'debug', icon: Icons.bug_report_outlined, title: controller.tr('ui_debug'), body: const WoxSettingDebugView()),
         _NavItem(id: 'privacy', icon: Icons.privacy_tip_outlined, title: controller.tr('ui_privacy'), body: const WoxSettingPrivacyView()),
         _NavItem(id: 'about', icon: Icons.info_outline, title: controller.tr('ui_about'), body: const WoxSettingAboutView()),
       ];
@@ -189,7 +196,10 @@ class _WoxSettingViewState extends State<WoxSettingView> {
               // Navigation rail
               Container(
                 width: 220,
-                decoration: BoxDecoration(color: getThemeTextColor().withOpacity(0.03), border: Border(right: BorderSide(color: getThemeTextColor().withOpacity(0.08), width: 1))),
+                decoration: BoxDecoration(
+                  color: getThemeTextColor().withValues(alpha: 0.03),
+                  border: Border(right: BorderSide(color: getThemeTextColor().withValues(alpha: 0.08), width: 1)),
+                ),
                 child: Column(
                   children: [
                     const SizedBox(height: 16),

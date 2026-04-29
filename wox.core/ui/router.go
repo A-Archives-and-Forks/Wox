@@ -568,6 +568,8 @@ func handleSettingWox(w http.ResponseWriter, r *http.Request) {
 	settingDto.MaxResultCount = woxSetting.MaxResultCount.Get()
 	settingDto.ThemeId = woxSetting.ThemeId.Get()
 	settingDto.AppFontFamily = woxSetting.AppFontFamily.Get()
+	settingDto.ShowScoreTail = woxSetting.ShowScoreTail.Get()
+	settingDto.ShowPerformanceTail = woxSetting.ShowPerformanceTail.Get()
 
 	writeSuccessResponse(w, settingDto)
 }
@@ -780,6 +782,16 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 	case "AppFontFamily":
 		vs = font.NormalizeConfiguredFontFamily(vs, font.GetSystemFontFamilies(ctx))
 		woxSetting.AppFontFamily.Set(vs)
+	case "ShowScoreTail":
+		// New dev setting: score tails used to be compiled into a helper but
+		// effectively disabled by commented call sites. Persisting this switch
+		// lets developers opt in without editing code for each debug session.
+		woxSetting.ShowScoreTail.Set(vb)
+	case "ShowPerformanceTail":
+		// New dev setting: performance tags were previously always appended in
+		// dev builds. Keeping the check in the backend prevents hidden UI tabs
+		// from being the only guard for noisy query-result tags.
+		woxSetting.ShowPerformanceTail.Set(vb)
 	case "EnableAnonymousUsageStats":
 		woxSetting.EnableAnonymousUsageStats.Set(vb)
 		// When disabled, delete telemetry state to stop tracking

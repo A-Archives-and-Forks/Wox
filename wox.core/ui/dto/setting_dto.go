@@ -37,4 +37,10 @@ type WoxSettingDto struct {
 	MaxResultCount int
 	ThemeId        string
 	AppFontFamily  string
+
+	// Debug display switches are only shown by the dev UI, but the DTO keeps
+	// them beside other settings so backend tail rendering and Flutter toggles
+	// stay synchronized through the existing settings API.
+	ShowScoreTail       bool
+	ShowPerformanceTail bool
 }

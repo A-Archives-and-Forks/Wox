@@ -58,8 +58,9 @@ func serializeContextData(contextData map[string]string) string {
 	return string(data)
 }
 
-func appendDevScoreTail(tails []QueryResultTail, score int64) []QueryResultTail {
-	if !util.IsDev() {
+func appendDevScoreTail(ctx context.Context, tails []QueryResultTail, score int64) []QueryResultTail {
+	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
+	if !util.IsDev() || !woxSetting.ShowScoreTail.Get() {
 		return tails
 	}
 
@@ -1671,7 +1672,7 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 		}
 	}
 
-	// result.Tails = appendDevScoreTail(result.Tails, result.Score)
+	result.Tails = appendDevScoreTail(ctx, result.Tails, result.Score)
 
 	// Create cache at the end
 	resultCopy := result
@@ -1849,7 +1850,7 @@ func (m *Manager) PolishUpdatableResult(ctx context.Context, pluginInstance *Ins
 			}
 		}
 
-		// tails = appendDevScoreTail(tails, resultCache.Result.Score)
+		tails = appendDevScoreTail(ctx, tails, resultCache.Result.Score)
 
 		result.Tails = &tails
 		resultCache.Result.Tails = tails

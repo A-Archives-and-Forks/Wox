@@ -26,41 +26,6 @@ import (
 // we use 32ms here, which is roughly equivalent to 30fps.
 const resultDebounceIntervalMs = 32
 
-func appendQueryDebugTails(sessionId string, queryId string, snapshot []plugin.QueryResultUI) []plugin.QueryResultUI {
-	if len(snapshot) == 0 {
-		return snapshot
-	}
-
-	annotated := make([]plugin.QueryResultUI, len(snapshot))
-	for i, result := range snapshot {
-		if result.IsGroup {
-			annotated[i] = result
-			continue
-		}
-
-		resultCopy := result
-		resultCopy.Tails = append([]plugin.QueryResultTail{}, result.Tails...)
-		if batch, queryElapsed, ok := plugin.GetPluginManager().GetQueryResultDebugInfo(sessionId, queryId, result.Id); ok {
-			category := plugin.QueryResultTailTextCategoryDefault
-			if queryElapsed > 10 {
-				category = plugin.QueryResultTailTextCategoryWarning
-			}
-			if queryElapsed > 20 {
-				category = plugin.QueryResultTailTextCategoryDanger
-			}
-
-			resultCopy.Tails = append(
-				resultCopy.Tails,
-				plugin.NewQueryResultTailText(fmt.Sprintf("P%d", batch)),
-				plugin.NewQueryResultTailTextWithCategory(fmt.Sprintf("%dms", queryElapsed), category),
-			)
-		}
-		annotated[i] = resultCopy
-	}
-
-	return annotated
-}
-
 type uiImpl struct {
 	requestMap      *util.HashMap[string, chan WebsocketMsg]
 	isVisible       bool // cached visibility state, updated by PostOnShow/PostOnHide
@@ -626,7 +591,7 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 		}
 		responseSnapshot := snapshot
 		if util.IsDev() {
-			responseSnapshot = appendQueryDebugTails(sessionId, queryId, snapshot)
+			responseSnapshot = appendQueryDebugTails(ctx, sessionId, queryId, snapshot)
 		}
 		responseUIQueryResults(ctx, request, queryId, responseSnapshot, isFinal)
 	})
@@ -719,7 +684,45 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 			return
 		}
 	}
+}
 
+func appendQueryDebugTails(ctx context.Context, sessionId string, queryId string, snapshot []plugin.QueryResultUI) []plugin.QueryResultUI {
+	if len(snapshot) == 0 {
+		return snapshot
+	}
+	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
+	if !woxSetting.ShowPerformanceTail.Get() {
+		return snapshot
+	}
+
+	annotated := make([]plugin.QueryResultUI, len(snapshot))
+	for i, result := range snapshot {
+		if result.IsGroup {
+			annotated[i] = result
+			continue
+		}
+
+		resultCopy := result
+		resultCopy.Tails = append([]plugin.QueryResultTail{}, result.Tails...)
+		if batch, queryElapsed, ok := plugin.GetPluginManager().GetQueryResultDebugInfo(sessionId, queryId, result.Id); ok {
+			category := plugin.QueryResultTailTextCategoryDefault
+			if queryElapsed > 10 {
+				category = plugin.QueryResultTailTextCategoryWarning
+			}
+			if queryElapsed > 20 {
+				category = plugin.QueryResultTailTextCategoryDanger
+			}
+
+			resultCopy.Tails = append(
+				resultCopy.Tails,
+				plugin.NewQueryResultTailText(fmt.Sprintf("P%d", batch)),
+				plugin.NewQueryResultTailTextWithCategory(fmt.Sprintf("%dms", queryElapsed), category),
+			)
+		}
+		annotated[i] = resultCopy
+	}
+
+	return annotated
 }
 
 func handleWebsocketAction(ctx context.Context, request WebsocketMsg) {

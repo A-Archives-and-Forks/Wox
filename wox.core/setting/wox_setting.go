@@ -44,6 +44,12 @@ type WoxSetting struct {
 	ThemeId        *WoxSettingValue[string]
 	AppFontFamily  *PlatformValue[string]
 
+	// Development-only debug display switches. Score and performance tails were
+	// previously hard-coded around dev-only code paths, so storing the switches
+	// here gives the settings UI and backend rendering one shared source of truth.
+	ShowScoreTail       *WoxSettingValue[bool]
+	ShowPerformanceTail *WoxSettingValue[bool]
+
 	// Window position for last location mode
 	LastWindowX *WoxSettingValue[int]
 	LastWindowY *WoxSettingValue[int]
@@ -201,6 +207,8 @@ func NewWoxSetting(store *WoxSettingStore) *WoxSetting {
 		MaxResultCount:            NewWoxSettingValue(store, "MaxResultCount", 10),
 		ThemeId:                   NewWoxSettingValue(store, "ThemeId", DefaultThemeId),
 		AppFontFamily:             NewPlatformValue(store, "AppFontFamily", "", "", ""),
+		ShowScoreTail:             NewWoxSettingValue(store, "ShowScoreTail", false),
+		ShowPerformanceTail:       NewWoxSettingValue(store, "ShowPerformanceTail", false),
 		EnableAutostart:           NewPlatformValue(store, "EnableAutostart", false, false, false),
 		HttpProxyEnabled:          NewPlatformValue(store, "HttpProxyEnabled", false, false, false),
 		HttpProxyUrl:              NewPlatformValue(store, "HttpProxyUrl", "", "", ""),
