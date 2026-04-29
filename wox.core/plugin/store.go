@@ -292,10 +292,9 @@ func (s *Store) Install(ctx context.Context, manifest StorePluginManifest) error
 func (s *Store) InstallWithProgress(ctx context.Context, manifest StorePluginManifest, progressCallback InstallProgressCallback) error {
 	logger.Info(ctx, fmt.Sprintf("start to install plugin %s(%s)", manifest.GetName(ctx), manifest.Version))
 
-	// check if plugin's runtime is started
-	if !GetPluginManager().IsHostStarted(ctx, manifest.Runtime) {
-		logger.Error(ctx, fmt.Sprintf("%s runtime is not started, please start first", manifest.Runtime))
-		return fmt.Errorf("%s runtime is not started, please start first", manifest.Runtime)
+	if err := GetPluginManager().EnsureHostStarted(ctx, manifest.Runtime); err != nil {
+		logger.Error(ctx, fmt.Sprintf("failed to prepare %s runtime for plugin %s(%s): %s", manifest.Runtime, manifest.GetName(ctx), manifest.Version, err.Error()))
+		return fmt.Errorf("failed to prepare %s runtime for plugin %s(%s): %w", manifest.Runtime, manifest.GetName(ctx), manifest.Version, err)
 	}
 
 	// check if installed newer version
@@ -685,10 +684,9 @@ func (s *Store) InstallFromLocalWithProgress(ctx context.Context, filePath strin
 		return err
 	}
 
-	// check if plugin's runtime is started
-	if !GetPluginManager().IsHostStarted(ctx, ConvertToRuntime(pluginMetadata.Runtime)) {
-		logger.Error(ctx, fmt.Sprintf("%s runtime is not started, please start first", pluginMetadata.Runtime))
-		return fmt.Errorf("%s runtime is not started, please start first", pluginMetadata.Runtime)
+	if err := GetPluginManager().EnsureHostStarted(ctx, ConvertToRuntime(pluginMetadata.Runtime)); err != nil {
+		logger.Error(ctx, fmt.Sprintf("failed to prepare %s runtime for local plugin %s(%s): %s", pluginMetadata.Runtime, pluginMetadata.GetName(ctx), pluginMetadata.Version, err.Error()))
+		return fmt.Errorf("failed to prepare %s runtime for local plugin %s(%s): %w", pluginMetadata.Runtime, pluginMetadata.GetName(ctx), pluginMetadata.Version, err)
 	}
 
 	// check if installed newer version

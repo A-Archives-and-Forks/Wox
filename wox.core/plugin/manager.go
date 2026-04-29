@@ -2501,6 +2501,35 @@ func (m *Manager) IsHostStarted(ctx context.Context, runtime Runtime) bool {
 	return false
 }
 
+// EnsureHostStarted makes runtime startup an explicit, reusable preflight for
+// install and load paths that need a live plugin host before mutating plugin files.
+func (m *Manager) EnsureHostStarted(ctx context.Context, runtime Runtime) error {
+	if runtime == PLUGIN_RUNTIME_GO || runtime == PLUGIN_RUNTIME_SCRIPT {
+		return nil
+	}
+
+	pluginHost, exist := lo.Find(AllHosts, func(item Host) bool {
+		return strings.EqualFold(string(item.GetRuntime(ctx)), string(runtime))
+	})
+	if !exist {
+		return fmt.Errorf("unsupported runtime: %s", runtime)
+	}
+
+	if pluginHost.IsStarted(ctx) {
+		return nil
+	}
+
+	// Bug fix: install flows previously stopped at a generic "runtime is not started"
+	// check, which blocked recovery after users corrected a Node.js/Python path.
+	// Starting the host here preserves the explicit preflight while returning the
+	// concrete startup or websocket connection error from the host layer.
+	if err := pluginHost.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start host for runtime %s: %w", runtime, err)
+	}
+
+	return nil
+}
+
 func (m *Manager) IsTriggerKeywordAIChat(ctx context.Context, triggerKeyword string) bool {
 	aiChatPluginInstance := m.GetAIChatPluginInstance(ctx)
 	if aiChatPluginInstance == nil {
