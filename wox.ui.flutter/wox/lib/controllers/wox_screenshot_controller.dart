@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -18,12 +19,22 @@ class WoxScreenshotController extends GetxController {
   static const Color defaultAnnotationColor = Color(0xFFFF5B36);
   static const double minTextFontSize = 12;
   static const double maxTextFontSize = 48;
+  static const int _scrollingCaptureMaxFrames = 16;
+  static const double _scrollingCaptureWheelSteps = 7;
+  static const Duration _scrollingCaptureSettleDelay = Duration(milliseconds: 120);
+  static const double _scrollingCaptureOverlapThreshold = 20;
+  static const double _scrollingCaptureDuplicateThreshold = 6;
+  static const int _scrollingCaptureSeamFeatherRows = 10;
+  static const double _scrollingCaptureToolbarMinWidth = 168;
 
   final isSessionActive = false.obs;
   final stage = ScreenshotSessionStage.idle.obs;
   final currentTool = ScreenshotTool.select.obs;
   final displaySnapshots = <DisplaySnapshot>[].obs;
   final annotations = <ScreenshotAnnotation>[].obs;
+  final scrollingCaptureFrames = <ScrollingCapturePreviewFrame>[].obs;
+  final isScrollingCaptureUpdating = false.obs;
+  final isNativeScrollingCaptureOverlay = false.obs;
   final selection = Rxn<ScreenshotRect>();
   final virtualBounds = Rxn<ScreenshotRect>();
   final workspaceScale = 1.0.obs;
@@ -41,10 +52,15 @@ class WoxScreenshotController extends GetxController {
   final Map<String, DisplaySnapshot> _hydratedRawSnapshots = <String, DisplaySnapshot>{};
   final Map<String, Future<DisplaySnapshot>> _rawSnapshotHydrationTasks = <String, Future<DisplaySnapshot>>{};
   Rect? _nativeWorkspaceBounds;
+  Rect? _activeNativeWorkspaceBounds;
   String? _preparedDisplayId;
   Rect? _preparedDisplayBounds;
   ScreenshotWorkspacePresentation? _preparedPresentation;
   List<DisplaySnapshot>? _preparedSnapshots;
+  Timer? _scrollingCaptureFrameDebounce;
+  StreamSubscription<void>? _scrollingCaptureWheelSubscription;
+  Rect? _scrollingCaptureControlsBounds;
+  Rect? _pendingScrollingCaptureSelection;
   StreamSubscription<ScreenshotSelectionDisplayHint>? _selectionDisplayHintSubscription;
   bool _acceptSelectionDisplayHints = false;
   int _preparedDisplayRevision = 0;
@@ -141,6 +157,7 @@ class WoxScreenshotController extends GetxController {
   }
 
   Future<void> _presentFlutterCaptureWorkspace(String traceId, List<DisplaySnapshot> rawSnapshots, Rect nativeWorkspaceBounds) async {
+    _activeNativeWorkspaceBounds = nativeWorkspaceBounds;
     final presentation = await ScreenshotPlatformBridge.instance.presentCaptureWorkspace(ScreenshotRect.fromRect(nativeWorkspaceBounds));
     final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
       rawSnapshots,
@@ -170,6 +187,7 @@ class WoxScreenshotController extends GetxController {
   }
 
   Future<void> _presentPreparedCaptureWorkspace(String traceId, List<DisplaySnapshot> metadataSnapshots, Rect nativeWorkspaceBounds) async {
+    _activeNativeWorkspaceBounds = nativeWorkspaceBounds;
     final presentation = await ScreenshotPlatformBridge.instance.prepareCaptureWorkspace(ScreenshotRect.fromRect(nativeWorkspaceBounds));
     final rawSnapshots = await _hydrateRawSnapshots(metadataSnapshots);
     final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
@@ -242,6 +260,7 @@ class WoxScreenshotController extends GetxController {
     // annotation editor is confined to the monitor where the user drew the selection. This avoids
     // cross-display rendering artifacts while keeping the transition seamless on that monitor.
     final selectedDisplay = _findDisplaySnapshotForSelection(nativeSelection.selection!.toRect(), rawSnapshots);
+    _activeNativeWorkspaceBounds = selectedDisplay.logicalBounds.toRect();
     await _prepareMacOSDisplayForAnnotation(selectedDisplay);
     final presentation = _preparedPresentation;
     final normalizedSnapshots = _preparedSnapshots;
@@ -396,6 +415,205 @@ class WoxScreenshotController extends GetxController {
     }
   }
 
+  Future<void> startScrollingCapture(String traceId) async {
+    final currentSelection = selectionRect;
+    if (currentSelection == null || currentSelection.width < 1 || currentSelection.height < 1) {
+      return;
+    }
+
+    stage.value = ScreenshotSessionStage.scrolling;
+    _disposeScrollingCaptureFrames();
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      await _appendScrollingCaptureFrame(traceId, currentSelection);
+      if (Platform.isMacOS && scrollingCaptureFrames.isNotEmpty) {
+        final controlsBounds = _calculateScrollingControlsBounds(currentSelection);
+        _scrollingCaptureControlsBounds = controlsBounds;
+        await ScreenshotPlatformBridge.instance.beginScrollingCaptureOverlay(
+          workspaceBounds: ScreenshotRect.fromRect(virtualBoundsRect),
+          selection: ScreenshotRect.fromRect(currentSelection),
+          controlsBounds: ScreenshotRect.fromRect(controlsBounds),
+        );
+        isNativeScrollingCaptureOverlay.value = true;
+        _scrollingCaptureWheelSubscription?.cancel();
+        _scrollingCaptureWheelSubscription = ScreenshotPlatformBridge.instance.scrollingCaptureWheelEvents().listen((_) {
+          final selectionForRefresh = selectionRect;
+          if (selectionForRefresh != null) {
+            _scheduleScrollingCaptureFrame(traceId, selectionForRefresh);
+          }
+        });
+        // Do not poll screenshots while idle. Polling appended frames before the user scrolled and
+        // made the preview grow on its own; scrolling capture should advance only after real wheel
+        // input because that is the only signal that the underlying page may have moved.
+      }
+    } catch (e) {
+      Logger.instance.error(traceId, 'Failed to start scrolling screenshot: $e');
+      await failSession(traceId, errorCode: 'scrolling_start_failed', errorMessage: e.toString());
+    }
+  }
+
+  Future<void> handleScrollingCaptureWheel(String traceId, double scrollDeltaY) async {
+    if (stage.value != ScreenshotSessionStage.scrolling) {
+      return;
+    }
+
+    final currentSelection = selectionRect;
+    if (currentSelection == null || currentSelection.width < 1 || currentSelection.height < 1) {
+      return;
+    }
+
+    try {
+      // Scrolling mode must not warp the cursor. Forward only the user's wheel delta at the current
+      // pointer location, then refresh the stitched preview after a short settle window so rapid
+      // wheel gestures do not trigger full-desktop capture on every native scroll tick.
+      await ScreenshotPlatformBridge.instance.scrollMouse(deltaY: _scrollDeltaToWheelSteps(scrollDeltaY));
+      _scheduleScrollingCaptureFrame(traceId, currentSelection);
+    } catch (e) {
+      Logger.instance.error(traceId, 'Failed to update scrolling screenshot: $e');
+    }
+  }
+
+  void _scheduleScrollingCaptureFrame(String traceId, Rect selection) {
+    _pendingScrollingCaptureSelection = selection;
+    if (_scrollingCaptureFrameDebounce != null) {
+      return;
+    }
+
+    _scrollingCaptureFrameDebounce = Timer(_scrollingCaptureSettleDelay, () {
+      _scrollingCaptureFrameDebounce = null;
+      if (stage.value != ScreenshotSessionStage.scrolling) {
+        _pendingScrollingCaptureSelection = null;
+        return;
+      }
+      if (isScrollingCaptureUpdating.value) {
+        final queuedSelection = _pendingScrollingCaptureSelection;
+        if (queuedSelection != null) {
+          _scheduleScrollingCaptureFrame(traceId, queuedSelection);
+        }
+        return;
+      }
+
+      final selectionForCapture = _pendingScrollingCaptureSelection;
+      _pendingScrollingCaptureSelection = null;
+      if (selectionForCapture == null) {
+        return;
+      }
+
+      // Use throttling instead of debounce for wheel-driven capture. Debounce waited until scrolling
+      // stopped, which allowed a single captured pair to be separated by more than one viewport and
+      // caused poor overlap matches; throttling records intermediate frames while staying bounded.
+      unawaited(
+        _appendScrollingCaptureFrame(traceId, selectionForCapture).whenComplete(() {
+          final queuedSelection = _pendingScrollingCaptureSelection;
+          if (queuedSelection != null && stage.value == ScreenshotSessionStage.scrolling) {
+            _scheduleScrollingCaptureFrame(traceId, queuedSelection);
+          }
+        }),
+      );
+    });
+  }
+
+  Rect _calculateScrollingControlsBounds(Rect selection) {
+    final bounds = virtualBoundsRect;
+    final rightAvailableWidth = math.max(0.0, bounds.right - selection.right - 44);
+    final leftAvailableWidth = math.max(0.0, selection.left - bounds.left - 44);
+    final maxAvailableWidth = math.max(rightAvailableWidth, leftAvailableWidth);
+    final previewSize = _calculateScrollingPreviewRenderSize(selection: selection, maxWidth: maxAvailableWidth, maxHeight: math.min(selection.height, 520.0));
+    final controlsWidth = math.max(previewSize.width, _scrollingCaptureToolbarMinWidth);
+    final controlsHeight = previewSize.height + 72;
+    final useRightSide = selection.right + 20 + controlsWidth <= bounds.right - 24 || rightAvailableWidth >= leftAvailableWidth;
+    final left = useRightSide ? selection.right + 20 : math.max(bounds.left + 24, selection.left - controlsWidth - 20);
+    final top = selection.top.clamp(bounds.top + 24, math.max(bounds.top + 24, bounds.bottom - controlsHeight - 24)).toDouble();
+
+    // The macOS scrolling overlay moves Flutter into a compact preview/toolbox panel while a native
+    // mouse-transparent overlay dims only the outside of the selected region. Keeping this geometry
+    // in the controller lets the preview width follow the stitched image aspect ratio instead of a
+    // fixed hard-coded side panel.
+    return Rect.fromLTWH(left, top, controlsWidth, controlsHeight);
+  }
+
+  Size _calculateScrollingPreviewRenderSize({required Rect selection, required double maxWidth, required double maxHeight}) {
+    final totalHeight = scrollingCaptureFrames.fold<int>(0, (total, frame) => total + frame.visibleHeight);
+    final contentWidth = scrollingCaptureFrames.isEmpty ? selection.width : scrollingCaptureFrames.first.pixelWidth.toDouble();
+    final contentHeight = scrollingCaptureFrames.isEmpty || totalHeight <= 0 ? selection.height : totalHeight.toDouble();
+    final safeMaxWidth = math.max(1.0, maxWidth);
+    final safeMaxHeight = math.max(1.0, maxHeight);
+    final scale = math.min(safeMaxWidth / math.max(1.0, contentWidth), safeMaxHeight / math.max(1.0, contentHeight));
+    return Size(math.max(1.0, contentWidth * scale), math.max(1.0, contentHeight * scale));
+  }
+
+  Future<void> _syncNativeScrollingControlsBounds(String traceId, Rect selection) async {
+    if (!Platform.isMacOS || !isNativeScrollingCaptureOverlay.value) {
+      return;
+    }
+
+    final nextBounds = _calculateScrollingControlsBounds(selection);
+    final previousBounds = _scrollingCaptureControlsBounds;
+    if (previousBounds != null &&
+        (previousBounds.left - nextBounds.left).abs() < 1 &&
+        (previousBounds.top - nextBounds.top).abs() < 1 &&
+        (previousBounds.width - nextBounds.width).abs() < 1 &&
+        (previousBounds.height - nextBounds.height).abs() < 1) {
+      return;
+    }
+
+    _scrollingCaptureControlsBounds = nextBounds;
+    try {
+      // The stitched image becomes narrower as more vertical content is added. Resizing the compact
+      // Flutter preview window after each accepted frame keeps the native side panel wrapped to the
+      // image instead of leaving the old first-frame panel width visible as a gray gutter.
+      await windowManager.setBounds(nextBounds.topLeft, nextBounds.size);
+    } catch (e) {
+      Logger.instance.warn(traceId, 'Failed to resize scrolling screenshot preview window: $e');
+    }
+  }
+
+  Future<void> confirmScrollingSelection(String traceId) async {
+    final currentSelection = selectionRect;
+    if (currentSelection == null || currentSelection.width < 1 || currentSelection.height < 1) {
+      return;
+    }
+
+    if (scrollingCaptureFrames.isEmpty) {
+      await _appendScrollingCaptureFrame(traceId, currentSelection);
+    }
+
+    stage.value = ScreenshotSessionStage.exporting;
+    try {
+      await _hideScreenshotWindowBeforeFinish(traceId);
+
+      final activeRequest = _activeRequest;
+      if (activeRequest == null || activeRequest.exportFilePath.isEmpty) {
+        throw StateError('Screenshot export file path is missing');
+      }
+
+      final screenshotPath = await _writeScrollingSelectionPngFile(exportFilePath: activeRequest.exportFilePath, frames: scrollingCaptureFrames.toList());
+
+      var clipboardWriteSucceeded = true;
+      String? clipboardWarningMessage;
+      if (activeRequest.output == 'clipboard') {
+        try {
+          await ScreenshotPlatformBridge.instance.writeClipboardImageFile(filePath: screenshotPath);
+        } catch (e) {
+          clipboardWriteSucceeded = false;
+          clipboardWarningMessage = e.toString();
+          Logger.instance.warn(traceId, 'Scrolling screenshot exported but clipboard write failed: $clipboardWarningMessage');
+        }
+      }
+
+      final result = CaptureScreenshotResult.completed(
+        selectionRect: currentSelection,
+        screenshotPath: screenshotPath,
+        clipboardWriteSucceeded: clipboardWriteSucceeded,
+        clipboardWarningMessage: clipboardWarningMessage,
+      );
+      await _finishSession(traceId, result, ScreenshotSessionStage.done, restoreVisibility: false, windowAlreadyHidden: true);
+    } catch (e) {
+      Logger.instance.error(traceId, 'Failed to export scrolling screenshot: $e');
+      await failSession(traceId, errorCode: 'scrolling_export_failed', errorMessage: e.toString());
+    }
+  }
+
   Future<String> _writeSelectionPngFile({
     required String exportFilePath,
     required Rect selection,
@@ -407,6 +625,357 @@ class WoxScreenshotController extends GetxController {
     await exportFile.parent.create(recursive: true);
     await exportFile.writeAsBytes(rendered.pngBytes, flush: true);
     return exportFile.path;
+  }
+
+  Future<void> _appendScrollingCaptureFrame(String traceId, Rect selection) async {
+    if (scrollingCaptureFrames.length >= _scrollingCaptureMaxFrames) {
+      return;
+    }
+    if (isScrollingCaptureUpdating.value) {
+      return;
+    }
+
+    isScrollingCaptureUpdating.value = true;
+    try {
+      final nextFrame = await _captureScrollingSelectionFrame(selection);
+      if (scrollingCaptureFrames.isNotEmpty) {
+        final overlap = _findScrollingOverlap(scrollingCaptureFrames.last, nextFrame);
+        if (overlap.isDuplicate) {
+          nextFrame.dispose();
+          return;
+        }
+
+        if (!overlap.isReliable) {
+          // Unreliable overlap used to append the whole frame, which made live previews repeat the
+          // same viewport whenever the page had dynamic content or a wheel refresh captured before
+          // scrolling had settled. Dropping the uncertain frame keeps the long image monotonic; the
+          // next wheel capture can still append once a stable overlap is visible.
+          nextFrame.dispose();
+          Logger.instance.warn(traceId, 'Scrolling screenshot overlap was not reliable; dropped frame to avoid repeated stitched content');
+          return;
+        }
+
+        nextFrame.cropTop = overlap.overlapRows;
+        nextFrame.seamFeatherRows = math.min(_scrollingCaptureSeamFeatherRows, math.min(nextFrame.cropTop, nextFrame.visibleHeight)).toInt();
+        if (nextFrame.visibleHeight <= 0) {
+          nextFrame.dispose();
+          return;
+        }
+      }
+
+      scrollingCaptureFrames.add(nextFrame);
+      await _syncNativeScrollingControlsBounds(traceId, selection);
+    } finally {
+      isScrollingCaptureUpdating.value = false;
+    }
+  }
+
+  double _scrollDeltaToWheelSteps(double scrollDeltaY) {
+    final direction = scrollDeltaY >= 0 ? 1.0 : -1.0;
+    final magnitude = (scrollDeltaY.abs() / 60).clamp(1.0, _scrollingCaptureWheelSteps);
+    return direction * magnitude;
+  }
+
+  Future<String> _writeScrollingSelectionPngFile({required String exportFilePath, required List<ScrollingCapturePreviewFrame> frames}) async {
+    final pngBytes = await _encodeScrollingFrames(frames);
+    final exportFile = File(exportFilePath);
+    await exportFile.parent.create(recursive: true);
+    await exportFile.writeAsBytes(pngBytes, flush: true);
+    return exportFile.path;
+  }
+
+  Future<ScrollingCapturePreviewFrame> _captureScrollingSelectionFrame(Rect selection) async {
+    final rawSnapshots = await ScreenshotPlatformBridge.instance.captureAllDisplays();
+    if (rawSnapshots.isEmpty) {
+      throw StateError('No display snapshots returned while scrolling');
+    }
+
+    final nativeWorkspaceBounds = _activeNativeWorkspaceBounds ?? _calculateUnionRect(rawSnapshots.map((snapshot) => snapshot.logicalBounds.toRect()).toList());
+    final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
+      rawSnapshots,
+      nativeWorkspaceBounds: nativeWorkspaceBounds,
+      workspaceBounds: virtualBoundsRect,
+      workspaceScale: workspaceScale.value,
+    );
+    final decodedImages = await _decodeSnapshotImages(normalizedSnapshots.where((snapshot) => !snapshot.logicalBounds.toRect().intersect(selection).isEmpty).toList());
+
+    try {
+      final composed = await _composeSelectionImage(
+        selection: selection,
+        snapshots: normalizedSnapshots,
+        annotationsToPaint: const <ScreenshotAnnotation>[],
+        decodedImages: decodedImages,
+      );
+      final byteData = await composed.image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (byteData == null) {
+        composed.image.dispose();
+        throw StateError('Failed to inspect scrolling screenshot frame');
+      }
+
+      return ScrollingCapturePreviewFrame(
+        image: composed.image,
+        rgbaBytes: byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes),
+        pixelWidth: composed.pixelWidth,
+        pixelHeight: composed.pixelHeight,
+      );
+    } finally {
+      for (final image in decodedImages.values) {
+        image.dispose();
+      }
+    }
+  }
+
+  Future<Map<String, ui.Image>> _decodeSnapshotImages(List<DisplaySnapshot> snapshots) async {
+    final decodedImages = <String, ui.Image>{};
+    try {
+      for (final snapshot in snapshots) {
+        if (!snapshot.hasImageBytes) {
+          continue;
+        }
+
+        final codec = await ui.instantiateImageCodec(snapshot.imageBytes);
+        final frame = await codec.getNextFrame();
+        decodedImages[snapshot.displayId] = frame.image;
+      }
+      return decodedImages;
+    } catch (_) {
+      for (final image in decodedImages.values) {
+        image.dispose();
+      }
+      rethrow;
+    }
+  }
+
+  _ScrollingCaptureOverlap _findScrollingOverlap(ScrollingCapturePreviewFrame previous, ScrollingCapturePreviewFrame next) {
+    if (previous.pixelWidth != next.pixelWidth || previous.pixelHeight != next.pixelHeight) {
+      return const _ScrollingCaptureOverlap(overlapRows: 0, averageDifference: double.infinity, isReliable: false, isDuplicate: false);
+    }
+
+    final columns = _scrollingOverlapComparisonColumns(previous, next);
+    final sameViewportDifference = _averageSameViewportDifference(previous, next, columns);
+    if (sameViewportDifference <= _scrollingCaptureDuplicateThreshold) {
+      return _ScrollingCaptureOverlap(overlapRows: next.pixelHeight, averageDifference: sameViewportDifference, isReliable: true, isDuplicate: true);
+    }
+
+    final maxOverlap = math.max(1, (next.pixelHeight * 0.97).floor());
+    final minOverlap = math.min(maxOverlap, math.max(24, (next.pixelHeight * 0.08).floor()));
+    final coarseStep = math.max(2, (next.pixelHeight / 100).round());
+    var best = _findBestScrollingOverlapInRange(previous, next, columns, minOverlap, maxOverlap, coarseStep);
+    final refineMin = math.max(minOverlap, best.overlapRows - coarseStep);
+    final refineMax = math.min(maxOverlap, best.overlapRows + coarseStep);
+    best = _findBestScrollingOverlapInRange(previous, next, columns, refineMin, refineMax, 1);
+
+    final isReliable = best.averageDifference <= _scrollingCaptureOverlapThreshold;
+    final isDuplicate = isReliable && best.overlapRows >= next.pixelHeight * 0.94;
+    return _ScrollingCaptureOverlap(overlapRows: isReliable ? best.overlapRows : 0, averageDifference: best.averageDifference, isReliable: isReliable, isDuplicate: isDuplicate);
+  }
+
+  _ScrollingCaptureOverlapCandidate _findBestScrollingOverlapInRange(
+    ScrollingCapturePreviewFrame previous,
+    ScrollingCapturePreviewFrame next,
+    List<int> columns,
+    int minOverlap,
+    int maxOverlap,
+    int step,
+  ) {
+    var bestOverlap = minOverlap;
+    var bestDifference = double.infinity;
+
+    for (var overlapRows = maxOverlap; overlapRows >= minOverlap; overlapRows -= step) {
+      final difference = _averageOverlapDifference(previous, next, overlapRows, columns);
+      if (difference < bestDifference) {
+        bestDifference = difference;
+        bestOverlap = overlapRows;
+      }
+    }
+
+    return _ScrollingCaptureOverlapCandidate(overlapRows: bestOverlap, averageDifference: bestDifference);
+  }
+
+  List<int> _scrollingOverlapComparisonColumns(ScrollingCapturePreviewFrame previous, ScrollingCapturePreviewFrame next) {
+    final startX = (next.pixelWidth * 0.06).floor();
+    final endX = math.max(startX + 1, (next.pixelWidth * 0.94).ceil());
+    final candidateStepX = math.max(1, ((endX - startX) / 72).ceil());
+    final rowStep = math.max(1, (next.pixelHeight / 24).round());
+    final movingColumns = <int>[];
+
+    for (var x = startX; x < endX; x += candidateStepX) {
+      var motion = 0.0;
+      var texture = 0.0;
+      var sampleCount = 0;
+      for (var y = 0; y < next.pixelHeight; y += rowStep) {
+        final previousLuma = _lumaAt(previous, x, y);
+        final nextLuma = _lumaAt(next, x, y);
+        motion += (previousLuma - nextLuma).abs();
+        if (y >= rowStep) {
+          texture += (previousLuma - _lumaAt(previous, x, y - rowStep)).abs();
+          texture += (nextLuma - _lumaAt(next, x, y - rowStep)).abs();
+        }
+        sampleCount += 1;
+      }
+
+      final averageMotion = sampleCount == 0 ? 0.0 : motion / sampleCount;
+      final averageTexture = sampleCount <= 1 ? 0.0 : texture / ((sampleCount - 1) * 2);
+      if (averageMotion >= 9 && averageTexture >= 2.5) {
+        movingColumns.add(x);
+      }
+    }
+
+    if (movingColumns.length >= 12) {
+      return _limitScrollingComparisonColumns(movingColumns, 48);
+    }
+
+    // Fixed sidebars and blank gutters are common in long screenshots. When motion detection cannot
+    // find enough useful columns, fall back to a centered textured sample instead of the full width so
+    // static app chrome does not dominate the vertical registration score.
+    final fallbackColumns = <int>[];
+    final fallbackStart = (next.pixelWidth * 0.18).floor();
+    final fallbackEnd = math.max(fallbackStart + 1, (next.pixelWidth * 0.82).ceil());
+    final fallbackStep = math.max(1, ((fallbackEnd - fallbackStart) / 48).ceil());
+    for (var x = fallbackStart; x < fallbackEnd; x += fallbackStep) {
+      fallbackColumns.add(x);
+    }
+    return fallbackColumns;
+  }
+
+  List<int> _limitScrollingComparisonColumns(List<int> columns, int maxColumns) {
+    if (columns.length <= maxColumns) {
+      return columns;
+    }
+
+    final step = columns.length / maxColumns;
+    return List<int>.generate(maxColumns, (index) => columns[(index * step).floor().clamp(0, columns.length - 1).toInt()]);
+  }
+
+  double _averageSameViewportDifference(ScrollingCapturePreviewFrame previous, ScrollingCapturePreviewFrame next, List<int> columns) {
+    final sampleStepY = math.max(1, (next.pixelHeight / 72).round());
+    var totalDifference = 0.0;
+    var sampleCount = 0;
+
+    for (var y = 0; y < next.pixelHeight; y += sampleStepY) {
+      for (final x in columns) {
+        totalDifference += math.min((_lumaAt(previous, x, y) - _lumaAt(next, x, y)).abs(), 72.0);
+        sampleCount += 1;
+      }
+    }
+
+    if (sampleCount == 0) {
+      return double.infinity;
+    }
+    return totalDifference / sampleCount;
+  }
+
+  double _averageOverlapDifference(ScrollingCapturePreviewFrame previous, ScrollingCapturePreviewFrame next, int overlapRows, List<int> columns) {
+    final sampleStepY = math.max(1, (overlapRows / 64).round());
+    var totalDifference = 0.0;
+    var sampleCount = 0;
+
+    // Compare only columns that look like moving content, and use luma/edge differences with capped
+    // outliers. That makes the matcher less sensitive to fixed sidebars, large blank areas, lazy-load
+    // placeholders, and live counters while keeping the search cheap enough for preview updates.
+    for (var y = 0; y < overlapRows; y += sampleStepY) {
+      final previousY = previous.pixelHeight - overlapRows + y;
+      for (final x in columns) {
+        final previousLuma = _lumaAt(previous, x, previousY);
+        final nextLuma = _lumaAt(next, x, y);
+        final previousEdge = previousY > 0 ? (previousLuma - _lumaAt(previous, x, previousY - 1)).abs() : 0.0;
+        final nextEdge = y > 0 ? (nextLuma - _lumaAt(next, x, y - 1)).abs() : 0.0;
+        totalDifference += math.min((previousLuma - nextLuma).abs(), 72.0);
+        totalDifference += math.min((previousEdge - nextEdge).abs(), 48.0) * 0.35;
+        sampleCount += 1;
+      }
+    }
+
+    if (sampleCount == 0) {
+      return double.infinity;
+    }
+    return totalDifference / sampleCount;
+  }
+
+  double _lumaAt(ScrollingCapturePreviewFrame frame, int x, int y) {
+    final safeX = x.clamp(0, frame.pixelWidth - 1).toInt();
+    final safeY = y.clamp(0, frame.pixelHeight - 1).toInt();
+    final offset = _rgbaOffset(frame.pixelWidth, safeX, safeY);
+    return frame.rgbaBytes[offset] * 0.299 + frame.rgbaBytes[offset + 1] * 0.587 + frame.rgbaBytes[offset + 2] * 0.114;
+  }
+
+  int _rgbaOffset(int width, int x, int y) {
+    return (y * width + x) * 4;
+  }
+
+  Future<Uint8List> _encodeScrollingFrames(List<ScrollingCapturePreviewFrame> frames) async {
+    if (frames.isEmpty) {
+      throw StateError('No scrolling screenshot frames were captured');
+    }
+
+    final width = frames.first.pixelWidth;
+    final height = frames.fold<int>(0, (total, frame) => total + frame.visibleHeight);
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final paint = Paint();
+    var y = 0.0;
+
+    for (final frame in frames) {
+      final visibleHeight = frame.visibleHeight;
+      if (visibleHeight <= 0) {
+        continue;
+      }
+
+      _paintScrollingFrame(canvas: canvas, frame: frame, destinationY: y, destinationWidth: frame.pixelWidth.toDouble(), destinationHeight: visibleHeight.toDouble(), paint: paint);
+      y += visibleHeight;
+    }
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(width, height);
+    try {
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) {
+        throw StateError('Failed to encode scrolling screenshot');
+      }
+      return byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes);
+    } finally {
+      image.dispose();
+    }
+  }
+
+  void _paintScrollingFrame({
+    required Canvas canvas,
+    required ScrollingCapturePreviewFrame frame,
+    required double destinationY,
+    required double destinationWidth,
+    required double destinationHeight,
+    required Paint paint,
+  }) {
+    canvas.drawImageRect(
+      frame.image,
+      Rect.fromLTWH(0, frame.cropTop.toDouble(), frame.pixelWidth.toDouble(), frame.visibleHeight.toDouble()),
+      Rect.fromLTWH(0, destinationY, destinationWidth, destinationHeight),
+      paint,
+    );
+
+    final featherRows = math.min(frame.seamFeatherRows, math.min(frame.cropTop, frame.visibleHeight)).toInt();
+    if (destinationY <= 0 || featherRows <= 0) {
+      return;
+    }
+
+    final featherHeight = destinationHeight * featherRows / frame.visibleHeight;
+    if (featherHeight <= 0 || destinationY < featherHeight) {
+      return;
+    }
+
+    // Hard cuts expose small overlap errors as horizontal lines. Paint the last overlapped rows of
+    // the new frame back over the previous frame with a vertical alpha ramp so the seam transitions
+    // through real shared pixels instead of a single hard boundary.
+    final destinationRect = Rect.fromLTWH(0, destinationY - featherHeight, destinationWidth, featherHeight);
+    canvas.saveLayer(destinationRect, Paint());
+    canvas.drawImageRect(frame.image, Rect.fromLTWH(0, (frame.cropTop - featherRows).toDouble(), frame.pixelWidth.toDouble(), featherRows.toDouble()), destinationRect, paint);
+    canvas.drawRect(
+      destinationRect,
+      Paint()
+        ..blendMode = BlendMode.dstIn
+        ..shader = ui.Gradient.linear(destinationRect.topLeft, destinationRect.bottomLeft, const [Color(0x00000000), Color(0xFF000000)]),
+    );
+    canvas.restore();
   }
 
   Future<void> _finishSession(
@@ -484,6 +1053,8 @@ class WoxScreenshotController extends GetxController {
     _savedWindowState = null;
     _activeRequest = null;
     _clearMacOSPreparationState();
+    _disposeScrollingCaptureFrames();
+    isScrollingCaptureUpdating.value = false;
     selectedAnnotationId.value = null;
     editingTextAnnotationId.value = null;
     textDraftPosition.value = null;
@@ -499,6 +1070,20 @@ class WoxScreenshotController extends GetxController {
     stage.value = ScreenshotSessionStage.idle;
     isSessionActive.value = false;
     _disposeDecodedImages();
+  }
+
+  void _disposeScrollingCaptureFrames() {
+    _scrollingCaptureFrameDebounce?.cancel();
+    _scrollingCaptureFrameDebounce = null;
+    _pendingScrollingCaptureSelection = null;
+    _scrollingCaptureWheelSubscription?.cancel();
+    _scrollingCaptureWheelSubscription = null;
+    _scrollingCaptureControlsBounds = null;
+    isNativeScrollingCaptureOverlay.value = false;
+    for (final frame in scrollingCaptureFrames) {
+      frame.dispose();
+    }
+    scrollingCaptureFrames.clear();
   }
 
   List<DisplaySnapshot> _normalizeSnapshotsForWorkspace(
@@ -786,6 +1371,7 @@ class WoxScreenshotController extends GetxController {
     _hydratedRawSnapshots.clear();
     _rawSnapshotHydrationTasks.clear();
     _nativeWorkspaceBounds = null;
+    _activeNativeWorkspaceBounds = null;
     _preparedDisplayId = null;
     _preparedDisplayBounds = null;
     _preparedPresentation = null;
@@ -1014,7 +1600,9 @@ class WoxScreenshotController extends GetxController {
     required Rect selection,
     required List<DisplaySnapshot> snapshots,
     required List<ScreenshotAnnotation> annotationsToPaint,
+    Map<String, ui.Image>? decodedImages,
   }) async {
+    final imageLookup = decodedImages ?? _decodedImages;
     final exportSlices = <_DisplayExportSlice>[];
     for (final snapshot in snapshots) {
       final logicalRect = snapshot.logicalBounds.toRect();
@@ -1023,7 +1611,7 @@ class WoxScreenshotController extends GetxController {
         continue;
       }
 
-      final decodedImage = _decodedImages[snapshot.displayId];
+      final decodedImage = imageLookup[snapshot.displayId];
       if (decodedImage == null) {
         continue;
       }
@@ -1182,6 +1770,7 @@ class WoxScreenshotController extends GetxController {
   @override
   void onClose() {
     _clearMacOSPreparationState();
+    _disposeScrollingCaptureFrames();
     _disposeDecodedImages();
     textDraftController.dispose();
     super.onClose();
@@ -1240,6 +1829,39 @@ class _ComposedSelectionImage {
   final ui.Image image;
   final int pixelWidth;
   final int pixelHeight;
+}
+
+class ScrollingCapturePreviewFrame {
+  ScrollingCapturePreviewFrame({required this.image, required this.rgbaBytes, required this.pixelWidth, required this.pixelHeight});
+
+  final ui.Image image;
+  final Uint8List rgbaBytes;
+  final int pixelWidth;
+  final int pixelHeight;
+  int cropTop = 0;
+  int seamFeatherRows = 0;
+
+  int get visibleHeight => math.max(0, pixelHeight - cropTop);
+
+  void dispose() {
+    image.dispose();
+  }
+}
+
+class _ScrollingCaptureOverlap {
+  const _ScrollingCaptureOverlap({required this.overlapRows, required this.averageDifference, required this.isReliable, required this.isDuplicate});
+
+  final int overlapRows;
+  final double averageDifference;
+  final bool isReliable;
+  final bool isDuplicate;
+}
+
+class _ScrollingCaptureOverlapCandidate {
+  const _ScrollingCaptureOverlapCandidate({required this.overlapRows, required this.averageDifference});
+
+  final int overlapRows;
+  final double averageDifference;
 }
 
 void paintScreenshotAnnotations(Canvas canvas, List<ScreenshotAnnotation> annotations, Offset selectionOrigin) {

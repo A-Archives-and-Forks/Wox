@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -13,6 +14,7 @@ const Key screenshotCanvasKey = Key('screenshot-canvas');
 const Key screenshotToolbarKey = Key('screenshot-toolbar');
 const Key screenshotEditBarKey = Key('screenshot-edit-bar');
 const Key screenshotConfirmKey = Key('screenshot-confirm');
+const Key screenshotScrollingCaptureKey = Key('screenshot-scrolling-capture');
 const Key screenshotCancelKey = Key('screenshot-cancel');
 const Key screenshotUndoKey = Key('screenshot-undo');
 const Key screenshotToolSelectKey = Key('screenshot-tool-select');
@@ -53,6 +55,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   final focusNode = FocusNode(debugLabel: 'screenshot-workspace');
   bool _isCancellingSession = false;
   bool _isConfirmingSession = false;
+  bool _isScrollingCaptureSession = false;
 
   _InteractionMode? _interactionMode;
   _ResizeHandle? _resizeHandle;
@@ -136,6 +139,27 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     return true;
   }
 
+  void _startScrollingSelectionFromToolbar() {
+    if (_isScrollingCaptureSession || !controller.isSessionActive.value || controller.selectionRect == null) {
+      return;
+    }
+
+    if (controller.textDraftPosition.value != null) {
+      controller.commitTextDraft();
+    }
+
+    setState(() {
+      _isScrollingCaptureSession = true;
+    });
+    controller.startScrollingCapture(const UuidV4().generate()).whenComplete(() {
+      if (mounted) {
+        setState(() {
+          _isScrollingCaptureSession = false;
+        });
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Obx(() {
@@ -186,69 +210,82 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   }
 
   Widget _buildWorkspace(BuildContext context, Rect virtualBounds) {
+    if (controller.isNativeScrollingCaptureOverlay.value) {
+      return _buildNativeScrollingControls();
+    }
+
+    final isScrollingCapture = controller.stage.value == ScreenshotSessionStage.scrolling;
+    final scrollingSelectionLocalRect = isScrollingCapture ? controller.selectionRect?.shift(-virtualBounds.topLeft) : null;
+
     return Stack(
       children: [
         MouseRegion(
           cursor: _hoverCursor,
           onHover: (event) => _handleHover(event.localPosition),
           onExit: (_) => _setHoverCursor(SystemMouseCursors.basic),
-          child: GestureDetector(
-            key: screenshotCanvasKey,
-            behavior: HitTestBehavior.translucent,
-            onPanStart: (details) => _handlePanStart(details.localPosition),
-            onPanUpdate: (details) => _handlePanUpdate(details.localPosition),
-            onPanEnd: (_) => _handlePanEnd(),
-            onTapDown: (details) => _handleTap(details.localPosition),
-            onDoubleTapDown: (details) => _handleDoubleTap(details.localPosition),
-            child: Stack(
-              children: [
-                RepaintBoundary(
-                  // Dragging annotations used to visually disturb the captured background because the
-                  // entire workspace repainted on every pointer update. Keeping the snapshots isolated in
-                  // their own repaint boundary limits redraws to overlays that actually changed.
-                  child: _WorkspaceBackground(snapshots: controller.displaySnapshots.toList(), virtualBounds: virtualBounds),
-                ),
-                Obx(() {
-                  final selectionRect = controller.selectionRect;
-                  final selectionLocalRect = selectionRect?.shift(-virtualBounds.topLeft);
-                  final textDraftPosition = controller.textDraftPosition.value;
-                  final selectedAnnotationId = controller.selectedAnnotationId.value;
+          child: Listener(
+            onPointerSignal: _handlePointerSignal,
+            child: GestureDetector(
+              key: screenshotCanvasKey,
+              behavior: HitTestBehavior.translucent,
+              onPanStart: (details) => _handlePanStart(details.localPosition),
+              onPanUpdate: (details) => _handlePanUpdate(details.localPosition),
+              onPanEnd: (_) => _handlePanEnd(),
+              onTapDown: (details) => _handleTap(details.localPosition),
+              onDoubleTapDown: (details) => _handleDoubleTap(details.localPosition),
+              child: Stack(
+                children: [
+                  RepaintBoundary(
+                    // Dragging annotations used to visually disturb the captured background because the
+                    // entire workspace repainted on every pointer update. Keeping the snapshots isolated in
+                    // their own repaint boundary limits redraws to overlays that actually changed.
+                    child: _WorkspaceBackground(snapshots: controller.displaySnapshots.toList(), virtualBounds: virtualBounds, clearLocalRect: scrollingSelectionLocalRect),
+                  ),
+                  Obx(() {
+                    final selectionRect = controller.selectionRect;
+                    final selectionLocalRect = selectionRect?.shift(-virtualBounds.topLeft);
+                    final textDraftPosition = controller.textDraftPosition.value;
+                    final selectedAnnotationId = controller.selectedAnnotationId.value;
+                    final isScrollingCapture = controller.stage.value == ScreenshotSessionStage.scrolling;
 
-                  return Stack(
-                    children: [
-                      Positioned.fill(
-                        child: CustomPaint(
-                          painter: _WorkspaceShadePainter(
-                            selectionRect: selectionLocalRect,
-                            selectionSizeLabel: selectionRect == null ? null : '${selectionRect.width.round()} x ${selectionRect.height.round()}',
-                          ),
-                        ),
-                      ),
-                      if (selectionRect != null)
+                    return Stack(
+                      children: [
                         Positioned.fill(
-                          child: RepaintBoundary(
-                            child: CustomPaint(
-                              painter: _AnnotationPainter(
-                                annotations: controller.annotations.toList(),
-                                canvasOrigin: virtualBounds.topLeft,
-                                selectionClipRect: selectionLocalRect,
-                                draftRect: _annotationDraftRect,
-                                draftStart: _annotationStart,
-                                draftEnd: _annotationEnd,
-                                draftType: _currentDraftType(),
-                                previewColor: controller.annotationCreationColor.value,
-                                selectedAnnotationId: selectedAnnotationId,
-                                editingTextAnnotationId: controller.editingTextAnnotationId.value,
-                              ),
+                          child: CustomPaint(
+                            painter: _WorkspaceShadePainter(
+                              selectionRect: selectionLocalRect,
+                              selectionSizeLabel: selectionRect == null ? null : '${selectionRect.width.round()} x ${selectionRect.height.round()}',
                             ),
                           ),
                         ),
-                      if (selectionLocalRect != null) _buildSelectionFrame(selectionLocalRect),
-                      if (textDraftPosition != null && selectionRect != null) _buildTextDraftField(textDraftPosition - virtualBounds.topLeft),
-                    ],
-                  );
-                }),
-              ],
+                        if (selectionRect != null && !isScrollingCapture)
+                          Positioned.fill(
+                            child: RepaintBoundary(
+                              child: CustomPaint(
+                                painter: _AnnotationPainter(
+                                  annotations: controller.annotations.toList(),
+                                  canvasOrigin: virtualBounds.topLeft,
+                                  selectionClipRect: selectionLocalRect,
+                                  draftRect: _annotationDraftRect,
+                                  draftStart: _annotationStart,
+                                  draftEnd: _annotationEnd,
+                                  draftType: _currentDraftType(),
+                                  previewColor: controller.annotationCreationColor.value,
+                                  selectedAnnotationId: selectedAnnotationId,
+                                  editingTextAnnotationId: controller.editingTextAnnotationId.value,
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (isScrollingCapture && selectionLocalRect != null) _buildScrollingSelectionFrame(selectionLocalRect),
+                        if (selectionLocalRect != null) _buildSelectionFrame(selectionLocalRect),
+                        if (isScrollingCapture && selectionLocalRect != null) _buildScrollingPreview(selectionLocalRect),
+                        if (textDraftPosition != null && selectionRect != null && !isScrollingCapture) _buildTextDraftField(textDraftPosition - virtualBounds.topLeft),
+                      ],
+                    );
+                  }),
+                ],
+              ),
             ),
           ),
         ),
@@ -262,9 +299,108 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     );
   }
 
+  Widget _buildNativeScrollingControls() {
+    final frames = controller.scrollingCaptureFrames.toList();
+    final totalHeight = frames.fold<int>(0, (total, frame) => total + frame.visibleHeight);
+
+    return Material(
+      color: Colors.transparent,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final previewSize = _calculateScrollingPreviewRenderSize(
+            frames: frames,
+            totalHeight: totalHeight,
+            maxWidth: constraints.maxWidth,
+            maxHeight: math.max(1.0, constraints.maxHeight - 64),
+          );
+
+          return Stack(
+            children: [
+              Positioned(
+                left: (constraints.maxWidth - previewSize.width) / 2,
+                top: 0,
+                width: previewSize.width,
+                height: previewSize.height,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.transparent,
+                    border: Border.all(color: const Color(0xCCFFFFFF), width: 2),
+                    boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 24, offset: Offset(0, 14))],
+                  ),
+                  child:
+                      frames.isEmpty
+                          ? const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.4, color: Color(0xFF4DA3FF))))
+                          : CustomPaint(painter: _ScrollingPreviewPainter(frames: frames, totalHeight: totalHeight)),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: 56,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xE61E1A18),
+                      borderRadius: BorderRadius.circular(18),
+                      boxShadow: const [BoxShadow(color: Color(0x55000000), blurRadius: 24, offset: Offset(0, 12))],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (controller.isScrollingCaptureUpdating.value)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 10),
+                            child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.2, color: Color(0xFF4DA3FF))),
+                          ),
+                        _ToolButton(
+                          key: screenshotCancelKey,
+                          icon: Icons.close,
+                          color: const Color(0xFFFF6B6B),
+                          onPressed: () => controller.cancelSession(const UuidV4().generate(), reason: 'scrolling_native_toolbar_cancel'),
+                        ),
+                        _ToolButton(
+                          key: screenshotConfirmKey,
+                          icon: Icons.check,
+                          color: const Color(0xFF30E37A),
+                          enabled: frames.isNotEmpty,
+                          onPressed: frames.isNotEmpty ? () => controller.confirmScrollingSelection(const UuidV4().generate()) : null,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Size _calculateScrollingPreviewRenderSize({required List<ScrollingCapturePreviewFrame> frames, required int totalHeight, required double maxWidth, required double maxHeight}) {
+    if (frames.isEmpty || totalHeight <= 0) {
+      final fallbackSize = math.min(120.0, math.min(math.max(1.0, maxWidth), math.max(1.0, maxHeight)));
+      return Size(fallbackSize, fallbackSize);
+    }
+
+    final contentWidth = frames.first.pixelWidth.toDouble();
+    final contentHeight = totalHeight.toDouble();
+    final safeMaxWidth = math.max(1.0, maxWidth);
+    final safeMaxHeight = math.max(1.0, maxHeight);
+    final scale = math.min(safeMaxWidth / math.max(1.0, contentWidth), safeMaxHeight / math.max(1.0, contentHeight));
+
+    // The native preview panel is transparent outside this child. Returning the exact rendered image
+    // size prevents the old first-frame panel width from showing as gray gutters after the stitched
+    // screenshot grows taller and the scaled image becomes narrower.
+    return Size(math.max(1.0, contentWidth * scale), math.max(1.0, contentHeight * scale));
+  }
+
   Widget _buildToolbar(BuildContext context, Rect? selectionRect, Rect virtualBounds) {
     final currentTool = controller.currentTool.value;
-    final canConfirm = selectionRect != null && selectionRect.width >= 1 && selectionRect.height >= 1;
+    final isScrollingCapture = controller.stage.value == ScreenshotSessionStage.scrolling;
+    final canConfirm = selectionRect != null && selectionRect.width >= 1 && selectionRect.height >= 1 && (!isScrollingCapture || controller.scrollingCaptureFrames.isNotEmpty);
     final selectionLocalRect = selectionRect?.shift(-virtualBounds.topLeft);
     final creationColor = controller.annotationCreationColor.value;
 
@@ -334,6 +470,17 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                 const SizedBox(width: 6),
                 _ToolButton(key: screenshotUndoKey, icon: Icons.undo, enabled: controller.annotations.isNotEmpty, onPressed: controller.undoAnnotation),
                 const SizedBox(width: 6),
+                // Scrolling capture is exposed as a selection action instead of a drawing tool
+                // because it exports a stitched live page after Wox hides, so keeping it beside
+                // confirm/cancel matches the point where the selected region becomes final.
+                _ToolButton(
+                  key: screenshotScrollingCaptureKey,
+                  icon: Icons.vertical_align_bottom,
+                  color: const Color(0xFF4DA3FF),
+                  selected: isScrollingCapture,
+                  enabled: selectionRect != null && !_isScrollingCaptureSession && !isScrollingCapture,
+                  onPressed: selectionRect != null ? _startScrollingSelectionFromToolbar : null,
+                ),
                 _ToolButton(
                   key: screenshotCancelKey,
                   icon: Icons.close,
@@ -351,7 +498,11 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                             if (controller.textDraftPosition.value != null) {
                               controller.commitTextDraft();
                             }
-                            controller.confirmSelection(const UuidV4().generate());
+                            if (controller.stage.value == ScreenshotSessionStage.scrolling) {
+                              controller.confirmScrollingSelection(const UuidV4().generate());
+                            } else {
+                              controller.confirmSelection(const UuidV4().generate());
+                            }
                           }
                           : null,
                 ),
@@ -406,6 +557,71 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildScrollingPreview(Rect selectionLocalRect) {
+    final frames = controller.scrollingCaptureFrames.toList();
+    final totalHeight = frames.fold<int>(0, (total, frame) => total + frame.visibleHeight);
+    final screenSize = MediaQuery.sizeOf(context);
+    final rightAvailableWidth = math.max(0.0, screenSize.width - selectionLocalRect.right - 44);
+    final leftAvailableWidth = math.max(0.0, selectionLocalRect.left - 44);
+    final maxAvailableWidth = math.max(rightAvailableWidth, leftAvailableWidth);
+    final previewSize = _calculateScrollingPreviewRenderSize(
+      frames: frames,
+      totalHeight: totalHeight,
+      maxWidth: maxAvailableWidth,
+      maxHeight: math.min(selectionLocalRect.height, 520.0),
+    );
+
+    final hasRightSpace = selectionLocalRect.right + 20 + previewSize.width <= screenSize.width - 24;
+    final left = hasRightSpace ? selectionLocalRect.right + 20 : math.max(24.0, selectionLocalRect.left - previewSize.width - 20);
+    final top = selectionLocalRect.top.clamp(24.0, math.max(24.0, screenSize.height - previewSize.height - 24)).toDouble();
+
+    return Positioned(
+      left: left,
+      top: top,
+      width: previewSize.width,
+      height: previewSize.height,
+      child: IgnorePointer(
+        // The preview is a live rendering aid, not an editing surface. Keeping it pointer-transparent
+        // prevents it from stealing wheel gestures that should continue driving the selected page.
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            border: Border.all(color: const Color(0xCCFFFFFF), width: 2),
+            boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 24, offset: Offset(0, 14))],
+          ),
+          child:
+              frames.isEmpty
+                  ? const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.4, color: Color(0xFF4DA3FF))))
+                  : CustomPaint(painter: _ScrollingPreviewPainter(frames: frames, totalHeight: totalHeight)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScrollingSelectionFrame(Rect selectionLocalRect) {
+    final frames = controller.scrollingCaptureFrames;
+    if (frames.isEmpty) {
+      return Positioned.fromRect(
+        rect: selectionLocalRect,
+        child: const ColoredBox(
+          color: Color(0x11FFFFFF),
+          child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.4, color: Color(0xFF4DA3FF)))),
+        ),
+      );
+    }
+
+    final latestFrame = frames.last;
+    return Positioned.fromRect(
+      rect: selectionLocalRect,
+      child: IgnorePointer(
+        // The selected region is a live viewport. Paint the latest captured crop back into it so
+        // users see page movement immediately even when the native overlay cannot expose a truly
+        // transparent hole through the Flutter window.
+        child: RawImage(image: latestFrame.image, fit: BoxFit.fill, filterQuality: FilterQuality.medium),
       ),
     );
   }
@@ -482,6 +698,10 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   }
 
   void _handleTap(Offset localPosition) {
+    if (controller.stage.value == ScreenshotSessionStage.scrolling) {
+      return;
+    }
+
     if (controller.textDraftPosition.value != null) {
       return;
     }
@@ -526,6 +746,10 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   }
 
   void _handleDoubleTap(Offset localPosition) {
+    if (controller.stage.value == ScreenshotSessionStage.scrolling) {
+      return;
+    }
+
     final globalPosition = _toGlobalPosition(localPosition);
     final annotation = _hitTestAnnotationBody(globalPosition, allowOnlyText: true);
     if (annotation == null || annotation.type != ScreenshotAnnotationType.text || annotation.start == null) {
@@ -537,6 +761,10 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   }
 
   void _handlePanStart(Offset localPosition) {
+    if (controller.stage.value == ScreenshotSessionStage.scrolling) {
+      return;
+    }
+
     if (controller.textDraftPosition.value != null) {
       controller.commitTextDraft();
     }
@@ -711,7 +939,33 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     }
   }
 
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent || controller.stage.value != ScreenshotSessionStage.scrolling) {
+      return;
+    }
+
+    final selectionRect = controller.selectionRect;
+    if (selectionRect == null) {
+      return;
+    }
+
+    final globalPosition = _toGlobalPosition(event.localPosition);
+    if (!selectionRect.contains(globalPosition)) {
+      return;
+    }
+
+    // In scrolling-capture mode the rectangle behaves like a mouse-through viewport: Flutter uses
+    // the wheel delta to drive the native app underneath, then refreshes the stitched preview from
+    // the live desktop pixels. Drag/annotation gestures stay disabled until the mode is confirmed.
+    controller.handleScrollingCaptureWheel(const UuidV4().generate(), event.scrollDelta.dy);
+  }
+
   void _handleHover(Offset localPosition) {
+    if (controller.stage.value == ScreenshotSessionStage.scrolling) {
+      _setHoverCursor(SystemMouseCursors.basic);
+      return;
+    }
+
     if (_interactionMode != null || controller.currentTool.value != ScreenshotTool.select) {
       _setHoverCursor(SystemMouseCursors.basic);
       return;
@@ -1136,14 +1390,15 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
 }
 
 class _WorkspaceBackground extends StatelessWidget {
-  const _WorkspaceBackground({required this.snapshots, required this.virtualBounds});
+  const _WorkspaceBackground({required this.snapshots, required this.virtualBounds, this.clearLocalRect});
 
   final List<DisplaySnapshot> snapshots;
   final Rect virtualBounds;
+  final Rect? clearLocalRect;
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
+    final background = Stack(
       children: [
         for (final snapshot in snapshots)
           if (snapshot.hasImageBytes)
@@ -1156,6 +1411,33 @@ class _WorkspaceBackground extends StatelessWidget {
             ),
       ],
     );
+
+    if (clearLocalRect == null) {
+      return background;
+    }
+
+    // Scrolling capture needs the selected rectangle to reveal the live app behind Wox, while the
+    // rest of the workspace still uses the frozen screenshot backdrop for a stable capture shell.
+    return ClipPath(clipper: _SelectionHoleClipper(clearLocalRect!), child: background);
+  }
+}
+
+class _SelectionHoleClipper extends CustomClipper<Path> {
+  const _SelectionHoleClipper(this.clearRect);
+
+  final Rect clearRect;
+
+  @override
+  Path getClip(Size size) {
+    return Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(Offset.zero & size)
+      ..addRect(clearRect);
+  }
+
+  @override
+  bool shouldReclip(covariant _SelectionHoleClipper oldClipper) {
+    return oldClipper.clearRect != clearRect;
   }
 }
 
@@ -1412,6 +1694,86 @@ class _WorkspaceShadePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _WorkspaceShadePainter oldDelegate) {
     return oldDelegate.selectionRect != selectionRect || oldDelegate.selectionSizeLabel != selectionSizeLabel;
+  }
+}
+
+class _ScrollingPreviewPainter extends CustomPainter {
+  _ScrollingPreviewPainter({required this.frames, required this.totalHeight});
+
+  final List<ScrollingCapturePreviewFrame> frames;
+  final int totalHeight;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (frames.isEmpty || totalHeight <= 0) {
+      return;
+    }
+
+    final contentWidth = frames.first.pixelWidth.toDouble();
+    final scale = math.min(size.width / contentWidth, size.height / totalHeight);
+    final renderedWidth = contentWidth * scale;
+    final dx = (size.width - renderedWidth) / 2;
+    var y = 0.0;
+    final paint = Paint()..filterQuality = FilterQuality.medium;
+
+    // The preview is rendered from the same stitched frame list used for export. Painting from the
+    // accumulated frame crops avoids a separate preview-only bitmap and keeps export/preview drift
+    // out of the scrolling capture flow.
+    for (final frame in frames) {
+      final visibleHeight = frame.visibleHeight;
+      if (visibleHeight <= 0) {
+        continue;
+      }
+
+      final scaledHeight = visibleHeight * scale;
+      _paintScrollingFrame(canvas: canvas, frame: frame, dx: dx, destinationY: y, destinationWidth: renderedWidth, destinationHeight: scaledHeight, paint: paint);
+      y += scaledHeight;
+    }
+  }
+
+  void _paintScrollingFrame({
+    required Canvas canvas,
+    required ScrollingCapturePreviewFrame frame,
+    required double dx,
+    required double destinationY,
+    required double destinationWidth,
+    required double destinationHeight,
+    required Paint paint,
+  }) {
+    canvas.drawImageRect(
+      frame.image,
+      Rect.fromLTWH(0, frame.cropTop.toDouble(), frame.pixelWidth.toDouble(), frame.visibleHeight.toDouble()),
+      Rect.fromLTWH(dx, destinationY, destinationWidth, destinationHeight),
+      paint,
+    );
+
+    final featherRows = math.min(frame.seamFeatherRows, math.min(frame.cropTop, frame.visibleHeight)).toInt();
+    if (destinationY <= 0 || featherRows <= 0) {
+      return;
+    }
+
+    final featherHeight = destinationHeight * featherRows / frame.visibleHeight;
+    if (featherHeight <= 0 || destinationY < featherHeight) {
+      return;
+    }
+
+    // Match the export renderer by feathering each frame's top seam in preview too. This prevents
+    // the live side preview from showing horizontal hard cuts that will not represent the final PNG.
+    final destinationRect = Rect.fromLTWH(dx, destinationY - featherHeight, destinationWidth, featherHeight);
+    canvas.saveLayer(destinationRect, Paint());
+    canvas.drawImageRect(frame.image, Rect.fromLTWH(0, (frame.cropTop - featherRows).toDouble(), frame.pixelWidth.toDouble(), featherRows.toDouble()), destinationRect, paint);
+    canvas.drawRect(
+      destinationRect,
+      Paint()
+        ..blendMode = BlendMode.dstIn
+        ..shader = const LinearGradient(colors: [Color(0x00000000), Color(0xFF000000)], begin: Alignment.topCenter, end: Alignment.bottomCenter).createShader(destinationRect),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScrollingPreviewPainter oldDelegate) {
+    return oldDelegate.frames != frames || oldDelegate.totalHeight != totalHeight;
   }
 }
 

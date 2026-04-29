@@ -499,6 +499,118 @@ private final class ScreenshotOverlaySession {
   }
 }
 
+private final class ScrollingCaptureOverlayView: NSView {
+  private let selectionRect: NSRect
+  private let overlayColor = NSColor(calibratedWhite: 0, alpha: 0.46)
+  private let borderColor = NSColor(red: 41 / 255, green: 1, blue: 114 / 255, alpha: 1)
+
+  init(frame: NSRect, selectionRect: NSRect) {
+    self.selectionRect = selectionRect
+    super.init(frame: frame)
+  }
+
+  required init?(coder: NSCoder) {
+    return nil
+  }
+
+  override var isOpaque: Bool { false }
+
+  override func draw(_ dirtyRect: NSRect) {
+    super.draw(dirtyRect)
+
+    // Drawing the four dimmed bands in one mouse-transparent window avoids compositor seams that
+    // appeared when the same visual mask was split across four adjacent NSWindows. The center still
+    // receives native mouse and text interaction because the whole overlay window ignores events.
+    overlayColor.setFill()
+    NSBezierPath(rect: NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: max(0, selectionRect.minY - bounds.minY))).fill()
+    NSBezierPath(rect: NSRect(x: bounds.minX, y: selectionRect.maxY, width: bounds.width, height: max(0, bounds.maxY - selectionRect.maxY))).fill()
+    NSBezierPath(rect: NSRect(x: bounds.minX, y: selectionRect.minY, width: max(0, selectionRect.minX - bounds.minX), height: selectionRect.height)).fill()
+    NSBezierPath(rect: NSRect(x: selectionRect.maxX, y: selectionRect.minY, width: max(0, bounds.maxX - selectionRect.maxX), height: selectionRect.height)).fill()
+
+    let borderPath = NSBezierPath(rect: selectionRect.insetBy(dx: 1, dy: 1))
+    borderPath.lineWidth = 2
+    borderColor.setStroke()
+    borderPath.stroke()
+  }
+}
+
+private final class ScrollingCaptureOverlaySession {
+  private let selection: NSRect
+  private let overlayWindow: NSWindow
+  private let controlsWindow: NSWindow
+  private let controlsBounds: NSRect
+  private let onScroll: () -> Void
+  private var scrollMonitor: Any?
+
+  init(workspaceBounds: NSRect, selection: NSRect, controlsWindow: NSWindow, controlsBounds: NSRect, onScroll: @escaping () -> Void) {
+    self.selection = selection
+    self.controlsWindow = controlsWindow
+    self.controlsBounds = controlsBounds
+    self.onScroll = onScroll
+
+    let localSelection = NSRect(x: selection.minX - workspaceBounds.minX, y: workspaceBounds.maxY - selection.maxY, width: selection.width, height: selection.height)
+    overlayWindow = NSWindow(contentRect: appKitRect(fromTopLeftRect: workspaceBounds), styleMask: .borderless, backing: .buffered, defer: false)
+    overlayWindow.isOpaque = false
+    overlayWindow.backgroundColor = .clear
+    overlayWindow.hasShadow = false
+    overlayWindow.isReleasedWhenClosed = false
+    overlayWindow.level = screenshotWindowLevel()
+    overlayWindow.ignoresMouseEvents = true
+    overlayWindow.acceptsMouseMovedEvents = false
+    overlayWindow.titleVisibility = .hidden
+    overlayWindow.titlebarAppearsTransparent = true
+    overlayWindow.animationBehavior = .none
+    overlayWindow.collectionBehavior = screenshotCollectionBehavior()
+    overlayWindow.contentView = ScrollingCaptureOverlayView(frame: NSRect(x: 0, y: 0, width: workspaceBounds.width, height: workspaceBounds.height), selectionRect: localSelection)
+  }
+
+  func begin() {
+    overlayWindow.orderFrontRegardless()
+    moveControlsWindow()
+    installScrollMonitor()
+  }
+
+  func dismiss() {
+    if let scrollMonitor {
+      NSEvent.removeMonitor(scrollMonitor)
+      self.scrollMonitor = nil
+    }
+
+    overlayWindow.orderOut(nil)
+    overlayWindow.contentView = nil
+    overlayWindow.close()
+  }
+
+  private func moveControlsWindow() {
+    controlsWindow.setFrame(appKitRect(fromTopLeftRect: controlsBounds), display: true)
+    controlsWindow.contentView?.needsLayout = true
+    controlsWindow.contentView?.layoutSubtreeIfNeeded()
+    controlsWindow.displayIfNeeded()
+    controlsWindow.collectionBehavior = screenshotCollectionBehavior()
+    controlsWindow.level = screenshotWindowLevel()
+    if let panel = controlsWindow as? NSPanel {
+      panel.hidesOnDeactivate = false
+      panel.becomesKeyOnlyIfNeeded = false
+      panel.isFloatingPanel = false
+    }
+    controlsWindow.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  private func installScrollMonitor() {
+    scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel]) { [weak self] _ in
+      guard let self else {
+        return
+      }
+
+      let point = topLeftPoint(fromAppKit: NSEvent.mouseLocation)
+      if self.selection.contains(point) {
+        self.onScroll()
+      }
+    }
+  }
+}
+
 @main
 class AppDelegate: FlutterAppDelegate {
   // The screenshot capture helpers run inside Swift `throws` / `async throws` contexts. The
@@ -524,6 +636,8 @@ class AppDelegate: FlutterAppDelegate {
     let collectionBehavior: NSWindow.CollectionBehavior
     let level: NSWindow.Level
     let animationBehavior: NSWindow.AnimationBehavior
+    let isOpaque: Bool
+    let backgroundColor: NSColor?
     let hasShadow: Bool
     let styleMask: NSWindow.StyleMask
     let ignoresMouseEvents: Bool
@@ -536,6 +650,7 @@ class AppDelegate: FlutterAppDelegate {
     let panelHidesOnDeactivate: Bool?
     let panelBecomesKeyOnlyIfNeeded: Bool?
     let panelIsFloating: Bool?
+    let hadAcrylicEffect: Bool
   }
 
   // Store the previous active application
@@ -557,6 +672,7 @@ class AppDelegate: FlutterAppDelegate {
   // one full-resolution background per monitor without sending large image payloads back to Swift.
   private var cachedDisplayCaptures: [CachedDisplayCapture] = []
   private var activeOverlaySession: ScreenshotOverlaySession?
+  private var activeScrollingCaptureOverlaySession: ScrollingCaptureOverlaySession?
   private var nativeOverlayDismissTimeoutWorkItem: DispatchWorkItem?
 
   private func describeFrontmostApplication() -> String {
@@ -761,6 +877,47 @@ class AppDelegate: FlutterAppDelegate {
     activeOverlaySession.dismissOverlays()
   }
 
+  private func beginScrollingCaptureOverlay(on window: NSWindow, arguments: [String: Any]) throws {
+    guard
+      let workspacePayload = arguments["workspaceBounds"] as? [String: Any],
+      let selectionPayload = arguments["selection"] as? [String: Any],
+      let controlsPayload = arguments["controlsBounds"] as? [String: Any],
+      let workspaceBounds = parseRect(arguments: workspacePayload),
+      let selection = parseRect(arguments: selectionPayload),
+      let controlsBounds = parseRect(arguments: controlsPayload)
+    else {
+      throw DisplayCaptureError(code: "INVALID_ARGS", message: "Invalid arguments for beginScrollingCaptureOverlay", details: nil)
+    }
+
+    dismissScrollingCaptureOverlay()
+    // Scrolling capture differs from annotation mode: the selected rectangle must contain no Wox
+    // window at all so native app interaction, text selection, and inertial scrolling continue
+    // naturally. A single passive overlay window draws the outside dimming and border together so
+    // the mask looks continuous while the reused Flutter window moves to the preview/toolbox area.
+    let overlaySession = ScrollingCaptureOverlaySession(
+      workspaceBounds: workspaceBounds,
+      selection: selection,
+      controlsWindow: window,
+      controlsBounds: controlsBounds,
+      onScroll: { [weak self] in
+        DispatchQueue.main.async {
+          self?.screenshotEventChannel?.invokeMethod("onScrollingCaptureWheel", arguments: nil)
+        }
+      }
+    )
+    activeScrollingCaptureOverlaySession = overlaySession
+    overlaySession.begin()
+  }
+
+  private func dismissScrollingCaptureOverlay() {
+    guard let activeScrollingCaptureOverlaySession else {
+      return
+    }
+
+    self.activeScrollingCaptureOverlaySession = nil
+    activeScrollingCaptureOverlaySession.dismiss()
+  }
+
   private func scheduleNativeOverlayDismissTimeout() {
     cancelNativeOverlayDismissTimeout()
     guard activeOverlaySession != nil else {
@@ -840,11 +997,14 @@ class AppDelegate: FlutterAppDelegate {
   }
 
   private func prepareCaptureWorkspace(on window: NSWindow, bounds: NSRect) -> [String: Any] {
+    let hadAcrylicEffect = containsAcrylicEffect(in: window)
     if screenshotPresentationState == nil {
       screenshotPresentationState = ScreenshotPresentationState(
         collectionBehavior: window.collectionBehavior,
         level: window.level,
         animationBehavior: window.animationBehavior,
+        isOpaque: window.isOpaque,
+        backgroundColor: window.backgroundColor,
         hasShadow: window.hasShadow,
         styleMask: window.styleMask,
         ignoresMouseEvents: window.ignoresMouseEvents,
@@ -856,7 +1016,8 @@ class AppDelegate: FlutterAppDelegate {
         zoomButtonHidden: isStandardWindowButtonHidden(.zoomButton, on: window),
         panelHidesOnDeactivate: (window as? NSPanel)?.hidesOnDeactivate,
         panelBecomesKeyOnlyIfNeeded: (window as? NSPanel)?.becomesKeyOnlyIfNeeded,
-        panelIsFloating: (window as? NSPanel)?.isFloatingPanel
+        panelIsFloating: (window as? NSPanel)?.isFloatingPanel,
+        hadAcrylicEffect: hadAcrylicEffect
       )
     }
 
@@ -871,6 +1032,12 @@ class AppDelegate: FlutterAppDelegate {
     // capture needs a system-overlay style contract instead so one window can stay pinned across the
     // full virtual desktop without inheriting the main launcher panel's single-display assumptions.
     window.collectionBehavior = screenshotCollectionBehavior()
+    // The normal Wox launcher uses an acrylic NSVisualEffectView behind Flutter. In compact
+    // scrolling-capture preview mode, unpainted Flutter pixels intentionally need to be transparent;
+    // leaving the acrylic view in place made the preview look like it had a large gray backing panel.
+    removeAcrylicEffect(from: window)
+    window.isOpaque = false
+    window.backgroundColor = .clear
     // The native selection overlay already appears without AppKit window animations. Leaving the
     // reused Flutter window at its default animation behavior makes the handoff look like a short
     // fade/zoom even when the content is ready. Disable window animation for screenshot mode so the
@@ -941,6 +1108,7 @@ class AppDelegate: FlutterAppDelegate {
   }
 
   private func dismissCaptureWorkspacePresentation(on window: NSWindow) {
+    dismissScrollingCaptureOverlay()
     guard let savedState = screenshotPresentationState else {
       isCapturePresentationActive = false
       captureWorkspaceBounds = .zero
@@ -950,6 +1118,8 @@ class AppDelegate: FlutterAppDelegate {
 
     window.collectionBehavior = savedState.collectionBehavior
     window.level = savedState.level
+    window.isOpaque = savedState.isOpaque
+    window.backgroundColor = savedState.backgroundColor ?? NSColor.windowBackgroundColor
     window.hasShadow = savedState.hasShadow
     window.styleMask = savedState.styleMask
     window.ignoresMouseEvents = savedState.ignoresMouseEvents
@@ -980,6 +1150,9 @@ class AppDelegate: FlutterAppDelegate {
       miniaturizeHidden: savedState.miniaturizeButtonHidden,
       zoomHidden: savedState.zoomButtonHidden
     )
+    if savedState.hadAcrylicEffect {
+      applyAcrylicEffect(to: window)
+    }
     screenshotPresentationState = nil
     isCapturePresentationActive = false
     captureWorkspaceBounds = .zero
@@ -1269,6 +1442,49 @@ class AppDelegate: FlutterAppDelegate {
     return nil
   }
 
+  private func postMouseScrollEvent(deltaY: Double, through window: NSWindow) -> FlutterError? {
+    // Scrolling capture drives the app underneath Wox after the screenshot shell hides. Using a
+    // CGEvent keeps the scroll targeted at the current cursor location instead of requiring app-
+    // specific accessibility APIs, which would make the feature depend on each target window type.
+    guard
+      let event = CGEvent(
+        scrollWheelEvent2Source: CGEventSource(stateID: .hidSystemState),
+        units: .line,
+        wheelCount: 1,
+        wheel1: Int32(-deltaY.rounded()),
+        wheel2: 0,
+        wheel3: 0
+      )
+    else {
+      return FlutterError(code: "INPUT_ERROR", message: "Failed to create macOS scroll event", details: deltaY)
+    }
+
+    let wasVisible = window.isVisible
+    // `ignoresMouseEvents` is not reliable for synthetic scroll-wheel routing on macOS: the Wox
+    // screenshot window can still be the effective event target even when the cursor visually sits
+    // inside the selected page. Briefly ordering the capture window out before posting the wheel
+    // event gives the system a real underlying target, then restores the overlay quickly enough for
+    // the Flutter preview refresh to repaint the new page position.
+    if wasVisible {
+      window.orderOut(nil)
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+      event.post(tap: .cghidEventTap)
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+      if wasVisible {
+        if let panel = window as? NSPanel {
+          panel.isFloatingPanel = false
+        }
+        window.collectionBehavior = screenshotCollectionBehavior()
+        window.level = screenshotWindowLevel()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+      }
+    }
+    return nil
+  }
+
   private func moveMouse(to point: CGPoint) -> FlutterError? {
     CGWarpMouseCursorPosition(screenPoint(fromTopLeft: point))
     return nil
@@ -1312,6 +1528,23 @@ class AppDelegate: FlutterAppDelegate {
         subview.wantsLayer = true
         subview.layer?.backgroundColor = NSColor.clear.cgColor
       }
+    }
+  }
+
+  private func containsAcrylicEffect(in window: NSWindow) -> Bool {
+    return window.contentView?.subviews.contains(where: { $0 is NSVisualEffectView }) ?? false
+  }
+
+  private func removeAcrylicEffect(from window: NSWindow) {
+    guard let contentView = window.contentView else {
+      return
+    }
+
+    // Screenshot mode has its own Flutter-rendered backdrop or native dimming overlay. Removing the
+    // launcher acrylic layer lets intentionally transparent preview pixels show the desktop instead
+    // of the launcher blur material.
+    for subview in contentView.subviews where subview is NSVisualEffectView {
+      subview.removeFromSuperview()
     }
   }
 
@@ -1485,6 +1718,20 @@ class AppDelegate: FlutterAppDelegate {
           self?.dismissCaptureWorkspacePresentation(on: window)
           result(nil)
 
+        case "beginScrollingCaptureOverlay":
+          if let args = call.arguments as? [String: Any] {
+            do {
+              try self?.beginScrollingCaptureOverlay(on: window, arguments: args)
+              result(nil)
+            } catch let error as DisplayCaptureError {
+              result(error.asFlutterError())
+            } catch {
+              result(FlutterError(code: "scrolling_overlay_failed", message: error.localizedDescription, details: nil))
+            }
+          } else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Invalid arguments for beginScrollingCaptureOverlay", details: nil))
+          }
+
         case "dismissNativeSelectionOverlays":
           self?.dismissNativeSelectionOverlays()
           result(nil)
@@ -1608,6 +1855,19 @@ class AppDelegate: FlutterAppDelegate {
             }
           } else {
             result(FlutterError(code: "INVALID_ARGS", message: "Missing mouse button", details: nil))
+          }
+
+        case "inputMouseScroll":
+          if let args = call.arguments as? [String: Any],
+            let deltaY = args["deltaY"] as? Double
+          {
+            if let error = self?.postMouseScrollEvent(deltaY: deltaY, through: window) {
+              result(error)
+            } else {
+              result(nil)
+            }
+          } else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Missing scroll delta", details: nil))
           }
 
         case "setBounds":

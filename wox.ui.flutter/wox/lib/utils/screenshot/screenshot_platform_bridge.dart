@@ -51,6 +51,14 @@ abstract class ScreenshotPlatformBridge {
 
   Future<void> writeClipboardImageFile({required String filePath}) async {}
 
+  Future<void> moveMouseTo(Offset position) async {}
+
+  Future<void> scrollMouse({required double deltaY}) async {}
+
+  Future<void> beginScrollingCaptureOverlay({required ScreenshotRect workspaceBounds, required ScreenshotRect selection, required ScreenshotRect controlsBounds}) async {}
+
+  Stream<void> scrollingCaptureWheelEvents() => const Stream<void>.empty();
+
   Future<Map<String, dynamic>> debugCaptureWorkspaceState();
 }
 
@@ -62,6 +70,7 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
 
   late final MethodChannel _channel = MethodChannel(_resolveChannelName());
   late final StreamController<ScreenshotSelectionDisplayHint> _selectionDisplayHintController = StreamController<ScreenshotSelectionDisplayHint>.broadcast();
+  late final StreamController<void> _scrollingCaptureWheelController = StreamController<void>.broadcast();
 
   MethodChannelScreenshotPlatformBridge() {
     if (Platform.isMacOS) {
@@ -175,6 +184,9 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
   Stream<ScreenshotSelectionDisplayHint> selectionDisplayHints() => _selectionDisplayHintController.stream;
 
   @override
+  Stream<void> scrollingCaptureWheelEvents() => _scrollingCaptureWheelController.stream;
+
+  @override
   Future<void> dismissCaptureWorkspacePresentation() async {
     try {
       await _channel.invokeMethod<void>('dismissCaptureWorkspacePresentation');
@@ -202,6 +214,37 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
   }
 
   @override
+  Future<void> moveMouseTo(Offset position) async {
+    try {
+      await _channel.invokeMethod<void>('inputMouseMove', {'x': position.dx, 'y': position.dy});
+    } on MissingPluginException {
+      throw UnsupportedError('Mouse movement input is not available on ${Platform.operatingSystem}');
+    }
+  }
+
+  @override
+  Future<void> scrollMouse({required double deltaY}) async {
+    try {
+      await _channel.invokeMethod<void>('inputMouseScroll', {'deltaY': deltaY});
+    } on MissingPluginException {
+      throw UnsupportedError('Mouse scroll input is not available on ${Platform.operatingSystem}');
+    }
+  }
+
+  @override
+  Future<void> beginScrollingCaptureOverlay({required ScreenshotRect workspaceBounds, required ScreenshotRect selection, required ScreenshotRect controlsBounds}) async {
+    try {
+      await _channel.invokeMethod<void>('beginScrollingCaptureOverlay', {
+        'workspaceBounds': workspaceBounds.toJson(),
+        'selection': selection.toJson(),
+        'controlsBounds': controlsBounds.toJson(),
+      });
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  @override
   Future<Map<String, dynamic>> debugCaptureWorkspaceState() async {
     try {
       final response = await _channel.invokeMethod<Map<dynamic, dynamic>>('debugCaptureWorkspaceState');
@@ -215,6 +258,11 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
   }
 
   Future<void> _handleMacOSScreenshotEvent(MethodCall call) async {
+    if (call.method == 'onScrollingCaptureWheel') {
+      _scrollingCaptureWheelController.add(null);
+      return;
+    }
+
     if (call.method != 'onSelectionDisplayHint') {
       return;
     }

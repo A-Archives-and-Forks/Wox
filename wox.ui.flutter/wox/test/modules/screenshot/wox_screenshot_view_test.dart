@@ -25,15 +25,40 @@ void main() {
       ),
     ]);
     controller.virtualBounds.value = const ScreenshotRect(x: 0, y: 0, width: 800, height: 600);
-    controller.selection.value = const ScreenshotRect(x: 100, y: 100, width: 420, height: 160);
+    controller.selection.value = const ScreenshotRect(x: 220, y: 100, width: 500, height: 160);
     controller.stage.value = ScreenshotSessionStage.annotating;
 
     await tester.pumpWidget(const GetMaterialApp(home: Material(child: SizedBox(width: 800, height: 600, child: WoxScreenshotView()))));
     await tester.pumpAndSettle();
 
     final toolbarRect = tester.getRect(find.byKey(screenshotToolbarKey));
-    expect(toolbarRect.right, closeTo(520, 1));
+    expect(toolbarRect.right, closeTo(720, 1));
     expect(toolbarRect.top, greaterThan(260));
+  });
+
+  testWidgets('annotation toolbar exposes scrolling capture after selecting a region', (tester) async {
+    final controller = Get.put(WoxScreenshotController());
+    controller.displaySnapshots.assignAll([
+      DisplaySnapshot(
+        displayId: 'display-a',
+        logicalBounds: const ScreenshotRect(x: 0, y: 0, width: 800, height: 600),
+        pixelBounds: const ScreenshotRect(x: 0, y: 0, width: 800, height: 600),
+        scale: 1,
+        rotation: 0,
+        imageBytesBase64: _transparentPixelPngBase64,
+      ),
+    ]);
+    controller.virtualBounds.value = const ScreenshotRect(x: 0, y: 0, width: 800, height: 600);
+    controller.selection.value = const ScreenshotRect(x: 100, y: 100, width: 420, height: 160);
+    controller.stage.value = ScreenshotSessionStage.annotating;
+
+    await tester.pumpWidget(const GetMaterialApp(home: Material(child: SizedBox(width: 800, height: 600, child: WoxScreenshotView()))));
+    await tester.pumpAndSettle();
+
+    // Scrolling capture is a smoke-level toolbar check because the full workflow depends on native
+    // wheel input and live desktop capture. Verifying the action appears keeps the user-facing entry
+    // point covered without adding a brittle platform-specific integration test here.
+    expect(find.byKey(screenshotScrollingCaptureKey), findsOneWidget);
   });
 
   testWidgets('selected annotation edit bar falls back to the left side when the selection has no room on the right', (tester) async {

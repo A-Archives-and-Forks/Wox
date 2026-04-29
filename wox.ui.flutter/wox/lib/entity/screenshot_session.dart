@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:wox/entity/wox_image.dart';
 
-enum ScreenshotSessionStage { idle, loading, selecting, annotating, exporting, done, cancelled, failed }
+enum ScreenshotSessionStage { idle, loading, selecting, annotating, scrolling, exporting, done, cancelled, failed }
 
 enum ScreenshotTool { select, rect, ellipse, arrow, text }
 

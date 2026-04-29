@@ -3,6 +3,7 @@
 #include <cairo.h>
 #include <flutter_linux/flutter_linux.h>
 #include <gdk/gdk.h>
+#include <cstdlib>
 #include <math.h>
 #include <string>
 #include <stdarg.h>
@@ -1671,6 +1672,49 @@ static gboolean send_x11_mouse_button(GtkWindow *window, const std::string &butt
   XFlush(display);
   return TRUE;
 }
+
+static gboolean restore_x11_input_shape(gpointer data)
+{
+  gtk_widget_input_shape_combine_region(GTK_WIDGET(data), nullptr);
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean send_x11_mouse_scroll(GtkWindow *window, int delta_y)
+{
+  // X11 exposes wheel scrolling as virtual button clicks. Reusing that path gives scrolling
+  // capture the same behavior as a user wheel gesture without needing target-application APIs.
+  Display *display = get_x11_display(window);
+  if (display == nullptr)
+  {
+    return FALSE;
+  }
+
+  int steps = std::abs(delta_y);
+  if (steps == 0)
+  {
+    return TRUE;
+  }
+  if (steps > 20)
+  {
+    steps = 20;
+  }
+
+  const int button_id = delta_y > 0 ? Button5 : Button4;
+  cairo_region_t *empty_region = cairo_region_create();
+  // Flutter observes the wheel gesture to update the scrolling-preview model, then forwards it to
+  // the app underneath. Clearing the input shape briefly makes the XTest wheel buttons target the
+  // underlying window instead of Wox's fullscreen capture shell.
+  gtk_widget_input_shape_combine_region(GTK_WIDGET(window), empty_region);
+  cairo_region_destroy(empty_region);
+  for (int i = 0; i < steps; i++)
+  {
+    XTestFakeButtonEvent(display, button_id, True, CurrentTime);
+    XTestFakeButtonEvent(display, button_id, False, CurrentTime);
+  }
+  XFlush(display);
+  g_timeout_add(50, restore_x11_input_shape, window);
+  return TRUE;
+}
 #endif
 
 // Method channel handler
@@ -1887,6 +1931,37 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
     else
     {
       response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing arguments for mouse button input", nullptr));
+    }
+#else
+    response = FL_METHOD_RESPONSE(fl_method_error_response_new("UNSUPPORTED", "System mouse input is only implemented for X11 Linux sessions", nullptr));
+#endif
+  }
+  else if (strcmp(method, "inputMouseScroll") == 0)
+  {
+#ifdef GDK_WINDOWING_X11
+    if (fl_value_get_type(args) == FL_VALUE_TYPE_MAP)
+    {
+      FlValue *delta_y_value = fl_value_lookup_string(args, "deltaY");
+      if (delta_y_value != nullptr && fl_value_get_type(delta_y_value) == FL_VALUE_TYPE_FLOAT)
+      {
+        gboolean handled = send_x11_mouse_scroll(window, (int)round(fl_value_get_float(delta_y_value)));
+        if (handled)
+        {
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
+        }
+        else
+        {
+          response = FL_METHOD_RESPONSE(fl_method_error_response_new("INPUT_ERROR", "Failed to send X11 mouse scroll event", nullptr));
+        }
+      }
+      else
+      {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing scroll delta", nullptr));
+      }
+    }
+    else
+    {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", "Missing arguments for mouse scroll input", nullptr));
     }
 #else
     response = FL_METHOD_RESPONSE(fl_method_error_response_new("UNSUPPORTED", "System mouse input is only implemented for X11 Linux sessions", nullptr));

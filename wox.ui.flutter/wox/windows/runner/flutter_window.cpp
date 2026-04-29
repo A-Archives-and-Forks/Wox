@@ -648,6 +648,32 @@ static bool SendWindowsMouseButtonInput(DWORD mouse_flag)
   return SendInput(1, &input, sizeof(INPUT)) == 1;
 }
 
+static bool SendWindowsMouseWheelInput(int wheel_delta)
+{
+  // Scrolling capture needs to drive the window under the cursor after the Wox overlay hides. A
+  // wheel SendInput event matches normal user scrolling and avoids coupling the feature to UIA or
+  // browser-specific scroll APIs.
+  INPUT input = {};
+  input.type = INPUT_MOUSE;
+  input.mi.dwFlags = MOUSEEVENTF_WHEEL;
+  input.mi.mouseData = wheel_delta;
+  return SendInput(1, &input, sizeof(INPUT)) == 1;
+}
+
+static void SetWindowsMousePassthrough(HWND hwnd, bool enabled)
+{
+  LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+  if (enabled)
+  {
+    ex_style |= WS_EX_TRANSPARENT;
+  }
+  else
+  {
+    ex_style &= ~WS_EX_TRANSPARENT;
+  }
+  SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style);
+}
+
 FlutterWindow::FlutterWindow(const flutter::DartProject &project)
     : project_(project),
       original_window_proc_(nullptr),
@@ -1809,6 +1835,46 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       if (!SendWindowsMouseButtonInput(*mouse_flag))
       {
         result->Error("INPUT_ERROR", "Failed to send mouse button input");
+        return;
+      }
+
+      result->Success();
+    }
+    else if (method_name == "inputMouseScroll")
+    {
+      const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
+      if (arguments == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Missing arguments for mouse scroll");
+        return;
+      }
+
+      auto delta_y_it = arguments->find(flutter::EncodableValue("deltaY"));
+      if (delta_y_it == arguments->end())
+      {
+        result->Error("INVALID_ARGUMENTS", "Missing scroll delta");
+        return;
+      }
+
+      const double delta_y = std::get<double>(delta_y_it->second);
+      const int wheel_delta = -static_cast<int>(std::lround(delta_y * WHEEL_DELTA));
+      if (wheel_delta == 0)
+      {
+        result->Success();
+        return;
+      }
+
+      // The scrolling screenshot overlay receives the Flutter wheel event first for preview
+      // bookkeeping. Briefly marking Wox as transparent lets the forwarded wheel input hit the
+      // window underneath the selected rectangle instead of the topmost capture shell.
+      SetWindowsMousePassthrough(hwnd, true);
+      const bool sent = SendWindowsMouseWheelInput(wheel_delta);
+      Sleep(50);
+      SetWindowsMousePassthrough(hwnd, false);
+
+      if (!sent)
+      {
+        result->Error("INPUT_ERROR", "Failed to send mouse wheel input");
         return;
       }
 
