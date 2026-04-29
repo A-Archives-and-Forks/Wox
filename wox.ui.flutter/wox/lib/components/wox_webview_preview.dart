@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
@@ -26,8 +27,10 @@ class WoxWebViewPreview extends StatefulWidget {
 class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
   static const double _toolbarBottomSpacing = 60;
   static const double _toolbarHeight = 36;
-  static const double _toolbarWidth = 176;
-  static const double _toolbarTriggerWidth = 224;
+  // The toolbar now has four fixed-size controls. Keeping the width explicit preserves the centered
+  // floating shape while adding the external-browser action instead of letting Expanded handles shift it.
+  static const double _toolbarWidth = 208;
+  static const double _toolbarTriggerWidth = 256;
   static const double _toolbarTriggerHeight = 72;
   static const Duration _toolbarAnimationDuration = Duration(milliseconds: 180);
   static const Duration _toolbarAutoHideDelay = Duration(milliseconds: 1200);
@@ -259,6 +262,12 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
                               enabled: navigationState?.canGoForward,
                               onPressed: _goForward,
                             ),
+                            _buildToolbarButton(
+                              icon: Icons.open_in_browser_rounded,
+                              tooltip: launcherController.tr("ui_action_webview_open_in_browser"),
+                              iconColor: iconColor,
+                              onPressed: _openInBrowser,
+                            ),
                             Expanded(child: _buildToolbarDragHandle()),
                           ],
                         ),
@@ -345,6 +354,31 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
 
   void _goForward() {
     unawaited(WoxWebViewUtil.goForward());
+  }
+
+  void _openInBrowser() {
+    unawaited(_openCurrentUrlInBrowser());
+  }
+
+  Future<void> _openCurrentUrlInBrowser() async {
+    // WebView navigation can move away from the original preview URL. Prefer the platform-reported current
+    // URL and fall back to the preview data so cached/native views still have a usable browser escape hatch.
+    final currentUrl = await WoxWebViewUtil.getCurrentUrl();
+    final uri = _resolveExternalBrowserUri(currentUrl) ?? _resolveExternalBrowserUri(webviewData.url);
+    if (uri == null) {
+      return;
+    }
+
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Uri? _resolveExternalBrowserUri(String? url) {
+    final uri = Uri.tryParse(url?.trim() ?? "");
+    if (uri == null || uri.host.isEmpty || (uri.scheme != "http" && uri.scheme != "https")) {
+      return null;
+    }
+
+    return uri;
   }
 
   @override

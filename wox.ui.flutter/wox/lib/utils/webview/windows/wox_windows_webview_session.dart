@@ -21,6 +21,7 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
   Future<void>? _initialization;
   StreamSubscription<AcceleratorKeyPressedEvent>? _acceleratorKeySubscription;
   StreamSubscription<HistoryChanged>? _historyChangedSubscription;
+  StreamSubscription<String>? _urlSubscription;
   StreamSubscription<dynamic>? _webMessageSubscription;
   String _currentUrl = "";
   String _currentCss = "";
@@ -36,6 +37,8 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
 
   @override
   ValueListenable<WoxWebViewNavigationState> get navigationState => _navigationState;
+
+  String? get currentUrl => _currentUrl.trim().isEmpty ? null : _currentUrl;
 
   @override
   Widget buildWidget() => SizedBox.expand(child: Webview(controller));
@@ -120,6 +123,7 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
     _disposed = true;
     await _acceleratorKeySubscription?.cancel();
     await _historyChangedSubscription?.cancel();
+    await _urlSubscription?.cancel();
     await _webMessageSubscription?.cancel();
     await _actions.close();
     _navigationState.dispose();
@@ -138,6 +142,11 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
     });
     _historyChangedSubscription = controller.historyChanged.listen((event) {
       _navigationState.value = WoxWebViewNavigationState(canGoBack: event.canGoBack, canGoForward: event.canGoForward);
+    });
+    _urlSubscription = controller.url.listen((url) {
+      // The floating toolbar opens the current page in the system browser. Preview data only contains the
+      // initial URL, so track WebView navigation events here and expose that simple state through the platform wrapper.
+      _currentUrl = url;
     });
     _webMessageSubscription = controller.webMessage.listen((message) {
       if (message is! Map) {

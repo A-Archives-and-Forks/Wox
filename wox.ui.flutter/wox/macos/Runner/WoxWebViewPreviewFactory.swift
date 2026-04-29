@@ -116,15 +116,44 @@ class WoxWebViewPreviewPlugin: NSObject {
 
   static func openInspector() -> Bool {
     guard let activeWebView else {
+      NSLog("WoxWebViewPreviewPlugin.openInspector skipped: no active WKWebView")
       return false
     }
 
-    let showInspectorSelector = Selector(("_showWebInspector"))
+    if #available(macOS 13.3, *) {
+      // Newer WebKit defaults embedded WKWebView inspection to disabled. Re-applying this on the active
+      // view makes cached views and views created before this action follow the same inspectable path.
+      activeWebView.isInspectable = true
+    }
+
+    // The public isInspectable flag only exposes the view to Safari's Develop menu. Wox's action is
+    // expected to open the inspector directly, so WebKit's private developer extras flag is still needed.
+    activeWebView.configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+
+    if let inspector = activeWebView.value(forKey: "_inspector") as? NSObject {
+      let showSelector = NSSelectorFromString("show")
+      if inspector.responds(to: showSelector) {
+        inspector.perform(showSelector)
+
+        let detachSelector = NSSelectorFromString("detach")
+        if inspector.responds(to: detachSelector) {
+          // Detached inspector windows are more reliable for Wox's small, frequently resized preview
+          // panel than the inline inspector that WebKit may otherwise try to embed in the WKWebView.
+          inspector.perform(detachSelector)
+        }
+        NSLog("WoxWebViewPreviewPlugin.openInspector opened via _inspector")
+        return true
+      }
+    }
+
+    let showInspectorSelector = NSSelectorFromString("_showWebInspector")
     guard activeWebView.responds(to: showInspectorSelector) else {
+      NSLog("WoxWebViewPreviewPlugin.openInspector failed: WKWebView has no supported inspector selector")
       return false
     }
 
     activeWebView.perform(showInspectorSelector)
+    NSLog("WoxWebViewPreviewPlugin.openInspector opened via _showWebInspector")
     return true
   }
 
@@ -153,6 +182,12 @@ class WoxWebViewPreviewPlugin: NSObject {
 
     activeWebView.goForward()
     return true
+  }
+
+  static func getCurrentUrl() -> String? {
+    // Flutter preview data only records the original URL. Reading WKWebView.url keeps the external-browser
+    // toolbar action aligned with in-page navigation without adding another delegate state cache on macOS.
+    return activeWebView?.url?.absoluteString
   }
 
   static func clearState() -> Bool {

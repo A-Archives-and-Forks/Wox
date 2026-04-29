@@ -39,6 +39,10 @@ class WoxWebViewUtil {
     return (await _platform?.goForward()) ?? false;
   }
 
+  static Future<String?> getCurrentUrl() async {
+    return _platform?.getCurrentUrl();
+  }
+
   static Future<bool> clearState() async {
     return (await _platform?.clearState()) ?? false;
   }

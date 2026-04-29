@@ -67,6 +67,11 @@ class WoxWindowsWebViewPlatform implements WoxWebViewPlatform {
   }
 
   @override
+  Future<String?> getCurrentUrl() async {
+    return _activeSession?.currentUrl;
+  }
+
+  @override
   Future<bool> clearState() async {
     final session = _activeSession;
     if (session == null) {

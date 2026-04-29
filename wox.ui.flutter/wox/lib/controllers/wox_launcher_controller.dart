@@ -766,8 +766,14 @@ class WoxLauncherController extends GetxController {
           name: tr("ui_action_webview_open_inspector"),
           hotkey: previewInspectorHotkey,
           emoji: "🧰",
-          handler: (_) {
-            unawaited(WoxWebViewUtil.openInspector());
+          handler: (traceId) {
+            // Log the native result because macOS WebKit can reject programmatic inspector opening without
+            // throwing through MethodChannel. The previous fire-and-forget call made that failure invisible.
+            unawaited(
+              WoxWebViewUtil.openInspector()
+                  .then((opened) => Logger.instance.debug(traceId, "open webview inspector result: $opened"))
+                  .catchError((err, stack) => Logger.instance.error(traceId, "open webview inspector failed: $err")),
+            );
             return true;
           },
         ),
