@@ -1671,7 +1671,7 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 		}
 	}
 
-	result.Tails = appendDevScoreTail(result.Tails, result.Score)
+	// result.Tails = appendDevScoreTail(result.Tails, result.Score)
 
 	// Create cache at the end
 	resultCopy := result
@@ -1849,7 +1849,7 @@ func (m *Manager) PolishUpdatableResult(ctx context.Context, pluginInstance *Ins
 			}
 		}
 
-		tails = appendDevScoreTail(tails, resultCache.Result.Score)
+		// tails = appendDevScoreTail(tails, resultCache.Result.Score)
 
 		result.Tails = &tails
 		resultCache.Result.Tails = tails
