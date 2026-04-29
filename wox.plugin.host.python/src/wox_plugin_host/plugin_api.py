@@ -13,7 +13,6 @@ from wox_plugin import (
     LogLevel,
     MetadataCommand,
     MRUData,
-    ToolbarMsg,
     PluginSettingDefinitionItem,
     PublicAPI,
     Query,
@@ -22,6 +21,7 @@ from wox_plugin import (
     ResultActionType,
     ScreenshotOption,
     ScreenshotResult,
+    ToolbarMsg,
     UpdatableResult,
     WoxImage,
 )
@@ -358,12 +358,16 @@ class PluginAPI(PublicAPI):
 
     async def screenshot(self, ctx: Context, option: ScreenshotOption) -> ScreenshotResult:
         """Start the built-in screenshot workflow."""
+        # The Python SDK exposes snake_case dataclass fields, while core accepts the public JSON
+        # option names. Serializing through to_dict keeps future screenshot fields explicit instead
+        # of silently dropping everything at the host boundary.
+        option_payload = option.to_dict() if hasattr(option, "to_dict") else {}
         response = await self.invoke_method(
             ctx,
             "Screenshot",
             {
                 # Keep options as one JSON object so future fields do not change the method signature.
-                "option": json.dumps({}),
+                "option": json.dumps(option_payload),
             },
         )
 

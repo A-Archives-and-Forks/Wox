@@ -158,6 +158,14 @@ type CaptureScreenshotRequest struct {
 	Output         string   `json:"output"`
 	Tools          []string `json:"tools"`
 	ExportFilePath string   `json:"exportFilePath"`
+	// HideAnnotationToolbar is an API-facing simplification for plugins that only need a selected
+	// image region. The previous toolbar always exposed markup controls, which slowed down raw OCR
+	// style workflows and implied annotation support the caller would ignore.
+	HideAnnotationToolbar bool `json:"hideAnnotationToolbar"`
+	// AutoConfirm lets capture-only plugins finish on mouse-up after a valid rectangle is selected.
+	// It reuses the normal confirm/export path so file output, clipboard behavior, and cleanup stay
+	// identical to an explicit confirm button press.
+	AutoConfirm bool `json:"autoConfirm"`
 	// CallerIcon is set only by plugin-originated screenshot API calls. The previous request did not
 	// carry caller identity, so Flutter could not visually distinguish a third-party capture from the
 	// built-in Wox screenshot flow; passing the already-resolved icon keeps that decision in Go.

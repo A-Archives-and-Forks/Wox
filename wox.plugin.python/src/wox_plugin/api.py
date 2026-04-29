@@ -23,9 +23,20 @@ from .models.toolbar_msg import ToolbarMsg
 class ScreenshotOption:
     """
     Options for the built-in screenshot workflow.
-
-    The object shape is reserved for future screenshot fields.
     """
+
+    hide_annotation_toolbar: bool = False
+    auto_confirm: bool = False
+
+    def to_dict(self) -> Dict[str, bool]:
+        """
+        Convert Pythonic field names to the public API JSON fields expected by Wox core.
+        """
+
+        return {
+            "HideAnnotationToolbar": self.hide_annotation_toolbar,
+            "AutoConfirm": self.auto_confirm,
+        }
 
 
 @dataclass

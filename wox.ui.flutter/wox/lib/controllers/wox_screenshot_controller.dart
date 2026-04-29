@@ -300,6 +300,14 @@ class WoxScreenshotController extends GetxController {
     // That removes the visible "loading / resize / repaint" gap that used to appear after mouse-up.
     await WidgetsBinding.instance.endOfFrame;
     await ScreenshotPlatformBridge.instance.dismissNativeSelectionOverlays();
+    if (_activeRequest?.autoConfirm == true) {
+      // Auto-confirm still waits until Flutter owns the normalized selection and decoded workspace.
+      // Exporting through confirmSelection keeps plugin API captures on the same file-output path as
+      // a manual confirm while skipping the now-unnecessary annotation toolbar stopover.
+      final sessionFuture = _sessionFutureOrCancelled();
+      unawaited(confirmSelection(traceId));
+      return sessionFuture;
+    }
     return _sessionFutureOrCancelled();
   }
 

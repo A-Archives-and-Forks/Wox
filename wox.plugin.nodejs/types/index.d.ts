@@ -1169,10 +1169,17 @@ export interface CopyParams {
 
 /**
  * Options for the built-in screenshot workflow.
- *
- * The object shape is reserved for future screenshot fields.
  */
-export interface ScreenshotOption {}
+export interface ScreenshotOption {
+  /**
+   * Hide annotation tools and keep only caller identity, cancel, and confirm controls.
+   */
+  HideAnnotationToolbar?: boolean
+  /**
+   * Complete the screenshot automatically after the user finishes drawing a valid selection.
+   */
+  AutoConfirm?: boolean
+}
 
 /**
  * Result of a plugin-triggered screenshot workflow.

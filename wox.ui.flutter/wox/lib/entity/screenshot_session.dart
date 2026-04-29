@@ -182,6 +182,8 @@ class CaptureScreenshotRequest {
     required this.output,
     required this.tools,
     required this.exportFilePath,
+    required this.hideAnnotationToolbar,
+    required this.autoConfirm,
     this.callerIcon,
   });
 
@@ -191,6 +193,8 @@ class CaptureScreenshotRequest {
   final String output;
   final List<String> tools;
   final String exportFilePath;
+  final bool hideAnnotationToolbar;
+  final bool autoConfirm;
   final WoxImage? callerIcon;
 
   factory CaptureScreenshotRequest.fromJson(Map<String, dynamic> json) {
@@ -201,6 +205,8 @@ class CaptureScreenshotRequest {
       output: json['Output'] as String? ?? json['output'] as String? ?? 'clipboard',
       tools: ((json['Tools'] ?? json['tools']) as List<dynamic>? ?? const []).map((tool) => tool.toString()).toList(),
       exportFilePath: json['ExportFilePath'] as String? ?? json['exportFilePath'] as String? ?? '',
+      hideAnnotationToolbar: json['HideAnnotationToolbar'] as bool? ?? json['hideAnnotationToolbar'] as bool? ?? false,
+      autoConfirm: json['AutoConfirm'] as bool? ?? json['autoConfirm'] as bool? ?? false,
       callerIcon: _parseOptionalWoxImage(json['CallerIcon'] ?? json['callerIcon']),
     );
   }
@@ -213,6 +219,8 @@ class CaptureScreenshotRequest {
       'output': output,
       'tools': tools,
       'exportFilePath': exportFilePath,
+      'hideAnnotationToolbar': hideAnnotationToolbar,
+      'autoConfirm': autoConfirm,
       if (callerIcon != null) 'callerIcon': callerIcon!.toJson(),
     };
   }

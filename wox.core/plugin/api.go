@@ -194,7 +194,16 @@ type CopyParams struct {
 }
 
 // ScreenshotOption controls optional screenshot behavior.
-type ScreenshotOption struct{}
+type ScreenshotOption struct {
+	// HideAnnotationToolbar keeps plugin capture flows focused on raw image selection when callers,
+	// such as OCR plugins, do not need Wox's markup tools. Cancel and confirm remain visible so the
+	// user still has an explicit escape/finish path when AutoConfirm is not requested.
+	HideAnnotationToolbar bool `json:"hideAnnotationToolbar"`
+	// AutoConfirm completes the screenshot as soon as the user finishes drawing the selection.
+	// The previous API always required a manual confirm click, which is unnecessary for callers that
+	// only need the selected PNG path and do their own processing after capture.
+	AutoConfirm bool `json:"autoConfirm"`
+}
 
 // ScreenshotResult reports the screenshot capture outcome and saved PNG path.
 type ScreenshotResult struct {
@@ -575,6 +584,10 @@ func (a *APIImpl) Screenshot(ctx context.Context, option ScreenshotOption) Scree
 	request := common.DefaultCaptureScreenshotRequest()
 	// Plugin screenshots return a saved file path and leave clipboard handling to the caller.
 	request.Output = "file"
+	// Screenshot API options are translated in core where the plugin caller is known. Keeping Flutter
+	// on a request-only contract avoids making the UI infer SDK defaults from plugin runtime details.
+	request.HideAnnotationToolbar = option.HideAnnotationToolbar
+	request.AutoConfirm = option.AutoConfirm
 	if !a.pluginInstance.IsSystemPlugin {
 		// Third-party screenshot callers need a visible identity marker in the floating toolbox.
 		// The UI cannot reliably infer the plugin from the generic CaptureScreenshot websocket method,

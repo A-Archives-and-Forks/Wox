@@ -139,6 +139,23 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     return true;
   }
 
+  void _confirmSelectionFromAutoConfirm() {
+    final selectionRect = controller.selectionRect;
+    if (_isConfirmingSession || !controller.isSessionActive.value || selectionRect == null || selectionRect.width < 1 || selectionRect.height < 1) {
+      return;
+    }
+
+    // AutoConfirm is intentionally wired to the same controller method as the confirm button. The
+    // old plugin flow forced a second click even when no annotation was desired; this keeps export
+    // cleanup identical while letting capture-only API callers finish on mouse-up.
+    _isConfirmingSession = true;
+    controller.confirmSelection(const UuidV4().generate()).whenComplete(() {
+      if (mounted) {
+        _isConfirmingSession = false;
+      }
+    });
+  }
+
   void _startScrollingSelectionFromToolbar() {
     if (_isScrollingCaptureSession || !controller.isSessionActive.value || controller.selectionRect == null) {
       return;
@@ -216,6 +233,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
 
     final isScrollingCapture = controller.stage.value == ScreenshotSessionStage.scrolling;
     final scrollingSelectionLocalRect = isScrollingCapture ? controller.selectionRect?.shift(-virtualBounds.topLeft) : null;
+    final hideSessionChrome = controller.activeRequest?.autoConfirm ?? false;
 
     return Stack(
       children: [
@@ -293,8 +311,13 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         // swatch or action button also triggered the workspace tap handler and cleared the current
         // annotation selection first. Lifting those overlays above the gesture layer keeps their
         // controls interactive without letting canvas hit-testing cancel the active edit target.
-        Obx(() => _buildToolbar(context, controller.selectionRect, virtualBounds)),
-        Obx(() => _buildEditBar(virtualBounds)),
+        if (!hideSessionChrome) ...[
+          // AutoConfirm sessions should complete as soon as the rectangle is chosen. The previous
+          // implementation still built the overlay controls for one frame before confirmSelection
+          // hid the window, which made the toolbar flash even though the user never needed it.
+          Obx(() => _buildToolbar(context, controller.selectionRect, virtualBounds)),
+          Obx(() => _buildEditBar(virtualBounds)),
+        ],
       ],
     );
   }
@@ -403,6 +426,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     final canConfirm = selectionRect != null && selectionRect.width >= 1 && selectionRect.height >= 1 && (!isScrollingCapture || controller.scrollingCaptureFrames.isNotEmpty);
     final selectionLocalRect = selectionRect?.shift(-virtualBounds.topLeft);
     final creationColor = controller.annotationCreationColor.value;
+    final hideAnnotationToolbar = controller.activeRequest?.hideAnnotationToolbar ?? false;
 
     return Positioned.fill(
       child: CustomSingleChildLayout(
@@ -430,57 +454,62 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                   _CallerIcon(icon: controller.activeRequest!.callerIcon!),
                   const SizedBox(width: 10),
                 ],
-                _ToolButton(
-                  key: screenshotToolSelectKey,
-                  icon: Icons.select_all,
-                  selected: currentTool == ScreenshotTool.select,
-                  activateOnTapDown: true,
-                  onPressed: () => controller.setTool(ScreenshotTool.select),
-                ),
-                _ToolButton(
-                  key: screenshotToolRectKey,
-                  icon: Icons.crop_square,
-                  selected: currentTool == ScreenshotTool.rect,
-                  activateOnTapDown: true,
-                  onPressed: () => controller.setTool(ScreenshotTool.rect),
-                ),
-                _ToolButton(
-                  key: screenshotToolEllipseKey,
-                  icon: Icons.circle_outlined,
-                  selected: currentTool == ScreenshotTool.ellipse,
-                  activateOnTapDown: true,
-                  onPressed: () => controller.setTool(ScreenshotTool.ellipse),
-                ),
-                _ToolButton(
-                  key: screenshotToolTextKey,
-                  icon: Icons.text_fields,
-                  selected: currentTool == ScreenshotTool.text,
-                  activateOnTapDown: true,
-                  onPressed: () => controller.setTool(ScreenshotTool.text),
-                ),
-                _ToolButton(
-                  key: screenshotToolArrowKey,
-                  icon: Icons.north_east,
-                  selected: currentTool == ScreenshotTool.arrow,
-                  activateOnTapDown: true,
-                  onPressed: () => controller.setTool(ScreenshotTool.arrow),
-                ),
-                const SizedBox(width: 10),
-                _buildColorPalette(selectedColor: creationColor, onColorSelected: controller.setAnnotationCreationColor, compact: true),
-                const SizedBox(width: 6),
-                _ToolButton(key: screenshotUndoKey, icon: Icons.undo, enabled: controller.annotations.isNotEmpty, onPressed: controller.undoAnnotation),
-                const SizedBox(width: 6),
-                // Scrolling capture is exposed as a selection action instead of a drawing tool
-                // because it exports a stitched live page after Wox hides, so keeping it beside
-                // confirm/cancel matches the point where the selected region becomes final.
-                _ToolButton(
-                  key: screenshotScrollingCaptureKey,
-                  icon: Icons.vertical_align_bottom,
-                  color: const Color(0xFF4DA3FF),
-                  selected: isScrollingCapture,
-                  enabled: selectionRect != null && !_isScrollingCaptureSession && !isScrollingCapture,
-                  onPressed: selectionRect != null ? _startScrollingSelectionFromToolbar : null,
-                ),
+                if (!hideAnnotationToolbar) ...[
+                  // Plugin callers can hide markup controls for raw capture workflows. Confirm and
+                  // cancel stay outside this branch because even simplified API sessions still need
+                  // an explicit user-controlled finish path when AutoConfirm is disabled.
+                  _ToolButton(
+                    key: screenshotToolSelectKey,
+                    icon: Icons.select_all,
+                    selected: currentTool == ScreenshotTool.select,
+                    activateOnTapDown: true,
+                    onPressed: () => controller.setTool(ScreenshotTool.select),
+                  ),
+                  _ToolButton(
+                    key: screenshotToolRectKey,
+                    icon: Icons.crop_square,
+                    selected: currentTool == ScreenshotTool.rect,
+                    activateOnTapDown: true,
+                    onPressed: () => controller.setTool(ScreenshotTool.rect),
+                  ),
+                  _ToolButton(
+                    key: screenshotToolEllipseKey,
+                    icon: Icons.circle_outlined,
+                    selected: currentTool == ScreenshotTool.ellipse,
+                    activateOnTapDown: true,
+                    onPressed: () => controller.setTool(ScreenshotTool.ellipse),
+                  ),
+                  _ToolButton(
+                    key: screenshotToolTextKey,
+                    icon: Icons.text_fields,
+                    selected: currentTool == ScreenshotTool.text,
+                    activateOnTapDown: true,
+                    onPressed: () => controller.setTool(ScreenshotTool.text),
+                  ),
+                  _ToolButton(
+                    key: screenshotToolArrowKey,
+                    icon: Icons.north_east,
+                    selected: currentTool == ScreenshotTool.arrow,
+                    activateOnTapDown: true,
+                    onPressed: () => controller.setTool(ScreenshotTool.arrow),
+                  ),
+                  const SizedBox(width: 10),
+                  _buildColorPalette(selectedColor: creationColor, onColorSelected: controller.setAnnotationCreationColor, compact: true),
+                  const SizedBox(width: 6),
+                  _ToolButton(key: screenshotUndoKey, icon: Icons.undo, enabled: controller.annotations.isNotEmpty, onPressed: controller.undoAnnotation),
+                  const SizedBox(width: 6),
+                  // Scrolling capture is exposed as a selection action instead of a drawing tool
+                  // because it exports a stitched live page after Wox hides, so keeping it beside
+                  // confirm/cancel matches the point where the selected region becomes final.
+                  _ToolButton(
+                    key: screenshotScrollingCaptureKey,
+                    icon: Icons.vertical_align_bottom,
+                    color: const Color(0xFF4DA3FF),
+                    selected: isScrollingCapture,
+                    enabled: selectionRect != null && !_isScrollingCaptureSession && !isScrollingCapture,
+                    onPressed: selectionRect != null ? _startScrollingSelectionFromToolbar : null,
+                  ),
+                ],
                 _ToolButton(
                   key: screenshotCancelKey,
                   icon: Icons.close,
@@ -903,6 +932,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   void _handlePanEnd() {
     final interactionMode = _interactionMode;
     final needsOverlayRefresh = interactionMode == _InteractionMode.createAnnotation;
+    final shouldAutoConfirmSelection = interactionMode == _InteractionMode.createSelection && (controller.activeRequest?.autoConfirm ?? false);
 
     if (interactionMode == _InteractionMode.createAnnotation && _annotationStart != null && _annotationEnd != null) {
       // Freshly drawn annotations now stay unselected by default. Auto-selecting every new mark
@@ -936,6 +966,9 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     _annotationAtDragStart = null;
     if (needsOverlayRefresh) {
       setState(() {});
+    }
+    if (shouldAutoConfirmSelection) {
+      _confirmSelectionFromAutoConfirm();
     }
   }
 
