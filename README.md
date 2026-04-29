@@ -10,8 +10,6 @@ It is a practical alternative to [Alfred](https://www.alfredapp.com/) and [Rayca
 
 ![Wox screenshot](https://raw.githubusercontent.com/Wox-launcher/Wox/master/screenshots/poster.png)
 
-[View screenshots](https://github.com/Wox-launcher/Wox/tree/master/screenshots)
-
 ## Highlights
 
 - Search and launch applications, files, folders, and commands
