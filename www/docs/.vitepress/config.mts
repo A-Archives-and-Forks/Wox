@@ -14,7 +14,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: "Home", link: "/" },
-          { text: "Guide", link: "/guide/installation" },
+          { text: "Guide", link: "/guide/introduction" },
           { text: "Development", link: "/development/setup" },
           { text: "Blog", link: "/blog/" },
           { text: "Plugin Store", link: "/store/plugins" },
@@ -119,7 +119,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: "首页", link: "/zh/" },
-          { text: "指南", link: "/zh/guide/installation" },
+          { text: "指南", link: "/zh/guide/introduction" },
           { text: "开发", link: "/zh/development/setup" },
           { text: "博客", link: "/zh/blog/" },
           { text: "插件商店", link: "/zh/store/plugins" },
@@ -130,6 +130,7 @@ export default defineConfig({
             {
               text: "指南",
               items: [
+                { text: "简介", link: "/zh/guide/introduction" },
                 { text: "安装", link: "/zh/guide/installation" },
                 { text: "常见问题", link: "/zh/guide/faq" },
               ],

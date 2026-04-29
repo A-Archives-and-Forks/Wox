@@ -1,45 +1,42 @@
 # WebSearch Plugin
 
-WebSearch lets you run web searches with keyword shortcuts and a default fallback engine.
+WebSearch opens search URLs from Wox. It can work as a fallback result for normal text or through explicit engine keywords.
 
-## What it does
+## Quick Start
 
-- Keyword-based search engines
-- Default fallback search when no keyword matches
-- Selected-text search (uses fallback engines)
-- Auto-fetch icons for engines
-
-## Quick start
-
-```
+```text
 Wox Launcher
-→ Search with the default engine
-
 g Wox Launcher
-→ Search with Google
 ```
 
-## Settings
+The default configuration includes Google with the `g` keyword. Add more engines in plugin settings.
 
-Add engines in **WebSearch** settings:
+## Engine Settings
 
-- **Keyword**: shortcut (e.g., `g`)
-- **Title**: display name
-- **URL(s)**: use `{query}` placeholder
-- **Enabled**: show or hide the engine
-- **Default**: used when no keyword matches
+| Field | Use |
+| --- | --- |
+| Keyword | Shortcut typed before the query, such as `g` |
+| Title | Result label shown in Wox |
+| URL(s) | Search URL templates |
+| Enabled | Whether the engine appears |
+| Default | Whether the engine is used for fallback searches |
 
-### URL variables
+## URL Variables
 
-- `{query}` original text
-- `{lower_query}` lowercase
-- `{upper_query}` uppercase
+| Variable | Value |
+| --- | --- |
+| `{query}` | Original query text |
+| `{lower_query}` | Lowercase query text |
+| `{upper_query}` | Uppercase query text |
 
-### Multi-URL engine
+Example URL:
 
-If you provide multiple URLs, Wox opens them in sequence.
+```text
+https://www.google.com/search?q={query}
+```
 
-## Notes
+If an engine has multiple URLs, Wox opens each URL in order.
 
-- Selected-text search only shows fallback engines.
-- If nothing shows up, check **Enabled** and **Default** settings.
+## Selected Text
+
+When you trigger Wox on selected text, WebSearch can show fallback engines for that selection. This is useful for quickly searching an error message, symbol, or phrase from another app.
