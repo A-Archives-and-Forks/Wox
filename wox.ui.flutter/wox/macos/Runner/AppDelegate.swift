@@ -51,6 +51,27 @@ private func screenshotWindowLevel() -> NSWindow.Level {
   return max(.screenSaver, shieldingLevel)
 }
 
+private func scrollingCaptureControlsWindowLevel() -> NSWindow.Level {
+  // The scrolling mask and the compact Flutter preview are separate windows. Keeping them at the
+  // exact same level made the initial AppKit ordering depend on focus events, so the preview could
+  // stay visually under the mask until the user clicked. Put controls one level above the passive
+  // mask while keeping both in the screenshot overlay range.
+  return NSWindow.Level(rawValue: screenshotWindowLevel().rawValue + 1)
+}
+
+private func applyScreenshotWindowPresentation(to window: NSWindow, level: NSWindow.Level) {
+  window.collectionBehavior = screenshotCollectionBehavior()
+  if let panel = window as? NSPanel {
+    panel.hidesOnDeactivate = false
+    panel.becomesKeyOnlyIfNeeded = false
+    // AppKit resets an NSPanel back to a normal/floating level when `isFloatingPanel` changes. Put
+    // panel flags before the final level assignment so scrolling preview controls are not pushed
+    // behind the passive mask until a user click reorders the window.
+    panel.isFloatingPanel = false
+  }
+  window.level = level
+}
+
 private func screenshotCollectionBehavior() -> NSWindow.CollectionBehavior {
   // The native selector already relied on fullscreen auxiliary behavior to coexist with fullscreen
   // apps. Reusing that exact behavior for the prepared Flutter workspace avoids downgrading the
@@ -586,14 +607,12 @@ private final class ScrollingCaptureOverlaySession {
     controlsWindow.contentView?.needsLayout = true
     controlsWindow.contentView?.layoutSubtreeIfNeeded()
     controlsWindow.displayIfNeeded()
-    controlsWindow.collectionBehavior = screenshotCollectionBehavior()
-    controlsWindow.level = screenshotWindowLevel()
-    if let panel = controlsWindow as? NSPanel {
-      panel.hidesOnDeactivate = false
-      panel.becomesKeyOnlyIfNeeded = false
-      panel.isFloatingPanel = false
-    }
+    applyScreenshotWindowPresentation(to: controlsWindow, level: scrollingCaptureControlsWindowLevel())
+    controlsWindow.orderFrontRegardless()
     controlsWindow.makeKeyAndOrderFront(nil)
+    // Ordering can cause AppKit to reconsider NSPanel presentation, so reassert the explicit
+    // scrolling-preview level after fronting the window as well as before it.
+    controlsWindow.level = scrollingCaptureControlsWindowLevel()
     NSApp.activate(ignoringOtherApps: true)
   }
 
@@ -1473,12 +1492,13 @@ class AppDelegate: FlutterAppDelegate {
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
       if wasVisible {
-        if let panel = window as? NSPanel {
-          panel.isFloatingPanel = false
-        }
-        window.collectionBehavior = screenshotCollectionBehavior()
-        window.level = screenshotWindowLevel()
+        let restoreLevel = self.activeScrollingCaptureOverlaySession == nil ? screenshotWindowLevel() : scrollingCaptureControlsWindowLevel()
+        applyScreenshotWindowPresentation(to: window, level: restoreLevel)
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
+        // Match the initial reveal path: after synthetic scrolling, AppKit may restore panel
+        // defaults while the window is reinserted, so keep the final level explicit.
+        window.level = restoreLevel
         NSApp.activate(ignoringOtherApps: true)
       }
     }
