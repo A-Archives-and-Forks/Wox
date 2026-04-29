@@ -10,6 +10,8 @@ abstract class WoxWebViewPlatform {
 
   Future<bool> goForward();
 
+  Future<bool> clearState();
+
   Future<WoxWebViewSession?> acquireSession(WoxPreviewWebviewData previewData);
 
   Future<void> releaseSession(WoxWebViewSession? session);

@@ -391,6 +391,15 @@ class WebviewController extends ValueNotifier<WebviewValue> {
     return _methodChannel.invokeMethod('clearCache');
   }
 
+  /// Clears persistent storage such as localStorage, IndexedDB and service worker data for a single origin.
+  Future<void> clearStorageForOrigin(String origin) async {
+    if (_isDisposed) {
+      return;
+    }
+    assert(value.isInitialized);
+    return _methodChannel.invokeMethod('clearStorageForOrigin', origin);
+  }
+
   /// Toggles ignoring cache for each request. If true, cache will not be used.
   Future<void> setCacheDisabled(bool disabled) async {
     if (_isDisposed) {

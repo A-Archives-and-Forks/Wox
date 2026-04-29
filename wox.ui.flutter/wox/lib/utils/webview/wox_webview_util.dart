@@ -39,6 +39,10 @@ class WoxWebViewUtil {
     return (await _platform?.goForward()) ?? false;
   }
 
+  static Future<bool> clearState() async {
+    return (await _platform?.clearState()) ?? false;
+  }
+
   static Stream<void> get unhandledEscape {
     if (Platform.isMacOS) {
       return _macosPlatform.unhandledEscape;

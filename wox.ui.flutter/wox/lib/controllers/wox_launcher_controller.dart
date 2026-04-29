@@ -66,6 +66,7 @@ class WoxLauncherController extends GetxController {
   static const String localActionWebViewRefreshId = "__local_webview_refresh__";
   static const String localActionWebViewBackId = "__local_webview_back__";
   static const String localActionWebViewForwardId = "__local_webview_forward__";
+  static const String localActionWebViewClearStateId = "__local_webview_clear_state__";
 
   //query related variables
   final currentQuery = PlainQuery.empty().obs;
@@ -722,7 +723,7 @@ class WoxLauncherController extends GetxController {
       );
     }
 
-    if (Platform.isMacOS && currentPreview.value.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_WEBVIEW.code) {
+    if ((Platform.isMacOS || Platform.isWindows) && currentPreview.value.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_WEBVIEW.code) {
       actions.add(
         WoxResultAction.local(
           id: localActionWebViewRefreshId,
@@ -767,6 +768,18 @@ class WoxLauncherController extends GetxController {
           emoji: "🧰",
           handler: (_) {
             unawaited(WoxWebViewUtil.openInspector());
+            return true;
+          },
+        ),
+      );
+      actions.add(
+        WoxResultAction.local(
+          id: localActionWebViewClearStateId,
+          name: tr("ui_action_webview_clear_state"),
+          hotkey: "",
+          emoji: "🧹",
+          handler: (_) {
+            unawaited(WoxWebViewUtil.clearState());
             return true;
           },
         ),

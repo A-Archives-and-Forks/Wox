@@ -1026,6 +1026,7 @@
   "ui_action_webview_go_back": "后退",
   "ui_action_webview_go_forward": "前进",
   "ui_action_webview_open_inspector": "打开检查器",
+  "ui_action_webview_clear_state": "清除网页状态",
   "ui_no_matches": "无匹配结果",
   "selection_copy": "复制",
   "selection_copy_to_clipboard": "复制到剪贴板",

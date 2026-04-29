@@ -42,6 +42,7 @@ constexpr auto kMethodClearVirtualHostNameMapping =
     "clearVirtualHostNameMapping";
 constexpr auto kMethodClearCookies = "clearCookies";
 constexpr auto kMethodClearCache = "clearCache";
+constexpr auto kMethodClearStorageForOrigin = "clearStorageForOrigin";
 constexpr auto kMethodSetCacheDisabled = "setCacheDisabled";
 constexpr auto kMethodSetPopupWindowPolicy = "setPopupWindowPolicy";
 constexpr auto kMethodSetFpsLimit = "setFpsLimit";
@@ -666,6 +667,16 @@ void WebviewBridge::HandleMethodCall(
       return result->Success();
     }
     return result->Error(kMethodFailed);
+  }
+
+  // clearStorageForOrigin: string
+  if (method_name.compare(kMethodClearStorageForOrigin) == 0) {
+    if (const auto origin = std::get_if<std::string>(method_call.arguments())) {
+      if (webview_->ClearStorageForOrigin(*origin)) {
+        return result->Success();
+      }
+    }
+    return result->Error(kErrorInvalidArgs);
   }
 
   // setCacheDisabled: bool

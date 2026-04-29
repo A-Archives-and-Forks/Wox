@@ -48,6 +48,14 @@ private final class WoxCachedWebViewEntry {
 private enum WoxWebViewStore {
   private static var entries: [String: WoxCachedWebViewEntry] = [:]
 
+  static func removeEntry(cacheKey: String?) {
+    guard let normalizedKey = cacheKey?.trimmingCharacters(in: .whitespacesAndNewlines), !normalizedKey.isEmpty else {
+      return
+    }
+
+    entries.removeValue(forKey: normalizedKey)
+  }
+
   static func resolveWebView(for request: WoxWebViewPreviewRequest) -> (webView: WKWebView, shouldReload: Bool) {
     guard request.hasCache else {
       return (makeWebView(for: request), true)
@@ -80,6 +88,8 @@ private enum WoxWebViewStore {
     if #available(macOS 13.3, *) {
       webView.isInspectable = true
     }
+    // Preserve the plugin's mobile-preview behavior. Clearing site state is now a separate reset action, so existing sites
+    // keep their mobile layout while users still have a way to recover from stale login/session storage.
     webView.customUserAgent = mobileUserAgent
     return webView
   }
@@ -87,6 +97,7 @@ private enum WoxWebViewStore {
 
 class WoxWebViewPreviewPlugin: NSObject {
   private static weak var activeWebView: WKWebView?
+  private static var activeCacheKey: String?
   private static var methodChannel: FlutterMethodChannel?
 
   static func register(with registrar: FlutterPluginRegistrar) {
@@ -98,8 +109,9 @@ class WoxWebViewPreviewPlugin: NSObject {
     methodChannel = channel
   }
 
-  static func setActiveWebView(_ webView: WKWebView) {
+  static func setActiveWebView(_ webView: WKWebView, cacheKey: String?) {
     activeWebView = webView
+    activeCacheKey = cacheKey
   }
 
   static func openInspector() -> Bool {
@@ -140,6 +152,37 @@ class WoxWebViewPreviewPlugin: NSObject {
     }
 
     activeWebView.goForward()
+    return true
+  }
+
+  static func clearState() -> Bool {
+    guard let activeWebView else {
+      return false
+    }
+
+    guard let targetURL = activeWebView.url, let targetHost = targetURL.host?.lowercased() else {
+      return false
+    }
+
+    let dataStore = activeWebView.configuration.websiteDataStore
+    let dataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+    WoxWebViewStore.removeEntry(cacheKey: activeCacheKey)
+
+    // Clearing only cookies/cache is not enough for modern login flows. WKWebsiteDataStore records include IndexedDB,
+    // local storage, service workers and cache storage, so clear the current host group before forcing a fresh bootstrap.
+    dataStore.fetchDataRecords(ofTypes: dataTypes) { records in
+      let matchingRecords = records.filter { record in
+        let displayName = record.displayName.lowercased()
+        return displayName == targetHost || displayName.hasSuffix(".\(targetHost)") || targetHost.hasSuffix(".\(displayName)")
+      }
+
+      dataStore.removeData(ofTypes: dataTypes, for: matchingRecords) {
+        DispatchQueue.main.async {
+          activeWebView.stopLoading()
+          activeWebView.load(URLRequest(url: targetURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData))
+        }
+      }
+    }
     return true
   }
 
@@ -189,7 +232,7 @@ final class WoxWebViewPreviewNativeView: NSView, WKNavigationDelegate, WKUIDeleg
     webView = resolved.webView
     super.init(frame: frameRect)
 
-    WoxWebViewPreviewPlugin.setActiveWebView(webView)
+    WoxWebViewPreviewPlugin.setActiveWebView(webView, cacheKey: request.hasCache ? request.cacheKey : nil)
     webView.navigationDelegate = self
     webView.uiDelegate = self
     webView.autoresizingMask = [.width, .height]

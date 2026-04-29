@@ -71,6 +71,46 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
     }
   }
 
+  Future<bool> clearState() async {
+    if (_disposed) {
+      return false;
+    }
+
+    await ensureInitialized();
+    final targetUrl = _currentUrl;
+    if (targetUrl.isEmpty) {
+      return false;
+    }
+
+    final origin = _resolveHttpOrigin(targetUrl);
+    if (origin == null || origin == "null") {
+      return false;
+    }
+
+    // Clear both browser-wide network state and origin-scoped storage. Cookies/cache alone were not enough for login flows
+    // such as X because their onboarding state also lives in IndexedDB, Cache Storage and service worker registrations.
+    await controller.clearCookies();
+    await controller.clearCache();
+    await controller.clearStorageForOrigin(origin);
+
+    // Reload through a blank page so the current document's in-memory JavaScript state is discarded before the site starts
+    // a new login/session bootstrap from the cleared persistent storage.
+    await controller.loadUrl("about:blank");
+    _currentUrl = "";
+    await controller.loadUrl(targetUrl);
+    _currentUrl = targetUrl;
+    return true;
+  }
+
+  String? _resolveHttpOrigin(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null || (uri.scheme != "http" && uri.scheme != "https") || uri.host.isEmpty) {
+      return null;
+    }
+
+    return uri.origin;
+  }
+
   @override
   Future<void> dispose() async {
     if (_disposed) {
@@ -110,6 +150,8 @@ class WoxWindowsWebViewSession implements WoxWebViewSession {
     });
     await controller.setBackgroundColor(Colors.transparent);
     await controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.sameWindow);
+    // Keep the WebView plugin in its mobile-preview mode. The clear-state action handles stuck login/session data without
+    // changing the user-facing mobile layout that existing configured sites were built around.
     await controller.setUserAgent(WoxWebViewSupport.mobileUserAgent);
     await controller.setCacheDisabled(!isCached);
   }

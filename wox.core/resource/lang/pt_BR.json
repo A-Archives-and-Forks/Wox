@@ -965,6 +965,7 @@
   "ui_action_webview_go_back": "Voltar",
   "ui_action_webview_go_forward": "Avançar",
   "ui_action_webview_open_inspector": "Abrir Inspetor",
+  "ui_action_webview_clear_state": "Limpar estado do WebView",
   "ui_no_matches": "Nenhuma correspondência",
   "selection_copy": "Copiar",
   "selection_copy_to_clipboard": "Copiar para a área de transferência",

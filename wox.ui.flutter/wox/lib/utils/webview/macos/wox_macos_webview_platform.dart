@@ -41,6 +41,11 @@ class WoxMacosWebViewPlatform implements WoxWebViewPlatform {
   }
 
   @override
+  Future<bool> clearState() async {
+    return _invoke('clearState');
+  }
+
+  @override
   Future<bool> openInspector() async {
     return _invoke('openInspector');
   }

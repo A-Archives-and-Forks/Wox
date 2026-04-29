@@ -12,6 +12,7 @@ class WoxWindowsWebViewPlatform implements WoxWebViewPlatform {
   final Map<String, WoxWindowsWebViewSession> _cachedSessions = {};
 
   WebviewController? _activeController;
+  WoxWindowsWebViewSession? _activeSession;
   Future<void>? _environmentInitialization;
   bool _runtimeChecked = false;
   bool _runtimeAvailable = false;
@@ -39,6 +40,7 @@ class WoxWindowsWebViewPlatform implements WoxWebViewPlatform {
 
     if (identical(_activeController, session.controller)) {
       _activeController = null;
+      _activeSession = null;
     }
   }
 
@@ -62,6 +64,22 @@ class WoxWindowsWebViewPlatform implements WoxWebViewPlatform {
 
     await controller.goForward();
     return true;
+  }
+
+  @override
+  Future<bool> clearState() async {
+    final session = _activeSession;
+    if (session == null) {
+      return false;
+    }
+
+    // Drop the reusable session entry after clearing so the next preview open gets a fresh WebView controller instead of
+    // inheriting navigation history or renderer-side memory that is not part of persistent browser storage.
+    final cacheKey = session.cacheKey;
+    if (cacheKey != null && identical(_cachedSessions[cacheKey], session)) {
+      _cachedSessions.remove(cacheKey);
+    }
+    return session.clearState();
   }
 
   @override
@@ -99,8 +117,10 @@ class WoxWindowsWebViewPlatform implements WoxWebViewPlatform {
   void setActiveSession(WoxWebViewSession? session) {
     if (session is WoxWindowsWebViewSession) {
       _activeController = session.controller;
+      _activeSession = session;
     } else {
       _activeController = null;
+      _activeSession = null;
     }
   }
 

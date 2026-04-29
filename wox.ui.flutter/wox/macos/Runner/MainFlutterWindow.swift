@@ -45,6 +45,8 @@ class MainFlutterWindow: NSPanel {
         result(WoxWebViewPreviewPlugin.goBack())
       case "goForward":
         result(WoxWebViewPreviewPlugin.goForward())
+      case "clearState":
+        result(WoxWebViewPreviewPlugin.clearState())
       default:
         result(FlutterMethodNotImplemented)
       }
