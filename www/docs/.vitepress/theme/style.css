@@ -1,10 +1,10 @@
 :root {
-  /* Keep VitePress active links and built-in highlights aligned with the homepage accent instead of the default purple brand color. */
-  --vp-c-brand-1: #0f9f87;
-  --vp-c-brand-2: #12bfa0;
-  --vp-c-brand-3: #19d3ad;
-  --wox-home-accent: #19d3ad;
-  --wox-home-accent-strong: #0f9f87;
+  /* Keep VitePress active links aligned with Wox while muting the old neon green, which was too bright on large filled controls and dark panels. */
+  --vp-c-brand-1: #0c8a77;
+  --vp-c-brand-2: #0f9a84;
+  --vp-c-brand-3: #13aa91;
+  --wox-home-accent: #13aa91;
+  --wox-home-accent-strong: #0c8a77;
   --wox-home-panel: rgba(255, 255, 255, 0.74);
   --wox-home-panel-soft: rgba(246, 247, 250, 0.9);
   --wox-home-border: rgba(60, 60, 67, 0.14);
@@ -12,9 +12,10 @@
 }
 
 .dark {
-  --vp-c-brand-1: #19d3ad;
-  --vp-c-brand-2: #31e0bd;
-  --vp-c-brand-3: #0f9f87;
+  /* Dark mode uses a slightly deeper accent so plugin install buttons do not glow against the near-black store background. */
+  --vp-c-brand-1: #0f9a84;
+  --vp-c-brand-2: #13aa91;
+  --vp-c-brand-3: #0c8a77;
   --wox-home-panel: rgba(25, 27, 34, 0.78);
   --wox-home-panel-soft: rgba(28, 30, 38, 0.92);
   --wox-home-border: rgba(255, 255, 255, 0.12);

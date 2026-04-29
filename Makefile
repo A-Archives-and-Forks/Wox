@@ -1,4 +1,4 @@
-.PHONY: build clean host _bundle_mac_app plugins help dev test test-all test-calculator test-converter test-plugin test-time test-network test-quick test-legacy only_test check_deps release appimage smoke
+.PHONY: build clean host _bundle_mac_app plugins help dev test test-all test-calculator test-converter test-plugin test-time test-network test-quick test-legacy only_test check_deps release appimage smoke www
 
 SMOKE_FILTER := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 SQLITE_BUILD_TAGS ?= sqlite_fts5
@@ -45,6 +45,7 @@ help:
 	@echo "  smoke      Run the desktop smoke E2E flow"
 	@echo "  appimage   Build Linux AppImage"
 	@echo "  plugins    Update plugin store"
+	@echo "  www        Run docs dev server"
 	@echo "  clean      Clean release directory"
 	@echo "  host       Build plugin hosts"
 	@echo "  release    Create a new release (reads version from CHANGELOG.md)"
@@ -212,3 +213,7 @@ release:
 
 plugins:
 	cd ci && go run . plugin
+
+# Keep the docs dev shortcut at the repository root so contributors can discover the website workflow without duplicating the script definition from www/package.json.
+www:
+	cd www && pnpm docs:dev
