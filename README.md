@@ -8,7 +8,7 @@ Wox is an open-source cross-platform launcher for macOS, Linux, and Windows. It 
 
 It is a practical alternative to [Alfred](https://www.alfredapp.com/) and [Raycast](https://www.raycast.com/).
 
-![Wox screenshot](https://raw.githubusercontent.com/Wox-launcher/Wox/master/screenshots/app.png)
+![Wox screenshot](https://raw.githubusercontent.com/Wox-launcher/Wox/master/screenshots/poster.png)
 
 [View screenshots](https://github.com/Wox-launcher/Wox/tree/master/screenshots)
 
