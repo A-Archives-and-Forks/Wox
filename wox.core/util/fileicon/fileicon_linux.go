@@ -12,8 +12,7 @@ import (
 
 // getFileTypeIconImpl tries to resolve a themed icon PNG for the file's MIME type and cache it.
 // Best-effort: look up MIME via extension, then search common icon-theme locations (hicolor/Adwaita) for 48px PNG.
-func getFileTypeIconImpl(ctx context.Context, ext string) (string, error) {
-	const size = 48
+func getFileTypeIconImpl(ctx context.Context, ext string, size int) (string, error) {
 	cachePath := buildCachePath(ext, size)
 	if _, err := os.Stat(cachePath); err == nil {
 		return cachePath, nil
@@ -78,7 +77,7 @@ func getFileTypeIconImpl(ctx context.Context, ext string) (string, error) {
 	return "", errors.New("no themed icon found")
 }
 
-func getFileIconImpl(ctx context.Context, filePath string) (string, error) {
+func getFileIconImpl(ctx context.Context, filePath string, size int) (string, error) {
 	return "", errors.New("file icon not supported")
 }
 

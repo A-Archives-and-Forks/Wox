@@ -1460,34 +1460,7 @@ func handleQueryMetadata(w http.ResponseWriter, r *http.Request) {
 
 	featureParamsGridLayout, err := pluginInstance.Metadata.GetFeatureParamsForGridLayout()
 	if err == nil {
-		// Check if current command is in the allowed commands list
-		currentCommand := query.Command
-
-		shouldEnableGrid := true
-		if len(featureParamsGridLayout.Commands) > 0 {
-			// Check if first element starts with "!" to determine mode
-			if strings.HasPrefix(featureParamsGridLayout.Commands[0], "!") {
-				// Exclusion mode: grid enabled for all commands except those starting with "!"
-				shouldEnableGrid = true
-				for _, cmd := range featureParamsGridLayout.Commands {
-					if strings.TrimPrefix(cmd, "!") == currentCommand {
-						shouldEnableGrid = false
-						break
-					}
-				}
-			} else {
-				// Inclusion mode: grid enabled only for commands in the list
-				shouldEnableGrid = false
-				for _, cmd := range featureParamsGridLayout.Commands {
-					if cmd == currentCommand {
-						shouldEnableGrid = true
-						break
-					}
-				}
-			}
-		}
-
-		if shouldEnableGrid {
+		if featureParamsGridLayout.IsEnabledForCommand(query.Command) {
 			metadata.IsGridLayout = true
 			metadata.GridLayoutParams = featureParamsGridLayout
 		}

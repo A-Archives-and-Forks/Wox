@@ -118,7 +118,7 @@ func (a *MacRetriever) ParseAppInfo(ctx context.Context, path string) (appInfo, 
 		a.api.Log(ctx, plugin.LogLevelError, iconErr.Error())
 	}
 	info.Icon = icon
-	if info.Icon.ImageData == defaultAppIcon {
+	if info.Icon.ImageData == defaultAppIcon || !a.hasDedicatedMacAppIcon(ctx, path) {
 		info.IsDefaultIcon = true
 	}
 
@@ -262,6 +262,18 @@ func (a *MacRetriever) getMacAppIcon(ctx context.Context, appPath string) (commo
 		ImageType: common.WoxImageTypeAbsolutePath,
 		ImageData: defaultAppIcon,
 	}, nil
+}
+
+func (a *MacRetriever) hasDedicatedMacAppIcon(ctx context.Context, appPath string) bool {
+	// NSWorkspace can synthesize a generic app icon even when the bundle does not
+	// declare one. Launchpad should hide those entries, so use the same bundle
+	// icon resolver as fileicon's preferred extraction path instead of treating
+	// every cached absolute PNG as a real app icon.
+	if _, err := fileicon.ResolveMacAppBundleIconPath(appPath); err != nil {
+		a.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("app %s has no dedicated bundle icon: %s", appPath, err.Error()))
+		return false
+	}
+	return true
 }
 
 func (a *MacRetriever) generateSFSymbolIconBytes(symbolName, colorName, iconStyle string) (*C.uchar, C.size_t) {

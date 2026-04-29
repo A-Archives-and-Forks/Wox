@@ -162,8 +162,7 @@ func getIconFromSHGetFileInfo(ext string) (win.HICON, error) {
 	return shfi.HIcon, nil
 }
 
-func getFileIconImpl(ctx context.Context, filePath string) (string, error) {
-	const size = 48
+func getFileIconImpl(ctx context.Context, filePath string, size int) (string, error) {
 	cachePath := buildPathCachePath(filePath, size)
 
 	if _, err := os.Stat(cachePath); err == nil {
@@ -185,7 +184,7 @@ func getFileIconImpl(ctx context.Context, filePath string) (string, error) {
 			(sys.FileAttributes&FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS != 0) ||
 			(sys.FileAttributes&FILE_ATTRIBUTE_RECALL_ON_OPEN != 0) {
 			util.GetLogger().Debug(ctx, "File is offline, falling back to extension icon to avoid download: "+filePath)
-			return getFileTypeIconImpl(ctx, filepath.Ext(filePath))
+			return getFileTypeIconImpl(ctx, filepath.Ext(filePath), size)
 		}
 	}
 
@@ -195,7 +194,7 @@ func getFileIconImpl(ctx context.Context, filePath string) (string, error) {
 	}
 	if err != nil {
 		util.GetLogger().Debug(ctx, "No embedded file icon found, fallback to associated file type icon: "+filePath)
-		return GetFileTypeIcon(ctx, filepath.Ext(filePath))
+		return GetFileTypeIconWithSize(ctx, filepath.Ext(filePath), size)
 	}
 
 	if mkdirErr := os.MkdirAll(filepath.Dir(cachePath), 0o755); mkdirErr != nil {
@@ -346,8 +345,7 @@ func getStandardDefaultIcon(ctx context.Context) (image.Image, error) {
 	return convertIconToImage(ctx, shfi.HIcon)
 }
 
-func getFileTypeIconImpl(ctx context.Context, ext string) (string, error) {
-	const size = 48
+func getFileTypeIconImpl(ctx context.Context, ext string, size int) (string, error) {
 	cachePath := buildCachePath(ext, size)
 
 	// Check cache first

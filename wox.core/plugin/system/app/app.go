@@ -55,8 +55,11 @@ type appInfo struct {
 	Type             AppType         `json:"type,omitempty"`
 	LastModifiedUnix int64           `json:"last_modified_unix,omitempty"`
 
-	Pid           int  `json:"-"`
-	IsDefaultIcon bool `json:"-"`
+	Pid int `json:"-"`
+	// IsDefaultIcon is persisted so launchpad can hide entries whose icon fell
+	// back to a generic/default asset after a restart. Normal app search still
+	// keeps these entries visible.
+	IsDefaultIcon bool `json:"is_default_icon,omitempty"`
 }
 
 type appCacheFile struct {
@@ -64,7 +67,17 @@ type appCacheFile struct {
 	Apps    []appInfo `json:"apps"`
 }
 
-const appCacheVersion = 2
+// Bump this when cached appInfo fields or preprocessed icon semantics change.
+// Version 4 adds IsDefaultIcon to cached app entries and invalidates icon paths
+// generated from the old 48px file-icon source cache; reindexing is required so
+// launchpad can hide apps without real icons and list results stop reusing
+// blurred 40px resize outputs stored in wox-app-cache.json.
+const appCacheVersion = 4
+
+const (
+	appCommandReindex   = "reindex"
+	appCommandLaunchpad = "launchpad"
+)
 
 type appContextData struct {
 	Name string `json:"name"`
@@ -192,11 +205,27 @@ func (a *ApplicationPlugin) GetMetadata() plugin.Metadata {
 			{
 				Name: plugin.MetadataFeatureMRU,
 			},
+			{
+				// Launchpad is intentionally command-scoped: the default app search stays dense and informative,
+				// while this command uses the existing grid renderer to recreate a visual app launcher.
+				Name: plugin.MetadataFeatureGridLayout,
+				Params: map[string]any{
+					"Commands":    []string{appCommandLaunchpad},
+					"Columns":     7,
+					"ShowTitle":   true,
+					"ItemPadding": 10,
+					"ItemMargin":  4,
+				},
+			},
 		},
 		Commands: []plugin.MetadataCommand{
 			{
-				Command:     "reindex",
+				Command:     appCommandReindex,
 				Description: "i18n:plugin_app_command_reindex",
+			},
+			{
+				Command:     appCommandLaunchpad,
+				Description: "i18n:plugin_app_command_launchpad",
 			},
 		},
 		SettingDefinitions: []definition.PluginSettingDefinitionItem{
@@ -351,7 +380,7 @@ func (a *ApplicationPlugin) reuseAppFromCache(ctx context.Context, appPath strin
 
 func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
 	// clean cache and reindex apps
-	if query.Command == "reindex" {
+	if query.Command == appCommandReindex {
 		reindexId := uuid.NewString()
 		return []plugin.QueryResult{
 			{
@@ -388,6 +417,8 @@ func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plu
 		}
 	}
 
+	isLaunchpadQuery := query.Command == appCommandLaunchpad
+
 	// Query against a stable snapshot so reindexing or settings changes do not
 	// force extra work in the middle of a keystroke.
 	entries, generation := a.getQueryEntriesSnapshot()
@@ -402,6 +433,10 @@ func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plu
 
 	matchEntry := func(entryIndex int) {
 		entry := entries[entryIndex]
+		if isLaunchpadQuery && !a.shouldShowInLaunchpad(entry.info) {
+			return
+		}
+
 		displayName, displayPath, searchCandidates := a.resolveQueryEntryDisplay(ctx, entry)
 
 		isMatch := false
@@ -433,13 +468,17 @@ func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plu
 			Id:       resultID,
 			Title:    displayName,
 			SubTitle: displayPath,
-			Icon:     entry.info.Icon,
+			Icon:     a.getQueryResultIcon(entry.info, isLaunchpadQuery),
 			Score:    bestScore,
 			Actions:  actions,
 		}
 
-		// Track this result for periodic refresh (refreshRunningApps will handle running state)
-		a.trackedResults.Store(result.Id, entry.info)
+		// Launchpad mode is a static app grid that replaces macOS Launchpad's removed entry point.
+		// The normal app query tracks visible rows so CPU/memory tails and terminate actions stay fresh,
+		// but those running-state updates make a Launchpad-style grid noisy and can resize cells while browsing.
+		if !isLaunchpadQuery {
+			a.trackedResults.Store(result.Id, entry.info)
+		}
 
 		results = append(results, result)
 		matchedIndexes = append(matchedIndexes, entryIndex)
@@ -545,6 +584,32 @@ func (a *ApplicationPlugin) buildAppActions(info appInfo, displayName string, co
 	}
 
 	return actions
+}
+
+func (a *ApplicationPlugin) getQueryResultIcon(info appInfo, isLaunchpadQuery bool) common.WoxImage {
+	if !isLaunchpadQuery {
+		return info.Icon
+	}
+
+	// Launchpad uses the generic grid icon polish path. Return the app path as a file icon source
+	// instead of the indexed list icon so Manager.PolishResult can resolve it at the core grid size.
+	if strings.TrimSpace(info.Path) != "" && info.Type != AppTypeWindowsSetting && !isMacSystemSettingsPath(info.Path) {
+		return common.NewWoxImageFileIcon(info.Path)
+	}
+
+	// Generated settings icons and pathless entries cannot be resolved from the file icon API,
+	// so they fall back to the already indexed icon and use the same grid-size polish as other results.
+	return info.Icon
+}
+
+func (a *ApplicationPlugin) shouldShowInLaunchpad(info appInfo) bool {
+	// Launchpad is a visual app grid, so entries with no usable icon create
+	// noise and look broken. Keep the regular app query unchanged because users
+	// may still need to find and open those apps by name.
+	if info.IsDefaultIcon || info.Icon.IsEmpty() {
+		return false
+	}
+	return true
 }
 
 func (a *ApplicationPlugin) getRunningProcessResult(app appInfo) (tails []plugin.QueryResultTail) {

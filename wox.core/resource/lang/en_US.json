@@ -577,6 +577,7 @@
   "plugin_app_start_reindex": "Start reindexing",
   "plugin_app_reindex_completed": "Reindexing completed",
   "plugin_app_command_reindex": "Reindex apps",
+  "plugin_app_command_launchpad": "Launchpad",
   "plugin_browser_bookmark_open_in_browser": "Open in browser",
   "plugin_explorer_open": "Open",
   "plugin_explorer_reveal_in_explorer": "Reveal in file explorer",

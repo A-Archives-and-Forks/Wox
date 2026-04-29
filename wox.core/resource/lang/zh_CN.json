@@ -578,6 +578,7 @@
   "plugin_app_start_reindex": "开始重新索引",
   "plugin_app_reindex_completed": "重新索引完成",
   "plugin_app_command_reindex": "重新索引应用",
+  "plugin_app_command_launchpad": "启动台",
   "plugin_browser_bookmark_open_in_browser": "在浏览器中打开",
   "plugin_explorer_open": "打开",
   "plugin_explorer_reveal_in_explorer": "在文件管理器中显示",

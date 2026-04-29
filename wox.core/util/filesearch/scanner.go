@@ -1118,13 +1118,13 @@ func (s *Scanner) enqueueDirtyWithContext(ctx context.Context, signal DirtySigna
 		s.dirtyQueue.Push(normalized)
 	}
 	s.refreshTransientSyncPendingCounts()
-	pendingRootCount, pendingPathCount := s.pendingDirtyCounts()
-	util.GetLogger().Debug(contextWithTraceID(ctx, normalized.TraceID), fmt.Sprintf(
-		"filesearch dirty enqueued: %s pending_roots=%d pending_paths=%d",
-		summarizeDirtySignal(normalized),
-		pendingRootCount,
-		pendingPathCount,
-	))
+	//pendingRootCount, pendingPathCount := s.pendingDirtyCounts()
+	// util.GetLogger().Debug(contextWithTraceID(ctx, normalized.TraceID), fmt.Sprintf(
+	// 	"filesearch dirty enqueued: %s pending_roots=%d pending_paths=%d",
+	// 	summarizeDirtySignal(normalized),
+	// 	pendingRootCount,
+	// 	pendingPathCount,
+	// ))
 	s.emitStateChange(contextWithTraceID(ctx, normalized.TraceID))
 
 	select {
@@ -1274,13 +1274,13 @@ func (s *Scanner) handleChangeSignal(ctx context.Context, signal ChangeSignal) {
 
 	root, rootFound := s.findRootByID(ctx, signal.RootID)
 	if rootFound && !s.shouldProcessChange(root, signal) {
-		util.GetLogger().Debug(ctx, fmt.Sprintf(
-			"filesearch change signal ignored by policy: kind=%s semantic=%s root=%s path=%s",
-			signal.Kind,
-			signal.SemanticKind,
-			signal.RootID,
-			summarizeLogPath(signal.Path),
-		))
+		// util.GetLogger().Debug(ctx, fmt.Sprintf(
+		// 	"filesearch change signal ignored by policy: kind=%s semantic=%s root=%s path=%s",
+		// 	signal.Kind,
+		// 	signal.SemanticKind,
+		// 	signal.RootID,
+		// 	summarizeLogPath(signal.Path),
+		// ))
 		return
 	}
 
@@ -1517,13 +1517,13 @@ func (s *Scanner) updateRootFeedMetadata(ctx context.Context, rootID string, fee
 		util.GetLogger().Warn(ctx, "filesearch failed to update root feed metadata: "+err.Error())
 		return
 	}
-	util.GetLogger().Debug(ctx, fmt.Sprintf(
-		"filesearch root feed metadata updated: root=%s path=%s feed_type=%s cursor_updated=%t",
-		root.ID,
-		root.Path,
-		root.FeedType,
-		cursor != "",
-	))
+	// util.GetLogger().Debug(ctx, fmt.Sprintf(
+	// 	"filesearch root feed metadata updated: root=%s path=%s feed_type=%s cursor_updated=%t",
+	// 	root.ID,
+	// 	root.Path,
+	// 	root.FeedType,
+	// 	cursor != "",
+	// ))
 }
 
 func (s *Scanner) captureRootFeedSnapshot(ctx context.Context, root RootRecord) RootRecord {

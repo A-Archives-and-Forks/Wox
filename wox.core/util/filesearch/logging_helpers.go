@@ -77,217 +77,217 @@ func contextWithTraceID(ctx context.Context, traceID string) context.Context {
 }
 
 func logProviderSearchResponse(ctx context.Context, query SearchQuery, providerName string, elapsedMs int64, aggregationElapsedMs int64, candidateCount int, resultCount int, changed bool, err error) {
-	status := "ok"
-	if err != nil {
-		if errorsIsCanceled(err) {
-			status = "canceled"
-		} else {
-			status = "error"
-		}
-	}
+	// status := "ok"
+	// if err != nil {
+	// 	if errorsIsCanceled(err) {
+	// 		status = "canceled"
+	// 	} else {
+	// 		status = "error"
+	// 	}
+	// }
 
-	msg := fmt.Sprintf(
-		"filesearch provider query: provider=%s query=%q elapsed=%dms aggregate=%dms candidates=%d results=%d changed=%v status=%s",
-		providerName,
-		query.Raw,
-		elapsedMs,
-		aggregationElapsedMs,
-		candidateCount,
-		resultCount,
-		changed,
-		status,
-	)
-	if err != nil && !errorsIsCanceled(err) {
-		msg += " error=" + err.Error()
-	}
+	// msg := fmt.Sprintf(
+	// 	"filesearch provider query: provider=%s query=%q elapsed=%dms aggregate=%dms candidates=%d results=%d changed=%v status=%s",
+	// 	providerName,
+	// 	query.Raw,
+	// 	elapsedMs,
+	// 	aggregationElapsedMs,
+	// 	candidateCount,
+	// 	resultCount,
+	// 	changed,
+	// 	status,
+	// )
+	// if err != nil && !errorsIsCanceled(err) {
+	// 	msg += " error=" + err.Error()
+	// }
 
-	if err != nil && !errorsIsCanceled(err) {
-		util.GetLogger().Warn(ctx, msg)
-		return
-	}
+	// if err != nil && !errorsIsCanceled(err) {
+	// 	util.GetLogger().Warn(ctx, msg)
+	// 	return
+	// }
 
-	if elapsedMs >= slowFilesearchProviderQueryThresholdMs || aggregationElapsedMs >= slowFilesearchAggregationThresholdMs {
-		util.GetLogger().Info(ctx, "filesearch slow provider query: "+msg)
-		return
-	}
+	// if elapsedMs >= slowFilesearchProviderQueryThresholdMs || aggregationElapsedMs >= slowFilesearchAggregationThresholdMs {
+	// 	util.GetLogger().Info(ctx, "filesearch slow provider query: "+msg)
+	// 	return
+	// }
 
-	util.GetLogger().Debug(ctx, msg)
+	// util.GetLogger().Debug(ctx, msg)
 }
 
 func logEngineSearchCompletion(ctx context.Context, query SearchQuery, elapsedMs int64, providerCount int, updateCount int, resultCount int) {
-	msg := fmt.Sprintf(
-		"filesearch engine query complete: query=%q elapsed=%dms providers=%d updates=%d results=%d",
-		query.Raw,
-		elapsedMs,
-		providerCount,
-		updateCount,
-		resultCount,
-	)
-	if elapsedMs >= slowFilesearchEngineQueryThresholdMs {
-		util.GetLogger().Info(ctx, "filesearch slow engine query: "+msg)
-		return
-	}
+	// msg := fmt.Sprintf(
+	// 	"filesearch engine query complete: query=%q elapsed=%dms providers=%d updates=%d results=%d",
+	// 	query.Raw,
+	// 	elapsedMs,
+	// 	providerCount,
+	// 	updateCount,
+	// 	resultCount,
+	// )
+	// if elapsedMs >= slowFilesearchEngineQueryThresholdMs {
+	// 	util.GetLogger().Info(ctx, "filesearch slow engine query: "+msg)
+	// 	return
+	// }
 
-	util.GetLogger().Debug(ctx, msg)
+	// util.GetLogger().Debug(ctx, msg)
 }
 
 func logSearchOnceWait(ctx context.Context, query SearchQuery, elapsedMs int64, timedOut bool, resultCount int) {
-	msg := fmt.Sprintf(
-		"filesearch search_once wait: query=%q elapsed=%dms timeout=%v results=%d",
-		query.Raw,
-		elapsedMs,
-		timedOut,
-		resultCount,
-	)
-	if timedOut {
-		util.GetLogger().Info(ctx, "filesearch partial query return: "+msg)
-		return
-	}
+	// msg := fmt.Sprintf(
+	// 	"filesearch search_once wait: query=%q elapsed=%dms timeout=%v results=%d",
+	// 	query.Raw,
+	// 	elapsedMs,
+	// 	timedOut,
+	// 	resultCount,
+	// )
+	// if timedOut {
+	// 	util.GetLogger().Info(ctx, "filesearch partial query return: "+msg)
+	// 	return
+	// }
 
-	if elapsedMs >= slowFilesearchSearchOnceTimeoutMs {
-		util.GetLogger().Info(ctx, "filesearch slow search_once wait: "+msg)
-		return
-	}
+	// if elapsedMs >= slowFilesearchSearchOnceTimeoutMs {
+	// 	util.GetLogger().Info(ctx, "filesearch slow search_once wait: "+msg)
+	// 	return
+	// }
 
-	util.GetLogger().Debug(ctx, msg)
+	// util.GetLogger().Debug(ctx, msg)
 }
 
 func logLocalIndexSnapshot(ctx context.Context, stage string, snapshot queryIndexSnapshot, info bool) {
-	summary := formatLocalIndexSnapshotSummary(stage, snapshot)
-	topRoots := formatLocalIndexTopRoots(stage, snapshot)
-	if info {
-		util.GetLogger().Info(ctx, summary)
-		if topRoots != "" {
-			util.GetLogger().Info(ctx, topRoots)
-		}
-		return
-	}
+	// summary := formatLocalIndexSnapshotSummary(stage, snapshot)
+	// topRoots := formatLocalIndexTopRoots(stage, snapshot)
+	// if info {
+	// 	util.GetLogger().Info(ctx, summary)
+	// 	if topRoots != "" {
+	// 		util.GetLogger().Info(ctx, topRoots)
+	// 	}
+	// 	return
+	// }
 
-	util.GetLogger().Debug(ctx, summary)
-	if topRoots != "" {
-		util.GetLogger().Debug(ctx, topRoots)
-	}
+	// util.GetLogger().Debug(ctx, summary)
+	// if topRoots != "" {
+	// 	util.GetLogger().Debug(ctx, topRoots)
+	// }
 }
 
 func logSQLiteIndexSnapshot(ctx context.Context, stage string, snapshot sqliteIndexSnapshot, info bool) {
-	summary := formatSQLiteIndexSnapshotSummary(stage, snapshot)
-	topRoots := formatSQLiteIndexTopRoots(stage, snapshot)
-	if info {
-		util.GetLogger().Info(ctx, summary)
-		if topRoots != "" {
-			util.GetLogger().Info(ctx, topRoots)
-		}
-		return
-	}
+	// summary := formatSQLiteIndexSnapshotSummary(stage, snapshot)
+	// topRoots := formatSQLiteIndexTopRoots(stage, snapshot)
+	// if info {
+	// 	util.GetLogger().Info(ctx, summary)
+	// 	if topRoots != "" {
+	// 		util.GetLogger().Info(ctx, topRoots)
+	// 	}
+	// 	return
+	// }
 
-	util.GetLogger().Debug(ctx, summary)
-	if topRoots != "" {
-		util.GetLogger().Debug(ctx, topRoots)
-	}
+	// util.GetLogger().Debug(ctx, summary)
+	// if topRoots != "" {
+	// 	util.GetLogger().Debug(ctx, topRoots)
+	// }
 }
 
 func logFilesearchRunStage(ctx context.Context, kind RunKind, stage RunStage, root RootRecord, job Job, rootIndex int, rootTotal int, current int64, total int64) {
-	msg := fmt.Sprintf(
-		"filesearch run stage: kind=%s stage=%s root=%s root_path=%s root_index=%d/%d job=%s job_kind=%s scope=%s progress=%d/%d",
-		kind,
-		stage,
-		root.ID,
-		summarizeLogPath(root.Path),
-		rootIndex,
-		rootTotal,
-		strings.TrimSpace(job.JobID),
-		job.Kind,
-		summarizeLogPath(job.ScopePath),
-		current,
-		total,
-	)
+	// msg := fmt.Sprintf(
+	// 	"filesearch run stage: kind=%s stage=%s root=%s root_path=%s root_index=%d/%d job=%s job_kind=%s scope=%s progress=%d/%d",
+	// 	kind,
+	// 	stage,
+	// 	root.ID,
+	// 	summarizeLogPath(root.Path),
+	// 	rootIndex,
+	// 	rootTotal,
+	// 	strings.TrimSpace(job.JobID),
+	// 	job.Kind,
+	// 	summarizeLogPath(job.ScopePath),
+	// 	current,
+	// 	total,
+	// )
 
-	switch stage {
-	case RunStagePlanning, RunStagePreScan, RunStageFinalizing:
-		util.GetLogger().Info(ctx, msg)
-	default:
-		util.GetLogger().Debug(ctx, msg)
-	}
+	// switch stage {
+	// case RunStagePlanning, RunStagePreScan, RunStageFinalizing:
+	// 	util.GetLogger().Info(ctx, msg)
+	// default:
+	// 	util.GetLogger().Debug(ctx, msg)
+	// }
 }
 
 func logFilesearchRunPlanner(ctx context.Context, kind RunKind, elapsedMs int64, rootCount int, jobCount int, totalUnits int64) {
-	msg := fmt.Sprintf(
-		"filesearch run planner: kind=%s elapsed=%dms roots=%d jobs=%d total_units=%d",
-		kind,
-		elapsedMs,
-		rootCount,
-		jobCount,
-		totalUnits,
-	)
-	if elapsedMs >= slowFilesearchRunPlannerThresholdMs {
-		util.GetLogger().Info(ctx, "filesearch slow run planner: "+msg)
-		return
-	}
-	util.GetLogger().Debug(ctx, msg)
+	// msg := fmt.Sprintf(
+	// 	"filesearch run planner: kind=%s elapsed=%dms roots=%d jobs=%d total_units=%d",
+	// 	kind,
+	// 	elapsedMs,
+	// 	rootCount,
+	// 	jobCount,
+	// 	totalUnits,
+	// )
+	// if elapsedMs >= slowFilesearchRunPlannerThresholdMs {
+	// 	util.GetLogger().Info(ctx, "filesearch slow run planner: "+msg)
+	// 	return
+	// }
+	// util.GetLogger().Debug(ctx, msg)
 }
 
 func logFilesearchRunExecution(ctx context.Context, kind RunKind, elapsedMs int64, jobCount int, totalUnits int64) {
-	msg := fmt.Sprintf(
-		"filesearch run execution: kind=%s elapsed=%dms jobs=%d total_units=%d",
-		kind,
-		elapsedMs,
-		jobCount,
-		totalUnits,
-	)
-	if elapsedMs >= slowFilesearchRunExecutionThresholdMs {
-		util.GetLogger().Info(ctx, "filesearch slow run execution: "+msg)
-		return
-	}
-	util.GetLogger().Debug(ctx, msg)
+	// msg := fmt.Sprintf(
+	// 	"filesearch run execution: kind=%s elapsed=%dms jobs=%d total_units=%d",
+	// 	kind,
+	// 	elapsedMs,
+	// 	jobCount,
+	// 	totalUnits,
+	// )
+	// if elapsedMs >= slowFilesearchRunExecutionThresholdMs {
+	// 	util.GetLogger().Info(ctx, "filesearch slow run execution: "+msg)
+	// 	return
+	// }
+	// util.GetLogger().Debug(ctx, msg)
 }
 
 func logFilesearchFullIndexTotal(ctx context.Context, reason string, elapsedMs int64, rootCount int, jobCount int, totalUnits int64) {
-	msg := fmt.Sprintf(
-		"filesearch full index total: reason=%s elapsed=%dms roots=%d jobs=%d total_units=%d",
-		strings.TrimSpace(reason),
-		elapsedMs,
-		rootCount,
-		jobCount,
-		totalUnits,
-	)
-	// This metric is the optimization baseline for one complete full index run, so
-	// emit it at info level every time instead of hiding it behind the generic
-	// slow-log threshold used by the planner and execution phase diagnostics.
-	util.GetLogger().Info(ctx, msg)
+	// msg := fmt.Sprintf(
+	// 	"filesearch full index total: reason=%s elapsed=%dms roots=%d jobs=%d total_units=%d",
+	// 	strings.TrimSpace(reason),
+	// 	elapsedMs,
+	// 	rootCount,
+	// 	jobCount,
+	// 	totalUnits,
+	// )
+	// // This metric is the optimization baseline for one complete full index run, so
+	// // emit it at info level every time instead of hiding it behind the generic
+	// // slow-log threshold used by the planner and execution phase diagnostics.
+	// util.GetLogger().Info(ctx, msg)
 }
 
 func logFilesearchJobPhase(ctx context.Context, root RootRecord, job Job, phase string, elapsedMs int64) {
-	msg := fmt.Sprintf(
-		"filesearch job phase: phase=%s elapsed=%dms root=%s root_path=%s job=%s job_kind=%s scope=%s units=%d",
-		strings.TrimSpace(phase),
-		elapsedMs,
-		root.ID,
-		summarizeLogPath(root.Path),
-		strings.TrimSpace(job.JobID),
-		job.Kind,
-		summarizeLogPath(job.ScopePath),
-		job.PlannedTotalUnits,
-	)
-	if elapsedMs >= slowFilesearchJobPhaseThresholdMs {
-		util.GetLogger().Info(ctx, "filesearch slow job phase: "+msg)
-		return
-	}
-	util.GetLogger().Debug(ctx, msg)
+	// msg := fmt.Sprintf(
+	// 	"filesearch job phase: phase=%s elapsed=%dms root=%s root_path=%s job=%s job_kind=%s scope=%s units=%d",
+	// 	strings.TrimSpace(phase),
+	// 	elapsedMs,
+	// 	root.ID,
+	// 	summarizeLogPath(root.Path),
+	// 	strings.TrimSpace(job.JobID),
+	// 	job.Kind,
+	// 	summarizeLogPath(job.ScopePath),
+	// 	job.PlannedTotalUnits,
+	// )
+	// if elapsedMs >= slowFilesearchJobPhaseThresholdMs {
+	// 	util.GetLogger().Info(ctx, "filesearch slow job phase: "+msg)
+	// 	return
+	// }
+	// util.GetLogger().Debug(ctx, msg)
 }
 
 func logFilesearchSQLiteMaintenance(ctx context.Context, operation string, scope string, elapsedMs int64, workCount int) {
-	msg := fmt.Sprintf(
-		"filesearch sqlite maintenance: operation=%s scope=%s elapsed=%dms work_count=%d",
-		strings.TrimSpace(operation),
-		summarizeLogPath(scope),
-		elapsedMs,
-		workCount,
-	)
-	if elapsedMs >= slowFilesearchSQLiteMaintenanceMs {
-		util.GetLogger().Info(ctx, "filesearch slow sqlite maintenance: "+msg)
-		return
-	}
-	util.GetLogger().Debug(ctx, msg)
+	// msg := fmt.Sprintf(
+	// 	"filesearch sqlite maintenance: operation=%s scope=%s elapsed=%dms work_count=%d",
+	// 	strings.TrimSpace(operation),
+	// 	summarizeLogPath(scope),
+	// 	elapsedMs,
+	// 	workCount,
+	// )
+	// if elapsedMs >= slowFilesearchSQLiteMaintenanceMs {
+	// 	util.GetLogger().Info(ctx, "filesearch slow sqlite maintenance: "+msg)
+	// 	return
+	// }
+	// util.GetLogger().Debug(ctx, msg)
 }
 
 func formatLocalIndexSnapshotSummary(stage string, snapshot queryIndexSnapshot) string {

@@ -367,6 +367,39 @@ type MetadataFeatureParamsGridLayout struct {
 	Commands    []string // commands to enable grid layout for, empty means all commands
 }
 
+func (m *Metadata) GetFeatureParamsForGridLayoutCommand(command string) (MetadataFeatureParamsGridLayout, bool, error) {
+	params, err := m.GetFeatureParamsForGridLayout()
+	if err != nil {
+		return MetadataFeatureParamsGridLayout{}, false, err
+	}
+
+	return params, params.IsEnabledForCommand(command), nil
+}
+
+func (p MetadataFeatureParamsGridLayout) IsEnabledForCommand(command string) bool {
+	if len(p.Commands) == 0 {
+		return true
+	}
+
+	// A leading ! keeps the existing exclusion-mode contract while centralizing
+	// command matching for both metadata responses and result icon polishing.
+	if strings.HasPrefix(p.Commands[0], "!") {
+		for _, cmd := range p.Commands {
+			if strings.TrimPrefix(cmd, "!") == command {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, cmd := range p.Commands {
+		if cmd == command {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Metadata) GetFeatureParamsForGridLayout() (MetadataFeatureParamsGridLayout, error) {
 	for _, feature := range m.Features {
 		if strings.EqualFold(feature.Name, MetadataFeatureGridLayout) {
@@ -426,6 +459,12 @@ func (m *Metadata) GetFeatureParamsForGridLayout() (MetadataFeatureParamsGridLay
 							params.Commands = append(params.Commands, itemString)
 						}
 					}
+				}
+				if vArray, ok := v.([]string); ok {
+					// Built-in Go plugins pass feature params directly instead of through JSON decoding.
+					// Accepting []string keeps command-scoped grid layouts from falling back to the
+					// empty-command meaning, which enables grid mode for every query.
+					params.Commands = append(params.Commands, vArray...)
 				}
 			}
 

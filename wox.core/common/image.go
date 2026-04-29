@@ -42,6 +42,12 @@ var fastPngEncoder = &png.Encoder{
 
 var derivedImagePathExistenceCache = util.NewHashMap[string, struct{}]()
 
+const (
+	ResultListIconSize     = util.ResultListIconSize
+	ResultGridIconSize     = util.ResultGridIconSize
+	resizeImageCachePrefix = "resize_v2_"
+)
+
 type pngBufferPool struct{}
 
 func (p *pngBufferPool) Get() *png.EncoderBuffer {
@@ -442,7 +448,17 @@ func ParseWoxImage(image string) (WoxImage, error) {
 }
 
 func ConvertIcon(ctx context.Context, image WoxImage, pluginDirectory string) (newImage WoxImage) {
-	newImage = ConvertFileIconToAbsolutePath(ctx, image)
+	return ConvertIconWithSize(ctx, image, pluginDirectory, ResultListIconSize)
+}
+
+func ConvertIconWithSize(ctx context.Context, image WoxImage, pluginDirectory string, size int) (newImage WoxImage) {
+	// Result icon callers can choose the surface size directly. Keep invalid
+	// sizes on the normal list path so every icon cache layer shares one default.
+	if size <= 0 {
+		size = ResultListIconSize
+	}
+
+	newImage = ConvertFileIconToAbsolutePathWithSize(ctx, image, size)
 	newImage = ConvertRelativePathToAbsolutePath(ctx, newImage, pluginDirectory)
 
 	// Keep SVG data and SVG files as-is so Flutter can render vectors directly.
@@ -451,7 +467,7 @@ func ConvertIcon(ctx context.Context, image WoxImage, pluginDirectory string) (n
 	}
 
 	newImage = cropPngTransparentPaddings(ctx, newImage)
-	newImage = resizeImage(ctx, newImage, 40)
+	newImage = resizeImage(ctx, newImage, size)
 	return
 }
 
@@ -468,7 +484,7 @@ func resizeImage(ctx context.Context, image WoxImage, size int) (newImage WoxIma
 	newImage = image
 
 	imgHash := image.Hash()
-	resizeImgPath := path.Join(util.GetLocation().GetImageCacheDirectory(), fmt.Sprintf("resize_%d_%s.png", size, imgHash))
+	resizeImgPath := path.Join(util.GetLocation().GetImageCacheDirectory(), fmt.Sprintf("%s%d_%s.png", resizeImageCachePrefix, size, imgHash))
 	if isKnownExistingDerivedImagePath(resizeImgPath) {
 		return NewWoxImageAbsolutePath(resizeImgPath)
 	}
@@ -482,10 +498,15 @@ func resizeImage(ctx context.Context, image WoxImage, size int) (newImage WoxIma
 		return image
 	}
 
-	// respect ratio, remain longer side
-	width := size
-	height := size
-	if img.Bounds().Dx() > img.Bounds().Dy() {
+	// Respect the original ratio and never enlarge the source. Upscaling a small
+	// native app icon before a grid surface downsampled it made large result icons
+	// visibly soft.
+	sourceWidth := img.Bounds().Dx()
+	sourceHeight := img.Bounds().Dy()
+	targetSize := min(size, max(sourceWidth, sourceHeight))
+	width := targetSize
+	height := targetSize
+	if sourceWidth > sourceHeight {
 		height = 0
 	} else {
 		width = 0
@@ -586,10 +607,14 @@ func ConvertRelativePathToAbsolutePath(ctx context.Context, image WoxImage, plug
 }
 
 func ConvertFileIconToAbsolutePath(ctx context.Context, image WoxImage) (newImage WoxImage) {
+	return ConvertFileIconToAbsolutePathWithSize(ctx, image, ResultListIconSize)
+}
+
+func ConvertFileIconToAbsolutePathWithSize(ctx context.Context, image WoxImage, size int) (newImage WoxImage) {
 	newImage = image
 
 	if image.ImageType == WoxImageTypeFileIcon {
-		absPath, err := fileicon.GetFileIconByPath(ctx, image.ImageData)
+		absPath, err := fileicon.GetFileIconByPathWithSize(ctx, image.ImageData, size)
 		if err == nil {
 			newImage.ImageType = WoxImageTypeAbsolutePath
 			newImage.ImageData = absPath

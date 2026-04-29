@@ -1491,6 +1491,8 @@ func (m *Manager) BuildQueryResultsSnapshot(sessionId string, queryId string) []
 }
 
 func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, query Query, result QueryResult) QueryResult {
+	resultIconSize := m.getResultIconSizeForQuery(pluginInstance, query)
+
 	// set default id
 	if result.Id == "" {
 		result.Id = uuid.NewString()
@@ -1517,8 +1519,10 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 		}
 	}
 	m.attachExternalActionCallbacks(pluginInstance, result.Actions)
-	// convert icon
-	result.Icon = common.ConvertIcon(ctx, result.Icon, pluginInstance.PluginDirectory)
+	// Result icons are converted for the visual surface selected by metadata. The old
+	// hard-coded list size made grid icons blurry because the UI had to scale 40px
+	// raster caches into much larger cells.
+	result.Icon = common.ConvertIconWithSize(ctx, result.Icon, pluginInstance.PluginDirectory, resultIconSize)
 	for i := range result.Tails {
 		if result.Tails[i].Type == QueryResultTailTypeImage {
 			result.Tails[i].Image = common.ConvertIcon(ctx, result.Tails[i].Image, pluginInstance.PluginDirectory)
@@ -1677,6 +1681,20 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 	m.storeQueryResult(ctx, pluginInstance, query, resultCopy)
 
 	return result
+}
+
+func (m *Manager) getResultIconSizeForQuery(pluginInstance *Instance, query Query) int {
+	if pluginInstance == nil {
+		return common.ResultListIconSize
+	}
+
+	// Grid is the only large-icon result surface today. Keep the size pinned in core
+	// for now so third-party metadata does not need a public IconSize contract.
+	if _, isGridLayout, err := pluginInstance.Metadata.GetFeatureParamsForGridLayoutCommand(query.Command); err == nil && isGridLayout {
+		return common.ResultGridIconSize
+	}
+
+	return common.ResultListIconSize
 }
 
 func (m *Manager) PolishUpdatableResult(ctx context.Context, pluginInstance *Instance, result UpdatableResult) UpdatableResult {
@@ -1852,7 +1870,10 @@ func (m *Manager) PolishUpdatableResult(ctx context.Context, pluginInstance *Ins
 
 	// Update icon in cache if present
 	if result.Icon != nil {
-		convertedIcon := common.ConvertIcon(ctx, *result.Icon, pluginInstance.PluginDirectory)
+		// Updated result icons must keep the same surface-aware size as initial results;
+		// otherwise a grid plugin can become blurry after sending an icon update.
+		resultIconSize := m.getResultIconSizeForQuery(pluginInstance, resultCache.Query)
+		convertedIcon := common.ConvertIconWithSize(ctx, *result.Icon, pluginInstance.PluginDirectory, resultIconSize)
 		result.Icon = &convertedIcon
 		resultCache.Result.Icon = *result.Icon
 	}
@@ -2739,7 +2760,6 @@ func (m *Manager) ShowToolbarMsg(ctx context.Context, pluginInstance *Instance, 
 	}
 	resolvedCtx, ok := m.resolveActiveToolbarMsgContext(ctx, pluginInstance.Metadata.Id)
 	if !ok {
-		logger.Warn(ctx, fmt.Sprintf("[%s] ignored toolbar msg outside active plugin query", pluginInstance.GetName(ctx)))
 		return
 	}
 	if msg.Id == "" {
