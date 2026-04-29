@@ -13,6 +13,8 @@ f .pdf
 
 The first run may show indexing status while Wox scans configured roots. Results become faster and more complete after the initial index is ready.
 
+![File plugin search results](/images/system-plugin-filesearch.png)
+
 ## What Gets Indexed
 
 Open **Settings -> Plugins -> File** to manage roots. Wox indexes those roots and skips common system/generated directories that are not useful for launcher search.

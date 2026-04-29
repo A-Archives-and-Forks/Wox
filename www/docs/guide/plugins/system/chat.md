@@ -10,6 +10,8 @@ chat How do I use Wox?
 
 You can continue from chat history, switch agents, and use configured MCP tools when the selected agent supports them.
 
+![AI Chat plugin conversation](/images/system-plugin-ai-chat.png)
+
 ## Settings
 
 | Setting | Use |

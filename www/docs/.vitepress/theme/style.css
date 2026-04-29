@@ -256,9 +256,15 @@
 
 .wox-split-section {
   display: grid;
-  grid-template-columns: minmax(0, 0.92fr) minmax(420px, 1.08fr);
+  /* Match split-section screenshot columns to the carousel stage width so the
+  homepage keeps one consistent visual rhythm from plugins through themes. */
+  grid-template-columns: minmax(0, 0.72fr) minmax(560px, 1.28fr);
   gap: clamp(32px, 6vw, 76px);
   align-items: center;
+}
+
+.wox-split-section-reverse {
+  grid-template-columns: minmax(560px, 1.28fr) minmax(0, 0.72fr);
 }
 
 .wox-split-section-reverse > :first-child {

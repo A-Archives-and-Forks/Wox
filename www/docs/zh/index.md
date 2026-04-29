@@ -48,6 +48,10 @@ description: "适用于 Windows、macOS 和 Linux 的快速、开放、插件驱
     </div>
   </section>
 
+  <SystemPluginCarousel />
+
+  <ThemeShowcase />
+
   <section class="wox-section wox-split-section">
     <div>
       <p class="wox-home-label">核心体验</p>

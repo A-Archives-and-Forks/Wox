@@ -13,6 +13,8 @@ github.com/Wox-launcher
 
 该插件的匹配比普通文本搜索更严格，避免书签结果淹没每一次查询。
 
+![浏览器书签插件结果列表](/images/system-plugin-bookmark.png)
+
 ## 支持的浏览器
 
 | 浏览器 | 说明 |

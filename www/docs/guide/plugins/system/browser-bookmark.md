@@ -13,6 +13,8 @@ github.com/Wox-launcher
 
 The plugin uses stricter matching than broad text search so bookmark results do not flood every query.
 
+![Browser Bookmark plugin result list](/images/system-plugin-bookmark.png)
+
 ## Supported Browsers
 
 | Browser | Notes |

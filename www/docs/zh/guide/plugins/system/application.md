@@ -12,6 +12,8 @@ settings
 
 按 `Enter` 打开选中的应用。如果 Wox 能识别该应用已经运行，结果可以激活现有窗口，而不是再启动一个实例。
 
+![应用插件结果列表](/images/system-plugin-app.png)
+
 ## 动作
 
 在应用结果上打开 [操作面板](../../usage/action-panel.md)，可以执行二级动作：

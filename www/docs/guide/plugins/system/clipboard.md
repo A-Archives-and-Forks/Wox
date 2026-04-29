@@ -18,6 +18,8 @@ cb fav
 
 Press `Enter` to run the configured primary action: copy the item back to the clipboard or paste it into the active app.
 
+![Clipboard plugin history results](/images/system-plugin-clipboard.png)
+
 ## Actions
 
 Open the Action Panel to favorite an item, edit its alias, delete it, open a copied path, or choose copy/paste explicitly.

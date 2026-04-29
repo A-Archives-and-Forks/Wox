@@ -13,6 +13,8 @@ emoji flag
 
 Results use a grid layout so you can scan many choices quickly. Press `Enter` to copy the selected emoji.
 
+![Emoji plugin grid results](/images/system-plugin-emoji.png)
+
 ## AI Matching
 
 AI matching is optional. When enabled, Wox can match descriptive phrases that are not part of the built-in emoji names.

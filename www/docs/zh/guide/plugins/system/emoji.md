@@ -13,6 +13,8 @@ emoji flag
 
 结果以网格展示，方便快速扫描。按 `Enter` 复制选中的 Emoji。
 
+![Emoji 插件网格结果](/images/system-plugin-emoji.png)
+
 ## AI 匹配
 
 AI 匹配是可选功能。启用后，Wox 可以匹配不在内置名称里的描述性短语。

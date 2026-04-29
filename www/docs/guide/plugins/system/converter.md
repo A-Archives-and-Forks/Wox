@@ -14,6 +14,8 @@ Converter handles units, currencies, crypto prices, number bases, dates, time zo
 
 Converter listens globally. Use `calculator` as an explicit keyword if another global result is taking priority.
 
+![Converter plugin result list](/images/system-plugin-converter.png)
+
 ## Supported Work
 
 | Type | Examples |

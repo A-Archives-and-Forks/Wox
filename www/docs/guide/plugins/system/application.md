@@ -12,6 +12,8 @@ settings
 
 Press `Enter` to open the selected app. If Wox can detect that the app is already running, the result can activate the existing window instead of starting another instance.
 
+![Application plugin result list](/images/system-plugin-app.png)
+
 ## Actions
 
 Open the [Action Panel](../../usage/action-panel.md) on an app result for secondary actions:

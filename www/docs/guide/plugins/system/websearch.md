@@ -11,6 +11,8 @@ g Wox Launcher
 
 The default configuration includes Google with the `g` keyword. Add more engines in plugin settings.
 
+![WebSearch plugin result list](/images/system-plugin-websearch.png)
+
 ## Engine Settings
 
 | Field | Use |

@@ -11,6 +11,8 @@ g Wox Launcher
 
 默认配置包含 Google，关键字为 `g`。你可以在插件设置中添加更多搜索引擎。
 
+![网页搜索插件结果列表](/images/system-plugin-websearch.png)
+
 ## 搜索引擎设置
 
 | 字段 | 用途 |

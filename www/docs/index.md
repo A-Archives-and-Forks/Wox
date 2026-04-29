@@ -48,6 +48,10 @@ description: "A fast, open, plugin-driven launcher for Windows, macOS, and Linux
     </div>
   </section>
 
+  <SystemPluginCarousel />
+
+  <ThemeShowcase />
+
   <section class="wox-section wox-split-section">
     <div>
       <p class="wox-home-label">Core experience</p>
