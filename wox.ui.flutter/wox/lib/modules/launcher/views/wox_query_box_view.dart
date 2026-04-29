@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:extended_text_field/extended_text_field.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
@@ -259,9 +260,20 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
               },
               child: SizedBox(
                 height: queryBoxHeight,
-                child: Theme(
-                  data: ThemeData(textSelectionTheme: TextSelectionThemeData(selectionColor: safeFromCssColor(currentTheme.queryBoxTextSelectionBackgroundColor))),
-                  child: _buildTextField(currentTheme),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // The query box height now follows visual wrapping, so update the controller with the
+                    // same text width used by the input decoration. This keeps pasted multi-line text intact
+                    // while giving long single-line queries enough vertical room for caret navigation.
+                    SchedulerBinding.instance.addPostFrameCallback((_) {
+                      controller.updateQueryBoxTextWrapWidth(const UuidV4().generate(), (constraints.maxWidth - 8 - 68).clamp(0, double.infinity));
+                    });
+
+                    return Theme(
+                      data: ThemeData(textSelectionTheme: TextSelectionThemeData(selectionColor: safeFromCssColor(currentTheme.queryBoxTextSelectionBackgroundColor))),
+                      child: _buildTextField(currentTheme),
+                    );
+                  },
                 ),
               ),
             ),

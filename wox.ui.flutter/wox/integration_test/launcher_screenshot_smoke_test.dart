@@ -129,6 +129,35 @@ class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
       await _delegate.writeClipboardImageFile(filePath: filePath);
     }
   }
+
+  @override
+  Future<void> moveMouseTo(Offset position) async {
+    if (delegateNativePresentation) {
+      await _delegate.moveMouseTo(position);
+    }
+  }
+
+  @override
+  Future<void> scrollMouse({required double deltaY}) async {
+    if (delegateNativePresentation) {
+      await _delegate.scrollMouse(deltaY: deltaY);
+    }
+  }
+
+  @override
+  Future<void> beginScrollingCaptureOverlay({required ScreenshotRect workspaceBounds, required ScreenshotRect selection, required ScreenshotRect controlsBounds}) async {
+    if (delegateNativePresentation) {
+      await _delegate.beginScrollingCaptureOverlay(workspaceBounds: workspaceBounds, selection: selection, controlsBounds: controlsBounds);
+    }
+  }
+
+  @override
+  Stream<void> scrollingCaptureWheelEvents() {
+    if (delegateNativePresentation) {
+      return _delegate.scrollingCaptureWheelEvents();
+    }
+    return const Stream<void>.empty();
+  }
 }
 
 void main() {
@@ -570,6 +599,8 @@ CaptureScreenshotRequest _defaultRequest() {
     scope: 'all_displays',
     output: 'clipboard',
     tools: const ['rect', 'ellipse', 'arrow', 'text'],
+    hideAnnotationToolbar: false,
+    autoConfirm: false,
     // Direct controller smoke tests bypass the Go UI layer that normally
     // reserves timestamped screenshot paths, so mirror that production naming
     // contract here instead of exporting every test to one fixed temp file.

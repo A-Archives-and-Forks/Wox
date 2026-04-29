@@ -384,5 +384,34 @@ void registerLauncherCoreSmokeTests() {
       controller.executeDefaultAction(const UuidV4().generate());
       expect(actionExecuted, isTrue, reason: 'Continue mode should keep retained result actions executable after re-show');
     });
+
+    testWidgets('T2-18: Query box preserves pasted multi-line query text', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      const query = 'Problem Statement\n输入的字符超过窗口长度时文字光标无法拖动查看\n\nProposed Solution\n希望可以随光标移动到指定字符';
+
+      await enterQueryTextAndWait(tester, controller, query);
+
+      // Regression coverage: maxLines=1 injects Flutter's single-line formatter and strips
+      // pasted newlines before Wox sees the query, so this smoke must assert the accepted value.
+      expect(controller.queryBoxTextFieldController.text, equals(query));
+      expect(controller.currentQuery.value.queryText, equals(query));
+      expect(controller.queryBoxLineCount.value, greaterThan(1));
+    });
+
+    testWidgets('T2-19: Query box expands for a visually wrapped long single-line query', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final baseInputHeight = controller.getQueryBoxInputHeight();
+      final query = 'Problem Statement ${List.filled(8, '输入的字符超过窗口长度时文字光标需要继续保持可见').join()}';
+
+      await enterQueryTextAndWait(tester, controller, query);
+      await pumpUntil(tester, () => controller.queryBoxLineCount.value > 1, timeout: const Duration(seconds: 5));
+
+      // Regression coverage: counting only explicit newlines kept this long one-line query at
+      // one visible row, hiding wrapped text and making caret navigation hard to inspect.
+      expect(controller.queryBoxTextFieldController.text, equals(query));
+      expect(controller.queryBoxTextFieldController.text.contains('\n'), isFalse);
+      expect(controller.queryBoxLineCount.value, greaterThan(1));
+      expect(controller.getQueryBoxInputHeight(), greaterThan(baseInputHeight));
+    });
   });
 }

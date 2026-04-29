@@ -78,6 +78,8 @@ class WoxLauncherController extends GetxController {
     enableSelectedTextStyle: false,
   );
   final queryBoxScrollController = ScrollController(initialScrollOffset: 0.0);
+  // Stores the current editable text width so query box height can follow visual wrapping.
+  double queryBoxTextWrapWidth = 0;
   final queryBoxLineCount = 1.obs;
   final queryBoxTextFieldKey = GlobalKey<ExtendedTextFieldState>();
 
@@ -2442,9 +2444,35 @@ class WoxLauncherController extends GetxController {
     }
   }
 
-  void updateQueryBoxLineCount(String traceId, String text) {
+  void updateQueryBoxTextWrapWidth(String traceId, double width) {
+    if ((queryBoxTextWrapWidth - width).abs() < 1) {
+      return;
+    }
+
+    queryBoxTextWrapWidth = width;
+    updateQueryBoxLineCount(traceId, queryBoxTextFieldController.text);
+  }
+
+  int calculateQueryBoxLineCount(String text) {
     final normalizedText = text.replaceAll('\r\n', '\n');
-    final rawLineCount = normalizedText.isEmpty ? 1 : normalizedText.split('\n').length;
+    if (queryBoxTextWrapWidth <= 0) {
+      return normalizedText.isEmpty ? 1 : normalizedText.split('\n').length.clamp(1, QUERY_BOX_MAX_LINES).toInt();
+    }
+
+    final painter = TextPainter(text: TextSpan(text: normalizedText.isEmpty ? ' ' : normalizedText, style: const TextStyle(fontSize: 28.0)), textDirection: TextDirection.ltr)
+      ..layout(minWidth: 0, maxWidth: queryBoxTextWrapWidth);
+
+    // Query text can wrap visually even when it has no explicit newline. The previous explicit-newline
+    // count kept the window one line tall, so wrapped content and the caret could move outside the
+    // visible input area. Measuring the actual layout preserves pasted multi-line text and lets long
+    // single-line queries expand up to the existing query box limit.
+    final lineCount = painter.computeLineMetrics().length.clamp(1, QUERY_BOX_MAX_LINES).toInt();
+    painter.dispose();
+    return lineCount;
+  }
+
+  void updateQueryBoxLineCount(String traceId, String text) {
+    final rawLineCount = calculateQueryBoxLineCount(text);
     final clampedLineCount = rawLineCount.clamp(1, QUERY_BOX_MAX_LINES);
     if (queryBoxLineCount.value == clampedLineCount) {
       return;

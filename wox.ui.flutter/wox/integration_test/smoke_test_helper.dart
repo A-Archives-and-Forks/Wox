@@ -355,7 +355,7 @@ Future<void> hideLauncherByEscape(WidgetTester tester, WoxLauncherController con
   await waitForWindowVisibility(tester, false, timeout: timeout);
 }
 
-Future<void> enterQueryAndWaitForResults(WidgetTester tester, WoxLauncherController controller, String query, {Duration timeout = const Duration(seconds: 30)}) async {
+Future<void> enterQueryTextAndWait(WidgetTester tester, WoxLauncherController controller, String query, {Duration timeout = const Duration(seconds: 30)}) async {
   final extendedTextFieldFinder = find.byType(ExtendedTextField);
   expect(extendedTextFieldFinder, findsOneWidget);
 
@@ -365,12 +365,13 @@ Future<void> enterQueryAndWaitForResults(WidgetTester tester, WoxLauncherControl
   tester.testTextInput.enterText(query);
   await tester.pump();
 
-  // Bug fix: continue-launch smoke cases can intentionally keep the previous
-  // result snapshot visible while the next query is still in flight. Waiting
-  // for any active result made callers proceed against stale results, so wait
-  // until the controller has accepted this query and then require a result that
-  // belongs to the current query id.
+  // Keep smoke tests on the real text-input path so paste and formatter regressions
+  // are caught before query-result assertions look at plugin behavior.
   await pumpUntil(tester, () => controller.queryBoxTextFieldController.text == query && controller.currentQuery.value.queryText == query, timeout: timeout);
+}
+
+Future<void> enterQueryAndWaitForResults(WidgetTester tester, WoxLauncherController controller, String query, {Duration timeout = const Duration(seconds: 30)}) async {
+  await enterQueryTextAndWait(tester, controller, query, timeout: timeout);
   final currentQueryId = controller.currentQuery.value.queryId;
 
   // Suppress transient overflow errors that occur during the window resize
