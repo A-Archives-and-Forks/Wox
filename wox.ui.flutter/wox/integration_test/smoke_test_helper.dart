@@ -168,6 +168,7 @@ Future<WoxLauncherController> launchAndShowLauncher(WidgetTester tester, {Size? 
   await updateSettingDirect('LangCode', 'en_US');
   await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
   await updateSettingDirect('StartPage', WoxStartPageEnum.WOX_START_PAGE_BLANK.code);
+  await updateSettingDirect('ShowPerformanceTail', 'true');
   await triggerBackendShowApp(tester);
   // Use a bounded pump instead of pumpAndSettle because showApp() calls
   // focusQueryBox() which starts the cursor blink timer. The periodic blink
@@ -590,6 +591,10 @@ Future<void> closeSettings(WidgetTester tester, WoxSettingController settingCont
 
 Future<void> tapSettingNavItem(WidgetTester tester, WoxSettingController settingController, String navPath, {Duration timeout = const Duration(seconds: 30)}) async {
   final navItemFinder = find.byKey(ValueKey('settings-nav-$navPath'));
+  if (navItemFinder.evaluate().isEmpty) {
+    final navScrollable = find.descendant(of: find.byKey(const ValueKey('settings-nav-list')), matching: find.byType(Scrollable));
+    await tester.scrollUntilVisible(navItemFinder, 120, scrollable: navScrollable, duration: const Duration(milliseconds: 100), continuous: true);
+  }
   expect(navItemFinder, findsOneWidget);
   // Avoid tester.ensureVisible which calls pumpAndSettle (10-min timeout).
   // If the cursor blink timer is still active from the query box, pumpAndSettle

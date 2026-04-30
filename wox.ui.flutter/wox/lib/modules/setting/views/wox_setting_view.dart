@@ -32,6 +32,7 @@ class WoxSettingView extends StatefulWidget {
 
 class _WoxSettingViewState extends State<WoxSettingView> {
   static const String navItemKeyPrefix = 'settings-nav-';
+  static const String navListKey = 'settings-nav-list';
   static const String backButtonKey = 'settings-back-button';
 
   WoxSettingController get controller => Get.find<WoxSettingController>();
@@ -209,7 +210,7 @@ class _WoxSettingViewState extends State<WoxSettingView> {
                 child: Column(
                   children: [
                     const SizedBox(height: 26),
-                    Expanded(child: ListView(padding: const EdgeInsets.symmetric(vertical: 4), children: _buildNavTree(navItems))),
+                    Expanded(child: ListView(key: const ValueKey(navListKey), padding: const EdgeInsets.symmetric(vertical: 4), children: _buildNavTree(navItems))),
                     Container(
                       margin: const EdgeInsets.fromLTRB(14, 8, 14, 16),
                       child: GestureDetector(
