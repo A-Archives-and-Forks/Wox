@@ -6,6 +6,7 @@ import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_button.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
+import 'package:wox/components/wox_panel.dart';
 import 'package:wox/components/wox_textfield.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/wox_runtime_status.dart';
@@ -49,30 +50,19 @@ class WoxSettingRuntimeView extends WoxSettingBaseView {
 
   Widget _buildRuntimeStatusCard(BuildContext context, WoxRuntimeStatus status) {
     final bool isRunning = status.isStarted;
-    final Color baseBackground = getThemeBackgroundColor();
-    final bool isDarkTheme = baseBackground.computeLuminance() < 0.5;
+    final bool isDarkTheme = isThemeDark();
     final Color textColor = getThemeTextColor();
     final Color subTextColor = getThemeSubTextColor();
     final Color statusColor = isRunning ? Colors.green : Colors.red;
-    final Color outlineColor = getThemeDividerColor().withValues(alpha: isDarkTheme ? 0.45 : 0.28);
-    final Color panelColor = getThemePanelBackgroundColor();
-    final Color blendedPanelColor = panelColor.a < 1 ? Color.alphaBlend(panelColor, baseBackground) : panelColor;
-    final Color tileColor = isDarkTheme ? blendedPanelColor.lighter(8) : blendedPanelColor.darker(6);
-    final Color iconBackgroundColor = isDarkTheme ? blendedPanelColor.lighter(16) : blendedPanelColor.darker(2);
+    final Color iconBackgroundColor = getThemeTextColor().withValues(alpha: isDarkTheme ? 0.10 : 0.05);
 
     final String stateLabel = isRunning ? controller.tr("ui_runtime_status_running") : controller.tr("ui_runtime_status_stopped");
     final String pluginCountLabel = controller.tr("ui_runtime_status_plugin_count").replaceAll("{count}", status.loadedPluginCount.toString());
     final String hostVersionLabel = status.hostVersion.isNotEmpty && !status.hostVersion.toLowerCase().startsWith('v') ? 'v${status.hostVersion}' : status.hostVersion;
     final WoxImage runtimeIcon = WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_SVG.code, imageData: _runtimeIcon(status.runtime));
 
-    return Container(
+    return WoxPanel(
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        // Keep each runtime tile lightweight but distinct; the first pass was too close to the page background and lost the grouped status shape.
-        color: tileColor,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: outlineColor),
-      ),
       child: SizedBox(
         height: 88,
         child: Column(
@@ -85,7 +75,8 @@ class WoxSettingRuntimeView extends WoxSettingBaseView {
                   width: 34,
                   height: 34,
                   decoration: BoxDecoration(
-                    // The leading mark identifies the runtime itself; status now lives in the pill so the icon no longer changes meaning between running and stopped.
+                    // The leading mark identifies the runtime itself; the shared panel provides the
+                    // card surface while the status pill remains the only running/stopped signal.
                     color: iconBackgroundColor,
                     borderRadius: BorderRadius.circular(8),
                   ),

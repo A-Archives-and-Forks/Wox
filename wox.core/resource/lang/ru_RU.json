@@ -315,7 +315,7 @@
   "ui_usage_period_365d": "1 год",
   "ui_usage_period_all": "За все время",
   "ui_usage_share_x": "Поделиться в X",
-  "ui_usage_share_success": "Изображение статистики скопировано. Вставьте его в X для публикации.",
+  "ui_usage_share_image_title": "Обзор использования",
   "ui_usage_share_clipboard_unsupported": "Изображение статистики создано, но буфер изображений недоступен. Прикрепите сохраненное изображение вручную.",
   "ui_usage_share_failed": "Не удалось поделиться изображением статистики",
   "ui_usage_share_tweet_text": "Мой обзор использования Wox Launcher\n\n#WoxLauncher\nhttps://github.com/Wox-Launcher/Wox\n\n(Изображение уже в буфере обмена. Вы можете вставить его сюда напрямую.)",

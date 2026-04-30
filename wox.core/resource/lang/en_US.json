@@ -318,7 +318,7 @@
   "ui_usage_period_365d": "1 year",
   "ui_usage_period_all": "All time",
   "ui_usage_share_x": "Share to X",
-  "ui_usage_share_success": "Usage image copied. Paste it into X to share.",
+  "ui_usage_share_image_title": "Usage Recap",
   "ui_usage_share_clipboard_unsupported": "Usage image generated, but image clipboard is unavailable. Attach the saved image manually.",
   "ui_usage_share_failed": "Failed to share usage image",
   "ui_usage_share_tweet_text": "My Wox Launcher usage recap\n\n#WoxLauncher\nhttps://github.com/Wox-Launcher/Wox\n\n(The share image is already on your clipboard. You can paste it here directly.)",

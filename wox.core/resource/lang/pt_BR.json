@@ -315,7 +315,7 @@
   "ui_usage_period_365d": "1 ano",
   "ui_usage_period_all": "Todo o periodo",
   "ui_usage_share_x": "Compartilhar no X",
-  "ui_usage_share_success": "Imagem de uso copiada. Cole no X para compartilhar.",
+  "ui_usage_share_image_title": "Resumo de uso",
   "ui_usage_share_clipboard_unsupported": "Imagem de uso gerada, mas a area de transferencia de imagens nao esta disponivel. Anexe a imagem salva manualmente.",
   "ui_usage_share_failed": "Falha ao compartilhar a imagem de uso",
   "ui_usage_share_tweet_text": "Minha retrospectiva de uso do Wox Launcher\n\n#WoxLauncher\nhttps://github.com/Wox-Launcher/Wox\n\n(A imagem de compartilhamento ja esta na sua area de transferencia. Voce pode cola-la aqui diretamente.)",

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -11,9 +12,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
+import 'package:wox/components/wox_panel.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/wox_usage_stats.dart';
-import 'package:wox/modules/setting/views/wox_usage_share_card.dart';
 import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/log.dart';
@@ -28,6 +29,7 @@ class WoxSettingUsageView extends StatefulWidget {
 
 class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
   final WoxSettingController controller = Get.find<WoxSettingController>();
+  late final MemoryImage _woxIconImage = MemoryImage(base64Decode(WOX_ICON.split(';base64,').last));
   bool _isSharingUsage = false;
   String _shareStatusMessage = '';
   bool _shareStatusIsError = false;
@@ -96,11 +98,10 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
     return isThemeDark() ? Colors.white.withValues(alpha: 0.08) : const Color(0xFFE6EAF0);
   }
 
-  List<BoxShadow> _softShadow() {
-    if (isThemeDark()) {
-      return const [];
-    }
-    return [BoxShadow(color: const Color(0xFF1F2937).withValues(alpha: 0.04), blurRadius: 18, offset: const Offset(0, 8))];
+  Color _shareImageBackgroundColor() {
+    // The capture overlay must use an opaque color. Hiding the overlay with opacity previously made
+    // the exported PNG translucent, which looked wrong after pasting into X or image viewers.
+    return isThemeDark() ? const Color(0xFF202733) : const Color(0xFFF6F8FB);
   }
 
   Widget _shareButton({required bool disabled, required VoidCallback onPressed}) {
@@ -218,50 +219,64 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
   }
 
   Widget _statCard({required String title, required String value, required IconData icon, required Color accentColor, required _UsageTrend trend, required String compareLabel}) {
-    return Container(
-      height: 108,
+    return WoxPanel(
+      height: 116,
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: _panelColor(), borderRadius: BorderRadius.circular(8), border: Border.all(color: _outlineColor()), boxShadow: _softShadow()),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(color: accentColor.withValues(alpha: isThemeDark() ? 0.22 : 0.12), borderRadius: BorderRadius.circular(8)),
-            child: Icon(icon, size: 19, color: accentColor),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(title, style: TextStyle(color: getThemeSubTextColor(), fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 6),
-                Text(value, style: TextStyle(color: getThemeTextColor(), fontSize: 22, fontWeight: FontWeight.w700, height: 1.0)),
-                const SizedBox(height: 8),
-                Row(
+          Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(color: accentColor.withValues(alpha: isThemeDark() ? 0.22 : 0.12), borderRadius: BorderRadius.circular(8)),
+                child: Icon(icon, size: 22, color: accentColor),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                      decoration: BoxDecoration(color: trend.color.withValues(alpha: isThemeDark() ? 0.16 : 0.09), borderRadius: BorderRadius.circular(6)),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(trend.icon, size: 10, color: trend.color),
-                          const SizedBox(width: 3),
-                          Text(trend.label, style: TextStyle(color: trend.color, fontSize: 10, fontWeight: FontWeight.w700)),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(compareLabel, style: TextStyle(color: getThemeSubTextColor(), fontSize: 11, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis),
-                    ),
+                    Text(title, style: TextStyle(color: getThemeSubTextColor(), fontSize: 12, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
+                    const SizedBox(height: 6),
+                    Text(value, style: TextStyle(color: getThemeTextColor(), fontSize: 22, fontWeight: FontWeight.w700, height: 1.0)),
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
+          ),
+          const Spacer(),
+          // The comparison row belongs to the whole KPI card, not just the text column. Placing it
+          // at the bottom separates auxiliary trend context from the primary icon/value content and
+          // gives localized labels the full card width without truncating common English text.
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(color: trend.color.withValues(alpha: isThemeDark() ? 0.16 : 0.09), borderRadius: BorderRadius.circular(6)),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(trend.icon, size: 10, color: trend.color),
+                    const SizedBox(width: 3),
+                    Text(trend.label, style: TextStyle(color: trend.color, fontSize: 10, fontWeight: FontWeight.w700)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: SizedBox(
+                  height: 16,
+                  child: FittedBox(
+                    alignment: Alignment.centerLeft,
+                    fit: BoxFit.scaleDown,
+                    child: Text(compareLabel, style: TextStyle(color: getThemeSubTextColor(), fontSize: 11, fontWeight: FontWeight.w500), maxLines: 1),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -269,9 +284,8 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
   }
 
   Widget _dashboardPanel({required String title, required IconData icon, required Widget child, String? footer}) {
-    return Container(
+    return WoxPanel(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: _panelColor(), borderRadius: BorderRadius.circular(8), border: Border.all(color: _outlineColor()), boxShadow: _softShadow()),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -543,7 +557,200 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
     }
   }
 
-  Widget _usageSummaryHeader({required bool isLoading, required bool disableShare, required String selectedPeriod, required WoxUsageStats stats}) {
+  String _shareImageTitle() {
+    return controller.tr('ui_usage_share_image_title');
+  }
+
+  Widget _usageDashboardBody({required WoxUsageStats stats, required String selectedPeriod, required String error}) {
+    final allTime = stats.period == 'all' || selectedPeriod == 'all';
+    final mostHour = stats.mostActiveHour < 0 ? '-' : '${stats.mostActiveHour.toString().padLeft(2, '0')}:00';
+    final mostDay = stats.mostActiveDay < 0 ? '-' : _weekdayLabel(stats.mostActiveDay);
+    const blueAccent = Color(0xFF3B82F6);
+    const tealAccent = Color(0xFF14B8A6);
+    const amberAccent = Color(0xFFF59E0B);
+    const violetAccent = Color(0xFF8B5CF6);
+    // KPI cards can keep their semantic accents, but the lower analytics panels need a calmer
+    // reading rhythm. Reusing blue for app/time panels and violet for plugin panels matches the
+    // accepted mockup more closely than giving every card its own dominant color.
+    const appPanelAccent = blueAccent;
+    const pluginPanelAccent = violetAccent;
+    final compareLabel = _compareLabel(stats);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (error.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 10), child: Text(error, style: const TextStyle(color: Colors.red, fontSize: 12))),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth.isFinite ? constraints.maxWidth : GENERAL_SETTING_COMPACT_FORM_WIDTH;
+            final spacing = 12.0;
+            final columns = width >= 760 ? 4 : 2;
+            final cardWidth = (width - (columns - 1) * spacing) / columns;
+
+            return Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                SizedBox(
+                  width: cardWidth,
+                  child: _statCard(
+                    title: controller.tr('ui_usage_opened'),
+                    value: stats.periodOpened.toString(),
+                    icon: Icons.visibility_outlined,
+                    accentColor: blueAccent,
+                    trend: _buildUsageTrend(
+                      changePercent: stats.openedChangePercent,
+                      current: stats.periodOpened,
+                      previous: stats.previousPeriodOpened,
+                      accentColor: blueAccent,
+                      allTime: allTime,
+                    ),
+                    compareLabel: compareLabel,
+                  ),
+                ),
+                SizedBox(
+                  width: cardWidth,
+                  child: _statCard(
+                    title: controller.tr('ui_usage_app_launches'),
+                    value: stats.periodAppLaunch.toString(),
+                    icon: Icons.rocket_launch_outlined,
+                    accentColor: tealAccent,
+                    trend: _buildUsageTrend(
+                      changePercent: stats.appLaunchChangePercent,
+                      current: stats.periodAppLaunch,
+                      previous: stats.previousPeriodAppLaunch,
+                      accentColor: tealAccent,
+                      allTime: allTime,
+                    ),
+                    compareLabel: compareLabel,
+                  ),
+                ),
+                SizedBox(
+                  width: cardWidth,
+                  child: _statCard(
+                    title: controller.tr('ui_usage_apps_used'),
+                    value: stats.periodAppsUsed.toString(),
+                    icon: Icons.apps_outlined,
+                    accentColor: amberAccent,
+                    trend: _buildUsageTrend(
+                      changePercent: stats.appsUsedChangePercent,
+                      current: stats.periodAppsUsed,
+                      previous: stats.previousPeriodAppsUsed,
+                      accentColor: amberAccent,
+                      allTime: allTime,
+                    ),
+                    compareLabel: compareLabel,
+                  ),
+                ),
+                SizedBox(
+                  width: cardWidth,
+                  child: _statCard(
+                    title: controller.tr('ui_usage_actions'),
+                    value: stats.periodActions.toString(),
+                    icon: Icons.bolt_outlined,
+                    accentColor: violetAccent,
+                    trend: _buildUsageTrend(
+                      changePercent: stats.actionsChangePercent,
+                      current: stats.periodActions,
+                      previous: stats.previousPeriodActions,
+                      accentColor: violetAccent,
+                      allTime: allTime,
+                    ),
+                    compareLabel: compareLabel,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 18),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth.isFinite ? constraints.maxWidth : GENERAL_SETTING_COMPACT_FORM_WIDTH;
+            final spacing = 12.0;
+            final columns = width >= 760 ? 2 : 1;
+            final blockWidth = columns == 1 ? width : (width - spacing) / columns;
+
+            final hourLabels = List<String>.generate(24, (i) => i % 6 == 0 ? i.toString().padLeft(2, '0') : '');
+            final hourTooltipLabels = List<String>.generate(24, (i) => '${i.toString().padLeft(2, '0')}:00');
+            final weekdayLabels = List<String>.generate(7, (i) => _weekdayLabel(i));
+
+            return Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                SizedBox(
+                  width: blockWidth,
+                  child: _dashboardPanel(
+                    title: controller.tr('ui_usage_opened_by_hour'),
+                    icon: Icons.schedule_outlined,
+                    child: _barChart(data: stats.openedByHour, labels: hourLabels, tooltipLabels: hourTooltipLabels, highlightIndex: stats.mostActiveHour, accentColor: blueAccent),
+                    footer: '${controller.tr('ui_usage_most_active_hour')} · $mostHour',
+                  ),
+                ),
+                SizedBox(
+                  width: blockWidth,
+                  child: _dashboardPanel(
+                    title: controller.tr('ui_usage_opened_by_weekday'),
+                    icon: Icons.calendar_today_outlined,
+                    child: _barChart(
+                      data: stats.openedByWeekday,
+                      labels: weekdayLabels,
+                      tooltipLabels: weekdayLabels,
+                      highlightIndex: stats.mostActiveDay,
+                      accentColor: appPanelAccent,
+                    ),
+                    footer: '${controller.tr('ui_usage_most_active_day')} · $mostDay',
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 18),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth.isFinite ? constraints.maxWidth : GENERAL_SETTING_COMPACT_FORM_WIDTH;
+            final spacing = 12.0;
+            final columns = width >= 760 ? 2 : 1;
+            final blockWidth = columns == 1 ? width : (width - spacing) / columns;
+            final emptyText = controller.tr('ui_usage_no_data');
+
+            return Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                SizedBox(
+                  width: blockWidth,
+                  child: _topList(
+                    title: controller.tr('ui_usage_top_apps'),
+                    titleIcon: Icons.apps_outlined,
+                    items: stats.topApps,
+                    emptyText: emptyText,
+                    accentColor: appPanelAccent,
+                    showItemIcons: true,
+                  ),
+                ),
+                SizedBox(
+                  width: blockWidth,
+                  child: _topList(
+                    title: controller.tr('ui_usage_top_plugins'),
+                    titleIcon: Icons.extension_outlined,
+                    items: stats.topPlugins,
+                    emptyText: emptyText,
+                    accentColor: pluginPanelAccent,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _usageSummaryHeader({required bool isLoading, required bool disableShare, required String selectedPeriod}) {
     final titleBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -560,9 +767,7 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
     );
 
     final shareAction =
-        _isSharingUsage
-            ? const Padding(padding: EdgeInsets.only(top: 6), child: WoxLoadingIndicator(size: 16))
-            : _shareButton(disabled: disableShare, onPressed: () => _shareUsageToX(stats));
+        _isSharingUsage ? const Padding(padding: EdgeInsets.only(top: 6), child: WoxLoadingIndicator(size: 16)) : _shareButton(disabled: disableShare, onPressed: _shareUsageToX);
     final periodSelector = _periodSelector(selectedPeriod: selectedPeriod, disabled: isLoading);
 
     // The period selector is a page-level filter, not part of the share action. It stays centered in
@@ -581,20 +786,102 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
     );
   }
 
-  Future<ui.Image> _captureShareCardImage(WoxUsageStats stats) async {
+  Widget _usageShareHeader({required String selectedPeriod}) {
+    // The share image header is rendered only in the temporary capture overlay. The visible settings
+    // page keeps its regular title/subtitle, while the exported image gets a more editorial header.
+    return SizedBox(
+      width: double.infinity,
+      height: 72,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Keep the logo in the brand line instead of beside the whole title stack. The
+                // previous lockup made the large title start after the icon, which looked visually
+                // offset even though the widget edges were technically aligned.
+                Row(
+                  children: [
+                    ClipRRect(borderRadius: BorderRadius.circular(8), child: Image(image: _woxIconImage, width: 30, height: 30, fit: BoxFit.cover)),
+                    const SizedBox(width: 10),
+                    Text('Wox Launcher', style: TextStyle(color: getThemeSubTextColor(), fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.1)),
+                  ],
+                ),
+                const SizedBox(height: 9),
+                Text(
+                  _shareImageTitle(),
+                  style: TextStyle(color: getThemeTextColor(), fontSize: 30, fontWeight: FontWeight.w900, height: 1.0),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 20),
+          // A small period pill gives the top-right corner useful context without competing with
+          // the Wox logo. The previous card-like badge was visually heavier than the report title.
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+            decoration: BoxDecoration(color: _panelColor().withValues(alpha: 0.72), borderRadius: BorderRadius.circular(999), border: Border.all(color: _outlineColor())),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.calendar_today_outlined, size: 13, color: getThemeSubTextColor()),
+                const SizedBox(width: 7),
+                Text(_periodLabel(selectedPeriod), style: TextStyle(color: getThemeSubTextColor(), fontSize: 12, fontWeight: FontWeight.w800)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<ui.Image> _captureUsagePageImage() async {
     final overlay = Overlay.of(context);
     final captureKey = GlobalKey();
+    final selectedPeriod = controller.usageStatsPeriod.value;
+    final stats = controller.usageStats.value;
+    final error = controller.usageStatsError.value;
     late final OverlayEntry entry;
+
+    // The capture overlay is rendered and read back immediately. Precache the bundled icon first so
+    // the share image does not grab a frame where the logo slot has layout but no decoded pixels yet.
+    await precacheImage(_woxIconImage, context);
 
     entry = OverlayEntry(
       builder: (context) {
         return Positioned(
-          left: 0,
-          top: 0,
+          left: -10000,
+          top: -10000,
           child: IgnorePointer(
-            child: Opacity(
-              opacity: 0.01,
-              child: Material(type: MaterialType.transparency, child: RepaintBoundary(key: captureKey, child: WoxUsageShareCard(stats: stats, tr: controller.tr))),
+            child: Material(
+              type: MaterialType.transparency,
+              child: RepaintBoundary(
+                key: captureKey,
+                child: SizedBox(
+                  width: GENERAL_SETTING_WIDE_FORM_WIDTH,
+                  child: ColoredBox(
+                    color: _shareImageBackgroundColor(),
+                    // The exported image needs breathing room on every edge; the visible settings
+                    // page keeps its dense layout, while only the capture overlay gets this padding.
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _usageShareHeader(selectedPeriod: selectedPeriod),
+                          const SizedBox(height: 22),
+                          _usageDashboardBody(stats: stats, selectedPeriod: selectedPeriod, error: error),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         );
@@ -603,9 +890,8 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
 
     overlay.insert(entry);
     try {
-      // A temporary overlay gives the share card its own paint pass. Capturing the in-page hidden
-      // widget was timing-sensitive because settings rebuilds and scroll containers can leave the
-      // boundary dirty when the click handler tries to call toImage.
+      // The capture target is hidden in an overlay so the screenshot can have a share-only title and
+      // outer padding without mutating the visible settings page or capturing interactive controls.
       RenderRepaintBoundary? boundary;
       for (var attempt = 0; attempt < 6; attempt++) {
         WidgetsBinding.instance.ensureVisualUpdate();
@@ -619,7 +905,7 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
 
       final readyBoundary = boundary;
       if (readyBoundary == null || readyBoundary.debugNeedsPaint) {
-        throw StateError('Usage share card is not ready');
+        throw StateError('Usage page is not ready for sharing');
       }
       return readyBoundary.toImage(pixelRatio: 2);
     } finally {
@@ -633,7 +919,7 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
     return controller.tr('ui_usage_share_tweet_text');
   }
 
-  Future<void> _shareUsageToX(WoxUsageStats stats) async {
+  Future<void> _shareUsageToX() async {
     final traceId = const UuidV4().generate();
     setState(() {
       _isSharingUsage = true;
@@ -642,9 +928,10 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
     });
 
     try {
-      // The share image is rendered through a temporary overlay so the PNG uses the polished
-      // share-card layout without changing the visible settings page or inventing data.
-      final image = await _captureShareCardImage(stats);
+      // Exporting the live dashboard preserves the user's selected period and current theme. The
+      // previous off-screen share card was visually disconnected from the page the user chose to
+      // share, so the capture now targets the dashboard body directly.
+      final image = await _captureUsagePageImage();
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       image.dispose();
       if (byteData == null) {
@@ -655,7 +942,7 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
       final file = File('${directory.path}/wox-usage-share.png');
       await file.writeAsBytes(byteData.buffer.asUint8List(), flush: true);
 
-      var statusMessage = controller.tr('ui_usage_share_success');
+      var statusMessage = '';
       var statusIsError = false;
       try {
         await ScreenshotPlatformBridge.instance.writeClipboardImageFile(filePath: file.path);
@@ -704,20 +991,6 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
       final error = controller.usageStatsError.value;
       final stats = controller.usageStats.value;
       final selectedPeriod = controller.usageStatsPeriod.value;
-      final allTime = stats.period == 'all' || selectedPeriod == 'all';
-
-      final mostHour = stats.mostActiveHour < 0 ? '-' : '${stats.mostActiveHour.toString().padLeft(2, '0')}:00';
-      final mostDay = stats.mostActiveDay < 0 ? '-' : _weekdayLabel(stats.mostActiveDay);
-      const blueAccent = Color(0xFF3B82F6);
-      const tealAccent = Color(0xFF14B8A6);
-      const amberAccent = Color(0xFFF59E0B);
-      const violetAccent = Color(0xFF8B5CF6);
-      // KPI cards can keep their semantic accents, but the lower analytics panels need a calmer
-      // reading rhythm. Reusing blue for app/time panels and violet for plugin panels matches the
-      // accepted mockup more closely than giving every card its own dominant color.
-      const appPanelAccent = blueAccent;
-      const pluginPanelAccent = violetAccent;
-      final compareLabel = _compareLabel(stats);
 
       return Container(
         color: _pageBackgroundColor(),
@@ -726,188 +999,16 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
             _form(
               width: GENERAL_SETTING_WIDE_FORM_WIDTH,
               children: [
-                // The usage page is now a dense analytics dashboard instead of a generic settings
-                // form. Keeping the header, KPI row, charts, and ranked lists in one vertical rhythm
-                // matches the accepted redesign while reusing the existing usage endpoint unchanged.
-                _usageSummaryHeader(isLoading: isLoading, disableShare: isLoading, selectedPeriod: selectedPeriod, stats: stats),
-                const SizedBox(height: 18),
                 if (_shareStatusMessage.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: Text(_shareStatusMessage, style: TextStyle(color: _shareStatusIsError ? Colors.red : getThemeSubTextColor(), fontSize: 12)),
                   ),
-                if (error.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 10), child: Text(error, style: const TextStyle(color: Colors.red, fontSize: 12))),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final width = constraints.maxWidth.isFinite ? constraints.maxWidth : GENERAL_SETTING_COMPACT_FORM_WIDTH;
-                    final spacing = 12.0;
-                    final columns = width >= 760 ? 4 : 2;
-                    final cardWidth = (width - (columns - 1) * spacing) / columns;
-
-                    return Wrap(
-                      spacing: spacing,
-                      runSpacing: spacing,
-                      children: [
-                        SizedBox(
-                          width: cardWidth,
-                          child: _statCard(
-                            title: controller.tr('ui_usage_opened'),
-                            value: stats.periodOpened.toString(),
-                            icon: Icons.visibility_outlined,
-                            accentColor: blueAccent,
-                            trend: _buildUsageTrend(
-                              changePercent: stats.openedChangePercent,
-                              current: stats.periodOpened,
-                              previous: stats.previousPeriodOpened,
-                              accentColor: blueAccent,
-                              allTime: allTime,
-                            ),
-                            compareLabel: compareLabel,
-                          ),
-                        ),
-                        SizedBox(
-                          width: cardWidth,
-                          child: _statCard(
-                            title: controller.tr('ui_usage_app_launches'),
-                            value: stats.periodAppLaunch.toString(),
-                            icon: Icons.rocket_launch_outlined,
-                            accentColor: tealAccent,
-                            trend: _buildUsageTrend(
-                              changePercent: stats.appLaunchChangePercent,
-                              current: stats.periodAppLaunch,
-                              previous: stats.previousPeriodAppLaunch,
-                              accentColor: tealAccent,
-                              allTime: allTime,
-                            ),
-                            compareLabel: compareLabel,
-                          ),
-                        ),
-                        SizedBox(
-                          width: cardWidth,
-                          child: _statCard(
-                            title: controller.tr('ui_usage_apps_used'),
-                            value: stats.periodAppsUsed.toString(),
-                            icon: Icons.apps_outlined,
-                            accentColor: amberAccent,
-                            trend: _buildUsageTrend(
-                              changePercent: stats.appsUsedChangePercent,
-                              current: stats.periodAppsUsed,
-                              previous: stats.previousPeriodAppsUsed,
-                              accentColor: amberAccent,
-                              allTime: allTime,
-                            ),
-                            compareLabel: compareLabel,
-                          ),
-                        ),
-                        SizedBox(
-                          width: cardWidth,
-                          child: _statCard(
-                            title: controller.tr('ui_usage_actions'),
-                            value: stats.periodActions.toString(),
-                            icon: Icons.bolt_outlined,
-                            accentColor: violetAccent,
-                            trend: _buildUsageTrend(
-                              changePercent: stats.actionsChangePercent,
-                              current: stats.periodActions,
-                              previous: stats.previousPeriodActions,
-                              accentColor: violetAccent,
-                              allTime: allTime,
-                            ),
-                            compareLabel: compareLabel,
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
+                // Normal settings view keeps its original title and subtitle. The share-only title
+                // and outer padding are rendered in a temporary overlay when the user clicks Share.
+                _usageSummaryHeader(isLoading: isLoading, disableShare: isLoading, selectedPeriod: selectedPeriod),
                 const SizedBox(height: 18),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final width = constraints.maxWidth.isFinite ? constraints.maxWidth : GENERAL_SETTING_COMPACT_FORM_WIDTH;
-                    final spacing = 12.0;
-                    final columns = width >= 760 ? 2 : 1;
-                    final blockWidth = columns == 1 ? width : (width - spacing) / columns;
-
-                    final hourLabels = List<String>.generate(24, (i) => i % 6 == 0 ? i.toString().padLeft(2, '0') : '');
-                    final hourTooltipLabels = List<String>.generate(24, (i) => '${i.toString().padLeft(2, '0')}:00');
-                    final weekdayLabels = List<String>.generate(7, (i) => _weekdayLabel(i));
-
-                    return Wrap(
-                      spacing: spacing,
-                      runSpacing: spacing,
-                      children: [
-                        SizedBox(
-                          width: blockWidth,
-                          child: _dashboardPanel(
-                            title: controller.tr('ui_usage_opened_by_hour'),
-                            icon: Icons.schedule_outlined,
-                            child: _barChart(
-                              data: stats.openedByHour,
-                              labels: hourLabels,
-                              tooltipLabels: hourTooltipLabels,
-                              highlightIndex: stats.mostActiveHour,
-                              accentColor: blueAccent,
-                            ),
-                            footer: '${controller.tr('ui_usage_most_active_hour')} · $mostHour',
-                          ),
-                        ),
-                        SizedBox(
-                          width: blockWidth,
-                          child: _dashboardPanel(
-                            title: controller.tr('ui_usage_opened_by_weekday'),
-                            icon: Icons.calendar_today_outlined,
-                            child: _barChart(
-                              data: stats.openedByWeekday,
-                              labels: weekdayLabels,
-                              tooltipLabels: weekdayLabels,
-                              highlightIndex: stats.mostActiveDay,
-                              accentColor: appPanelAccent,
-                            ),
-                            footer: '${controller.tr('ui_usage_most_active_day')} · $mostDay',
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 18),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final width = constraints.maxWidth.isFinite ? constraints.maxWidth : GENERAL_SETTING_COMPACT_FORM_WIDTH;
-                    final spacing = 12.0;
-                    final columns = width >= 760 ? 2 : 1;
-                    final blockWidth = columns == 1 ? width : (width - spacing) / columns;
-                    final emptyText = controller.tr('ui_usage_no_data');
-
-                    return Wrap(
-                      spacing: spacing,
-                      runSpacing: spacing,
-                      children: [
-                        SizedBox(
-                          width: blockWidth,
-                          child: _topList(
-                            title: controller.tr('ui_usage_top_apps'),
-                            titleIcon: Icons.apps_outlined,
-                            items: stats.topApps,
-                            emptyText: emptyText,
-                            accentColor: appPanelAccent,
-                            showItemIcons: true,
-                          ),
-                        ),
-                        SizedBox(
-                          width: blockWidth,
-                          child: _topList(
-                            title: controller.tr('ui_usage_top_plugins'),
-                            titleIcon: Icons.extension_outlined,
-                            items: stats.topPlugins,
-                            emptyText: emptyText,
-                            accentColor: pluginPanelAccent,
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
+                _usageDashboardBody(stats: stats, selectedPeriod: selectedPeriod, error: error),
               ],
             ),
           ],
