@@ -36,6 +36,9 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   final columnTooltipWidth = 20.0;
   final bool readonly;
   final bool inlineTitleActions;
+  final int minimumRowCount;
+  final String minimumRowDeleteMessage;
+  final Widget? Function(PluginSettingValueTableColumn column, Map<String, dynamic> row)? customCellBuilder;
   final Future<List<PluginSettingTableValidationError>> Function(Map<String, dynamic> rowValues)? onUpdateValidate;
   final int? autoOpenEditRowIndex;
   final ScrollController horizontalHeaderScrollController = ScrollController();
@@ -52,6 +55,9 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     this.tableWidth = PLUGIN_SETTING_TABLE_WIDTH,
     this.readonly = false,
     this.inlineTitleActions = false,
+    this.minimumRowCount = 0,
+    this.minimumRowDeleteMessage = "",
+    this.customCellBuilder,
     this.onUpdateValidate,
     this.autoOpenEditRowIndex,
   }) {
@@ -253,6 +259,13 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
 
   Widget buildRowCell(PluginSettingValueTableColumn column, Map<String, dynamic> row) {
     var value = row[column.key] ?? "";
+    final customCell = customCellBuilder?.call(column, row);
+    if (customCell != null) {
+      // Some built-in setting tables need domain-specific display without changing
+      // persisted values. Keeping the hook here lets callers polish cells such as
+      // global trigger keywords while the generic table still owns sizing.
+      return columnWidth(column: column, isHeader: false, isOperation: false, child: customCell);
+    }
 
     if (column.type == PluginSettingValueType.pluginSettingValueTableColumnTypeText) {
       return columnWidth(
@@ -545,6 +558,8 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   DataCell buildOperationCell(BuildContext context, Map<String, dynamic> row, List<dynamic> rows) {
     final originalRow = json.decode(json.encode(row)) as Map<String, dynamic>;
     originalRow.remove(rowUniqueIdKey);
+    final isDeleteDisabled = rows.length <= minimumRowCount;
+    final deleteDisabledMessage = minimumRowDeleteMessage.trim().isEmpty ? tr("ui_plugin_table_minimum_row_delete_message") : tr(minimumRowDeleteMessage);
 
     return DataCell(
       SizedBox(
@@ -561,55 +576,66 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                 await _showEditRowDialog(context, row);
               },
             ),
-            WoxButton.text(
-              text: '',
-              icon: Icon(Icons.delete, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              onPressed: () async {
-                //confirm delete
-                await showDialog(
-                  context: context,
-                  barrierColor: getThemePopupBarrierColor(),
-                  builder: (context) {
-                    final cardColor = getThemePopupSurfaceColor();
-                    final outlineColor = getThemePopupOutlineColor();
+            Tooltip(
+              message: isDeleteDisabled ? deleteDisabledMessage : "",
+              child: WoxButton.text(
+                text: '',
+                icon: Icon(Icons.delete, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor).withValues(alpha: isDeleteDisabled ? 0.45 : 1)),
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                onPressed:
+                    isDeleteDisabled
+                        ? null
+                        : () async {
+                          //confirm delete
+                          await showDialog(
+                            context: context,
+                            barrierColor: getThemePopupBarrierColor(),
+                            builder: (context) {
+                              final cardColor = getThemePopupSurfaceColor();
+                              final outlineColor = getThemePopupOutlineColor();
 
-                    return AlertDialog(
-                      backgroundColor: cardColor,
-                      surfaceTintColor: Colors.transparent,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: outlineColor)),
-                      content: Text(tr("ui_delete_row_confirm"), style: TextStyle(color: getThemeTextColor())),
-                      actions: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            WoxButton.secondary(text: tr("ui_cancel"), onPressed: () => Navigator.pop(context)),
-                            const SizedBox(width: 16),
-                            WoxButton.primary(
-                              text: tr("ui_delete"),
-                              onPressed: () {
-                                Navigator.pop(context);
+                              return AlertDialog(
+                                backgroundColor: cardColor,
+                                surfaceTintColor: Colors.transparent,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: outlineColor)),
+                                content: Text(tr("ui_delete_row_confirm"), style: TextStyle(color: getThemeTextColor())),
+                                actions: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                      WoxButton.secondary(text: tr("ui_cancel"), onPressed: () => Navigator.pop(context)),
+                                      const SizedBox(width: 16),
+                                      WoxButton.primary(
+                                        text: tr("ui_delete"),
+                                        onPressed: () {
+                                          Navigator.pop(context);
 
-                                // Re-read the latest rows from the current setting value
-                                final freshRows = decodeRowsJson(getSetting(item.key));
+                                          // Re-read the latest rows before deleting so minimum-row
+                                          // constraints remain correct when the table changed while
+                                          // the confirmation dialog was open.
+                                          final freshRows = decodeRowsJson(getSetting(item.key));
+                                          if (freshRows.length <= minimumRowCount) {
+                                            return;
+                                          }
 
-                                // Find and remove the target row by matching original field values
-                                var idx = _findRowIndex(freshRows, originalRow);
-                                if (idx >= 0) {
-                                  freshRows.removeAt(idx);
-                                }
+                                          // Find and remove the target row by matching original field values
+                                          var idx = _findRowIndex(freshRows, originalRow);
+                                          if (idx >= 0) {
+                                            freshRows.removeAt(idx);
+                                          }
 
-                                updateConfig(item.key, json.encode(freshRows));
-                              },
-                            ),
-                          ],
-                        ),
-                      ],
-                    );
-                  },
-                );
-                WoxSettingFocusUtil.restoreIfInSettingView();
-              },
+                                          updateConfig(item.key, json.encode(freshRows));
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                          WoxSettingFocusUtil.restoreIfInSettingView();
+                        },
+              ),
             ),
           ],
         ),

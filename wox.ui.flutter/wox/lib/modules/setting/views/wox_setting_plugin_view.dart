@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:dynamic_tabbar/dynamic_tabbar.dart' as dt;
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
@@ -40,6 +39,8 @@ import 'package:wox/enums/wox_plugin_runtime_enum.dart';
 
 class WoxSettingPluginView extends GetView<WoxSettingController> {
   const WoxSettingPluginView({super.key});
+  static const String _triggerKeywordColumnKey = "keyword";
+  static const String _triggerKeywordOriginalColumnKey = "_wox_original_trigger_keyword";
   // Local refreshing state for showing loading spinner on refresh button
   static final RxBool _refreshing = false.obs;
   static final GlobalKey _pluginFilterIconKey = GlobalKey();
@@ -493,74 +494,57 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
               return const SizedBox.shrink();
             }),
             Expanded(
-              child: dt.DynamicTabBarWidget(
-                isScrollable: true,
-                showBackIcon: false,
-                showNextIcon: false,
-                physics: const NeverScrollableScrollPhysics(),
-                physicsTabBarView: const NeverScrollableScrollPhysics(),
-                tabAlignment: TabAlignment.start,
-                onAddTabMoveTo: dt.MoveToTab.idol,
+              child: _InstantPluginTabView(
                 labelColor: getThemeTextColor(),
                 unselectedLabelColor: getThemeTextColor(),
                 indicatorColor: getThemeActiveBackgroundColor(),
-                dynamicTabs:
+                tabs:
                     controller.activeNavPath.value == 'plugins.installed'
                         ? [
-                          dt.TabData(
-                            index: 0,
+                          _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_settings'), style: TextStyle(color: getThemeTextColor()))),
                             content: pluginTabSetting(context),
                           ),
-                          dt.TabData(
-                            index: 1,
+                          _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_trigger_keywords'), style: TextStyle(color: getThemeTextColor()))),
                             content: pluginTabTriggerKeywords(),
                           ),
-                          dt.TabData(
-                            index: 2,
+                          _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_commands'), style: TextStyle(color: getThemeTextColor()))),
-                            content: pluginTabCommand(),
+                            content: pluginTabCommand(context),
                           ),
-                          dt.TabData(
-                            index: 3,
+                          _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_description'), style: TextStyle(color: getThemeTextColor()))),
                             content: pluginTabDescription(),
                           ),
-                          dt.TabData(
-                            index: 4,
+                          _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_privacy'), style: TextStyle(color: getThemeTextColor()))),
-                            content: pluginTabPrivacy(),
+                            content: pluginTabPrivacy(context),
                           ),
                         ]
                         : [
                           // For uninstalled plugins: Description tab first
-                          dt.TabData(
-                            index: 0,
+                          _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_description'), style: TextStyle(color: getThemeTextColor()))),
                             content: pluginTabDescription(),
                           ),
-                          dt.TabData(
-                            index: 1,
+                          _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_trigger_keywords'), style: TextStyle(color: getThemeTextColor()))),
                             content: pluginTabTriggerKeywords(),
                           ),
-                          dt.TabData(
-                            index: 2,
+                          _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_commands'), style: TextStyle(color: getThemeTextColor()))),
-                            content: pluginTabCommand(),
+                            content: pluginTabCommand(context),
                           ),
-                          dt.TabData(
-                            index: 3,
+                          _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_privacy'), style: TextStyle(color: getThemeTextColor()))),
-                            content: pluginTabPrivacy(),
+                            content: pluginTabPrivacy(context),
                           ),
                         ],
                 onTabControllerUpdated: (tabController) {
                   controller.activePluginTabController = tabController;
                   tabController.index = 0;
                 },
-                onTabChanged: (index) {},
               ),
             ),
           ],
@@ -585,6 +569,127 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
     return WoxPluginDetailView(pluginDetailJson: jsonEncode(pluginData));
   }
 
+  String _normalizeTriggerKeyword(dynamic value) {
+    return value?.toString().trim() ?? "";
+  }
+
+  List<Map<String, String>> _buildTriggerKeywordRows(PluginDetail plugin) {
+    // Keep the original keyword in a hidden row field so edit validation can
+    // distinguish "saving this same keyword again" from "adding a duplicate".
+    // The hidden field is stripped by the tab save handler before persisting.
+    return plugin.triggerKeywords.map((keyword) => {_triggerKeywordColumnKey: keyword, _triggerKeywordOriginalColumnKey: keyword}).toList();
+  }
+
+  Future<List<PluginSettingTableValidationError>> _validateTriggerKeywordUpdate(PluginDetail plugin, Map<String, dynamic> rowValues) async {
+    final keyword = _normalizeTriggerKeyword(rowValues[_triggerKeywordColumnKey]);
+    if (keyword.isEmpty) {
+      return const [];
+    }
+
+    final originalKeyword = _normalizeTriggerKeyword(rowValues[_triggerKeywordOriginalColumnKey]);
+    // Duplicate checks need to ignore the row being edited. Counting only the
+    // typed value made a normal save of the original keyword look like a conflict,
+    // so the hidden original-keyword marker is used to subtract that row once.
+    var samePluginMatchCount = plugin.triggerKeywords.where((item) => _normalizeTriggerKeyword(item) == keyword).length;
+    if (originalKeyword == keyword && samePluginMatchCount > 0) {
+      samePluginMatchCount--;
+    }
+    if (samePluginMatchCount > 0) {
+      return const [PluginSettingTableValidationError(key: _triggerKeywordColumnKey, errorMsg: "ui_plugin_trigger_keyword_duplicate_in_plugin")];
+    }
+
+    // Cross-plugin conflicts must be checked against installed plugins, because
+    // store-only plugin metadata can share defaults without affecting launcher
+    // routing. Blocking here keeps the setting dialog open with a field-level hint.
+    for (final item in controller.installedPlugins) {
+      if (item.id == plugin.id) {
+        continue;
+      }
+      if (item.triggerKeywords.any((triggerKeyword) => _normalizeTriggerKeyword(triggerKeyword) == keyword)) {
+        // Include the conflicting plugin name in the validation error so users
+        // know which existing route must be changed before this keyword can be saved.
+        final conflictPluginName = item.name.trim().isNotEmpty ? item.name.trim() : item.id;
+        final message = Strings.format(controller.tr("ui_plugin_trigger_keyword_duplicate_in_other_plugin"), [conflictPluginName]);
+        return [PluginSettingTableValidationError(key: _triggerKeywordColumnKey, errorMsg: message)];
+      }
+    }
+
+    return const [];
+  }
+
+  Widget? _buildTriggerKeywordCell(PluginSettingValueTableColumn column, Map<String, dynamic> row) {
+    if (column.key != _triggerKeywordColumnKey || row[column.key] != "*") {
+      return null;
+    }
+
+    final accentColor = getThemeActiveBackgroundColor();
+    // Keep the persisted global keyword as "*" for compatibility while presenting
+    // it as a readable pill in the table; raw symbols looked like placeholder data.
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: accentColor.withValues(alpha: 0.1),
+        border: Border.all(color: accentColor.withValues(alpha: 0.22)),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.public_rounded, size: 14, color: accentColor),
+          const SizedBox(width: 5),
+          Text(controller.tr('ui_plugin_trigger_keyword_global'), style: TextStyle(color: accentColor, fontSize: 12, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPluginEmptyState(BuildContext context, {required IconData icon, required String title, required String description}) {
+    final accentColor = getThemeActiveBackgroundColor();
+    final textColor = getThemeTextColor();
+    final subTextColor = getThemeSubTextColor();
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final contentHeight = constraints.hasBoundedHeight ? math.max(260.0, constraints.maxHeight - 32) : 360.0;
+
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: SizedBox(
+            width: double.infinity,
+            height: contentHeight,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 430),
+                // Empty plugin detail panes used to render as a single left-aligned line,
+                // which looked unfinished in a large area. A shared centered state keeps
+                // empty settings and privacy tabs visually consistent without adding noise.
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 58,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        color: accentColor.withValues(alpha: 0.1),
+                        border: Border.all(color: accentColor.withValues(alpha: 0.18)),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Icon(icon, color: accentColor, size: 28),
+                    ),
+                    const SizedBox(height: 18),
+                    Text(title, textAlign: TextAlign.center, style: TextStyle(color: textColor, fontSize: 18, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 8),
+                    Text(description, textAlign: TextAlign.center, style: TextStyle(color: subTextColor, fontSize: 13, height: 1.45)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget pluginTabSetting(BuildContext context) {
     return Obx(() {
       var plugin = controller.activePlugin.value;
@@ -592,9 +697,11 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
 
       // Show empty state if no settings
       if (plugin.settingDefinitions.isEmpty) {
-        return Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(controller.tr('ui_plugin_no_settings'), style: TextStyle(color: getThemeTextColor()))]),
+        return _buildPluginEmptyState(
+          context,
+          icon: Icons.tune_rounded,
+          title: controller.tr('ui_plugin_no_settings'),
+          description: controller.tr('ui_plugin_no_settings_subtitle'),
         );
       }
 
@@ -684,43 +791,47 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
         children: [
           WoxHintBox(text: controller.tr('ui_plugin_trigger_keywords_tip')),
           const SizedBox(height: 12),
-          if (plugin.triggerKeywords.isEmpty)
-            Text(controller.tr('ui_plugin_no_trigger_keywords'), style: TextStyle(color: getThemeTextColor()))
-          else
-            WoxSettingPluginTable(
-              value: json.encode(plugin.triggerKeywords.map((e) => {"keyword": e}).toList()),
-              tableWidth: PLUGIN_SETTING_TABLE_WIDTH,
-              item: PluginSettingValueTable.fromJson({
-                "Key": "_triggerKeywords",
-                "Columns": [
-                  {
-                    "Key": "keyword",
-                    "Label": controller.tr('ui_plugin_trigger_keyword_column'),
-                    "Tooltip": controller.tr('ui_plugin_trigger_keyword_tooltip'),
-                    "Type": "text",
-                    "TextMaxLines": 1,
-                    "Validators": [
-                      {"Type": "not_empty"},
-                    ],
-                  },
-                ],
-                "SortColumnKey": "keyword",
-              }),
-              onUpdate: (key, value) async {
-                final List<String> triggerKeywords = [];
-                for (var item in json.decode(value)) {
-                  triggerKeywords.add(item["keyword"]);
-                }
-                plugin.triggerKeywords = triggerKeywords;
-                return controller.updatePluginSetting(plugin.id, "TriggerKeywords", triggerKeywords.join(","));
-              },
-            ),
+          // Trigger keywords are required to make an installed plugin reachable.
+          // Always render the editable table so bad or legacy empty data can be fixed
+          // instead of showing a static empty label with no recovery path.
+          WoxSettingPluginTable(
+            value: json.encode(_buildTriggerKeywordRows(plugin)),
+            tableWidth: PLUGIN_SETTING_TABLE_WIDTH,
+            minimumRowCount: 1,
+            minimumRowDeleteMessage: "ui_plugin_trigger_keyword_keep_one",
+            customCellBuilder: _buildTriggerKeywordCell,
+            onUpdateValidate: (rowValues) => _validateTriggerKeywordUpdate(plugin, rowValues),
+            item: PluginSettingValueTable.fromJson({
+              "Key": "_triggerKeywords",
+              "Columns": [
+                {
+                  "Key": _triggerKeywordColumnKey,
+                  "Label": controller.tr('ui_plugin_trigger_keyword_column'),
+                  "Tooltip": controller.tr('ui_plugin_trigger_keyword_tooltip'),
+                  "Type": "text",
+                  "TextMaxLines": 1,
+                  "Validators": [
+                    {"Type": "not_empty"},
+                  ],
+                },
+              ],
+              "SortColumnKey": "keyword",
+            }),
+            onUpdate: (key, value) async {
+              final List<String> triggerKeywords = [];
+              for (var item in json.decode(value)) {
+                triggerKeywords.add(_normalizeTriggerKeyword(item[_triggerKeywordColumnKey]));
+              }
+              plugin.triggerKeywords = triggerKeywords;
+              return controller.updatePluginSetting(plugin.id, "TriggerKeywords", triggerKeywords.join(","));
+            },
+          ),
         ],
       ),
     );
   }
 
-  Widget pluginTabCommand() {
+  Widget pluginTabCommand(BuildContext context) {
     var plugin = controller.activePlugin.value;
     return Padding(
       padding: const EdgeInsets.all(16.0),
@@ -730,7 +841,14 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
           WoxHintBox(text: controller.tr('ui_plugin_commands_tip')),
           const SizedBox(height: 12),
           if (plugin.commands.isEmpty)
-            Text(controller.tr('ui_plugin_no_commands'), style: TextStyle(color: getThemeTextColor()))
+            Expanded(
+              child: _buildPluginEmptyState(
+                context,
+                icon: Icons.terminal_rounded,
+                title: controller.tr('ui_plugin_no_commands'),
+                description: controller.tr('ui_plugin_no_commands_subtitle'),
+              ),
+            )
           else
             WoxSettingPluginTable(
               value: json.encode(plugin.commands),
@@ -769,9 +887,14 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
     );
   }
 
-  Widget pluginTabPrivacy() {
+  Widget pluginTabPrivacy(BuildContext context) {
     var plugin = controller.activePlugin.value;
-    var noDataAccess = Padding(padding: const EdgeInsets.all(16), child: Text(controller.tr('ui_plugin_no_data_access'), style: TextStyle(color: getThemeTextColor())));
+    final noDataAccess = _buildPluginEmptyState(
+      context,
+      icon: Icons.verified_user_outlined,
+      title: controller.tr('ui_plugin_no_data_access'),
+      description: controller.tr('ui_plugin_no_data_access_subtitle'),
+    );
 
     if (plugin.features.isEmpty) {
       return noDataAccess;
@@ -855,6 +978,93 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
           pluginDetail(context),
         ],
       ),
+    );
+  }
+}
+
+class _PluginTabData {
+  final Tab title;
+  final Widget content;
+
+  const _PluginTabData({required this.title, required this.content});
+}
+
+class _InstantPluginTabView extends StatefulWidget {
+  final List<_PluginTabData> tabs;
+  final ValueChanged<TabController> onTabControllerUpdated;
+  final Color labelColor;
+  final Color unselectedLabelColor;
+  final Color indicatorColor;
+
+  const _InstantPluginTabView({
+    required this.tabs,
+    required this.onTabControllerUpdated,
+    required this.labelColor,
+    required this.unselectedLabelColor,
+    required this.indicatorColor,
+  });
+
+  @override
+  State<_InstantPluginTabView> createState() => _InstantPluginTabViewState();
+}
+
+class _InstantPluginTabViewState extends State<_InstantPluginTabView> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = _createController();
+    widget.onTabControllerUpdated(_tabController);
+  }
+
+  @override
+  void didUpdateWidget(covariant _InstantPluginTabView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.tabs.length != widget.tabs.length) {
+      _tabController.dispose();
+      _tabController = _createController();
+    }
+
+    // Plugin detail tabs should feel like a settings pane switch, not a page
+    // carousel. The old dynamic tab widget used the default TabController
+    // animation, which added click feedback and a horizontal content slide.
+    // A zero-duration controller preserves TabBar semantics while making every
+    // rebuild and tab click switch panes immediately.
+    widget.onTabControllerUpdated(_tabController);
+  }
+
+  TabController _createController() {
+    return TabController(length: widget.tabs.length, animationDuration: Duration.zero, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        TabBar(
+          isScrollable: true,
+          controller: _tabController,
+          tabAlignment: TabAlignment.start,
+          labelColor: widget.labelColor,
+          unselectedLabelColor: widget.unselectedLabelColor,
+          indicatorColor: widget.indicatorColor,
+          // The plugin detail tab strip should not flash a pressed color; the
+          // selected underline is the only state cue needed in this compact UI.
+          splashFactory: NoSplash.splashFactory,
+          overlayColor: WidgetStateProperty.all(Colors.transparent),
+          enableFeedback: false,
+          tabs: widget.tabs.map((tab) => tab.title).toList(),
+        ),
+        Expanded(child: TabBarView(controller: _tabController, physics: const NeverScrollableScrollPhysics(), children: widget.tabs.map((tab) => tab.content).toList())),
+      ],
     );
   }
 }
