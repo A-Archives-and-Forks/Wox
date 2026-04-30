@@ -124,8 +124,8 @@ class WoxApi {
     await WoxHttpUtil.instance.postData(traceId, "/on/setting", {"inSettingView": inSettingView});
   }
 
-  Future<WoxUsageStats> getUsageStats(String traceId) async {
-    return await WoxHttpUtil.instance.postData<WoxUsageStats>(traceId, "/usage/stats", {});
+  Future<WoxUsageStats> getUsageStats(String traceId, {String period = '30d'}) async {
+    return await WoxHttpUtil.instance.postData<WoxUsageStats>(traceId, "/usage/stats", {"Period": period});
   }
 
   Future<QueryMetadata> getQueryMetadata(String traceId, PlainQuery query) async {

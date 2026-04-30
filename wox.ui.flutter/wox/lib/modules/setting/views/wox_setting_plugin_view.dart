@@ -1008,7 +1008,7 @@ class _InstantPluginTabView extends StatefulWidget {
   State<_InstantPluginTabView> createState() => _InstantPluginTabViewState();
 }
 
-class _InstantPluginTabViewState extends State<_InstantPluginTabView> with SingleTickerProviderStateMixin {
+class _InstantPluginTabViewState extends State<_InstantPluginTabView> with TickerProviderStateMixin {
   late TabController _tabController;
 
   @override

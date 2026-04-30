@@ -32,6 +32,7 @@ class WoxSettingController extends GetxController {
   final usageStats = WoxUsageStats.empty().obs;
   final isUsageStatsLoading = false.obs;
   final usageStatsError = ''.obs;
+  final usageStatsPeriod = '30d'.obs;
   final systemFontFamilies = <String>[].obs;
 
   //plugins
@@ -202,14 +203,18 @@ class WoxSettingController extends GetxController {
     }
   }
 
-  Future<void> refreshUsageStats() async {
+  Future<void> refreshUsageStats({String? period}) async {
+    if (period != null) {
+      usageStatsPeriod.value = period;
+    }
+
     isUsageStatsLoading.value = true;
     usageStatsError.value = '';
     final traceId = const UuidV4().generate();
     try {
-      final stats = await WoxApi.instance.getUsageStats(traceId);
+      final stats = await WoxApi.instance.getUsageStats(traceId, period: usageStatsPeriod.value);
       usageStats.value = stats;
-      Logger.instance.info(traceId, 'Usage stats loaded');
+      Logger.instance.info(traceId, 'Usage stats loaded for period ${usageStatsPeriod.value}');
     } catch (e) {
       usageStats.value = WoxUsageStats.empty();
       usageStatsError.value = e.toString();

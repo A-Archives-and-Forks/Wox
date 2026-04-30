@@ -1358,6 +1358,46 @@ func GetHotkeyAppCandidates(ctx context.Context) []setting.IgnoredHotkeyApp {
 	return []setting.IgnoredHotkeyApp{}
 }
 
+func GetUsageAppIcons(ctx context.Context, usageSubjectIds []string) map[string]common.WoxImage {
+	manager := plugin.GetPluginManager()
+	if manager == nil || len(usageSubjectIds) == 0 {
+		return map[string]common.WoxImage{}
+	}
+
+	neededIds := map[string]struct{}{}
+	for _, id := range usageSubjectIds {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			neededIds[id] = struct{}{}
+		}
+	}
+	if len(neededIds) == 0 {
+		return map[string]common.WoxImage{}
+	}
+
+	for _, instance := range manager.GetPluginInstances() {
+		appPlugin, ok := instance.Plugin.(*ApplicationPlugin)
+		if !ok {
+			continue
+		}
+
+		icons := map[string]common.WoxImage{}
+		for _, info := range appPlugin.apps {
+			// Analytics stores app launches as "<type>:<name>" instead of duplicating icon payloads
+			// into every event. Resolve those stable subject ids against the current app index so
+			// the usage dashboard can show fresh icons without growing the analytics table.
+			usageSubjectId := fmt.Sprintf("%s:%s", info.Type, info.Name)
+			if _, ok := neededIds[usageSubjectId]; !ok || info.Icon.IsEmpty() {
+				continue
+			}
+			icons[usageSubjectId] = info.Icon
+		}
+		return icons
+	}
+
+	return map[string]common.WoxImage{}
+}
+
 func (a *ApplicationPlugin) getHotkeyAppCandidates(ctx context.Context) []setting.IgnoredHotkeyApp {
 	if len(a.hotkeyAppCandidates) == 0 && len(a.apps) > 0 {
 		a.rebuildHotkeyAppCandidates(ctx)
