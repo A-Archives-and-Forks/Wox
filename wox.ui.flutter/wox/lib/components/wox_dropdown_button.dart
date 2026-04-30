@@ -280,7 +280,8 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
     final searchTextColor = _getReadableTextColor(searchBg);
     final searchHintColor = searchTextColor.withValues(alpha: 0.55);
     final searchDividerColor = searchTextColor.withValues(alpha: 0.20);
-    final borderColor = getThemeSubTextColor();
+    // Settings controls should sit back in the surface; full-strength subtitle borders made dropdowns look heavier than neighboring text.
+    final borderColor = getThemeSubTextColor().withValues(alpha: 0.55);
 
     final RenderBox renderBox = context.findRenderObject() as RenderBox;
     final size = renderBox.size;
@@ -419,7 +420,7 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
   void _showMultiSelectMenu() {
     final dropdownBg = _getDropdownBackgroundColor();
     final dropdownTextColor = _getDropdownTextColor(dropdownBg);
-    final borderColor = getThemeSubTextColor();
+    final borderColor = getThemeSubTextColor().withValues(alpha: 0.55);
 
     final RenderBox renderBox = context.findRenderObject() as RenderBox;
     final size = renderBox.size;
@@ -555,7 +556,7 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
     final textColor = getThemeTextColor();
     final dropdownBg = _getDropdownBackgroundColor();
     final dropdownTextColor = _getDropdownTextColor(dropdownBg);
-    final borderColor = getThemeSubTextColor();
+    final borderColor = getThemeSubTextColor().withValues(alpha: 0.55);
 
     if (widget.multiSelect) {
       final selectedItems =

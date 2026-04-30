@@ -25,6 +25,7 @@ import 'package:wox/entity/validator/wox_setting_validator.dart';
 import 'package:wox/entity/wox_plugin_setting.dart';
 import 'package:wox/entity/wox_query_requirement_settings_preview.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/log.dart';
 
 class WoxQueryRequirementSettingsPreviewView extends StatefulWidget {
@@ -157,7 +158,7 @@ class _WoxQueryRequirementSettingsPreviewViewState extends State<WoxQueryRequire
   }
 
   Widget _buildSetting(PluginSettingDefinitionItem item) {
-    const labelWidth = 150.0;
+    const labelWidth = PLUGIN_SETTING_PREVIEW_LABEL_WIDTH;
     final key = _definitionKey(item);
     final value = key.isEmpty ? "" : (_values[key] ?? "");
 

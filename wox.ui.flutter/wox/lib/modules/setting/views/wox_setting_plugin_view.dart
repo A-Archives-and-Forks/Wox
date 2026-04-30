@@ -43,9 +43,6 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
   // Local refreshing state for showing loading spinner on refresh button
   static final RxBool _refreshing = false.obs;
   static final GlobalKey _pluginFilterIconKey = GlobalKey();
-  static const double _pluginLabelMinWidth = 0;
-  static const double _pluginTableDefaultWidth = 626;
-  static const double _pluginFilterPanelDefaultWidth = 660;
 
   String _extractSettingLabelText(dynamic settingDefinitionValue, String settingType) {
     if (settingType == "checkbox") {
@@ -67,7 +64,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
     return "";
   }
 
-  double _measureLabelWidthByText(BuildContext context, String label, {double minWidth = _pluginLabelMinWidth}) {
+  double _measureLabelWidthByText(BuildContext context, String label, {double minWidth = PLUGIN_SETTING_LABEL_MIN_WIDTH}) {
     final trimmedLabel = label.trim();
     final preferredWidth = WoxTextMeasureUtil.measureTextWidth(context: context, text: trimmedLabel, style: const TextStyle(fontSize: 13)) + 8;
     return preferredWidth.clamp(minWidth, PLUGIN_SETTING_LABEL_MAX_WIDTH).toDouble();
@@ -90,7 +87,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
       maxLabelWidth = math.max(maxLabelWidth, _measureLabelWidthByText(context, translatedLabel, minWidth: 0));
     }
 
-    return maxLabelWidth.clamp(_pluginLabelMinWidth, PLUGIN_SETTING_LABEL_MAX_WIDTH).toDouble();
+    return maxLabelWidth.clamp(PLUGIN_SETTING_LABEL_MIN_WIDTH, PLUGIN_SETTING_LABEL_MAX_WIDTH).toDouble();
   }
 
   Future<void> _showPluginFilterPanel(BuildContext context) async {
@@ -106,9 +103,9 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
     final Size screenSize = overlay.size;
     const double panelMinWidth = 360;
     double left = buttonTopLeft.dx;
-    double panelWidth = math.min(_pluginFilterPanelDefaultWidth, screenSize.width - left - 12);
+    double panelWidth = math.min(PLUGIN_SETTING_FILTER_PANEL_WIDTH, screenSize.width - left - 12);
     if (panelWidth < panelMinWidth) {
-      panelWidth = math.min(_pluginFilterPanelDefaultWidth, screenSize.width - 24);
+      panelWidth = math.min(PLUGIN_SETTING_FILTER_PANEL_WIDTH, screenSize.width - 24);
       left = left.clamp(12.0, screenSize.width - panelWidth - 12.0);
     }
 
@@ -604,8 +601,9 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
       return Padding(
         padding: const EdgeInsets.all(16.0),
         child: SingleChildScrollView(
-          child: Wrap(
-            crossAxisAlignment: WrapCrossAlignment.center,
+          child: Column(
+            // Plugin settings use a stacked rhythm because the detail pane shares space with the plugin list; the top-level two-column form made descriptions wrap too aggressively here.
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               ...plugin.settingDefinitions.map((e) {
                 if (e.type == "checkbox") {
@@ -691,7 +689,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
           else
             WoxSettingPluginTable(
               value: json.encode(plugin.triggerKeywords.map((e) => {"keyword": e}).toList()),
-              tableWidth: _pluginTableDefaultWidth,
+              tableWidth: PLUGIN_SETTING_TABLE_WIDTH,
               item: PluginSettingValueTable.fromJson({
                 "Key": "_triggerKeywords",
                 "Columns": [
@@ -736,9 +734,9 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
           else
             WoxSettingPluginTable(
               value: json.encode(plugin.commands),
-              tableWidth: _pluginTableDefaultWidth,
+              tableWidth: PLUGIN_SETTING_TABLE_WIDTH,
               readonly: true,
-              labelWidth: 160,
+              labelWidth: PLUGIN_SETTING_LABEL_WIDTH,
               item: PluginSettingValueTable.fromJson({
                 "Key": "_commands",
                 "Columns": [

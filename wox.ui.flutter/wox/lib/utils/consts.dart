@@ -1,3 +1,5 @@
+// ignore_for_file: constant_identifier_names
+
 const int MAX_LIST_VIEW_ITEM_COUNT = 10;
 const double QUERY_BOX_BASE_HEIGHT = 55.0;
 const double QUERY_BOX_CONTENT_PADDING_TOP = 4.0;
@@ -8,9 +10,23 @@ const double RESULT_ITEM_BASE_HEIGHT = 50.0;
 const double ACTION_ITEM_BASE_HEIGHT = 40.0;
 const double TOOLBAR_HEIGHT = 40.0;
 
-/// Default label width for setting view
-const double GENERAL_SETTING_LABEL_WIDTH = 160.0;
+/// Built-in settings tabs share one layout scale so General, UI, AI, Data, Network,
+/// Runtime, Debug, and Privacy stay aligned instead of redefining widths per page.
+const double GENERAL_SETTING_FORM_WIDTH = 1120.0;
+const double GENERAL_SETTING_WIDE_FORM_WIDTH = 1180.0;
+const double GENERAL_SETTING_COMPACT_FORM_WIDTH = 960.0;
+const double GENERAL_SETTING_LABEL_WIDTH = 400.0;
+const double GENERAL_SETTING_WIDE_LABEL_WIDTH = 550.0;
+const double GENERAL_SETTING_TABLE_WIDTH = 900.0;
+
+/// Plugin settings use a narrower detail-pane layout, so their labels and tables are
+/// intentionally separate from the built-in settings page constants above
+const double PLUGIN_SETTING_LABEL_WIDTH = 160.0;
+const double PLUGIN_SETTING_PREVIEW_LABEL_WIDTH = 150.0;
+const double PLUGIN_SETTING_LABEL_MIN_WIDTH = 0.0;
 const double PLUGIN_SETTING_LABEL_MAX_WIDTH = 200.0;
+const double PLUGIN_SETTING_TABLE_WIDTH = 626.0;
+const double PLUGIN_SETTING_FILTER_PANEL_WIDTH = 660.0;
 
 // Default font size for setting item tooltips
 const double SETTING_TOOLTIP_DEFAULT_SIZE = 12.0;

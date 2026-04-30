@@ -86,14 +86,19 @@ class _WoxSettingViewState extends State<WoxSettingView> {
           });
         },
         child: Container(
-          padding: EdgeInsets.only(left: 16.0 + (flatItem.depth * 16.0), right: 16.0, top: 10.0, bottom: 10.0),
-          decoration: BoxDecoration(color: isSelected ? getThemeActiveBackgroundColor().withValues(alpha: 0.15) : Colors.transparent, borderRadius: BorderRadius.circular(6)),
-          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          // The navigation rail now uses a calmer selected state with a small border; the previous filled block made the sidebar heavier than the content.
+          padding: EdgeInsets.only(left: 16.0 + (flatItem.depth * 18.0), right: 16.0, top: 12.0, bottom: 12.0),
+          decoration: BoxDecoration(
+            color: isSelected ? getThemeActiveBackgroundColor().withValues(alpha: 0.16) : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: isSelected ? getThemeActiveBackgroundColor().withValues(alpha: 0.32) : Colors.transparent),
+          ),
+          margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
           child: Row(
             children: [
-              Icon(item.icon, color: getThemeTextColor(), size: 18),
+              Icon(item.icon, color: isSelected ? getThemeTextColor() : getThemeTextColor().withValues(alpha: 0.78), size: 18),
               const SizedBox(width: 12),
-              Expanded(child: Text(item.title, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal))),
+              Expanded(child: Text(item.title, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal))),
               if (isParent) Icon(item.isExpanded ? Icons.expand_more : Icons.chevron_right, color: getThemeTextColor().withValues(alpha: 0.6), size: 18),
             ],
           ),
@@ -195,26 +200,27 @@ class _WoxSettingViewState extends State<WoxSettingView> {
             children: [
               // Navigation rail
               Container(
-                width: 220,
+                width: 250,
                 decoration: BoxDecoration(
-                  color: getThemeTextColor().withValues(alpha: 0.03),
-                  border: Border(right: BorderSide(color: getThemeTextColor().withValues(alpha: 0.08), width: 1)),
+                  // A slightly wider, quieter rail matches the refined content rhythm and gives nested items room to breathe.
+                  color: getThemeTextColor().withValues(alpha: 0.035),
+                  border: Border(right: BorderSide(color: getThemeDividerColor().withValues(alpha: 0.75), width: 1)),
                 ),
                 child: Column(
                   children: [
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 26),
                     Expanded(child: ListView(padding: const EdgeInsets.symmetric(vertical: 4), children: _buildNavTree(navItems))),
                     Container(
-                      margin: const EdgeInsets.all(8),
+                      margin: const EdgeInsets.fromLTRB(14, 8, 14, 16),
                       child: GestureDetector(
                         key: const ValueKey(backButtonKey),
                         onTap: () => controller.hideWindow(const UuidV4().generate()),
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                           decoration: BoxDecoration(borderRadius: BorderRadius.circular(6)),
                           child: Row(
                             children: [
-                              Icon(Icons.arrow_back, color: getThemeTextColor(), size: 18),
+                              Icon(Icons.arrow_back, color: getThemeTextColor().withValues(alpha: 0.86), size: 18),
                               const SizedBox(width: 12),
                               Text(controller.tr('ui_back'), style: TextStyle(color: getThemeTextColor(), fontSize: 13)),
                             ],

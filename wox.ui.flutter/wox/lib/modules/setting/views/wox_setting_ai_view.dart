@@ -7,6 +7,7 @@ import 'package:wox/api/wox_api.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_table_view.dart';
 import 'package:wox/entity/setting/wox_plugin_setting_table.dart';
 import 'package:wox/modules/setting/views/wox_setting_base.dart';
+import 'package:wox/utils/consts.dart';
 
 class WoxSettingAIView extends WoxSettingBaseView {
   const WoxSettingAIView({super.key});
@@ -18,15 +19,27 @@ class WoxSettingAIView extends WoxSettingBaseView {
       builder: (context, snapshot) {
         if (snapshot.hasData) {
           return form(
+            title: controller.tr("ui_ai"),
+            description: controller.tr("ui_ai_description"),
             children: [
-              formField(
-                label: controller.tr("ui_ai_model"),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 24),
                 child: Obx(() {
                   return WoxSettingPluginTable(
+                    inlineTitleActions: true,
+                    tableWidth: GENERAL_SETTING_TABLE_WIDTH,
                     value: json.encode(controller.woxSetting.value.aiProviders),
                     item: PluginSettingValueTable.fromJson({
                       "Key": "AIProviders",
+                      "Title": "i18n:ui_ai_model",
                       "Columns": [
+                        {
+                          "Key": "Status",
+                          "Label": "i18n:ui_ai_providers_status",
+                          "HideInUpdate": true,
+                          "Width": 40,
+                          "Type": PluginSettingValueType.pluginSettingValueTableColumnTypeAIModelStatus,
+                        },
                         {
                           "Key": "Name",
                           "Label": "i18n:ui_ai_providers_name",
@@ -53,15 +66,9 @@ class WoxSettingAIView extends WoxSettingBaseView {
                           ],
                         },
                         {"Key": "Alias", "Label": "i18n:ui_ai_providers_alias", "Tooltip": "i18n:ui_ai_providers_alias_tooltip", "Width": 120, "Type": "text", "TextMaxLines": 1},
-                        {"Key": "ApiKey", "Label": "i18n:ui_ai_providers_api_key", "Tooltip": "i18n:ui_ai_providers_api_key_tooltip", "Type": "text", "TextMaxLines": 1},
+
                         {"Key": "Host", "Label": "i18n:ui_ai_providers_host", "Tooltip": "i18n:ui_ai_providers_host_tooltip", "Width": 160, "Type": "text"},
-                        {
-                          "Key": "Status",
-                          "Label": "i18n:ui_ai_providers_status",
-                          "HideInUpdate": true,
-                          "Width": 60,
-                          "Type": PluginSettingValueType.pluginSettingValueTableColumnTypeAIModelStatus,
-                        },
+                        {"Key": "ApiKey", "Label": "i18n:ui_ai_providers_api_key", "Tooltip": "i18n:ui_ai_providers_api_key_tooltip", "Type": "text", "TextMaxLines": 1},
                       ],
                       "SortColumnKey": "Name",
                     }),

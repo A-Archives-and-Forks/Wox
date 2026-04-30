@@ -14,6 +14,7 @@ import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/wox_setting.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/color_util.dart';
 import 'package:wox/utils/wox_setting_focus_util.dart';
@@ -34,6 +35,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   final columnSpacing = 10.0;
   final columnTooltipWidth = 20.0;
   final bool readonly;
+  final bool inlineTitleActions;
   final Future<List<PluginSettingTableValidationError>> Function(Map<String, dynamic> rowValues)? onUpdateValidate;
   final int? autoOpenEditRowIndex;
   final ScrollController horizontalHeaderScrollController = ScrollController();
@@ -46,9 +48,10 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     required this.item,
     required super.value,
     required super.onUpdate,
-    super.labelWidth = 160.0,
-    this.tableWidth = 740.0,
+    super.labelWidth = PLUGIN_SETTING_LABEL_WIDTH,
+    this.tableWidth = PLUGIN_SETTING_TABLE_WIDTH,
     this.readonly = false,
+    this.inlineTitleActions = false,
     this.onUpdateValidate,
     this.autoOpenEditRowIndex,
   }) {
@@ -239,12 +242,11 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
               translatedLabel,
               overflow: TextOverflow.ellipsis,
               maxLines: 1,
-              style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveFontColor), fontSize: 13),
+              style: TextStyle(color: getThemeTextColor().withValues(alpha: 0.88), fontSize: 13, fontWeight: FontWeight.w600),
             ),
           ),
         ),
-        if (column.tooltip != "")
-          WoxTooltipIconView(tooltip: tr(column.tooltip), paddingRight: 0, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveFontColor)),
+        if (column.tooltip != "") WoxTooltipIconView(tooltip: tr(column.tooltip), paddingRight: 0, color: getThemeTextColor().withValues(alpha: 0.72)),
       ],
     );
   }
@@ -627,7 +629,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
           tr("ui_operation"),
           overflow: TextOverflow.ellipsis,
           maxLines: 1,
-          style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveFontColor), fontSize: 13),
+          style: TextStyle(color: getThemeTextColor().withValues(alpha: 0.88), fontSize: 13, fontWeight: FontWeight.w600),
         ),
       ),
     );
@@ -654,7 +656,8 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     Color? rightBorderColor,
     Color? bottomBorderColor,
   }) {
-    final borderColor = safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.previewSplitLineColor);
+    // Dense settings tables read better as neutral surfaces; the old active-color header looked like a selected action rather than a table header.
+    final borderColor = getThemeDividerColor().withValues(alpha: 0.58);
 
     return DataTable(
       columnSpacing: columnSpacing,
@@ -664,7 +667,8 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
       headingRowHeight: headingRowHeight,
       dataRowMinHeight: _dataRowHeight,
       dataRowMaxHeight: _dataRowHeight,
-      headingRowColor: WidgetStateProperty.resolveWith((states) => safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveBackgroundColor)),
+      headingRowColor: WidgetStateProperty.resolveWith((states) => getThemeTextColor().withValues(alpha: 0.055)),
+      dataRowColor: WidgetStateProperty.resolveWith((states) => getThemeTextColor().withValues(alpha: 0.018)),
       border: TableBorder(
         top: showTopBorder ? BorderSide(color: topBorderColor ?? borderColor) : BorderSide.none,
         bottom: showBottomBorder ? BorderSide(color: bottomBorderColor ?? borderColor) : BorderSide.none,
@@ -678,17 +682,18 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     );
   }
 
-  Widget buildEmptyTable() {
+  Widget buildEmptyTable({required bool showScrollbars}) {
     final visibleColumns = buildVisibleColumns();
-    final headerBorderColor = safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveBackgroundColor);
+    final headerBorderColor = getThemeDividerColor().withValues(alpha: 0.58);
     if (visibleColumns.isEmpty) {
       return Center(child: Text(tr("ui_no_data"), style: TextStyle(color: getThemeSubTextColor(), fontSize: 13)));
     }
 
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxHeight: 100),
+      // The empty table includes both a header and an empty-state body; the previous 100px cap was smaller than their combined height and caused bottom overflow.
+      constraints: const BoxConstraints(maxHeight: _headerRowHeight + 82),
       child: Scrollbar(
-        thumbVisibility: true,
+        thumbVisibility: showScrollbars,
         controller: horizontalBodyScrollController,
         child: SingleChildScrollView(
           controller: horizontalBodyScrollController,
@@ -711,7 +716,26 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                   leftBorderColor: headerBorderColor,
                   rightBorderColor: headerBorderColor,
                 ),
-                Center(child: Padding(padding: const EdgeInsets.only(top: 10), child: Text(tr("ui_no_data"), style: TextStyle(color: getThemeSubTextColor(), fontSize: 13)))),
+                Container(
+                  height: 82,
+                  decoration: BoxDecoration(
+                    border: Border(
+                      left: BorderSide(color: getThemeDividerColor().withValues(alpha: 0.58)),
+                      right: BorderSide(color: getThemeDividerColor().withValues(alpha: 0.58)),
+                      bottom: BorderSide(color: getThemeDividerColor().withValues(alpha: 0.58)),
+                    ),
+                  ),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.inbox_outlined, color: getThemeSubTextColor().withValues(alpha: 0.72), size: 24),
+                        const SizedBox(height: 4),
+                        Text(tr("ui_no_data"), style: TextStyle(color: getThemeSubTextColor(), fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -720,10 +744,10 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     );
   }
 
-  Widget buildTable(BuildContext context) {
+  Widget buildTable(BuildContext context, {required bool showScrollbars}) {
     final rows = decodeRowsJson(getSetting(item.key));
     if (rows.isEmpty) {
-      return buildEmptyTable();
+      return buildEmptyTable(showScrollbars: showScrollbars);
     }
 
     //give each row a unique key
@@ -750,7 +774,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
 
     final visibleColumns = buildVisibleColumns();
     if (visibleColumns.isEmpty && readonly) {
-      return buildEmptyTable();
+      return buildEmptyTable(showScrollbars: showScrollbars);
     }
 
     final pinnedColumn = !readonly ? buildOperationColumnDefinition() : visibleColumns.last;
@@ -788,7 +812,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
             : leftContentWidth > leftViewportWidth
             ? leftContentWidth
             : leftViewportWidth;
-    final headerBorderColor = safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionItemActiveBackgroundColor);
+    final headerBorderColor = getThemeDividerColor().withValues(alpha: 0.58);
 
     if (leftColumns.isEmpty) {
       return SizedBox(
@@ -813,6 +837,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
               height: tableBodyHeight,
               child: Scrollbar(
                 controller: verticalPinnedBodyScrollController,
+                thumbVisibility: showScrollbars,
                 child: SingleChildScrollView(
                   controller: verticalPinnedBodyScrollController,
                   physics: _tableScrollPhysics,
@@ -877,7 +902,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                 Expanded(
                   child: Scrollbar(
                     controller: horizontalBodyScrollController,
-                    thumbVisibility: true,
+                    thumbVisibility: showScrollbars,
                     child: SingleChildScrollView(
                       controller: horizontalBodyScrollController,
                       physics: _tableScrollPhysics,
@@ -903,7 +928,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                   width: pinnedSectionWidth,
                   child: Scrollbar(
                     controller: verticalPinnedBodyScrollController,
-                    thumbVisibility: true,
+                    thumbVisibility: showScrollbars,
                     child: SingleChildScrollView(
                       controller: verticalPinnedBodyScrollController,
                       physics: _tableScrollPhysics,
@@ -924,8 +949,102 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     );
   }
 
+  Widget buildAddButton(BuildContext context) {
+    // Table creation should be a compact outlined action that can sit beside table
+    // titles in top-level settings instead of forcing a separate full-width row.
+    return WoxButton.secondary(
+      text: tr("ui_add"),
+      icon: Icon(Icons.add, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      onPressed: () async {
+        await showDialog(
+          context: context,
+          barrierColor: getThemePopupBarrierColor(),
+          builder: (context) {
+            return WoxSettingPluginTableUpdate(
+              item: item,
+              row: const {},
+              onUpdateValidate: onUpdateValidate,
+              onUpdate: (key, row) async {
+                final rows = decodeRowsJson(getSetting(key));
+                rows.add(row);
+                //remove the unique key
+                for (final element in rows) {
+                  element.remove(rowUniqueIdKey);
+                }
+
+                return updateConfig(key, json.encode(rows));
+              },
+            );
+          },
+        );
+        WoxSettingFocusUtil.restoreIfInSettingView();
+      },
+    );
+  }
+
+  Widget buildInlineTitleHeader(BuildContext context) {
+    final hasTitle = item.title.trim().isNotEmpty;
+    final hasTooltip = item.tooltip.trim().isNotEmpty;
+    final hasAction = !readonly;
+
+    if (!hasTitle && !hasTooltip && !hasAction) {
+      return const SizedBox.shrink();
+    }
+
+    return SizedBox(
+      width: tableWidth,
+      child: Row(
+        // Long table tips can wrap to multiple lines. Bottom-align the action so its
+        // distance to the table stays fixed regardless of the description height.
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (hasTitle) Text(tr(item.title), style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w600)),
+                if (hasTooltip) Padding(padding: const EdgeInsets.only(top: 4), child: tooltipText(item.tooltip)),
+              ],
+            ),
+          ),
+          if (hasAction) ...[const SizedBox(width: 16), buildAddButton(context)],
+        ],
+      ),
+    );
+  }
+
+  Widget buildHoverAwareTable(BuildContext context) {
+    var isHovered = false;
+
+    return StatefulBuilder(
+      builder: (context, setState) {
+        // Scrollbars are useful when the pointer is working inside a table, but keeping
+        // them visible all the time adds visual noise to long settings pages.
+        return MouseRegion(
+          onEnter: (_) => setState(() => isHovered = true),
+          onExit: (_) => setState(() => isHovered = false),
+          child: buildTable(context, showScrollbars: isHovered),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (inlineTitleActions) {
+      // Built-in settings pages use full-width table blocks; keeping title, help text,
+      // and Add in the table component makes the header match the table edge exactly.
+      return applyStylePadding(
+        style: item.style,
+        child: Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 10),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [buildInlineTitleHeader(context), const SizedBox(height: 8), buildHoverAwareTable(context)]),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.only(top: 6),
       child: layout(
@@ -935,46 +1054,9 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (!readonly)
-              SizedBox(
-                width: tableWidth,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    WoxButton.text(
-                      text: tr("ui_add"),
-                      icon: Icon(Icons.add, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
-                      padding: EdgeInsets.zero,
-                      onPressed: () async {
-                        await showDialog(
-                          context: context,
-                          barrierColor: getThemePopupBarrierColor(),
-                          builder: (context) {
-                            return WoxSettingPluginTableUpdate(
-                              item: item,
-                              row: const {},
-                              onUpdateValidate: onUpdateValidate,
-                              onUpdate: (key, row) async {
-                                final rows = decodeRowsJson(getSetting(key));
-                                rows.add(row);
-                                //remove the unique key
-                                for (final element in rows) {
-                                  element.remove(rowUniqueIdKey);
-                                }
-
-                                return updateConfig(key, json.encode(rows));
-                              },
-                            );
-                          },
-                        );
-                        WoxSettingFocusUtil.restoreIfInSettingView();
-                      },
-                    ),
-                  ],
-                ),
-              ),
+            if (!readonly) SizedBox(width: tableWidth, child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [buildAddButton(context)])),
             if (!readonly) const SizedBox(height: 6),
-            buildTable(context),
+            buildHoverAwareTable(context),
           ],
         ),
       ),

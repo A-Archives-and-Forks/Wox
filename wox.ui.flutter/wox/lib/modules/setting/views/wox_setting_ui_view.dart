@@ -1,17 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:wox/components/wox_dropdown_button.dart';
-import 'package:wox/components/wox_slider.dart';
 import 'package:wox/components/wox_switch.dart';
 import 'package:wox/modules/setting/views/wox_setting_base.dart';
 
 class WoxSettingUIView extends WoxSettingBaseView {
   const WoxSettingUIView({super.key});
 
+  List<WoxDropdownItem<int>> _buildWindowWidthItems(int currentWidth) {
+    final values = List<int>.generate(21, (index) => 600 + (index * 50));
+    if (!values.contains(currentWidth)) {
+      values.add(currentWidth);
+      values.sort();
+    }
+
+    return values.map((width) => WoxDropdownItem<int>(value: width, label: width.toString())).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Obx(() {
       return form(
+        title: controller.tr("ui_ui"),
+        description: controller.tr("ui_ui_description"),
         children: [
           formField(
             label: controller.tr("ui_show_position"),
@@ -49,14 +60,18 @@ class WoxSettingUIView extends WoxSettingBaseView {
             label: controller.tr("ui_app_width"),
             tips: controller.tr("ui_app_width_tips"),
             child: Obx(() {
-              return WoxSlider(
-                value: controller.woxSetting.value.appWidth.toDouble(),
-                min: 600,
-                max: 1600,
-                divisions: 20,
-                onChanged: (double value) {
-                  controller.updateConfig("AppWidth", value.toInt().toString());
+              final currentWidth = controller.woxSetting.value.appWidth;
+
+              return WoxDropdownButton<int>(
+                // Width is a preset-style preference, so a dropdown avoids the imprecise slider interaction and keeps the UI aligned with other setting rows.
+                value: currentWidth,
+                items: _buildWindowWidthItems(currentWidth),
+                onChanged: (value) {
+                  if (value != null) {
+                    controller.updateConfig("AppWidth", value.toString());
+                  }
                 },
+                isExpanded: true,
               );
             }),
           ),

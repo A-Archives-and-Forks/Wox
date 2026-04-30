@@ -10,6 +10,7 @@ import 'package:wox/components/wox_textfield.dart';
 import 'package:wox/entity/wox_runtime_status.dart';
 import 'package:wox/modules/setting/views/wox_setting_base.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/picker.dart';
 
 // ignore: must_be_immutable
@@ -192,9 +193,12 @@ class WoxSettingRuntimeView extends WoxSettingBaseView {
       final List<WoxRuntimeStatus> visibleStatuses = statuses.where((status) => status.runtime.toUpperCase() != 'SCRIPT' || status.loadedPluginCount > 0).toList();
 
       return form(
+        title: controller.tr("ui_runtime_settings"),
+        description: controller.tr("ui_runtime_settings_description"),
         children: [
           formField(
             label: controller.tr("ui_runtime_status"),
+            labelWidth: GENERAL_SETTING_LABEL_WIDTH,
             tips: null,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -207,7 +211,7 @@ class WoxSettingRuntimeView extends WoxSettingBaseView {
                 if (visibleStatuses.isNotEmpty)
                   LayoutBuilder(
                     builder: (context, constraints) {
-                      final double availableWidth = constraints.maxWidth.isFinite ? constraints.maxWidth : 960;
+                      final double availableWidth = constraints.maxWidth.isFinite ? constraints.maxWidth : GENERAL_SETTING_COMPACT_FORM_WIDTH;
                       final double spacing = 12;
                       final int columnCount = availableWidth >= 640 ? 2 : 1;
                       final double cardWidth = columnCount == 1 ? availableWidth : (availableWidth - spacing) / columnCount;
@@ -227,6 +231,7 @@ class WoxSettingRuntimeView extends WoxSettingBaseView {
           ),
           formField(
             label: controller.tr("ui_runtime_python_path"),
+            labelWidth: GENERAL_SETTING_LABEL_WIDTH,
             tips: controller.tr("ui_runtime_python_path_tips"),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -277,6 +282,7 @@ class WoxSettingRuntimeView extends WoxSettingBaseView {
           ),
           formField(
             label: controller.tr("ui_runtime_nodejs_path"),
+            labelWidth: GENERAL_SETTING_LABEL_WIDTH,
             tips: controller.tr("ui_runtime_nodejs_path_tips"),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

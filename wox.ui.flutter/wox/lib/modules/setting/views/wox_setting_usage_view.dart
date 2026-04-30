@@ -15,6 +15,7 @@ import 'package:wox/entity/wox_usage_stats.dart';
 import 'package:wox/modules/setting/views/wox_usage_share_card.dart';
 import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/color_util.dart';
+import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/log.dart';
 import 'package:wox/utils/screenshot/screenshot_platform_bridge.dart';
 import 'package:wox/utils/wox_theme_util.dart';
@@ -63,12 +64,12 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
     }
   }
 
-  Widget _form({double width = 960, required List<Widget> children}) {
+  Widget _form({double width = GENERAL_SETTING_COMPACT_FORM_WIDTH, required List<Widget> children}) {
     return Align(
       alignment: Alignment.topLeft,
       child: SingleChildScrollView(
         child: Padding(
-          padding: const EdgeInsets.only(left: 20, right: 40, bottom: 20, top: 20),
+          padding: const EdgeInsets.only(left: 38, right: 44, bottom: 28, top: 34),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [...children.map((e) => SizedBox(width: width, child: e))]),
         ),
       ),
@@ -317,6 +318,8 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
             children: [
               Row(
                 children: [
+                  // Usage is a stats dashboard with a primary share action, so the
+                  // title stays in the toolbar row instead of using the generic tab header.
                   Text(controller.tr('ui_usage'), style: TextStyle(color: getThemeTextColor(), fontSize: 16, fontWeight: FontWeight.w600)),
                   const SizedBox(width: 12),
                   if (isLoading) const WoxLoadingIndicator(size: 16),
@@ -340,7 +343,7 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
               if (error.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 10), child: Text(error, style: const TextStyle(color: Colors.red, fontSize: 12))),
               LayoutBuilder(
                 builder: (context, constraints) {
-                  final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 960.0;
+                  final width = constraints.maxWidth.isFinite ? constraints.maxWidth : GENERAL_SETTING_COMPACT_FORM_WIDTH;
                   final spacing = 12.0;
                   final columns = width >= 760 ? 4 : 2;
                   final cardWidth = (width - (columns - 1) * spacing) / columns;
@@ -363,7 +366,7 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
               const SizedBox(height: 18),
               LayoutBuilder(
                 builder: (context, constraints) {
-                  final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 960.0;
+                  final width = constraints.maxWidth.isFinite ? constraints.maxWidth : GENERAL_SETTING_COMPACT_FORM_WIDTH;
                   final spacing = 12.0;
                   final columns = width >= 760 ? 2 : 1;
                   final blockWidth = columns == 1 ? width : (width - spacing) / columns;
@@ -408,7 +411,7 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
               const SizedBox(height: 18),
               LayoutBuilder(
                 builder: (context, constraints) {
-                  final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 960.0;
+                  final width = constraints.maxWidth.isFinite ? constraints.maxWidth : GENERAL_SETTING_COMPACT_FORM_WIDTH;
                   final spacing = 12.0;
                   final columns = width >= 760 ? 2 : 1;
                   final blockWidth = columns == 1 ? width : (width - spacing) / columns;

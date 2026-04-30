@@ -7,6 +7,7 @@ import 'package:wox/components/wox_button.dart';
 import 'package:wox/components/wox_switch.dart';
 import 'package:wox/modules/setting/views/wox_setting_base.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/wox_setting_focus_util.dart';
 
 class WoxSettingPrivacyView extends WoxSettingBaseView {
@@ -97,23 +98,29 @@ class WoxSettingPrivacyView extends WoxSettingBaseView {
   @override
   Widget build(BuildContext context) {
     return form(
+      title: controller.tr("ui_privacy"),
+      description: controller.tr("ui_privacy_description"),
       children: [
         formField(
           label: controller.tr("ui_privacy_anonymous_stats_title"),
+          labelWidth: GENERAL_SETTING_WIDE_LABEL_WIDTH,
           child: Obx(() {
             return Row(
+              // The parent form field right-aligns the control area; keeping this row compact
+              // prevents the switch and sample action from expanding back to the left edge.
+              mainAxisSize: MainAxisSize.min,
               children: [
+                WoxButton.text(
+                  text: controller.tr("ui_privacy_view_sample"),
+                  padding: const EdgeInsets.only(top: 4, right: 8, bottom: 4),
+                  onPressed: () => _showDataSampleDialog(context),
+                ),
+                SizedBox(width: 10),
                 WoxSwitch(
                   value: controller.woxSetting.value.enableAnonymousUsageStats,
                   onChanged: (value) {
                     controller.updateConfig("EnableAnonymousUsageStats", value.toString());
                   },
-                ),
-                SizedBox(width: 10),
-                WoxButton.text(
-                  text: controller.tr("ui_privacy_view_sample"),
-                  padding: const EdgeInsets.only(top: 4, right: 8, bottom: 4),
-                  onPressed: () => _showDataSampleDialog(context),
                 ),
               ],
             );

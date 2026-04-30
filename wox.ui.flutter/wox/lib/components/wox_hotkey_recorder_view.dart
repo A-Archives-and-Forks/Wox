@@ -214,10 +214,16 @@ class _WoxHotkeyRecorderState extends State<WoxHotkeyRecorder> {
         onTapDown: (_) {
           _focusNode.requestFocus();
         },
+        // Keep the recorder as compact content so parent setting rows can align it to the right edge; a full-width row made the keycaps appear stranded in the middle.
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              decoration: BoxDecoration(border: Border.all(color: _isFocused ? getThemeActiveBackgroundColor() : getThemeSubTextColor()), borderRadius: BorderRadius.circular(4)),
+              // Match the quieter setting control treatment; focus still uses the accent color while idle borders no longer dominate the row.
+              decoration: BoxDecoration(
+                border: Border.all(color: _isFocused ? getThemeActiveBackgroundColor() : getThemeSubTextColor().withValues(alpha: 0.55)),
+                borderRadius: BorderRadius.circular(4),
+              ),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(8.0, 4.0, 8.0, 4.0),
                 child:

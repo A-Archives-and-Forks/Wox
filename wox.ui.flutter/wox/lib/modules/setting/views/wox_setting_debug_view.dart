@@ -10,6 +10,8 @@ class WoxSettingDebugView extends WoxSettingBaseView {
   Widget build(BuildContext context) {
     return Obx(() {
       return form(
+        title: controller.tr("ui_debug"),
+        description: controller.tr("ui_debug_description"),
         children: [
           formField(
             label: controller.tr("ui_debug_show_score_tail"),

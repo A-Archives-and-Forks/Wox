@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:wox/components/wox_markdown.dart';
-import 'package:wox/components/wox_setting_form_field.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/wox_plugin_setting.dart';
 import 'package:wox/utils/colors.dart';
@@ -74,7 +73,19 @@ abstract class WoxSettingPluginItem extends StatelessWidget {
 
     return applyStylePadding(
       style: style,
-      child: WoxSettingFormField(label: label, tips: tipsWidget, labelWidth: labelWidth, labelGap: defaultLabelGap, bottomSpacing: bottomSpacing, tipsTopSpacing: 0, child: child),
+      child: Padding(
+        padding: EdgeInsets.only(bottom: bottomSpacing),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Plugin detail panes are narrower than top-level settings; stacking title, help text, and control prevents long plugin descriptions from being crushed into a left column.
+            Text(label, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w500)),
+            if (tipsWidget != null) Padding(padding: const EdgeInsets.only(top: 4), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 620), child: tipsWidget)),
+            const SizedBox(height: 8),
+            child,
+          ],
+        ),
+      ),
     );
   }
 
@@ -141,14 +152,18 @@ mixin WoxSettingPluginItemMixin<T extends StatefulWidget> on State<T> {
 
     return applyStylePadding(
       style: style,
-      child: WoxSettingFormField(
-        label: label,
-        tips: tipsWidget,
-        labelWidth: labelWidth,
-        labelGap: WoxSettingPluginItem.defaultLabelGap,
-        bottomSpacing: bottomSpacing,
-        tipsTopSpacing: 0,
-        child: child,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: bottomSpacing),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Plugin detail panes are narrower than top-level settings; stacking title, help text, and control prevents long plugin descriptions from being crushed into a left column.
+            Text(label, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w500)),
+            if (tipsWidget != null) Padding(padding: const EdgeInsets.only(top: 4), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 620), child: tipsWidget)),
+            const SizedBox(height: 8),
+            child,
+          ],
+        ),
       ),
     );
   }
