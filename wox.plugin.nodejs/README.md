@@ -149,14 +149,7 @@ const settings: PluginSettingDefinitionItem[] = [
       DefaultValue: "",
       Tooltip: "Enter your API key",
       MaxLines: 1,
-      Validators: [],
-      Style: {
-        PaddingLeft: 0,
-        PaddingTop: 0,
-        PaddingRight: 0,
-        PaddingBottom: 0,
-        Width: 0
-      }
+      Validators: []
     } as PluginSettingValueTextBox,
     DisabledInPlatforms: [],
     IsPlatformSpecific: false
@@ -167,20 +160,16 @@ const settings: PluginSettingDefinitionItem[] = [
       Key: "enabled",
       Label: "Enable Feature",
       DefaultValue: "true",
-      Tooltip: "",
-      Style: {
-        PaddingLeft: 0,
-        PaddingTop: 0,
-        PaddingRight: 0,
-        PaddingBottom: 0,
-        Width: 0
-      }
+      Tooltip: ""
     } as PluginSettingValueCheckBox,
     DisabledInPlatforms: [],
     IsPlatformSpecific: false
   }
 ]
 ```
+
+`Style` is deprecated and should not be used for new settings. Wox owns setting
+spacing and control widths so plugin settings remain visually consistent.
 
 ## AI/LLM Integration
 

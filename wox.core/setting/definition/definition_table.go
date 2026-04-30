@@ -35,7 +35,7 @@ type PluginSettingValueTable struct {
 	SortOrder     string // asc or desc
 	MaxHeight     int    // Max table height in px, <= 0 means use UI default
 
-	Style PluginSettingValueStyle
+	Style PluginSettingValueStyle `json:"-"` // Deprecated: ignored on load so Wox keeps setting layouts consistent.
 }
 
 type PluginSettingValueTableColumn struct {

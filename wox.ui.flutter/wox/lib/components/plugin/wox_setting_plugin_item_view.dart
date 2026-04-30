@@ -75,14 +75,27 @@ abstract class WoxSettingPluginItem extends StatelessWidget {
       style: style,
       child: Padding(
         padding: EdgeInsets.only(bottom: bottomSpacing),
-        child: Column(
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Plugin detail panes are narrower than top-level settings; stacking title, help text, and control prevents long plugin descriptions from being crushed into a left column.
-            Text(label, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w500)),
-            if (tipsWidget != null) Padding(padding: const EdgeInsets.only(top: 4), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 620), child: tipsWidget)),
-            const SizedBox(height: 8),
-            child,
+            // Plugin setting panes and table-edit dialogs are narrower than top-level
+            // settings, so the classic label/control split keeps controls aligned while
+            // leaving the right column to carry longer descriptions.
+            SizedBox(
+              width: labelWidth,
+              child: Padding(padding: const EdgeInsets.only(top: 6), child: Text(label, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w500))),
+            ),
+            const SizedBox(width: defaultLabelGap),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  child,
+                  if (tipsWidget != null)
+                    Padding(padding: const EdgeInsets.only(top: 4), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 620), child: tipsWidget)),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -154,14 +167,27 @@ mixin WoxSettingPluginItemMixin<T extends StatefulWidget> on State<T> {
       style: style,
       child: Padding(
         padding: EdgeInsets.only(bottom: bottomSpacing),
-        child: Column(
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Plugin detail panes are narrower than top-level settings; stacking title, help text, and control prevents long plugin descriptions from being crushed into a left column.
-            Text(label, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w500)),
-            if (tipsWidget != null) Padding(padding: const EdgeInsets.only(top: 4), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 620), child: tipsWidget)),
-            const SizedBox(height: 8),
-            child,
+            // Plugin setting panes and table-edit dialogs are narrower than top-level
+            // settings, so the classic label/control split keeps controls aligned while
+            // leaving the right column to carry longer descriptions.
+            SizedBox(
+              width: labelWidth,
+              child: Padding(padding: const EdgeInsets.only(top: 6), child: Text(label, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w500))),
+            ),
+            const SizedBox(width: WoxSettingPluginItem.defaultLabelGap),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  child,
+                  if (tipsWidget != null)
+                    Padding(padding: const EdgeInsets.only(top: 4), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 620), child: tipsWidget)),
+                ],
+              ),
+            ),
           ],
         ),
       ),

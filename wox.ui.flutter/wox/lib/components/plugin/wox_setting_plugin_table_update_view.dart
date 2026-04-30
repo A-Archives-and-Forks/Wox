@@ -767,6 +767,9 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
                                     child: Text(tr(column.label), style: TextStyle(color: textColor.withValues(alpha: 0.92), fontSize: 14, fontWeight: FontWeight.w600)),
                                   ),
                                   const SizedBox(width: 10),
+                                  // Table row editors use the same compact split layout as plugin
+                                  // settings because their dialogs are much narrower than full
+                                  // settings pages and need the input column to stay scannable.
                                   buildColumn(column),
                                 ],
                               ),

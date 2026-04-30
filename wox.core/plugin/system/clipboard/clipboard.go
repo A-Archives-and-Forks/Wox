@@ -140,9 +140,6 @@ func (c *ClipboardPlugin) GetMetadata() plugin.Metadata {
 					Key:          isKeepTextHistorySettingKey,
 					Label:        "i18n:plugin_clipboard_enable_text_history",
 					DefaultValue: "true",
-					Style: definition.PluginSettingValueStyle{
-						PaddingRight: 10,
-					},
 				},
 			},
 			{
@@ -152,9 +149,6 @@ func (c *ClipboardPlugin) GetMetadata() plugin.Metadata {
 					Label:        "i18n:plugin_clipboard_keep_text_history",
 					Suffix:       "i18n:plugin_clipboard_days",
 					DefaultValue: "90",
-					Style: definition.PluginSettingValueStyle{
-						Width: 50,
-					},
 				},
 			},
 			{
@@ -163,9 +157,6 @@ func (c *ClipboardPlugin) GetMetadata() plugin.Metadata {
 					Key:          isKeepImageHistorySettingKey,
 					Label:        "i18n:plugin_clipboard_enable_image_history",
 					DefaultValue: "true",
-					Style: definition.PluginSettingValueStyle{
-						PaddingRight: 10,
-					},
 				},
 			},
 			{
@@ -175,9 +166,6 @@ func (c *ClipboardPlugin) GetMetadata() plugin.Metadata {
 					Label:        "i18n:plugin_clipboard_keep_image_history",
 					Suffix:       "i18n:plugin_clipboard_days",
 					DefaultValue: "3",
-					Style: definition.PluginSettingValueStyle{
-						Width: 50,
-					},
 				},
 			},
 			{

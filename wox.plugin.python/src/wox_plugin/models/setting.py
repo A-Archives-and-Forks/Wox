@@ -93,8 +93,9 @@ class PluginSettingValueStyle:
     """
     Style configuration for plugin setting UI elements.
 
-    Controls the layout and spacing of setting items in the
-    settings panel.
+    Deprecated:
+        Wox ignores plugin-provided pixel styling when rendering settings.
+        Let Wox own spacing and width so plugin settings remain visually consistent.
 
     Attributes:
         padding_left: Left padding in pixels
@@ -103,12 +104,7 @@ class PluginSettingValueStyle:
         padding_bottom: Bottom padding in pixels
         width: Width of the setting element (0 = default)
 
-    Example usage:
-        style = PluginSettingValueStyle(
-            padding_left=20,
-            padding_top=10,
-            width=300
-        )
+    This class is kept only for compatibility with older plugins.
     """
 
     padding_left: int = field(default=0)
@@ -301,7 +297,7 @@ class PluginSettingValueTextBox(PluginSettingDefinitionValue):
         suffix: Optional suffix text (e.g., unit, placeholder)
         tooltip: Help text shown on hover
         max_lines: Maximum number of lines (1 = single-line, >1 = multi-line)
-        style: Visual styling options
+        style: Deprecated visual styling options. Wox ignores these values.
 
     Example usage:
         # Single-line text box
@@ -357,9 +353,7 @@ class PluginSettingValueTextBox(PluginSettingDefinitionValue):
 
     style: PluginSettingValueStyle = field(default_factory=PluginSettingValueStyle)
     """
-    Visual styling options.
-
-    Controls padding, width, and other layout properties.
+    Deprecated visual styling options. Wox ignores these values.
     """
 
     def to_dict(self) -> Dict[str, Any]:
@@ -376,7 +370,6 @@ class PluginSettingValueTextBox(PluginSettingDefinitionValue):
             "DefaultValue": self.default_value,
             "Tooltip": self.tooltip,
             "MaxLines": self.max_lines,
-            "Style": self.style.to_dict(),
         }
 
 
@@ -392,7 +385,7 @@ class PluginSettingValueCheckBox(PluginSettingDefinitionValue):
         key: Setting identifier
         label: Display label for the checkbox
         tooltip: Help text shown on hover
-        style: Visual styling options
+        style: Deprecated visual styling options. Wox ignores these values.
 
     Example usage:
         setting = PluginSettingValueCheckBox(
@@ -425,9 +418,7 @@ class PluginSettingValueCheckBox(PluginSettingDefinitionValue):
 
     style: PluginSettingValueStyle = field(default_factory=PluginSettingValueStyle)
     """
-    Visual styling options.
-
-    Controls padding, width, and other layout properties.
+    Deprecated visual styling options. Wox ignores these values.
     """
 
     def to_dict(self) -> Dict[str, Any]:
@@ -442,7 +433,6 @@ class PluginSettingValueCheckBox(PluginSettingDefinitionValue):
             "Label": self.label,
             "DefaultValue": self.default_value,
             "Tooltip": self.tooltip,
-            "Style": self.style.to_dict(),
         }
 
 
@@ -458,7 +448,7 @@ class PluginSettingValueLabel(PluginSettingDefinitionValue):
         key: Setting identifier (unused for labels, can be empty)
         content: The text content to display
         tooltip: Help text shown on hover
-        style: Visual styling options
+        style: Deprecated visual styling options. Wox ignores these values.
 
     Example usage:
         setting = PluginSettingValueLabel(
@@ -485,9 +475,7 @@ class PluginSettingValueLabel(PluginSettingDefinitionValue):
 
     style: PluginSettingValueStyle = field(default_factory=PluginSettingValueStyle)
     """
-    Visual styling options.
-
-    Controls padding, width, and other layout properties.
+    Deprecated visual styling options. Wox ignores these values.
     """
 
     def to_dict(self) -> Dict[str, Any]:
@@ -500,7 +488,6 @@ class PluginSettingValueLabel(PluginSettingDefinitionValue):
         return {
             "Content": self.content,
             "Tooltip": self.tooltip,
-            "Style": self.style.to_dict(),
         }
 
 
@@ -628,7 +615,6 @@ class PluginSettingDefinitionItem:
                 default_value=value_data.get("DefaultValue", ""),
                 tooltip=value_data.get("Tooltip", ""),
                 max_lines=value_data.get("MaxLines", 1),
-                style=PluginSettingValueStyle.from_dict(value_data.get("Style", {})),
             )
         elif setting_type == PluginSettingDefinitionType.CHECKBOX:
             value = PluginSettingValueCheckBox(
@@ -636,14 +622,12 @@ class PluginSettingDefinitionItem:
                 label=value_data.get("Label", ""),
                 default_value=value_data.get("DefaultValue", ""),
                 tooltip=value_data.get("Tooltip", ""),
-                style=PluginSettingValueStyle.from_dict(value_data.get("Style", {})),
             )
         elif setting_type == PluginSettingDefinitionType.LABEL:
             value = PluginSettingValueLabel(
                 key=value_data.get("Key", ""),
                 content=value_data.get("Content", ""),
                 tooltip=value_data.get("Tooltip", ""),
-                style=PluginSettingValueStyle.from_dict(value_data.get("Style", {})),
             )
         else:
             # Default to basic value
