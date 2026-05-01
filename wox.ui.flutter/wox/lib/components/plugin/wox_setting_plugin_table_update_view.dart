@@ -481,6 +481,8 @@ class _WoxSettingPluginTableUpdateState extends State<WoxSettingPluginTableUpdat
       case PluginSettingValueType.pluginSettingValueTableColumnTypeHotkey:
         return WoxHotkeyRecorder(
           hotkey: WoxHotkey.parseHotkeyFromString(getValue(column.key)),
+          // Table edit rows keep the hint on the right so it stays inside the hotkey cell instead of competing with row labels and descriptions.
+          tipPosition: WoxHotkeyRecorderTipPosition.right,
           onHotKeyRecorded: (hotkey) {
             updateValue(column.key, hotkey);
             setFieldValidationError(column.key, validateValue(hotkey, column.validators));

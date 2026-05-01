@@ -11,11 +11,14 @@ import 'package:wox/utils/log.dart';
 import 'package:get/get.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 
+enum WoxHotkeyRecorderTipPosition { left, right }
+
 class WoxHotkeyRecorder extends StatefulWidget {
   final ValueChanged<String> onHotKeyRecorded;
   final HotkeyX? hotkey;
+  final WoxHotkeyRecorderTipPosition tipPosition;
 
-  const WoxHotkeyRecorder({super.key, required this.onHotKeyRecorded, required this.hotkey});
+  const WoxHotkeyRecorder({super.key, required this.onHotKeyRecorded, required this.hotkey, this.tipPosition = WoxHotkeyRecorderTipPosition.left});
 
   @override
   State<WoxHotkeyRecorder> createState() => _WoxHotkeyRecorderState();
@@ -197,6 +200,73 @@ class _WoxHotkeyRecorderState extends State<WoxHotkeyRecorder> {
     );
   }
 
+  Widget _buildRecorderBox() {
+    return Container(
+      // Match the quieter setting control treatment; focus still uses the accent color while idle borders no longer dominate the row.
+      decoration: BoxDecoration(
+        border: Border.all(color: _isFocused ? getThemeActiveBackgroundColor() : getThemeSubTextColor().withValues(alpha: 0.55)),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8.0, 4.0, 8.0, 4.0),
+        child:
+            _hotKey == null || (!_hotKey!.isDoubleHotkey && !_hotKey!.isNormalHotkey && !_hotKey!.isSingleHotkey)
+                ? SizedBox(
+                  width: 80,
+                  height: 18,
+                  child: Text(_isFocused ? tr("ui_hotkey_recording") : tr("ui_hotkey_click_to_set"), style: TextStyle(color: Colors.grey[400], fontSize: 13)),
+                )
+                : _hotKey!.isDoubleHotkey
+                ? Wrap(
+                  spacing: 8,
+                  children: [buildSingleKeyView(WoxHotkey.getModifierStr(_hotKey!.doubleHotkey!)), buildSingleKeyView(WoxHotkey.getModifierStr(_hotKey!.doubleHotkey!))],
+                )
+                : HotKeyVirtualView(hotKey: _hotKey!.normalHotkey!),
+      ),
+    );
+  }
+
+  Widget _buildFocusedHint({bool singleLine = false}) {
+    return Text(
+      tr("ui_hotkey_press_hint"),
+      maxLines: singleLine ? 1 : null,
+      softWrap: !singleLine,
+      overflow: singleLine ? TextOverflow.visible : TextOverflow.clip,
+      style: TextStyle(color: Colors.grey[500], fontSize: 13),
+    );
+  }
+
+  Widget _buildRecorderContent() {
+    final recorderBox = _buildRecorderBox();
+    if (!_isFocused) {
+      return recorderBox;
+    }
+
+    if (widget.tipPosition == WoxHotkeyRecorderTipPosition.right) {
+      // Dense table-edit rows have their labels below the control area, so the recording hint stays to the right to avoid covering the row content.
+      return Row(mainAxisSize: MainAxisSize.min, children: [recorderBox, Padding(padding: const EdgeInsets.only(left: 8.0), child: _buildFocusedHint())]);
+    }
+
+    // General settings align the recorder itself to the right edge. The left hint is painted outside the recorder's layout box
+    // so focusing the control does not push the keycaps away from their idle position.
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        recorderBox,
+        Positioned.fill(
+          child: OverflowBox(
+            maxWidth: double.infinity,
+            alignment: Alignment.centerLeft,
+            child: FractionalTranslation(
+              translation: const Offset(-1, 0),
+              child: Padding(padding: const EdgeInsets.only(right: 8.0), child: Center(heightFactor: 1, child: _buildFocusedHint(singleLine: true))),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Focus(
@@ -214,36 +284,7 @@ class _WoxHotkeyRecorderState extends State<WoxHotkeyRecorder> {
         onTapDown: (_) {
           _focusNode.requestFocus();
         },
-        // Keep the recorder as compact content so parent setting rows can align it to the right edge; a full-width row made the keycaps appear stranded in the middle.
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              // Match the quieter setting control treatment; focus still uses the accent color while idle borders no longer dominate the row.
-              decoration: BoxDecoration(
-                border: Border.all(color: _isFocused ? getThemeActiveBackgroundColor() : getThemeSubTextColor().withValues(alpha: 0.55)),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(8.0, 4.0, 8.0, 4.0),
-                child:
-                    _hotKey == null || (!_hotKey!.isDoubleHotkey && !_hotKey!.isNormalHotkey && !_hotKey!.isSingleHotkey)
-                        ? SizedBox(
-                          width: 80,
-                          height: 18,
-                          child: Text(_isFocused ? tr("ui_hotkey_recording") : tr("ui_hotkey_click_to_set"), style: TextStyle(color: Colors.grey[400], fontSize: 13)),
-                        )
-                        : _hotKey!.isDoubleHotkey
-                        ? Wrap(
-                          spacing: 8,
-                          children: [buildSingleKeyView(WoxHotkey.getModifierStr(_hotKey!.doubleHotkey!)), buildSingleKeyView(WoxHotkey.getModifierStr(_hotKey!.doubleHotkey!))],
-                        )
-                        : HotKeyVirtualView(hotKey: _hotKey!.normalHotkey!),
-              ),
-            ),
-            if (_isFocused) Padding(padding: const EdgeInsets.only(left: 8.0), child: Text(tr("ui_hotkey_press_hint"), style: TextStyle(color: Colors.grey[500], fontSize: 13))),
-          ],
-        ),
+        child: _buildRecorderContent(),
       ),
     );
   }
