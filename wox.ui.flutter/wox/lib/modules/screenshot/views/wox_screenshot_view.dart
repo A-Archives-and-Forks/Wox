@@ -345,11 +345,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                 width: previewSize.width,
                 height: previewSize.height,
                 child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Colors.transparent,
-                    border: Border.all(color: const Color(0xCCFFFFFF), width: 2),
-                    boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 24, offset: Offset(0, 14))],
-                  ),
+                  decoration: BoxDecoration(color: Colors.transparent, border: Border.all(color: const Color(0xCCFFFFFF), width: 2)),
                   child:
                       frames.isEmpty
                           ? const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.4, color: Color(0xFF4DA3FF))))
@@ -364,19 +360,10 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                 child: Center(
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xE61E1A18),
-                      borderRadius: BorderRadius.circular(18),
-                      boxShadow: const [BoxShadow(color: Color(0x55000000), blurRadius: 24, offset: Offset(0, 12))],
-                    ),
+                    decoration: BoxDecoration(color: const Color(0xE61E1A18), borderRadius: BorderRadius.circular(18)),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (controller.isScrollingCaptureUpdating.value)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 10),
-                            child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.2, color: Color(0xFF4DA3FF))),
-                          ),
                         _ToolButton(
                           key: screenshotCancelKey,
                           icon: Icons.close,
@@ -617,11 +604,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         // The preview is a live rendering aid, not an editing surface. Keeping it pointer-transparent
         // prevents it from stealing wheel gestures that should continue driving the selected page.
         child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            border: Border.all(color: const Color(0xCCFFFFFF), width: 2),
-            boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 24, offset: Offset(0, 14))],
-          ),
+          decoration: BoxDecoration(color: Colors.transparent, border: Border.all(color: const Color(0xCCFFFFFF), width: 2)),
           child:
               frames.isEmpty
                   ? const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.4, color: Color(0xFF4DA3FF))))

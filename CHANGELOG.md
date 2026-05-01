@@ -2,6 +2,25 @@
 
 ## v2.0.4 -
 
+- Add
+  - [`Screenshot`] Add scrolling capture support
+  - [`Screenshot`] Add plugin screenshot API with hidden toolbar and auto-confirm options for direct capture workflows #4394
+  - [`WebView`] Add actions to open previews in the system browser and clear saved webview state
+  - [`Usage`] Add X sharing for usage statistics
+  - [`Plugin Store`] Add LuxTranslate and Screenshot OCR listings
+
+- Improve
+  - [`Query Box`] Improve multi-line query wrapping and pasted text handling #4397
+  - [`Plugin Setting`] Improve trigger keyword editing with validation, clearer empty states, stable tab switching, and app-owned setting layout
+  - [`Settings`] Improve settings layout consistency, navigation scrolling, and hotkey recorder hint placement
+  - [`App`] Improve macOS app icon handling and default icon detection
+  - [`AI`] Improve OpenAI-compatible streaming so tagged reasoning content is separated from answer text
+  - [`File Explorer Search`] Improve type-to-search routing from launcher queries
+
+- Fix
+  - [`Plugin Store`] Fix plugin installation by starting the required runtime host when possible before install #4395
+  - [`Plugin Setting`] Fix plugin search, update rows, dropdowns, and AI model selectors so active state is preserved during UI interactions
+
 ## v2.0.3 - 2026-04-26
 
 - Add

@@ -72,6 +72,28 @@ private func applyScreenshotWindowPresentation(to window: NSWindow, level: NSWin
   window.level = level
 }
 
+private func makeScreenshotWindowTransparent(_ window: NSWindow) {
+  // Scrolling screenshot reuses the launcher Flutter window as a compact preview/toolbox panel.
+  // NSWindow transparency alone was not enough after frame moves because AppKit/Flutter layers could
+  // keep an opaque backing store, leaving a gray rectangle around otherwise transparent preview UI.
+  window.isOpaque = false
+  window.backgroundColor = .clear
+  guard let contentView = window.contentView else {
+    return
+  }
+
+  func clearBackingLayers(in view: NSView) {
+    view.wantsLayer = true
+    view.layer?.isOpaque = false
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    for subview in view.subviews {
+      clearBackingLayers(in: subview)
+    }
+  }
+
+  clearBackingLayers(in: contentView)
+}
+
 private func screenshotCollectionBehavior() -> NSWindow.CollectionBehavior {
   // The native selector already relied on fullscreen auxiliary behavior to coexist with fullscreen
   // apps. Reusing that exact behavior for the prepared Flutter workspace avoids downgrading the
@@ -604,6 +626,7 @@ private final class ScrollingCaptureOverlaySession {
 
   private func moveControlsWindow() {
     controlsWindow.setFrame(appKitRect(fromTopLeftRect: controlsBounds), display: true)
+    makeScreenshotWindowTransparent(controlsWindow)
     controlsWindow.contentView?.needsLayout = true
     controlsWindow.contentView?.layoutSubtreeIfNeeded()
     controlsWindow.displayIfNeeded()
@@ -1055,8 +1078,7 @@ class AppDelegate: FlutterAppDelegate {
     // scrolling-capture preview mode, unpainted Flutter pixels intentionally need to be transparent;
     // leaving the acrylic view in place made the preview look like it had a large gray backing panel.
     removeAcrylicEffect(from: window)
-    window.isOpaque = false
-    window.backgroundColor = .clear
+    makeScreenshotWindowTransparent(window)
     // The native selection overlay already appears without AppKit window animations. Leaving the
     // reused Flutter window at its default animation behavior makes the handoff look like a short
     // fade/zoom even when the content is ready. Disable window animation for screenshot mode so the
@@ -1338,6 +1360,10 @@ class AppDelegate: FlutterAppDelegate {
       let streamConfiguration = SCStreamConfiguration()
       streamConfiguration.width = Int((display.frame.width * scale).rounded())
       streamConfiguration.height = Int((display.frame.height * scale).rounded())
+      // Long screenshots stitch multiple captures together. If the system cursor is included in
+      // every tile, the final image repeats the pointer at each sampled scroll position and also
+      // corrupts overlap matching, so keep captured display pixels cursor-free.
+      streamConfiguration.showsCursor = false
 
       let cgImage = try await SCScreenshotManager.captureImage(
         contentFilter: contentFilter,
@@ -1494,6 +1520,9 @@ class AppDelegate: FlutterAppDelegate {
       if wasVisible {
         let restoreLevel = self.activeScrollingCaptureOverlaySession == nil ? screenshotWindowLevel() : scrollingCaptureControlsWindowLevel()
         applyScreenshotWindowPresentation(to: window, level: restoreLevel)
+        if self.activeScrollingCaptureOverlaySession != nil {
+          makeScreenshotWindowTransparent(window)
+        }
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
         // Match the initial reveal path: after synthetic scrolling, AppKit may restore panel
@@ -1902,6 +1931,12 @@ class AppDelegate: FlutterAppDelegate {
             // Y conversion is not enough once monitors sit at different heights.
             let flippedY = appKitY(fromTopLeftY: y, height: frameRect.height)
             window.setFrame(NSRect(x: x, y: flippedY, width: frameRect.width, height: frameRect.height), display: true)
+            if self?.isCapturePresentationActive == true {
+              // Scrolling preview resizes the same transparent Flutter window as more stitched rows
+              // arrive. Re-clearing backing layers after the native resize prevents AppKit from
+              // reintroducing an opaque frame-sized surface around the compact controls.
+              makeScreenshotWindowTransparent(window)
+            }
             result(nil)
           } else {
             result(

@@ -23,7 +23,8 @@ class WoxScreenshotController extends GetxController {
   static const double _scrollingCaptureWheelSteps = 7;
   static const Duration _scrollingCaptureSettleDelay = Duration(milliseconds: 120);
   static const double _scrollingCaptureOverlapThreshold = 20;
-  static const double _scrollingCaptureDuplicateThreshold = 6;
+  static const double _scrollingCaptureDuplicateThreshold = 14;
+  static const double _scrollingCaptureMinimumOverlapRatio = 0.18;
   static const int _scrollingCaptureSeamFeatherRows = 10;
   static const double _scrollingCaptureToolbarMinWidth = 168;
 
@@ -762,11 +763,16 @@ class WoxScreenshotController extends GetxController {
     final columns = _scrollingOverlapComparisonColumns(previous, next);
     final sameViewportDifference = _averageSameViewportDifference(previous, next, columns);
     if (sameViewportDifference <= _scrollingCaptureDuplicateThreshold) {
+      // Cursor pixels and hover states can change even when the page has not actually moved. Treat
+      // a mostly-same viewport as duplicate instead of appending a second copy of the first screen.
       return _ScrollingCaptureOverlap(overlapRows: next.pixelHeight, averageDifference: sameViewportDifference, isReliable: true, isDuplicate: true);
     }
 
     final maxOverlap = math.max(1, (next.pixelHeight * 0.97).floor());
-    final minOverlap = math.min(maxOverlap, math.max(24, (next.pixelHeight * 0.08).floor()));
+    // Very small overlaps are easy to match against repeated cards or blank page regions. Requiring
+    // a meaningful shared band favors dropping an over-fast wheel sample over stitching the same
+    // viewport again at a wrong offset.
+    final minOverlap = math.min(maxOverlap, math.max(48, (next.pixelHeight * _scrollingCaptureMinimumOverlapRatio).floor()));
     final coarseStep = math.max(2, (next.pixelHeight / 100).round());
     var best = _findBestScrollingOverlapInRange(previous, next, columns, minOverlap, maxOverlap, coarseStep);
     final refineMin = math.max(minOverlap, best.overlapRows - coarseStep);
