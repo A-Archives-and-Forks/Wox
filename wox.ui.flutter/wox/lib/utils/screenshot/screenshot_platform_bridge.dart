@@ -17,7 +17,7 @@ abstract class ScreenshotPlatformBridge {
     _instance = MethodChannelScreenshotPlatformBridge();
   }
 
-  Future<List<DisplaySnapshot>> captureAllDisplays();
+  Future<List<DisplaySnapshot>> captureAllDisplays({String? traceId, ScreenshotRect? logicalSelection});
 
   Future<List<DisplaySnapshot>> captureDisplayMetadata() {
     return captureAllDisplays();
@@ -55,7 +55,12 @@ abstract class ScreenshotPlatformBridge {
 
   Future<void> scrollMouse({required double deltaY}) async {}
 
-  Future<void> beginScrollingCaptureOverlay({required ScreenshotRect workspaceBounds, required ScreenshotRect selection, required ScreenshotRect controlsBounds}) async {}
+  Future<void> beginScrollingCaptureOverlay({
+    required ScreenshotRect workspaceBounds,
+    required ScreenshotRect selection,
+    required ScreenshotRect controlsBounds,
+    String? traceId,
+  }) async {}
 
   Stream<void> scrollingCaptureWheelEvents() => const Stream<void>.empty();
 
@@ -92,8 +97,15 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
   }
 
   @override
-  Future<List<DisplaySnapshot>> captureAllDisplays() async {
-    final response = await _channel.invokeMethod<List<dynamic>>('captureAllDisplays');
+  Future<List<DisplaySnapshot>> captureAllDisplays({String? traceId, ScreenshotRect? logicalSelection}) async {
+    // Scrolling capture carries the request trace and selection into the macOS runner so native
+    // timing probes stay in one log chain and the runner can avoid encoding unrelated displays.
+    final macOSArguments = <String, dynamic>{
+      if (traceId != null && traceId.isNotEmpty) 'traceId': traceId,
+      if (logicalSelection != null) 'logicalSelection': logicalSelection.toJson(),
+    };
+    final Object? arguments = Platform.isMacOS && macOSArguments.isNotEmpty ? macOSArguments : null;
+    final response = await _channel.invokeMethod<List<dynamic>>('captureAllDisplays', arguments);
     return _decodeSnapshotResponse(response);
   }
 
@@ -232,12 +244,20 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
   }
 
   @override
-  Future<void> beginScrollingCaptureOverlay({required ScreenshotRect workspaceBounds, required ScreenshotRect selection, required ScreenshotRect controlsBounds}) async {
+  Future<void> beginScrollingCaptureOverlay({
+    required ScreenshotRect workspaceBounds,
+    required ScreenshotRect selection,
+    required ScreenshotRect controlsBounds,
+    String? traceId,
+  }) async {
     try {
+      // Native overlay/show timing happens after this boundary, so include the active trace in the
+      // channel payload instead of letting the window-manager log bridge assign a fresh UUID.
       await _channel.invokeMethod<void>('beginScrollingCaptureOverlay', {
         'workspaceBounds': workspaceBounds.toJson(),
         'selection': selection.toJson(),
         'controlsBounds': controlsBounds.toJson(),
+        if (traceId != null && traceId.isNotEmpty) 'traceId': traceId,
       });
     } on MissingPluginException {
       return;

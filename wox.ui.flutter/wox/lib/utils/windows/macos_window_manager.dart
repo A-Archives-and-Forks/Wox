@@ -24,7 +24,16 @@ class MacOSWindowManager extends BaseWindowManager {
         notifyWindowBlur();
         break;
       case 'log':
-        final message = call.arguments as String? ?? "";
+        final arguments = call.arguments;
+        if (arguments is Map) {
+          // Native screenshot timing logs can carry the active request trace. Preserve that trace so
+          // UI and macOS timing probes can be filtered as one capture pipeline in ui.log.
+          final message = arguments['message'] as String? ?? "";
+          final traceId = arguments['traceId'] as String? ?? const Uuid().v4();
+          Logger.instance.debug(traceId, "[NATIVE] $message");
+          break;
+        }
+        final message = arguments as String? ?? "";
         Logger.instance.debug(const Uuid().v4(), "[NATIVE] $message");
         break;
       default:

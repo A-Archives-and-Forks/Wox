@@ -9,6 +9,7 @@ import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/controllers/wox_screenshot_controller.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/screenshot_session.dart';
+import 'package:wox/utils/log.dart';
 
 const Key screenshotCanvasKey = Key('screenshot-canvas');
 const Key screenshotToolbarKey = Key('screenshot-toolbar');
@@ -349,7 +350,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                   child:
                       frames.isEmpty
                           ? const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.4, color: Color(0xFF4DA3FF))))
-                          : CustomPaint(painter: _ScrollingPreviewPainter(frames: frames, totalHeight: totalHeight)),
+                          : CustomPaint(painter: _ScrollingPreviewPainter(frames: frames, totalHeight: totalHeight, traceId: controller.scrollingCaptureTraceId)),
                 ),
               ),
               Positioned(
@@ -608,7 +609,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
           child:
               frames.isEmpty
                   ? const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.4, color: Color(0xFF4DA3FF))))
-                  : CustomPaint(painter: _ScrollingPreviewPainter(frames: frames, totalHeight: totalHeight)),
+                  : CustomPaint(painter: _ScrollingPreviewPainter(frames: frames, totalHeight: totalHeight, traceId: controller.scrollingCaptureTraceId)),
         ),
       ),
     );
@@ -1714,13 +1715,15 @@ class _WorkspaceShadePainter extends CustomPainter {
 }
 
 class _ScrollingPreviewPainter extends CustomPainter {
-  _ScrollingPreviewPainter({required this.frames, required this.totalHeight});
+  _ScrollingPreviewPainter({required this.frames, required this.totalHeight, required this.traceId});
 
   final List<ScrollingCapturePreviewFrame> frames;
   final int totalHeight;
+  final String traceId;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final paintWatch = Stopwatch()..start();
     if (frames.isEmpty || totalHeight <= 0) {
       return;
     }
@@ -1745,6 +1748,13 @@ class _ScrollingPreviewPainter extends CustomPainter {
       _paintScrollingFrame(canvas: canvas, frame: frame, dx: dx, destinationY: y, destinationWidth: renderedWidth, destinationHeight: scaledHeight, paint: paint);
       y += scaledHeight;
     }
+
+    // Preview paint is the final visible boundary of the scrolling-capture pipeline. Logging it
+    // separately lets timing analysis distinguish slow capture/stitching from slow Flutter repaint.
+    Logger.instance.debug(
+      traceId,
+      'scrolling_capture_timing event=preview_paint frameCount=${frames.length} totalHeight=$totalHeight canvas=${size.width.round()}x${size.height.round()} elapsedMs=${paintWatch.elapsedMilliseconds}',
+    );
   }
 
   void _paintScrollingFrame({
@@ -1789,7 +1799,7 @@ class _ScrollingPreviewPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ScrollingPreviewPainter oldDelegate) {
-    return oldDelegate.frames != frames || oldDelegate.totalHeight != totalHeight;
+    return oldDelegate.frames != frames || oldDelegate.totalHeight != totalHeight || oldDelegate.traceId != traceId;
   }
 }
 

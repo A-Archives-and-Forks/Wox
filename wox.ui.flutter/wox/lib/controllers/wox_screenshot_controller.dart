@@ -62,6 +62,7 @@ class WoxScreenshotController extends GetxController {
   StreamSubscription<void>? _scrollingCaptureWheelSubscription;
   Rect? _scrollingCaptureControlsBounds;
   Rect? _pendingScrollingCaptureSelection;
+  String _scrollingCaptureTraceId = "";
   StreamSubscription<ScreenshotSelectionDisplayHint>? _selectionDisplayHintSubscription;
   bool _acceptSelectionDisplayHints = false;
   int _preparedDisplayRevision = 0;
@@ -77,11 +78,45 @@ class WoxScreenshotController extends GetxController {
   // toolbox to render request-scoped identity details.
   CaptureScreenshotRequest? get activeRequest => _activeRequest;
 
+  String get scrollingCaptureTraceId => _scrollingCaptureTraceId;
+
   Rect get virtualBoundsRect => virtualBounds.value?.toRect() ?? Rect.zero;
 
   Rect? get selectionRect => selection.value?.toRect();
 
   ScreenshotAnnotation? get selectedAnnotation => annotationById(selectedAnnotationId.value);
+
+  // Scrolling capture spans Flutter scheduling, native screen capture, image decoding, overlap
+  // matching, and repaint. Centralizing timing log formatting keeps every probe searchable with the
+  // same prefix while avoiding heavy image/base64 data in the log stream.
+  void _logScrollingCaptureTiming(String traceId, String event, Map<String, Object?> fields) {
+    final details = fields.entries.map((entry) => '${entry.key}=${_formatScrollingTimingValue(entry.value)}').join(' ');
+    Logger.instance.debug(traceId, 'scrolling_capture_timing event=$event${details.isEmpty ? '' : ' $details'}');
+  }
+
+  String _formatScrollingTimingValue(Object? value) {
+    if (value == null) {
+      return 'null';
+    }
+    if (value is double) {
+      return _formatScrollingTimingDouble(value);
+    }
+    if (value is Rect) {
+      return _formatScrollingTimingRect(value);
+    }
+    return value.toString();
+  }
+
+  String _formatScrollingTimingDouble(double value) {
+    if (!value.isFinite) {
+      return value.toString();
+    }
+    return value.toStringAsFixed(2);
+  }
+
+  String _formatScrollingTimingRect(Rect rect) {
+    return '${rect.width.round()}x${rect.height.round()}@${rect.left.round()},${rect.top.round()}';
+  }
 
   ScreenshotAnnotation? annotationById(String? annotationId) {
     if (annotationId == null) {
@@ -425,24 +460,38 @@ class WoxScreenshotController extends GetxController {
   }
 
   Future<void> startScrollingCapture(String traceId) async {
+    _scrollingCaptureTraceId = traceId;
+    final sessionWatch = Stopwatch()..start();
     final currentSelection = selectionRect;
     if (currentSelection == null || currentSelection.width < 1 || currentSelection.height < 1) {
+      _logScrollingCaptureTiming(traceId, 'start_ignored_invalid_selection', {'elapsedMs': sessionWatch.elapsedMilliseconds});
       return;
     }
 
+    _logScrollingCaptureTiming(traceId, 'start', {'selection': currentSelection, 'frameCount': scrollingCaptureFrames.length});
     stage.value = ScreenshotSessionStage.scrolling;
     _disposeScrollingCaptureFrames();
+    _scrollingCaptureTraceId = traceId;
     try {
       await WidgetsBinding.instance.endOfFrame;
+      final firstFrameWatch = Stopwatch()..start();
       await _appendScrollingCaptureFrame(traceId, currentSelection);
+      _logScrollingCaptureTiming(traceId, 'start_initial_frame_done', {'elapsedMs': firstFrameWatch.elapsedMilliseconds, 'frameCount': scrollingCaptureFrames.length});
       if (Platform.isMacOS && scrollingCaptureFrames.isNotEmpty) {
         final controlsBounds = _calculateScrollingControlsBounds(currentSelection);
         _scrollingCaptureControlsBounds = controlsBounds;
+        final overlayWatch = Stopwatch()..start();
         await ScreenshotPlatformBridge.instance.beginScrollingCaptureOverlay(
           workspaceBounds: ScreenshotRect.fromRect(virtualBoundsRect),
           selection: ScreenshotRect.fromRect(currentSelection),
           controlsBounds: ScreenshotRect.fromRect(controlsBounds),
+          traceId: traceId,
         );
+        _logScrollingCaptureTiming(traceId, 'start_native_overlay_done', {
+          'elapsedMs': overlayWatch.elapsedMilliseconds,
+          'controls': controlsBounds,
+          'frameCount': scrollingCaptureFrames.length,
+        });
         isNativeScrollingCaptureOverlay.value = true;
         _scrollingCaptureWheelSubscription?.cancel();
         _scrollingCaptureWheelSubscription = ScreenshotPlatformBridge.instance.scrollingCaptureWheelEvents().listen((_) {
@@ -455,7 +504,9 @@ class WoxScreenshotController extends GetxController {
         // made the preview grow on its own; scrolling capture should advance only after real wheel
         // input because that is the only signal that the underlying page may have moved.
       }
+      _logScrollingCaptureTiming(traceId, 'start_done', {'elapsedMs': sessionWatch.elapsedMilliseconds, 'frameCount': scrollingCaptureFrames.length});
     } catch (e) {
+      _logScrollingCaptureTiming(traceId, 'start_failed', {'elapsedMs': sessionWatch.elapsedMilliseconds, 'error': e.runtimeType});
       Logger.instance.error(traceId, 'Failed to start scrolling screenshot: $e');
       await failSession(traceId, errorCode: 'scrolling_start_failed', errorMessage: e.toString());
     }
@@ -472,10 +523,24 @@ class WoxScreenshotController extends GetxController {
     }
 
     try {
+      final wheelSteps = _scrollDeltaToWheelSteps(scrollDeltaY);
+      final scrollWatch = Stopwatch()..start();
+      _logScrollingCaptureTiming(traceId, 'wheel_start', {
+        'deltaY': scrollDeltaY,
+        'wheelSteps': wheelSteps,
+        'frameCount': scrollingCaptureFrames.length,
+        'pending': _pendingScrollingCaptureSelection != null,
+        'updating': isScrollingCaptureUpdating.value,
+      });
       // Scrolling mode must not warp the cursor. Forward only the user's wheel delta at the current
       // pointer location, then refresh the stitched preview after a short settle window so rapid
       // wheel gestures do not trigger full-desktop capture on every native scroll tick.
-      await ScreenshotPlatformBridge.instance.scrollMouse(deltaY: _scrollDeltaToWheelSteps(scrollDeltaY));
+      await ScreenshotPlatformBridge.instance.scrollMouse(deltaY: wheelSteps);
+      _logScrollingCaptureTiming(traceId, 'wheel_synthetic_scroll_done', {
+        'elapsedMs': scrollWatch.elapsedMilliseconds,
+        'wheelSteps': wheelSteps,
+        'frameCount': scrollingCaptureFrames.length,
+      });
       _scheduleScrollingCaptureFrame(traceId, currentSelection);
     } catch (e) {
       Logger.instance.error(traceId, 'Failed to update scrolling screenshot: $e');
@@ -484,19 +549,36 @@ class WoxScreenshotController extends GetxController {
 
   void _scheduleScrollingCaptureFrame(String traceId, Rect selection) {
     _pendingScrollingCaptureSelection = selection;
+    final hadDebounce = _scrollingCaptureFrameDebounce != null;
+    _logScrollingCaptureTiming(traceId, 'schedule_request', {
+      'selection': selection,
+      'frameCount': scrollingCaptureFrames.length,
+      'pending': _pendingScrollingCaptureSelection != null,
+      'updating': isScrollingCaptureUpdating.value,
+      'debounceActive': hadDebounce,
+    });
     if (_scrollingCaptureFrameDebounce != null) {
       return;
     }
 
+    final settleWatch = Stopwatch()..start();
     _scrollingCaptureFrameDebounce = Timer(_scrollingCaptureSettleDelay, () {
       _scrollingCaptureFrameDebounce = null;
+      _logScrollingCaptureTiming(traceId, 'schedule_timer_fired', {
+        'settleMs': settleWatch.elapsedMilliseconds,
+        'frameCount': scrollingCaptureFrames.length,
+        'pending': _pendingScrollingCaptureSelection != null,
+        'updating': isScrollingCaptureUpdating.value,
+      });
       if (stage.value != ScreenshotSessionStage.scrolling) {
         _pendingScrollingCaptureSelection = null;
+        _logScrollingCaptureTiming(traceId, 'schedule_dropped_inactive', {'frameCount': scrollingCaptureFrames.length});
         return;
       }
       if (isScrollingCaptureUpdating.value) {
         final queuedSelection = _pendingScrollingCaptureSelection;
         if (queuedSelection != null) {
+          _logScrollingCaptureTiming(traceId, 'schedule_merged_while_updating', {'selection': queuedSelection, 'frameCount': scrollingCaptureFrames.length});
           _scheduleScrollingCaptureFrame(traceId, queuedSelection);
         }
         return;
@@ -505,16 +587,19 @@ class WoxScreenshotController extends GetxController {
       final selectionForCapture = _pendingScrollingCaptureSelection;
       _pendingScrollingCaptureSelection = null;
       if (selectionForCapture == null) {
+        _logScrollingCaptureTiming(traceId, 'schedule_dropped_no_selection', {'frameCount': scrollingCaptureFrames.length});
         return;
       }
 
       // Use throttling instead of debounce for wheel-driven capture. Debounce waited until scrolling
       // stopped, which allowed a single captured pair to be separated by more than one viewport and
       // caused poor overlap matches; throttling records intermediate frames while staying bounded.
+      _logScrollingCaptureTiming(traceId, 'schedule_append_started', {'selection': selectionForCapture, 'frameCount': scrollingCaptureFrames.length});
       unawaited(
         _appendScrollingCaptureFrame(traceId, selectionForCapture).whenComplete(() {
           final queuedSelection = _pendingScrollingCaptureSelection;
           if (queuedSelection != null && stage.value == ScreenshotSessionStage.scrolling) {
+            _logScrollingCaptureTiming(traceId, 'schedule_append_done_with_pending', {'selection': queuedSelection, 'frameCount': scrollingCaptureFrames.length});
             _scheduleScrollingCaptureFrame(traceId, queuedSelection);
           }
         }),
@@ -556,6 +641,7 @@ class WoxScreenshotController extends GetxController {
       return;
     }
 
+    final resizeWatch = Stopwatch()..start();
     final nextBounds = _calculateScrollingControlsBounds(selection);
     final previousBounds = _scrollingCaptureControlsBounds;
     if (previousBounds != null &&
@@ -563,6 +649,11 @@ class WoxScreenshotController extends GetxController {
         (previousBounds.top - nextBounds.top).abs() < 1 &&
         (previousBounds.width - nextBounds.width).abs() < 1 &&
         (previousBounds.height - nextBounds.height).abs() < 1) {
+      _logScrollingCaptureTiming(traceId, 'native_preview_resize_skipped', {
+        'elapsedMs': resizeWatch.elapsedMilliseconds,
+        'frameCount': scrollingCaptureFrames.length,
+        'bounds': nextBounds,
+      });
       return;
     }
 
@@ -572,7 +663,13 @@ class WoxScreenshotController extends GetxController {
       // Flutter preview window after each accepted frame keeps the native side panel wrapped to the
       // image instead of leaving the old first-frame panel width visible as a gray gutter.
       await windowManager.setBounds(nextBounds.topLeft, nextBounds.size);
+      _logScrollingCaptureTiming(traceId, 'native_preview_resize_done', {
+        'elapsedMs': resizeWatch.elapsedMilliseconds,
+        'frameCount': scrollingCaptureFrames.length,
+        'bounds': nextBounds,
+      });
     } catch (e) {
+      _logScrollingCaptureTiming(traceId, 'native_preview_resize_failed', {'elapsedMs': resizeWatch.elapsedMilliseconds, 'error': e.runtimeType});
       Logger.instance.warn(traceId, 'Failed to resize scrolling screenshot preview window: $e');
     }
   }
@@ -637,19 +734,44 @@ class WoxScreenshotController extends GetxController {
   }
 
   Future<void> _appendScrollingCaptureFrame(String traceId, Rect selection) async {
+    final appendWatch = Stopwatch()..start();
+    final frameIndex = scrollingCaptureFrames.length;
     if (scrollingCaptureFrames.length >= _scrollingCaptureMaxFrames) {
+      _logScrollingCaptureTiming(traceId, 'append_dropped_max_frames', {
+        'elapsedMs': appendWatch.elapsedMilliseconds,
+        'frameIndex': frameIndex,
+        'frameCount': scrollingCaptureFrames.length,
+      });
       return;
     }
     if (isScrollingCaptureUpdating.value) {
+      _logScrollingCaptureTiming(traceId, 'append_dropped_busy', {
+        'elapsedMs': appendWatch.elapsedMilliseconds,
+        'frameIndex': frameIndex,
+        'frameCount': scrollingCaptureFrames.length,
+      });
       return;
     }
 
     isScrollingCaptureUpdating.value = true;
     try {
+      _logScrollingCaptureTiming(traceId, 'append_start', {'frameIndex': frameIndex, 'selection': selection, 'frameCount': scrollingCaptureFrames.length});
+      final captureWatch = Stopwatch()..start();
       final nextFrame = await _captureScrollingSelectionFrame(selection);
+      _logScrollingCaptureTiming(traceId, 'append_capture_done', {
+        'elapsedMs': captureWatch.elapsedMilliseconds,
+        'frameIndex': frameIndex,
+        'pixel': '${nextFrame.pixelWidth}x${nextFrame.pixelHeight}',
+      });
       if (scrollingCaptureFrames.isNotEmpty) {
-        final overlap = _findScrollingOverlap(scrollingCaptureFrames.last, nextFrame);
+        final overlap = _findScrollingOverlap(traceId, scrollingCaptureFrames.last, nextFrame);
         if (overlap.isDuplicate) {
+          _logScrollingCaptureTiming(traceId, 'append_dropped_duplicate', {
+            'elapsedMs': appendWatch.elapsedMilliseconds,
+            'frameIndex': frameIndex,
+            'overlapRows': overlap.overlapRows,
+            'averageDifference': overlap.averageDifference,
+          });
           nextFrame.dispose();
           return;
         }
@@ -660,6 +782,12 @@ class WoxScreenshotController extends GetxController {
           // scrolling had settled. Dropping the uncertain frame keeps the long image monotonic; the
           // next wheel capture can still append once a stable overlap is visible.
           nextFrame.dispose();
+          _logScrollingCaptureTiming(traceId, 'append_dropped_unreliable_overlap', {
+            'elapsedMs': appendWatch.elapsedMilliseconds,
+            'frameIndex': frameIndex,
+            'overlapRows': overlap.overlapRows,
+            'averageDifference': overlap.averageDifference,
+          });
           Logger.instance.warn(traceId, 'Scrolling screenshot overlap was not reliable; dropped frame to avoid repeated stitched content');
           return;
         }
@@ -673,9 +801,18 @@ class WoxScreenshotController extends GetxController {
       }
 
       scrollingCaptureFrames.add(nextFrame);
+      _logScrollingCaptureTiming(traceId, 'append_accepted', {
+        'elapsedMs': appendWatch.elapsedMilliseconds,
+        'frameIndex': frameIndex,
+        'frameCount': scrollingCaptureFrames.length,
+        'pixel': '${nextFrame.pixelWidth}x${nextFrame.pixelHeight}',
+        'visibleHeight': nextFrame.visibleHeight,
+        'cropTop': nextFrame.cropTop,
+      });
       await _syncNativeScrollingControlsBounds(traceId, selection);
     } finally {
       isScrollingCaptureUpdating.value = false;
+      _logScrollingCaptureTiming(traceId, 'append_finished', {'elapsedMs': appendWatch.elapsedMilliseconds, 'frameIndex': frameIndex, 'frameCount': scrollingCaptureFrames.length});
     }
   }
 
@@ -694,39 +831,69 @@ class WoxScreenshotController extends GetxController {
   }
 
   Future<ScrollingCapturePreviewFrame> _captureScrollingSelectionFrame(Rect selection) async {
-    final rawSnapshots = await ScreenshotPlatformBridge.instance.captureAllDisplays();
-    if (rawSnapshots.isEmpty) {
-      throw StateError('No display snapshots returned while scrolling');
-    }
-
-    final nativeWorkspaceBounds = _activeNativeWorkspaceBounds ?? _calculateUnionRect(rawSnapshots.map((snapshot) => snapshot.logicalBounds.toRect()).toList());
-    final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
-      rawSnapshots,
-      nativeWorkspaceBounds: nativeWorkspaceBounds,
-      workspaceBounds: virtualBoundsRect,
-      workspaceScale: workspaceScale.value,
-    );
-    final decodedImages = await _decodeSnapshotImages(normalizedSnapshots.where((snapshot) => !snapshot.logicalBounds.toRect().intersect(selection).isEmpty).toList());
+    final traceId = _scrollingCaptureTraceId;
+    final totalWatch = Stopwatch()..start();
+    Map<String, ui.Image> decodedImages = <String, ui.Image>{};
 
     try {
+      final captureWatch = Stopwatch()..start();
+      final rawSnapshots = await ScreenshotPlatformBridge.instance.captureAllDisplays(traceId: traceId, logicalSelection: ScreenshotRect.fromRect(selection));
+      _logScrollingCaptureTiming(traceId, 'capture_all_displays_done', {'elapsedMs': captureWatch.elapsedMilliseconds, 'snapshotCount': rawSnapshots.length});
+      if (rawSnapshots.isEmpty) {
+        throw StateError('No display snapshots returned while scrolling');
+      }
+
+      final normalizeWatch = Stopwatch()..start();
+      final nativeWorkspaceBounds = _activeNativeWorkspaceBounds ?? _calculateUnionRect(rawSnapshots.map((snapshot) => snapshot.logicalBounds.toRect()).toList());
+      final normalizedSnapshots = _normalizeSnapshotsForWorkspace(
+        rawSnapshots,
+        nativeWorkspaceBounds: nativeWorkspaceBounds,
+        workspaceBounds: virtualBoundsRect,
+        workspaceScale: workspaceScale.value,
+      );
+      final intersectingSnapshots = normalizedSnapshots.where((snapshot) => !snapshot.logicalBounds.toRect().intersect(selection).isEmpty).toList();
+      _logScrollingCaptureTiming(traceId, 'capture_normalize_done', {
+        'elapsedMs': normalizeWatch.elapsedMilliseconds,
+        'snapshotCount': normalizedSnapshots.length,
+        'intersectingCount': intersectingSnapshots.length,
+        'selection': selection,
+      });
+
+      final decodeWatch = Stopwatch()..start();
+      decodedImages = await _decodeSnapshotImages(intersectingSnapshots);
+      _logScrollingCaptureTiming(traceId, 'capture_decode_done', {'elapsedMs': decodeWatch.elapsedMilliseconds, 'decodedCount': decodedImages.length});
+
+      final composeWatch = Stopwatch()..start();
       final composed = await _composeSelectionImage(
         selection: selection,
         snapshots: normalizedSnapshots,
         annotationsToPaint: const <ScreenshotAnnotation>[],
         decodedImages: decodedImages,
       );
+      _logScrollingCaptureTiming(traceId, 'capture_compose_done', {'elapsedMs': composeWatch.elapsedMilliseconds, 'pixel': '${composed.pixelWidth}x${composed.pixelHeight}'});
+
+      final byteWatch = Stopwatch()..start();
       final byteData = await composed.image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      _logScrollingCaptureTiming(traceId, 'capture_to_byte_data_done', {'elapsedMs': byteWatch.elapsedMilliseconds, 'pixel': '${composed.pixelWidth}x${composed.pixelHeight}'});
       if (byteData == null) {
         composed.image.dispose();
         throw StateError('Failed to inspect scrolling screenshot frame');
       }
 
+      _logScrollingCaptureTiming(traceId, 'capture_frame_done', {
+        'elapsedMs': totalWatch.elapsedMilliseconds,
+        'decodedCount': decodedImages.length,
+        'pixel': '${composed.pixelWidth}x${composed.pixelHeight}',
+      });
       return ScrollingCapturePreviewFrame(
         image: composed.image,
         rgbaBytes: byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes),
         pixelWidth: composed.pixelWidth,
         pixelHeight: composed.pixelHeight,
       );
+    } catch (e) {
+      _logScrollingCaptureTiming(traceId, 'capture_frame_failed', {'elapsedMs': totalWatch.elapsedMilliseconds, 'error': e.runtimeType});
+      rethrow;
     } finally {
       for (final image in decodedImages.values) {
         image.dispose();
@@ -755,8 +922,14 @@ class WoxScreenshotController extends GetxController {
     }
   }
 
-  _ScrollingCaptureOverlap _findScrollingOverlap(ScrollingCapturePreviewFrame previous, ScrollingCapturePreviewFrame next) {
+  _ScrollingCaptureOverlap _findScrollingOverlap(String traceId, ScrollingCapturePreviewFrame previous, ScrollingCapturePreviewFrame next) {
+    final overlapWatch = Stopwatch()..start();
     if (previous.pixelWidth != next.pixelWidth || previous.pixelHeight != next.pixelHeight) {
+      _logScrollingCaptureTiming(traceId, 'overlap_dimension_mismatch', {
+        'elapsedMs': overlapWatch.elapsedMilliseconds,
+        'previous': '${previous.pixelWidth}x${previous.pixelHeight}',
+        'next': '${next.pixelWidth}x${next.pixelHeight}',
+      });
       return const _ScrollingCaptureOverlap(overlapRows: 0, averageDifference: double.infinity, isReliable: false, isDuplicate: false);
     }
 
@@ -765,6 +938,11 @@ class WoxScreenshotController extends GetxController {
     if (sameViewportDifference <= _scrollingCaptureDuplicateThreshold) {
       // Cursor pixels and hover states can change even when the page has not actually moved. Treat
       // a mostly-same viewport as duplicate instead of appending a second copy of the first screen.
+      _logScrollingCaptureTiming(traceId, 'overlap_duplicate_same_viewport', {
+        'elapsedMs': overlapWatch.elapsedMilliseconds,
+        'sameViewportDifference': sameViewportDifference,
+        'columnCount': columns.length,
+      });
       return _ScrollingCaptureOverlap(overlapRows: next.pixelHeight, averageDifference: sameViewportDifference, isReliable: true, isDuplicate: true);
     }
 
@@ -781,6 +959,15 @@ class WoxScreenshotController extends GetxController {
 
     final isReliable = best.averageDifference <= _scrollingCaptureOverlapThreshold;
     final isDuplicate = isReliable && best.overlapRows >= next.pixelHeight * 0.94;
+    _logScrollingCaptureTiming(traceId, 'overlap_done', {
+      'elapsedMs': overlapWatch.elapsedMilliseconds,
+      'sameViewportDifference': sameViewportDifference,
+      'overlapRows': best.overlapRows,
+      'averageDifference': best.averageDifference,
+      'reliable': isReliable,
+      'duplicate': isDuplicate,
+      'columnCount': columns.length,
+    });
     return _ScrollingCaptureOverlap(overlapRows: isReliable ? best.overlapRows : 0, averageDifference: best.averageDifference, isReliable: isReliable, isDuplicate: isDuplicate);
   }
 
@@ -1094,6 +1281,7 @@ class WoxScreenshotController extends GetxController {
     _scrollingCaptureWheelSubscription = null;
     _scrollingCaptureControlsBounds = null;
     isNativeScrollingCaptureOverlay.value = false;
+    _scrollingCaptureTraceId = "";
     for (final frame in scrollingCaptureFrames) {
       frame.dispose();
     }

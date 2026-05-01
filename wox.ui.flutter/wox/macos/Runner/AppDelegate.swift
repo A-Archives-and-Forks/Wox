@@ -42,6 +42,14 @@ private func appKitRect(fromTopLeftRect rect: NSRect) -> NSRect {
   )
 }
 
+private func elapsedMilliseconds(since start: Date) -> Int {
+  return Int((Date().timeIntervalSince(start) * 1000).rounded())
+}
+
+private func formatTimingRect(_ rect: NSRect) -> String {
+  return "\(Int(rect.width.rounded()))x\(Int(rect.height.rounded()))@\(Int(rect.origin.x.rounded())),\(Int(rect.origin.y.rounded()))"
+}
+
 private func screenshotWindowLevel() -> NSWindow.Level {
   // `.popUpMenu` was high enough for regular launcher panels but still sat underneath some
   // fullscreen and always-on-top utility windows, which made the capture UI appear to vanish right
@@ -583,13 +591,15 @@ private final class ScrollingCaptureOverlaySession {
   private let controlsWindow: NSWindow
   private let controlsBounds: NSRect
   private let onScroll: () -> Void
+  private let onTimingLog: (String) -> Void
   private var scrollMonitor: Any?
 
-  init(workspaceBounds: NSRect, selection: NSRect, controlsWindow: NSWindow, controlsBounds: NSRect, onScroll: @escaping () -> Void) {
+  init(workspaceBounds: NSRect, selection: NSRect, controlsWindow: NSWindow, controlsBounds: NSRect, onScroll: @escaping () -> Void, onTimingLog: @escaping (String) -> Void) {
     self.selection = selection
     self.controlsWindow = controlsWindow
     self.controlsBounds = controlsBounds
     self.onScroll = onScroll
+    self.onTimingLog = onTimingLog
 
     let localSelection = NSRect(x: selection.minX - workspaceBounds.minX, y: workspaceBounds.maxY - selection.maxY, width: selection.width, height: selection.height)
     overlayWindow = NSWindow(contentRect: appKitRect(fromTopLeftRect: workspaceBounds), styleMask: .borderless, backing: .buffered, defer: false)
@@ -608,9 +618,11 @@ private final class ScrollingCaptureOverlaySession {
   }
 
   func begin() {
+    let beginStart = Date()
     overlayWindow.orderFrontRegardless()
     moveControlsWindow()
     installScrollMonitor()
+    onTimingLog("event=native_overlay_session_begin_done selection=\(formatTimingRect(selection)) controls=\(formatTimingRect(controlsBounds)) elapsedMs=\(elapsedMilliseconds(since: beginStart))")
   }
 
   func dismiss() {
@@ -625,6 +637,7 @@ private final class ScrollingCaptureOverlaySession {
   }
 
   private func moveControlsWindow() {
+    let moveStart = Date()
     controlsWindow.setFrame(appKitRect(fromTopLeftRect: controlsBounds), display: true)
     makeScreenshotWindowTransparent(controlsWindow)
     controlsWindow.contentView?.needsLayout = true
@@ -637,6 +650,7 @@ private final class ScrollingCaptureOverlaySession {
     // scrolling-preview level after fronting the window as well as before it.
     controlsWindow.level = scrollingCaptureControlsWindowLevel()
     NSApp.activate(ignoringOtherApps: true)
+    onTimingLog("event=native_controls_window_shown controls=\(formatTimingRect(controlsBounds)) elapsedMs=\(elapsedMilliseconds(since: moveStart))")
   }
 
   private func installScrollMonitor() {
@@ -647,6 +661,7 @@ private final class ScrollingCaptureOverlaySession {
 
       let point = topLeftPoint(fromAppKit: NSEvent.mouseLocation)
       if self.selection.contains(point) {
+        self.onTimingLog("event=native_scroll_monitor_hit selection=\(formatTimingRect(self.selection))")
         self.onScroll()
       }
     }
@@ -715,6 +730,7 @@ class AppDelegate: FlutterAppDelegate {
   private var cachedDisplayCaptures: [CachedDisplayCapture] = []
   private var activeOverlaySession: ScreenshotOverlaySession?
   private var activeScrollingCaptureOverlaySession: ScrollingCaptureOverlaySession?
+  private var activeScrollingCaptureTraceId = ""
   private var nativeOverlayDismissTimeoutWorkItem: DispatchWorkItem?
 
   private func describeFrontmostApplication() -> String {
@@ -740,10 +756,25 @@ class AppDelegate: FlutterAppDelegate {
     }
   }
 
-  private func log(_ message: String) {
+  private func log(_ message: String, traceId: String? = nil) {
     DispatchQueue.main.async { [weak self] in
-      self?.windowEventChannel?.invokeMethod("log", arguments: message)
+      if let traceId, !traceId.isEmpty {
+        self?.windowEventChannel?.invokeMethod("log", arguments: ["traceId": traceId, "message": message])
+      } else {
+        self?.windowEventChannel?.invokeMethod("log", arguments: message)
+      }
     }
+  }
+
+  private func logScrollingCaptureTiming(_ fields: String, traceId: String? = nil) {
+    let resolvedTraceId = traceId ?? activeScrollingCaptureTraceId
+    guard !resolvedTraceId.isEmpty else {
+      return
+    }
+
+    // Native timing probes must share the scrolling request trace with Dart so a single ui.log
+    // filter shows the wheel input, native capture, decode/stitch, and preview repaint path.
+    log("scrolling_capture_timing \(fields)", traceId: resolvedTraceId)
   }
 
   private func emitSelectionDisplayHint(_ capture: CachedDisplayCapture) {
@@ -867,6 +898,14 @@ class AppDelegate: FlutterAppDelegate {
     ]
   }
 
+  private func displayIntersectsSelection(_ displayBounds: NSRect, logicalSelection: NSRect?) -> Bool {
+    guard let logicalSelection else {
+      return true
+    }
+
+    return !displayBounds.intersection(logicalSelection).isEmpty
+  }
+
   private func writeClipboardImageFile(arguments: [String: Any]) throws {
     guard let filePath = arguments["filePath"] as? String else {
       throw DisplayCaptureError(code: "INVALID_ARGS", message: "Invalid arguments for writeClipboardImageFile", details: nil)
@@ -884,6 +923,45 @@ class AppDelegate: FlutterAppDelegate {
     if !pasteboard.writeObjects([image]) {
       throw DisplayCaptureError(code: "clipboard_write_failed", message: "Failed to write screenshot image to clipboard", details: ["filePath": filePath])
     }
+  }
+
+  private func payloadCaptureForSelection(_ capture: CachedDisplayCapture, logicalSelection: NSRect?) throws -> CachedDisplayCapture {
+    guard let logicalSelection else {
+      return capture
+    }
+
+    let logicalCrop = capture.logicalBounds.intersection(logicalSelection)
+    if logicalCrop.isEmpty {
+      throw DisplayCaptureError(code: "capture_failed", message: "Selection does not intersect macOS display image", details: ["displayId": capture.displayId])
+    }
+
+    let scaleX = CGFloat(capture.image.width) / capture.logicalBounds.width
+    let scaleY = CGFloat(capture.image.height) / capture.logicalBounds.height
+    let cropMinX = floor((logicalCrop.minX - capture.logicalBounds.minX) * scaleX)
+    let cropMinY = floor((logicalCrop.minY - capture.logicalBounds.minY) * scaleY)
+    let cropMaxX = ceil((logicalCrop.maxX - capture.logicalBounds.minX) * scaleX)
+    let cropMaxY = ceil((logicalCrop.maxY - capture.logicalBounds.minY) * scaleY)
+    let imageBounds = CGRect(x: 0, y: 0, width: CGFloat(capture.image.width), height: CGFloat(capture.image.height))
+    let cropRect = CGRect(x: cropMinX, y: cropMinY, width: max(1, cropMaxX - cropMinX), height: max(1, cropMaxY - cropMinY)).intersection(imageBounds)
+    if cropRect.isNull || cropRect.isEmpty {
+      throw DisplayCaptureError(code: "capture_failed", message: "Selection crop is outside macOS display image", details: ["displayId": capture.displayId])
+    }
+
+    // Scrolling preview only needs the selected page rectangle. Cropping before PNG/base64 encoding
+    // removes the previous per-frame cost of serializing entire 4K displays that Flutter discarded
+    // immediately after checking display intersection.
+    guard let croppedImage = capture.image.cropping(to: cropRect) else {
+      throw DisplayCaptureError(code: "capture_failed", message: "Failed to crop macOS display image for scrolling capture", details: ["displayId": capture.displayId])
+    }
+
+    return CachedDisplayCapture(
+      displayId: capture.displayId,
+      logicalBounds: logicalCrop,
+      visibleBounds: capture.visibleBounds.intersection(logicalCrop),
+      scale: capture.scale,
+      rotation: capture.rotation,
+      image: croppedImage
+    )
   }
 
   private func isStandardWindowButtonHidden(_ buttonType: NSWindow.ButtonType, on window: NSWindow) -> Bool {
@@ -920,6 +998,7 @@ class AppDelegate: FlutterAppDelegate {
   }
 
   private func beginScrollingCaptureOverlay(on window: NSWindow, arguments: [String: Any]) throws {
+    let beginStart = Date()
     guard
       let workspacePayload = arguments["workspaceBounds"] as? [String: Any],
       let selectionPayload = arguments["selection"] as? [String: Any],
@@ -932,6 +1011,9 @@ class AppDelegate: FlutterAppDelegate {
     }
 
     dismissScrollingCaptureOverlay()
+    let traceId = arguments["traceId"] as? String ?? ""
+    activeScrollingCaptureTraceId = traceId
+    logScrollingCaptureTiming("event=native_begin_overlay_start workspace=\(formatTimingRect(workspaceBounds)) selection=\(formatTimingRect(selection)) controls=\(formatTimingRect(controlsBounds))", traceId: traceId)
     // Scrolling capture differs from annotation mode: the selected rectangle must contain no Wox
     // window at all so native app interaction, text selection, and inertial scrolling continue
     // naturally. A single passive overlay window draws the outside dimming and border together so
@@ -945,13 +1027,18 @@ class AppDelegate: FlutterAppDelegate {
         DispatchQueue.main.async {
           self?.screenshotEventChannel?.invokeMethod("onScrollingCaptureWheel", arguments: nil)
         }
+      },
+      onTimingLog: { [weak self] message in
+        self?.logScrollingCaptureTiming(message)
       }
     )
     activeScrollingCaptureOverlaySession = overlaySession
     overlaySession.begin()
+    logScrollingCaptureTiming("event=native_begin_overlay_done elapsedMs=\(elapsedMilliseconds(since: beginStart))", traceId: traceId)
   }
 
   private func dismissScrollingCaptureOverlay() {
+    activeScrollingCaptureTraceId = ""
     guard let activeScrollingCaptureOverlaySession else {
       return
     }
@@ -1239,50 +1326,61 @@ class AppDelegate: FlutterAppDelegate {
 
   private func buildDisplaySnapshotPayload(
     capture: CachedDisplayCapture,
-    includeImageBytes: Bool
+    includeImageBytes: Bool,
+    logicalSelection: NSRect? = nil
   ) throws -> [String: Any] {
+    let payloadStart = Date()
+    let payloadCapture = try payloadCaptureForSelection(capture, logicalSelection: includeImageBytes ? logicalSelection : nil)
     var payload: [String: Any] = [
-      "displayId": capture.displayId,
+      "displayId": payloadCapture.displayId,
       "logicalBounds": [
-        "x": capture.logicalBounds.origin.x,
-        "y": capture.logicalBounds.origin.y,
-        "width": capture.logicalBounds.width,
-        "height": capture.logicalBounds.height,
+        "x": payloadCapture.logicalBounds.origin.x,
+        "y": payloadCapture.logicalBounds.origin.y,
+        "width": payloadCapture.logicalBounds.width,
+        "height": payloadCapture.logicalBounds.height,
       ],
       "pixelBounds": [
-        "x": capture.logicalBounds.origin.x * capture.scale,
-        "y": capture.logicalBounds.origin.y * capture.scale,
-        "width": CGFloat(capture.image.width),
-        "height": CGFloat(capture.image.height),
+        "x": payloadCapture.logicalBounds.origin.x * payloadCapture.scale,
+        "y": payloadCapture.logicalBounds.origin.y * payloadCapture.scale,
+        "width": CGFloat(payloadCapture.image.width),
+        "height": CGFloat(payloadCapture.image.height),
       ],
-      "scale": capture.scale,
-      "rotation": capture.rotation,
+      "scale": payloadCapture.scale,
+      "rotation": payloadCapture.rotation,
     ]
 
     if includeImageBytes {
-      let bitmap = NSBitmapImageRep(cgImage: capture.image)
+      let encodeStart = Date()
+      let bitmap = NSBitmapImageRep(cgImage: payloadCapture.image)
       guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
         throw DisplayCaptureError(code: "capture_failed", message: "Failed to encode macOS display image", details: nil)
       }
       payload["imageBytesBase64"] = pngData.base64EncodedString()
+      logScrollingCaptureTiming("event=native_payload_encode_done displayId=\(payloadCapture.displayId) logical=\(formatTimingRect(payloadCapture.logicalBounds)) pixel=\(payloadCapture.image.width)x\(payloadCapture.image.height) cropped=\(logicalSelection != nil) elapsedMs=\(elapsedMilliseconds(since: encodeStart))")
     }
 
+    logScrollingCaptureTiming("event=native_payload_done displayId=\(payloadCapture.displayId) includeImageBytes=\(includeImageBytes) logical=\(formatTimingRect(payloadCapture.logicalBounds)) pixel=\(payloadCapture.image.width)x\(payloadCapture.image.height) cropped=\(logicalSelection != nil) elapsedMs=\(elapsedMilliseconds(since: payloadStart))")
     return payload
   }
 
   private func buildDisplaySnapshotPayloads(
     captures: [CachedDisplayCapture],
-    includeImageBytes: Bool
+    includeImageBytes: Bool,
+    logicalSelection: NSRect? = nil
   ) throws -> [[String: Any]] {
-    return try captures.map { capture in
+    let payloadsStart = Date()
+    let payloads = try captures.map { capture in
       // The native overlay consumes cached CGImages directly, but Flutter only needs PNG/base64
       // once it is about to reveal an annotation frame or export pixels. Building payloads on
       // demand keeps the overlay path off the slow serialization step that made screenshot startup lag.
-      try buildDisplaySnapshotPayload(capture: capture, includeImageBytes: includeImageBytes)
+      try buildDisplaySnapshotPayload(capture: capture, includeImageBytes: includeImageBytes, logicalSelection: logicalSelection)
     }
+    logScrollingCaptureTiming("event=native_payloads_done snapshotCount=\(captures.count) includeImageBytes=\(includeImageBytes) cropped=\(logicalSelection != nil) elapsedMs=\(elapsedMilliseconds(since: payloadsStart))")
+    return payloads
   }
 
-  private func captureAllDisplaysLegacy() throws -> [CachedDisplayCapture] {
+  private func captureAllDisplaysLegacy(logicalSelection: NSRect? = nil) throws -> [CachedDisplayCapture] {
+    let legacyStart = Date()
     if !CGPreflightScreenCaptureAccess() {
       throw DisplayCaptureError(code: "permission_denied", message: "Screen recording permission is required", details: nil)
     }
@@ -1295,16 +1393,23 @@ class AppDelegate: FlutterAppDelegate {
     var cachedCaptures: [CachedDisplayCapture] = []
 
     for screen in screens {
+      let displayStart = Date()
       guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
         throw DisplayCaptureError(code: "capture_failed", message: "Failed to resolve macOS display id", details: nil)
       }
 
       let displayId = CGDirectDisplayID(screenNumber.uint32Value)
+      let frame = topLeftRect(fromAppKitRect: screen.frame)
+      if !displayIntersectsSelection(frame, logicalSelection: logicalSelection) {
+        logScrollingCaptureTiming("event=native_legacy_display_capture_skipped displayId=\(displayId) logical=\(formatTimingRect(frame)) selection=\(logicalSelection.map { formatTimingRect($0) } ?? "null")")
+        continue
+      }
+
+      logScrollingCaptureTiming("event=native_legacy_display_capture_start displayId=\(displayId)")
       guard let cgImage = CGDisplayCreateImage(displayId) else {
         throw DisplayCaptureError(code: "capture_failed", message: "Failed to capture macOS display image", details: nil)
       }
 
-      let frame = topLeftRect(fromAppKitRect: screen.frame)
       let visibleFrame = topLeftRect(fromAppKitRect: screen.visibleFrame)
       let scale = screen.backingScaleFactor
       let rotation = Int(CGDisplayRotation(displayId).rounded())
@@ -1319,13 +1424,20 @@ class AppDelegate: FlutterAppDelegate {
           image: cgImage
         )
       )
+      logScrollingCaptureTiming("event=native_legacy_display_capture_done displayId=\(displayId) logical=\(formatTimingRect(frame)) pixel=\(cgImage.width)x\(cgImage.height) elapsedMs=\(elapsedMilliseconds(since: displayStart))")
     }
 
+    if cachedCaptures.isEmpty && logicalSelection != nil {
+      throw DisplayCaptureError(code: "capture_failed", message: "Selection does not intersect any macOS display", details: nil)
+    }
+
+    logScrollingCaptureTiming("event=native_legacy_capture_done snapshotCount=\(cachedCaptures.count) elapsedMs=\(elapsedMilliseconds(since: legacyStart))")
     return cachedCaptures
   }
 
   @available(macOS 14.0, *)
-  private func captureAllDisplaysWithScreenCaptureKit() async throws -> [CachedDisplayCapture] {
+  private func captureAllDisplaysWithScreenCaptureKit(logicalSelection: NSRect? = nil) async throws -> [CachedDisplayCapture] {
+    let screenCaptureKitStart = Date()
     if !CGPreflightScreenCaptureAccess() {
       throw DisplayCaptureError(code: "permission_denied", message: "Screen recording permission is required", details: nil)
     }
@@ -1348,6 +1460,18 @@ class AppDelegate: FlutterAppDelegate {
     var cachedCaptures: [CachedDisplayCapture] = []
 
     for display in shareableContent.displays {
+      let displayStart = Date()
+      let matchedScreen = screen(for: display.displayID)
+      // Mixed-resolution desktops exposed that ScreenCaptureKit's display frame can drift from the
+      // AppKit window server layout that actually decides where NSWindow overlays appear. Basing the
+      // overlay geometry on the matching NSScreen frame keeps the shaded window aligned with the
+      // real monitor bounds even when one display uses a different native resolution or scale.
+      let logicalFrame = matchedScreen.map { topLeftRect(fromAppKitRect: $0.frame) } ?? topLeftRect(fromAppKitRect: display.frame)
+      if !displayIntersectsSelection(logicalFrame, logicalSelection: logicalSelection) {
+        logScrollingCaptureTiming("event=native_sck_display_capture_skipped displayId=\(display.displayID) logical=\(formatTimingRect(logicalFrame)) selection=\(logicalSelection.map { formatTimingRect($0) } ?? "null")")
+        continue
+      }
+
       // ScreenCaptureKit replaces CGDisplayCreateImage on modern macOS. We exclude the current
       // Wox process here so the screenshot workspace does not appear in the captured background
       // after the launcher window is hidden and resized across the virtual desktop.
@@ -1365,16 +1489,11 @@ class AppDelegate: FlutterAppDelegate {
       // corrupts overlap matching, so keep captured display pixels cursor-free.
       streamConfiguration.showsCursor = false
 
+      logScrollingCaptureTiming("event=native_sck_display_capture_start displayId=\(display.displayID) logical=\(formatTimingRect(display.frame)) pixel=\(streamConfiguration.width)x\(streamConfiguration.height)")
       let cgImage = try await SCScreenshotManager.captureImage(
         contentFilter: contentFilter,
         configuration: streamConfiguration
       )
-      let matchedScreen = screen(for: display.displayID)
-      // Mixed-resolution desktops exposed that ScreenCaptureKit's display frame can drift from the
-      // AppKit window server layout that actually decides where NSWindow overlays appear. Basing the
-      // overlay geometry on the matching NSScreen frame keeps the shaded window aligned with the
-      // real monitor bounds even when one display uses a different native resolution or scale.
-      let logicalFrame = matchedScreen.map { topLeftRect(fromAppKitRect: $0.frame) } ?? topLeftRect(fromAppKitRect: display.frame)
       let visibleFrame = matchedScreen.map { topLeftRect(fromAppKitRect: $0.visibleFrame) } ?? logicalFrame
       let rotation = Int(CGDisplayRotation(display.displayID).rounded())
 
@@ -1388,15 +1507,24 @@ class AppDelegate: FlutterAppDelegate {
           image: cgImage
         )
       )
+      logScrollingCaptureTiming("event=native_sck_display_capture_done displayId=\(display.displayID) logical=\(formatTimingRect(logicalFrame)) pixel=\(cgImage.width)x\(cgImage.height) elapsedMs=\(elapsedMilliseconds(since: displayStart))")
     }
 
+    if cachedCaptures.isEmpty && logicalSelection != nil {
+      throw DisplayCaptureError(code: "capture_failed", message: "Selection does not intersect any ScreenCaptureKit display", details: nil)
+    }
+
+    logScrollingCaptureTiming("event=native_sck_capture_done snapshotCount=\(cachedCaptures.count) elapsedMs=\(elapsedMilliseconds(since: screenCaptureKitStart))")
     return cachedCaptures
   }
 
-  private func captureDisplayCaptures() async throws -> [CachedDisplayCapture] {
+  private func captureDisplayCaptures(logicalSelection: NSRect? = nil) async throws -> [CachedDisplayCapture] {
+    let captureStart = Date()
     if #available(macOS 14.0, *) {
       do {
-        return try await captureAllDisplaysWithScreenCaptureKit()
+        let captures = try await captureAllDisplaysWithScreenCaptureKit(logicalSelection: logicalSelection)
+        logScrollingCaptureTiming("event=native_capture_display_captures_done branch=screen_capture_kit snapshotCount=\(captures.count) elapsedMs=\(elapsedMilliseconds(since: captureStart))")
+        return captures
       } catch let error as DisplayCaptureError {
         if error.code == "permission_denied" {
           throw error
@@ -1413,7 +1541,9 @@ class AppDelegate: FlutterAppDelegate {
       }
     }
 
-    return try captureAllDisplaysLegacy()
+    let captures = try captureAllDisplaysLegacy(logicalSelection: logicalSelection)
+    logScrollingCaptureTiming("event=native_capture_display_captures_done branch=legacy snapshotCount=\(captures.count) elapsedMs=\(elapsedMilliseconds(since: captureStart))")
+    return captures
   }
 
   private func captureDisplayMetadata() async throws -> [[String: Any]] {
@@ -1451,10 +1581,28 @@ class AppDelegate: FlutterAppDelegate {
     return try buildDisplaySnapshotPayloads(captures: filteredCaptures, includeImageBytes: true)
   }
 
-  private func captureAllDisplays() async throws -> [[String: Any]] {
-    let captures = try await captureDisplayCaptures()
-    cachedDisplayCaptures = captures
-    return try buildDisplaySnapshotPayloads(captures: captures, includeImageBytes: true)
+  private func captureAllDisplays(traceId: String? = nil, logicalSelection: NSRect? = nil) async throws -> [[String: Any]] {
+    // The first scrolling frame is captured before the native overlay exists. Scope its trace to
+    // this capture call so normal screenshots do not inherit stale scrolling timing metadata.
+    let shouldClearTraceAfterCall = activeScrollingCaptureOverlaySession == nil
+    if let traceId, !traceId.isEmpty {
+      activeScrollingCaptureTraceId = traceId
+    } else if shouldClearTraceAfterCall {
+      activeScrollingCaptureTraceId = ""
+    }
+    defer {
+      if shouldClearTraceAfterCall {
+        activeScrollingCaptureTraceId = ""
+      }
+    }
+    let captureAllStart = Date()
+    let captures = try await captureDisplayCaptures(logicalSelection: logicalSelection)
+    if logicalSelection == nil {
+      cachedDisplayCaptures = captures
+    }
+    let payloads = try buildDisplaySnapshotPayloads(captures: captures, includeImageBytes: true, logicalSelection: logicalSelection)
+    logScrollingCaptureTiming("event=native_capture_all_displays_done snapshotCount=\(captures.count) selection=\(logicalSelection.map { formatTimingRect($0) } ?? "null") elapsedMs=\(elapsedMilliseconds(since: captureAllStart))")
+    return payloads
   }
 
   private func postKeyboardEvent(key: String, isDown: Bool) -> FlutterError? {
@@ -1488,6 +1636,7 @@ class AppDelegate: FlutterAppDelegate {
   }
 
   private func postMouseScrollEvent(deltaY: Double, through window: NSWindow) -> FlutterError? {
+    let scrollStart = Date()
     // Scrolling capture drives the app underneath Wox after the screenshot shell hides. Using a
     // CGEvent keeps the scroll targeted at the current cursor location instead of requiring app-
     // specific accessibility APIs, which would make the feature depend on each target window type.
@@ -1505,6 +1654,7 @@ class AppDelegate: FlutterAppDelegate {
     }
 
     let wasVisible = window.isVisible
+    logScrollingCaptureTiming("event=native_post_scroll_start deltaY=\(deltaY) wasVisible=\(wasVisible)")
     // `ignoresMouseEvents` is not reliable for synthetic scroll-wheel routing on macOS: the Wox
     // screenshot window can still be the effective event target even when the cursor visually sits
     // inside the selected page. Briefly ordering the capture window out before posting the wheel
@@ -1512,9 +1662,11 @@ class AppDelegate: FlutterAppDelegate {
     // the Flutter preview refresh to repaint the new page position.
     if wasVisible {
       window.orderOut(nil)
+      logScrollingCaptureTiming("event=native_post_scroll_window_ordered_out elapsedMs=\(elapsedMilliseconds(since: scrollStart))")
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
       event.post(tap: .cghidEventTap)
+      self.logScrollingCaptureTiming("event=native_post_scroll_event_posted elapsedMs=\(elapsedMilliseconds(since: scrollStart))")
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
       if wasVisible {
@@ -1529,6 +1681,7 @@ class AppDelegate: FlutterAppDelegate {
         // defaults while the window is reinserted, so keep the final level explicit.
         window.level = restoreLevel
         NSApp.activate(ignoringOtherApps: true)
+        self.logScrollingCaptureTiming("event=native_post_scroll_window_restored elapsedMs=\(elapsedMilliseconds(since: scrollStart))")
       }
     }
     return nil
@@ -1656,7 +1809,15 @@ class AppDelegate: FlutterAppDelegate {
         case "captureAllDisplays":
           Task { @MainActor in
             do {
-              result(try await self?.captureAllDisplays())
+              let arguments = call.arguments as? [String: Any]
+              let selectionPayload = arguments?["logicalSelection"] as? [String: Any]
+              let logicalSelection: NSRect?
+              if let selectionPayload {
+                logicalSelection = self?.parseRect(arguments: selectionPayload)
+              } else {
+                logicalSelection = nil
+              }
+              result(try await self?.captureAllDisplays(traceId: arguments?["traceId"] as? String, logicalSelection: logicalSelection))
             } catch let error as DisplayCaptureError {
               // Convert the Swift-native capture error back to `FlutterError` only when returning
               // through the method channel so the Dart side keeps the existing error contract.
