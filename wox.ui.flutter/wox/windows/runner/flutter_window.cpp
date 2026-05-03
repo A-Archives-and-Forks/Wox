@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <flutter/plugin_registrar_windows.h>
 #include <windows.h>
@@ -507,6 +508,133 @@ static flutter::EncodableMap BuildScaledRectValue(const RECT &rect, double scale
       static_cast<double>(rect.top) / safe_scale,
       static_cast<double>(rect.right - rect.left) / safe_scale,
       static_cast<double>(rect.bottom - rect.top) / safe_scale);
+}
+
+static bool TryReadEncodableDouble(const flutter::EncodableMap &map, const char *key, double *value_out, std::string *error_out)
+{
+  const auto value_it = map.find(flutter::EncodableValue(key));
+  if (value_it == map.end())
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = std::string("Missing ") + key + " for logicalSelection";
+    }
+    return false;
+  }
+
+  if (const auto *double_value = std::get_if<double>(&value_it->second))
+  {
+    *value_out = *double_value;
+    return true;
+  }
+  if (const auto *int32_value = std::get_if<int32_t>(&value_it->second))
+  {
+    *value_out = static_cast<double>(*int32_value);
+    return true;
+  }
+  if (const auto *int64_value = std::get_if<int64_t>(&value_it->second))
+  {
+    *value_out = static_cast<double>(*int64_value);
+    return true;
+  }
+
+  if (error_out != nullptr)
+  {
+    *error_out = std::string("logicalSelection.") + key + " must be a number";
+  }
+  return false;
+}
+
+static bool TryParseLogicalSelectionArgument(const flutter::EncodableValue *arguments, std::optional<RECT> *selection_out, std::string *error_out)
+{
+  selection_out->reset();
+  if (arguments == nullptr)
+  {
+    return true;
+  }
+
+  const auto *argument_map = std::get_if<flutter::EncodableMap>(arguments);
+  if (argument_map == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = "captureAllDisplays arguments must be a map";
+    }
+    return false;
+  }
+
+  const auto selection_it = argument_map->find(flutter::EncodableValue("logicalSelection"));
+  if (selection_it == argument_map->end())
+  {
+    return true;
+  }
+
+  const auto *selection_map = std::get_if<flutter::EncodableMap>(&selection_it->second);
+  if (selection_map == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = "logicalSelection must be a map";
+    }
+    return false;
+  }
+
+  double x = 0;
+  double y = 0;
+  double width = 0;
+  double height = 0;
+  if (!TryReadEncodableDouble(*selection_map, "x", &x, error_out) ||
+      !TryReadEncodableDouble(*selection_map, "y", &y, error_out) ||
+      !TryReadEncodableDouble(*selection_map, "width", &width, error_out) ||
+      !TryReadEncodableDouble(*selection_map, "height", &height, error_out))
+  {
+    return false;
+  }
+
+  if (width <= 0 || height <= 0)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = "logicalSelection must have positive width and height";
+    }
+    return false;
+  }
+
+  // Region capture expands fractional Flutter coordinates to the nearest containing native pixels.
+  // The old Windows path only accepted full-monitor captures, so rounding both edges inward could
+  // drop a one-pixel strip and make the preview disagree with the exported stitched image.
+  RECT selection{};
+  selection.left = static_cast<LONG>(std::floor(x));
+  selection.top = static_cast<LONG>(std::floor(y));
+  selection.right = static_cast<LONG>(std::ceil(x + width));
+  selection.bottom = static_cast<LONG>(std::ceil(y + height));
+  if (selection.right <= selection.left || selection.bottom <= selection.top)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = "logicalSelection resolves to an empty native rectangle";
+    }
+    return false;
+  }
+
+  *selection_out = selection;
+  return true;
+}
+
+static bool TryIntersectRects(const RECT &first, const RECT &second, RECT *intersection_out)
+{
+  RECT intersection{};
+  intersection.left = first.left > second.left ? first.left : second.left;
+  intersection.top = first.top > second.top ? first.top : second.top;
+  intersection.right = first.right < second.right ? first.right : second.right;
+  intersection.bottom = first.bottom < second.bottom ? first.bottom : second.bottom;
+  if (intersection.right <= intersection.left || intersection.bottom <= intersection.top)
+  {
+    return false;
+  }
+
+  *intersection_out = intersection;
+  return true;
 }
 
 static bool IsKeyDownMessage(UINT message)
@@ -1172,9 +1300,14 @@ float FlutterWindow::GetDpiScale(HWND hwnd)
   return dpiScale;
 }
 
-void FlutterWindow::ClearCachedDisplayCaptures()
+void FlutterWindow::ReleaseDisplayCaptures(std::vector<CachedDisplayCapture> *captures)
 {
-  for (auto &capture : cached_display_captures_)
+  if (captures == nullptr)
+  {
+    return;
+  }
+
+  for (auto &capture : *captures)
   {
     if (capture.bitmap != nullptr)
     {
@@ -1182,10 +1315,15 @@ void FlutterWindow::ClearCachedDisplayCaptures()
       capture.bitmap = nullptr;
     }
   }
-  cached_display_captures_.clear();
+  captures->clear();
 }
 
-bool FlutterWindow::CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *captures_out, std::string *error_out)
+void FlutterWindow::ClearCachedDisplayCaptures()
+{
+  ReleaseDisplayCaptures(&cached_display_captures_);
+}
+
+bool FlutterWindow::CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *captures_out, std::string *error_out, const std::optional<RECT> &logical_selection)
 {
   if (captures_out == nullptr || error_out == nullptr)
   {
@@ -1199,7 +1337,8 @@ bool FlutterWindow::CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *c
   {
     std::vector<CachedDisplayCapture> *captures;
     std::string *error;
-  } context{captures_out, error_out};
+    const std::optional<RECT> *logical_selection;
+  } context{captures_out, error_out, &logical_selection};
 
   const BOOL enumerated = EnumDisplayMonitors(
       nullptr,
@@ -1215,8 +1354,23 @@ bool FlutterWindow::CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *c
           return FALSE;
         }
 
-        const int width = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
-        const int height = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+        RECT capture_bounds = monitor_info.rcMonitor;
+        if (context->logical_selection->has_value())
+        {
+          RECT intersection{};
+          if (!TryIntersectRects(monitor_info.rcMonitor, context->logical_selection->value(), &intersection))
+          {
+            return TRUE;
+          }
+
+          // Long screenshots only need the selected column/region. Capturing the intersection
+          // before BitBlt avoids encoding full monitors while keeping preview and export sourced
+          // from the exact same native pixels.
+          capture_bounds = intersection;
+        }
+
+        const int width = capture_bounds.right - capture_bounds.left;
+        const int height = capture_bounds.bottom - capture_bounds.top;
         if (width <= 0 || height <= 0)
         {
           *context->error = "Monitor has invalid bounds";
@@ -1255,8 +1409,8 @@ bool FlutterWindow::CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *c
             width,
             height,
             screen_dc,
-            monitor_info.rcMonitor.left,
-            monitor_info.rcMonitor.top,
+            capture_bounds.left,
+            capture_bounds.top,
             SRCCOPY | CAPTUREBLT);
 
         SelectObject(memory_dc, old_bitmap);
@@ -1296,7 +1450,7 @@ bool FlutterWindow::CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *c
         const double scale = static_cast<double>(dpi) / 96.0;
         context->captures->push_back(CachedDisplayCapture{
             monitor_info.szDevice,
-            monitor_info.rcMonitor,
+            capture_bounds,
             scale,
             rotation,
             bitmap,
@@ -1310,17 +1464,14 @@ bool FlutterWindow::CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *c
     *error_out = "Failed to enumerate display monitors";
   }
 
+  if (logical_selection.has_value() && captures_out->empty() && error_out->empty())
+  {
+    *error_out = "Selection does not intersect any display monitor";
+  }
+
   if (!error_out->empty())
   {
-    for (auto &capture : *captures_out)
-    {
-      if (capture.bitmap != nullptr)
-      {
-        DeleteObject(capture.bitmap);
-        capture.bitmap = nullptr;
-      }
-    }
-    captures_out->clear();
+    ReleaseDisplayCaptures(captures_out);
     return false;
   }
 
@@ -1882,22 +2033,40 @@ void FlutterWindow::HandleWindowManagerMethodCall(
     }
     else if (method_name == "captureAllDisplays")
     {
+      std::optional<RECT> logical_selection;
       std::vector<CachedDisplayCapture> captures;
       std::string capture_error;
-      if (!CaptureDisplaySnapshots(&captures, &capture_error))
+      if (!TryParseLogicalSelectionArgument(method_call.arguments(), &logical_selection, &capture_error))
+      {
+        result->Error("INVALID_ARGUMENTS", capture_error);
+        return;
+      }
+
+      if (!CaptureDisplaySnapshots(&captures, &capture_error, logical_selection))
       {
         result->Error("CAPTURE_ERROR", capture_error);
         return;
       }
 
-      ClearCachedDisplayCaptures();
-      cached_display_captures_ = captures;
-
       flutter::EncodableList snapshots;
-      if (!BuildDisplaySnapshotPayloads(cached_display_captures_, true, &snapshots, &capture_error))
+      if (!BuildDisplaySnapshotPayloads(captures, true, &snapshots, &capture_error))
       {
+        ReleaseDisplayCaptures(&captures);
         result->Error("CAPTURE_ERROR", capture_error);
         return;
+      }
+
+      if (logical_selection.has_value())
+      {
+        // Selection captures are transient scrolling frames. Caching them would make a later
+        // loadDisplaySnapshots call reuse cropped bitmaps where the normal screenshot flow expects
+        // full displays, so keep the region optimization local to this request.
+        ReleaseDisplayCaptures(&captures);
+      }
+      else
+      {
+        ClearCachedDisplayCaptures();
+        cached_display_captures_ = std::move(captures);
       }
       result->Success(flutter::EncodableValue(snapshots));
     }
@@ -1912,7 +2081,7 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       }
 
       ClearCachedDisplayCaptures();
-      cached_display_captures_ = captures;
+      cached_display_captures_ = std::move(captures);
 
       flutter::EncodableList snapshots;
       if (!BuildDisplaySnapshotPayloads(cached_display_captures_, false, &snapshots, &capture_error))
@@ -1970,7 +2139,7 @@ void FlutterWindow::HandleWindowManagerMethodCall(
         }
 
         ClearCachedDisplayCaptures();
-        cached_display_captures_ = captures;
+        cached_display_captures_ = std::move(captures);
       }
 
       std::vector<CachedDisplayCapture> filtered_captures;

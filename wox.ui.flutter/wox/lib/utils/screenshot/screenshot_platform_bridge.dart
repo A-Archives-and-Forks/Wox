@@ -98,13 +98,14 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
 
   @override
   Future<List<DisplaySnapshot>> captureAllDisplays({String? traceId, ScreenshotRect? logicalSelection}) async {
-    // Scrolling capture carries the request trace and selection into the macOS runner so native
-    // timing probes stay in one log chain and the runner can avoid encoding unrelated displays.
-    final macOSArguments = <String, dynamic>{
+    // Scrolling capture must pass the selected region to every desktop runner. The earlier bridge
+    // only sent it to macOS, which left Windows/Linux stuck on full-display captures even though
+    // the final export only needed a narrow region.
+    final methodArguments = <String, dynamic>{
       if (traceId != null && traceId.isNotEmpty) 'traceId': traceId,
       if (logicalSelection != null) 'logicalSelection': logicalSelection.toJson(),
     };
-    final Object? arguments = Platform.isMacOS && macOSArguments.isNotEmpty ? macOSArguments : null;
+    final Object? arguments = methodArguments.isNotEmpty ? methodArguments : null;
     final response = await _channel.invokeMethod<List<dynamic>>('captureAllDisplays', arguments);
     return _decodeSnapshotResponse(response);
   }

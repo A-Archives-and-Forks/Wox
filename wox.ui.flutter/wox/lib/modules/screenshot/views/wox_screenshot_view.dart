@@ -29,6 +29,7 @@ const double _selectionHandleSize = 12;
 const double _annotationHandleSize = 12;
 const double _selectionEdgeTolerance = 7;
 const double _textDraftMaxWidth = 480;
+const double _scrollingPreviewMaxWidth = 320;
 
 class WoxScreenshotView extends StatefulWidget {
   const WoxScreenshotView({super.key});
@@ -369,6 +370,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                           key: screenshotCancelKey,
                           icon: Icons.close,
                           color: const Color(0xFFFF6B6B),
+                          tooltip: controller.tr('ui_screenshot_tool_cancel'),
                           onPressed: () => controller.cancelSession(const UuidV4().generate(), reason: 'scrolling_native_toolbar_cancel'),
                         ),
                         _ToolButton(
@@ -376,6 +378,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                           icon: Icons.check,
                           color: const Color(0xFF30E37A),
                           enabled: frames.isNotEmpty,
+                          tooltip: controller.tr('ui_screenshot_tool_confirm'),
                           onPressed: frames.isNotEmpty ? () => controller.confirmScrollingSelection(const UuidV4().generate()) : null,
                         ),
                       ],
@@ -451,6 +454,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                     icon: Icons.select_all,
                     selected: currentTool == ScreenshotTool.select,
                     activateOnTapDown: true,
+                    tooltip: controller.tr('ui_screenshot_tool_select'),
                     onPressed: () => controller.setTool(ScreenshotTool.select),
                   ),
                   _ToolButton(
@@ -458,6 +462,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                     icon: Icons.crop_square,
                     selected: currentTool == ScreenshotTool.rect,
                     activateOnTapDown: true,
+                    tooltip: controller.tr('ui_screenshot_tool_rectangle'),
                     onPressed: () => controller.setTool(ScreenshotTool.rect),
                   ),
                   _ToolButton(
@@ -465,6 +470,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                     icon: Icons.circle_outlined,
                     selected: currentTool == ScreenshotTool.ellipse,
                     activateOnTapDown: true,
+                    tooltip: controller.tr('ui_screenshot_tool_ellipse'),
                     onPressed: () => controller.setTool(ScreenshotTool.ellipse),
                   ),
                   _ToolButton(
@@ -472,6 +478,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                     icon: Icons.text_fields,
                     selected: currentTool == ScreenshotTool.text,
                     activateOnTapDown: true,
+                    tooltip: controller.tr('ui_screenshot_tool_text'),
                     onPressed: () => controller.setTool(ScreenshotTool.text),
                   ),
                   _ToolButton(
@@ -479,22 +486,32 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                     icon: Icons.north_east,
                     selected: currentTool == ScreenshotTool.arrow,
                     activateOnTapDown: true,
+                    tooltip: controller.tr('ui_screenshot_tool_arrow'),
                     onPressed: () => controller.setTool(ScreenshotTool.arrow),
                   ),
                   const SizedBox(width: 10),
                   _buildColorPalette(selectedColor: creationColor, onColorSelected: controller.setAnnotationCreationColor, compact: true),
                   const SizedBox(width: 6),
-                  _ToolButton(key: screenshotUndoKey, icon: Icons.undo, enabled: controller.annotations.isNotEmpty, onPressed: controller.undoAnnotation),
+                  _ToolButton(
+                    key: screenshotUndoKey,
+                    icon: Icons.undo,
+                    enabled: controller.annotations.isNotEmpty,
+                    tooltip: controller.tr('ui_screenshot_tool_undo'),
+                    onPressed: controller.undoAnnotation,
+                  ),
                   const SizedBox(width: 6),
                   // Scrolling capture is exposed as a selection action instead of a drawing tool
                   // because it exports a stitched live page after Wox hides, so keeping it beside
-                  // confirm/cancel matches the point where the selected region becomes final.
+                  // confirm/cancel matches the point where the selected region becomes final. The
+                  // double-ended arrow tile reads as vertical expansion; down-arrow glyphs looked
+                  // like download/export actions and conflicted with this workflow.
                   _ToolButton(
                     key: screenshotScrollingCaptureKey,
-                    icon: Icons.vertical_align_bottom,
+                    iconBuilder: (foreground) => _ScrollingCaptureToolIcon(color: foreground),
                     color: const Color(0xFF4DA3FF),
                     selected: isScrollingCapture,
                     enabled: selectionRect != null && !_isScrollingCaptureSession && !isScrollingCapture,
+                    tooltip: controller.tr('ui_screenshot_tool_scrolling_capture'),
                     onPressed: selectionRect != null ? _startScrollingSelectionFromToolbar : null,
                   ),
                 ],
@@ -502,6 +519,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                   key: screenshotCancelKey,
                   icon: Icons.close,
                   color: const Color(0xFFFF6B6B),
+                  tooltip: controller.tr('ui_screenshot_tool_cancel'),
                   onPressed: () => controller.cancelSession(const UuidV4().generate(), reason: 'toolbar_cancel_button'),
                 ),
                 _ToolButton(
@@ -509,6 +527,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                   icon: Icons.check,
                   color: const Color(0xFF30E37A),
                   enabled: canConfirm,
+                  tooltip: controller.tr('ui_screenshot_tool_confirm'),
                   onPressed:
                       canConfirm
                           ? () {
@@ -562,15 +581,20 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
               _buildColorPalette(selectedColor: selectedAnnotation.color, onColorSelected: controller.updateSelectedAnnotationColor),
               if (selectedAnnotation.type == ScreenshotAnnotationType.text) ...[
                 const SizedBox(height: 10),
-                _EditActionButton(icon: Icons.remove, onPressed: () => controller.updateSelectedTextFontSize(-2)),
+                _EditActionButton(icon: Icons.remove, tooltip: controller.tr('ui_screenshot_tool_decrease_text'), onPressed: () => controller.updateSelectedTextFontSize(-2)),
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   child: Text('${selectedAnnotation.fontSize.round()}', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
                 ),
-                _EditActionButton(icon: Icons.add, onPressed: () => controller.updateSelectedTextFontSize(2)),
+                _EditActionButton(icon: Icons.add, tooltip: controller.tr('ui_screenshot_tool_increase_text'), onPressed: () => controller.updateSelectedTextFontSize(2)),
               ],
               const SizedBox(height: 10),
-              _EditActionButton(icon: Icons.delete_outline, color: const Color(0xFFFF6B6B), onPressed: controller.deleteSelectedAnnotation),
+              _EditActionButton(
+                icon: Icons.delete_outline,
+                color: const Color(0xFFFF6B6B),
+                tooltip: controller.tr('ui_screenshot_tool_delete_annotation'),
+                onPressed: controller.deleteSelectedAnnotation,
+              ),
             ],
           ),
         ),
@@ -584,13 +608,13 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     final screenSize = MediaQuery.sizeOf(context);
     final rightAvailableWidth = math.max(0.0, screenSize.width - selectionLocalRect.right - 44);
     final leftAvailableWidth = math.max(0.0, selectionLocalRect.left - 44);
-    final maxAvailableWidth = math.max(rightAvailableWidth, leftAvailableWidth);
-    final previewSize = _calculateScrollingPreviewRenderSize(
-      frames: frames,
-      totalHeight: totalHeight,
-      maxWidth: maxAvailableWidth,
-      maxHeight: math.min(selectionLocalRect.height, 520.0),
-    );
+    final maxAvailableWidth = math.min(math.max(rightAvailableWidth, leftAvailableWidth), _scrollingPreviewMaxWidth);
+    // Match the native scrolling preview layout: the old selection-height cap made the preview stop
+    // growing at the selected rectangle even though the dimmed workspace above and below was empty.
+    // Using the full masked viewport keeps the fallback Flutter preview consistent with macOS, while
+    // capping width prevents the preview from becoming a second full-size page copy.
+    final maxPreviewHeight = math.max(1.0, screenSize.height - 48);
+    final previewSize = _calculateScrollingPreviewRenderSize(frames: frames, totalHeight: totalHeight, maxWidth: maxAvailableWidth, maxHeight: maxPreviewHeight);
 
     final hasRightSpace = selectionLocalRect.right + 20 + previewSize.width <= screenSize.width - 24;
     final left = hasRightSpace ? selectionLocalRect.right + 20 : math.max(24.0, selectionLocalRect.left - previewSize.width - 20);
@@ -1579,27 +1603,32 @@ class _CallerIcon extends StatelessWidget {
 class _ToolButton extends StatelessWidget {
   const _ToolButton({
     super.key,
-    required this.icon,
     required this.onPressed,
+    this.icon,
+    this.iconBuilder,
     this.selected = false,
     this.enabled = true,
     this.color = Colors.white,
     this.activateOnTapDown = false,
-  });
+    this.tooltip,
+  }) : assert(icon != null || iconBuilder != null);
 
-  final IconData icon;
+  final IconData? icon;
+  final Widget Function(Color foreground)? iconBuilder;
   final VoidCallback? onPressed;
   final bool selected;
   final bool enabled;
   final Color color;
   final bool activateOnTapDown;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
     final foreground = enabled ? (selected ? const Color(0xFF29FF72) : color) : Colors.white38;
     final enabledAction = enabled ? onPressed : null;
+    final iconWidget = iconBuilder?.call(foreground) ?? Icon(icon, color: foreground, size: 24);
 
-    return Padding(
+    final button = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: InkWell(
         // Tool switching on desktop felt delayed because InkWell.onTap waits for pointer-up and also
@@ -1613,8 +1642,38 @@ class _ToolButton extends StatelessWidget {
           width: 40,
           height: 40,
           decoration: BoxDecoration(color: selected ? const Color(0x3329FF72) : Colors.transparent, borderRadius: BorderRadius.circular(10)),
-          child: Icon(icon, color: foreground, size: 24),
+          child: iconWidget,
         ),
+      ),
+    );
+
+    if (tooltip == null || tooltip!.isEmpty) {
+      return button;
+    }
+
+    // The screenshot toolbox is icon-only. Adding tooltips at the shared button wrapper keeps hover
+    // help consistent for drawing tools, session actions, and disabled actions without duplicating
+    // Tooltip wiring at every call site.
+    return Tooltip(message: tooltip!, waitDuration: const Duration(milliseconds: 350), child: button);
+  }
+}
+
+class _ScrollingCaptureToolIcon extends StatelessWidget {
+  const _ScrollingCaptureToolIcon({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    // Long screenshot needs a distinct vertical-expansion symbol instead of a down arrow, which
+    // users read as download/export. A compact colored tile mirrors the requested visual while
+    // staying inside the existing 40px toolbar button footprint.
+    return Center(
+      child: Container(
+        width: 26,
+        height: 26,
+        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.white24)),
+        child: const Icon(Icons.height, color: Colors.white, size: 22),
       ),
     );
   }
@@ -1643,22 +1702,27 @@ class _ColorSwatchButton extends StatelessWidget {
 }
 
 class _EditActionButton extends StatelessWidget {
-  const _EditActionButton({required this.icon, required this.onPressed, this.color = Colors.white});
+  const _EditActionButton({required this.icon, required this.onPressed, required this.tooltip, this.color = Colors.white});
 
   final IconData icon;
   final VoidCallback onPressed;
+  final String tooltip;
   final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onPressed,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        width: 42,
-        height: 42,
-        decoration: BoxDecoration(color: const Color(0x22FFFFFF), borderRadius: BorderRadius.circular(10)),
-        child: Icon(icon, color: color, size: 22),
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 350),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(color: const Color(0x22FFFFFF), borderRadius: BorderRadius.circular(10)),
+          child: Icon(icon, color: color, size: 22),
+        ),
       ),
     );
   }

@@ -7,6 +7,7 @@
 #include <flutter/standard_method_codec.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -100,8 +101,9 @@ private:
   // Helpers for logging native geometry.
   std::string RectToString(const RECT &rect) const;
   RECT GetWindowRectSafe(HWND hwnd) const;
+  void ReleaseDisplayCaptures(std::vector<CachedDisplayCapture> *captures);
   void ClearCachedDisplayCaptures();
-  bool CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *captures_out, std::string *error_out);
+  bool CaptureDisplaySnapshots(std::vector<CachedDisplayCapture> *captures_out, std::string *error_out, const std::optional<RECT> &logical_selection = std::nullopt);
   bool BuildDisplaySnapshotPayloads(const std::vector<CachedDisplayCapture> &captures, bool include_image_bytes, flutter::EncodableList *snapshots_out, std::string *error_out);
   const CachedDisplayCapture *FindCachedDisplayCapture(const std::string &display_id) const;
   bool CachedDisplayCapturesMatch(const std::vector<std::string> &display_ids) const;

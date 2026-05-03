@@ -308,6 +308,137 @@ static FlValue *build_rect_value(double x, double y, double width, double height
   return rect;
 }
 
+static gboolean read_fl_value_double(FlValue *value, double *double_out)
+{
+  if (value == nullptr || double_out == nullptr)
+  {
+    return FALSE;
+  }
+
+  const FlValueType type = fl_value_get_type(value);
+  if (type == FL_VALUE_TYPE_FLOAT)
+  {
+    *double_out = fl_value_get_float(value);
+    return TRUE;
+  }
+  if (type == FL_VALUE_TYPE_INT)
+  {
+    *double_out = static_cast<double>(fl_value_get_int(value));
+    return TRUE;
+  }
+
+  return FALSE;
+}
+
+static gboolean read_rect_number(FlValue *map, const gchar *key, double *number_out, gchar **error_out)
+{
+  FlValue *value = fl_value_lookup_string(map, key);
+  if (!read_fl_value_double(value, number_out))
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup_printf("logicalSelection.%s must be a number", key);
+    }
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean parse_optional_logical_selection(FlValue *args, GdkRectangle *selection_out, gboolean *has_selection_out, gchar **error_out)
+{
+  if (has_selection_out != nullptr)
+  {
+    *has_selection_out = FALSE;
+  }
+  if (args == nullptr)
+  {
+    return TRUE;
+  }
+  if (fl_value_get_type(args) != FL_VALUE_TYPE_MAP)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("captureAllDisplays arguments must be a map");
+    }
+    return FALSE;
+  }
+
+  FlValue *selection_value = fl_value_lookup_string(args, "logicalSelection");
+  if (selection_value == nullptr)
+  {
+    return TRUE;
+  }
+  if (fl_value_get_type(selection_value) != FL_VALUE_TYPE_MAP)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("logicalSelection must be a map");
+    }
+    return FALSE;
+  }
+
+  double x = 0;
+  double y = 0;
+  double width = 0;
+  double height = 0;
+  if (!read_rect_number(selection_value, "x", &x, error_out) ||
+      !read_rect_number(selection_value, "y", &y, error_out) ||
+      !read_rect_number(selection_value, "width", &width, error_out) ||
+      !read_rect_number(selection_value, "height", &height, error_out))
+  {
+    return FALSE;
+  }
+  if (width <= 0 || height <= 0)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("logicalSelection must have positive width and height");
+    }
+    return FALSE;
+  }
+
+  // The Flutter selection can carry fractional logical coordinates. Expand to the containing
+  // native rectangle so Linux preview frames never miss edge pixels that the final export expects.
+  GdkRectangle selection{};
+  selection.x = static_cast<int>(floor(x));
+  selection.y = static_cast<int>(floor(y));
+  const int right = static_cast<int>(ceil(x + width));
+  const int bottom = static_cast<int>(ceil(y + height));
+  selection.width = right - selection.x;
+  selection.height = bottom - selection.y;
+  if (selection.width <= 0 || selection.height <= 0)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup("logicalSelection resolves to an empty native rectangle");
+    }
+    return FALSE;
+  }
+
+  *selection_out = selection;
+  *has_selection_out = TRUE;
+  return TRUE;
+}
+
+static gboolean intersect_rectangles(const GdkRectangle *first, const GdkRectangle *second, GdkRectangle *intersection_out)
+{
+  const int left = MAX(first->x, second->x);
+  const int top = MAX(first->y, second->y);
+  const int right = MIN(first->x + first->width, second->x + second->width);
+  const int bottom = MIN(first->y + first->height, second->y + second->height);
+  if (right <= left || bottom <= top)
+  {
+    return FALSE;
+  }
+
+  intersection_out->x = left;
+  intersection_out->y = top;
+  intersection_out->width = right - left;
+  intersection_out->height = bottom - top;
+  return TRUE;
+}
+
 static gboolean encode_pixbuf_to_png_base64(GdkPixbuf *pixbuf, gchar **base64_out, gchar **error_out)
 {
   gchar *png_buffer = nullptr;
@@ -1158,7 +1289,7 @@ static gboolean display_id_is_requested(FlValue *display_ids, const std::string 
   return FALSE;
 }
 
-static gboolean cache_x11_display_captures(MyApplication *self, gchar **error_out)
+static gboolean cache_x11_display_captures(MyApplication *self, const GdkRectangle *logical_selection, gchar **error_out)
 {
 #ifdef GDK_WINDOWING_X11
   if (self == nullptr || self->window == nullptr)
@@ -1203,7 +1334,23 @@ static gboolean cache_x11_display_captures(MyApplication *self, gchar **error_ou
 
     GdkRectangle geometry{};
     gdk_monitor_get_geometry(monitor, &geometry);
-    GdkPixbuf *pixbuf = gdk_pixbuf_get_from_window(root_window, geometry.x, geometry.y, geometry.width, geometry.height);
+    GdkRectangle capture_geometry = geometry;
+    if (logical_selection != nullptr)
+    {
+      GdkRectangle intersection{};
+      if (!intersect_rectangles(&geometry, logical_selection, &intersection))
+      {
+        continue;
+      }
+
+      // Long screenshots only need the selected strip. The previous X11 path captured the full
+      // monitor and let Dart crop it later, which kept preview/export correct but made every frame
+      // pay for unrelated pixels. Cropping before gdk_pixbuf_get_from_window keeps the same source
+      // semantics with a much smaller payload.
+      capture_geometry = intersection;
+    }
+
+    GdkPixbuf *pixbuf = gdk_pixbuf_get_from_window(root_window, capture_geometry.x, capture_geometry.y, capture_geometry.width, capture_geometry.height);
     if (pixbuf == nullptr)
     {
       clear_x11_display_cache(self);
@@ -1216,16 +1363,25 @@ static gboolean cache_x11_display_captures(MyApplication *self, gchar **error_ou
 
     self->cached_x11_display_captures.push_back(CachedLinuxDisplayCapture{
         "x11-monitor-" + std::to_string(index),
-        geometry.x,
-        geometry.y,
-        geometry.width,
-        geometry.height,
+        capture_geometry.x,
+        capture_geometry.y,
+        capture_geometry.width,
+        capture_geometry.height,
         static_cast<double>(gdk_monitor_get_scale_factor(monitor)),
         pixbuf,
     });
   }
 
-  return !self->cached_x11_display_captures.empty();
+  if (self->cached_x11_display_captures.empty())
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = g_strdup(logical_selection != nullptr ? "Selection does not intersect any X11 monitor" : "No X11 monitors are available for capture");
+    }
+    return FALSE;
+  }
+
+  return TRUE;
 #else
   if (error_out != nullptr)
   {
@@ -1235,16 +1391,16 @@ static gboolean cache_x11_display_captures(MyApplication *self, gchar **error_ou
 #endif
 }
 
-static gboolean build_x11_snapshot_payloads(MyApplication *self, FlValue *display_ids, gboolean include_image_bytes, FlValue **snapshots_out, gchar **error_out)
+static gboolean build_x11_snapshot_payloads(MyApplication *self, FlValue *display_ids, gboolean include_image_bytes, const GdkRectangle *logical_selection, FlValue **snapshots_out, gchar **error_out)
 {
   if (self == nullptr)
   {
     return FALSE;
   }
 
-  if (self->cached_x11_display_captures.empty())
+  if (logical_selection != nullptr || self->cached_x11_display_captures.empty())
   {
-    if (!cache_x11_display_captures(self, error_out))
+    if (!cache_x11_display_captures(self, logical_selection, error_out))
     {
       return FALSE;
     }
@@ -1435,7 +1591,32 @@ static gboolean cache_portal_capture(MyApplication *self, gchar **error_out)
   return TRUE;
 }
 
-static gboolean build_portal_snapshot_payloads(MyApplication *self, FlValue *display_ids, gboolean include_image_bytes, FlValue **snapshots_out, gchar **error_out)
+static gboolean build_portal_source_crop(const CachedPortalCapture &capture, const GdkRectangle &logical_rect, GdkRectangle *crop_out)
+{
+  if (capture.desktop_pixbuf == nullptr || crop_out == nullptr)
+  {
+    return FALSE;
+  }
+
+  const int desktop_pixel_width = gdk_pixbuf_get_width(capture.desktop_pixbuf);
+  const int desktop_pixel_height = gdk_pixbuf_get_height(capture.desktop_pixbuf);
+  const int crop_left = CLAMP(static_cast<int>(floor((logical_rect.x - capture.logical_union.x) * capture.scale_x)), 0, desktop_pixel_width);
+  const int crop_top = CLAMP(static_cast<int>(floor((logical_rect.y - capture.logical_union.y) * capture.scale_y)), 0, desktop_pixel_height);
+  const int crop_right = CLAMP(static_cast<int>(ceil((logical_rect.x + logical_rect.width - capture.logical_union.x) * capture.scale_x)), 0, desktop_pixel_width);
+  const int crop_bottom = CLAMP(static_cast<int>(ceil((logical_rect.y + logical_rect.height - capture.logical_union.y) * capture.scale_y)), 0, desktop_pixel_height);
+  if (crop_right <= crop_left || crop_bottom <= crop_top)
+  {
+    return FALSE;
+  }
+
+  crop_out->x = crop_left;
+  crop_out->y = crop_top;
+  crop_out->width = crop_right - crop_left;
+  crop_out->height = crop_bottom - crop_top;
+  return TRUE;
+}
+
+static gboolean build_portal_snapshot_payloads(MyApplication *self, FlValue *display_ids, gboolean include_image_bytes, const GdkRectangle *logical_selection, FlValue **snapshots_out, gchar **error_out)
 {
   if (self == nullptr)
   {
@@ -1463,19 +1644,56 @@ static gboolean build_portal_snapshot_payloads(MyApplication *self, FlValue *dis
       return FALSE;
     }
 
+    GdkRectangle logical_bounds = capture.logical_union;
+    GdkRectangle source_crop{0, 0, gdk_pixbuf_get_width(capture.desktop_pixbuf), gdk_pixbuf_get_height(capture.desktop_pixbuf)};
+    if (logical_selection != nullptr)
+    {
+      GdkRectangle intersection{};
+      if (!intersect_rectangles(&capture.logical_union, logical_selection, &intersection) ||
+          !build_portal_source_crop(capture, intersection, &source_crop))
+      {
+        if (error_out != nullptr)
+        {
+          *error_out = g_strdup("Selection does not intersect the portal desktop snapshot");
+        }
+        return FALSE;
+      }
+
+      // Portal screenshots cannot request a source rectangle on Wayland. Cropping inside the GTK
+      // runner is still valuable because it keeps Dart preview/export on the same portal frame
+      // while avoiding a full-desktop PNG decode and compose path for every scrolling tick.
+      logical_bounds = intersection;
+    }
+
     matched_any = TRUE;
     FlValue *snapshot = fl_value_new_map();
     fl_value_set_string_take(snapshot, "displayId", fl_value_new_string(display_id.c_str()));
-    fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(capture.logical_union.x, capture.logical_union.y, capture.logical_union.width, capture.logical_union.height));
-    fl_value_set_string_take(snapshot, "pixelBounds", build_rect_value(capture.logical_union.x * capture.scale_x, capture.logical_union.y * capture.scale_y, gdk_pixbuf_get_width(capture.desktop_pixbuf), gdk_pixbuf_get_height(capture.desktop_pixbuf)));
+    fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(logical_bounds.x, logical_bounds.y, logical_bounds.width, logical_bounds.height));
+    fl_value_set_string_take(snapshot, "pixelBounds", build_rect_value(logical_bounds.x * capture.scale_x, logical_bounds.y * capture.scale_y, source_crop.width, source_crop.height));
     fl_value_set_string_take(snapshot, "scale", fl_value_new_float(capture.scale_x));
     fl_value_set_string_take(snapshot, "rotation", fl_value_new_int(0));
 
     if (include_image_bytes)
     {
+      GdkPixbuf *image_pixbuf = capture.desktop_pixbuf;
+      gboolean should_unref_image_pixbuf = FALSE;
+      if (logical_selection != nullptr)
+      {
+        image_pixbuf = gdk_pixbuf_new_subpixbuf(capture.desktop_pixbuf, source_crop.x, source_crop.y, source_crop.width, source_crop.height);
+        should_unref_image_pixbuf = TRUE;
+        if (image_pixbuf == nullptr)
+        {
+          if (error_out != nullptr)
+          {
+            *error_out = g_strdup("Failed to crop portal desktop snapshot");
+          }
+          return FALSE;
+        }
+      }
+
       gchar *image_base64 = nullptr;
       gchar *encode_error = nullptr;
-      if (!encode_pixbuf_to_png_base64(capture.desktop_pixbuf, &image_base64, &encode_error))
+      if (!encode_pixbuf_to_png_base64(image_pixbuf, &image_base64, &encode_error))
       {
         if (error_out != nullptr)
         {
@@ -1485,10 +1703,18 @@ static gboolean build_portal_snapshot_payloads(MyApplication *self, FlValue *dis
         {
           g_free(encode_error);
         }
+        if (should_unref_image_pixbuf)
+        {
+          g_object_unref(image_pixbuf);
+        }
         return FALSE;
       }
       fl_value_set_string_take(snapshot, "imageBytesBase64", fl_value_new_string(image_base64));
       g_free(image_base64);
+      if (should_unref_image_pixbuf)
+      {
+        g_object_unref(image_pixbuf);
+      }
     }
 
     fl_value_append_take(snapshots, snapshot);
@@ -1499,22 +1725,44 @@ static gboolean build_portal_snapshot_payloads(MyApplication *self, FlValue *dis
     const int desktop_pixel_height = gdk_pixbuf_get_height(capture.desktop_pixbuf);
     for (const auto &monitor : capture.monitors)
     {
+      GdkRectangle logical_bounds{monitor.x, monitor.y, monitor.width, monitor.height};
+      gboolean is_selection_crop = FALSE;
+      GdkRectangle selection_crop{};
+      if (logical_selection != nullptr)
+      {
+        GdkRectangle intersection{};
+        if (!intersect_rectangles(&logical_bounds, logical_selection, &intersection))
+        {
+          continue;
+        }
+        if (!build_portal_source_crop(capture, intersection, &selection_crop))
+        {
+          continue;
+        }
+
+        // ScreenCast metadata gives us monitor positions but portal Screenshot still returns one
+        // desktop image. Slice each monitor-selection intersection natively so scrolling preview
+        // frames no longer ship full monitor PNGs through the Flutter channel.
+        logical_bounds = intersection;
+        is_selection_crop = TRUE;
+      }
+
       if (!display_id_is_requested(display_ids, monitor.id))
       {
         continue;
       }
 
       matched_any = TRUE;
-      const int crop_x = CLAMP(static_cast<int>(round((monitor.x - capture.logical_union.x) * capture.scale_x)), 0, MAX(0, desktop_pixel_width - 1));
-      const int crop_y = CLAMP(static_cast<int>(round((monitor.y - capture.logical_union.y) * capture.scale_y)), 0, MAX(0, desktop_pixel_height - 1));
-      const int crop_width = CLAMP(static_cast<int>(round(monitor.width * capture.scale_x)), 1, desktop_pixel_width - crop_x);
-      const int crop_height = CLAMP(static_cast<int>(round(monitor.height * capture.scale_y)), 1, desktop_pixel_height - crop_y);
+      const int crop_x = is_selection_crop ? selection_crop.x : CLAMP(static_cast<int>(round((monitor.x - capture.logical_union.x) * capture.scale_x)), 0, MAX(0, desktop_pixel_width - 1));
+      const int crop_y = is_selection_crop ? selection_crop.y : CLAMP(static_cast<int>(round((monitor.y - capture.logical_union.y) * capture.scale_y)), 0, MAX(0, desktop_pixel_height - 1));
+      const int crop_width = is_selection_crop ? selection_crop.width : CLAMP(static_cast<int>(round(monitor.width * capture.scale_x)), 1, desktop_pixel_width - crop_x);
+      const int crop_height = is_selection_crop ? selection_crop.height : CLAMP(static_cast<int>(round(monitor.height * capture.scale_y)), 1, desktop_pixel_height - crop_y);
 
       FlValue *snapshot = fl_value_new_map();
       fl_value_set_string_take(snapshot, "displayId", fl_value_new_string(monitor.id.c_str()));
-      fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(monitor.x, monitor.y, monitor.width, monitor.height));
+      fl_value_set_string_take(snapshot, "logicalBounds", build_rect_value(logical_bounds.x, logical_bounds.y, logical_bounds.width, logical_bounds.height));
       fl_value_set_string_take(snapshot, "pixelBounds", build_rect_value(crop_x, crop_y, crop_width, crop_height));
-      fl_value_set_string_take(snapshot, "scale", fl_value_new_float(monitor.width > 0 ? static_cast<double>(crop_width) / monitor.width : capture.scale_x));
+      fl_value_set_string_take(snapshot, "scale", fl_value_new_float(logical_bounds.width > 0 ? static_cast<double>(crop_width) / logical_bounds.width : capture.scale_x));
       fl_value_set_string_take(snapshot, "rotation", fl_value_new_int(0));
 
       if (include_image_bytes)
@@ -1558,7 +1806,7 @@ static gboolean build_portal_snapshot_payloads(MyApplication *self, FlValue *dis
   {
     if (error_out != nullptr)
     {
-      *error_out = g_strdup("Requested portal snapshot is not available");
+      *error_out = g_strdup(logical_selection != nullptr ? "Selection does not intersect any portal snapshot" : "Requested portal snapshot is not available");
     }
     return FALSE;
   }
@@ -1730,6 +1978,18 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
   if (strcmp(method, "captureAllDisplays") == 0 || strcmp(method, "captureDisplayMetadata") == 0)
   {
     const gboolean include_image_bytes = strcmp(method, "captureAllDisplays") == 0;
+    GdkRectangle logical_selection{};
+    gboolean has_logical_selection = FALSE;
+    gchar *argument_error = nullptr;
+    if (include_image_bytes && !parse_optional_logical_selection(args, &logical_selection, &has_logical_selection, &argument_error))
+    {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ARGS", argument_error != nullptr ? argument_error : "Invalid logicalSelection", nullptr));
+      g_free(argument_error);
+      fl_method_call_respond(method_call, response, nullptr);
+      return;
+    }
+
+    const GdkRectangle *logical_selection_ptr = has_logical_selection ? &logical_selection : nullptr;
     FlValue *snapshots = nullptr;
     gchar *capture_error = nullptr;
 #ifdef GDK_WINDOWING_X11
@@ -1740,9 +2000,15 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
       // any previous cache here so each new screenshot session gets fresh pixels, then let Flutter
       // choose whether it only wants geometry or the full PNG payloads.
       clear_screenshot_capture_cache(self);
-      if (build_x11_snapshot_payloads(self, nullptr, include_image_bytes, &snapshots, &capture_error))
+      if (build_x11_snapshot_payloads(self, nullptr, include_image_bytes, logical_selection_ptr, &snapshots, &capture_error))
       {
         response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
+        if (has_logical_selection)
+        {
+          // Region frames are one-off scrolling captures. Drop them after the response is built so
+          // loadDisplaySnapshots can only reuse full-display captures from normal screenshot flows.
+          clear_x11_display_cache(self);
+        }
       }
       else
       {
@@ -1754,9 +2020,15 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
 #endif
     {
       clear_screenshot_capture_cache(self);
-      if (build_portal_snapshot_payloads(self, nullptr, include_image_bytes, &snapshots, &capture_error))
+      if (build_portal_snapshot_payloads(self, nullptr, include_image_bytes, logical_selection_ptr, &snapshots, &capture_error))
       {
         response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
+        if (has_logical_selection)
+        {
+          // Wayland portal selection captures do not need to stay cached after their cropped PNGs
+          // are encoded; clearing here prevents large desktop buffers from lingering between ticks.
+          clear_portal_capture(&self->cached_portal_capture);
+        }
       }
       else
       {
@@ -1786,7 +2058,7 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
         GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(window));
         if (display != nullptr && GDK_IS_X11_DISPLAY(display))
         {
-          if (build_x11_snapshot_payloads(self, display_ids, TRUE, &snapshots, &capture_error))
+          if (build_x11_snapshot_payloads(self, display_ids, TRUE, nullptr, &snapshots, &capture_error))
           {
             response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
           }
@@ -1799,7 +2071,7 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
         else
 #endif
         {
-          if (build_portal_snapshot_payloads(self, display_ids, TRUE, &snapshots, &capture_error))
+          if (build_portal_snapshot_payloads(self, display_ids, TRUE, nullptr, &snapshots, &capture_error))
           {
             response = FL_METHOD_RESPONSE(fl_method_success_response_new(snapshots));
           }

@@ -1481,33 +1481,57 @@ class AppDelegate: FlutterAppDelegate {
         exceptingWindows: []
       )
       let scale = CGFloat(contentFilter.pointPixelScale)
+      let visibleFrame = matchedScreen.map { topLeftRect(fromAppKitRect: $0.visibleFrame) } ?? logicalFrame
+      let captureLogicalBounds = logicalSelection.map { logicalFrame.intersection($0) } ?? logicalFrame
+      let captureOutputSize = logicalSelection == nil ? display.frame.size : captureLogicalBounds.size
+      let captureVisibleBounds = logicalSelection == nil ? visibleFrame : visibleFrame.intersection(captureLogicalBounds)
+      let filterContentRect = contentFilter.contentRect
+      let sourceRect = logicalSelection.map { _ in
+        NSRect(
+          x: filterContentRect.minX + captureLogicalBounds.minX - logicalFrame.minX,
+          y: filterContentRect.minY + captureLogicalBounds.minY - logicalFrame.minY,
+          width: captureLogicalBounds.width,
+          height: captureLogicalBounds.height
+        )
+      }
       let streamConfiguration = SCStreamConfiguration()
-      streamConfiguration.width = Int((display.frame.width * scale).rounded())
-      streamConfiguration.height = Int((display.frame.height * scale).rounded())
+      streamConfiguration.width = max(1, Int((captureOutputSize.width * scale).rounded()))
+      streamConfiguration.height = max(1, Int((captureOutputSize.height * scale).rounded()))
+      if let sourceRect {
+        // Scrolling capture previously asked ScreenCaptureKit for the whole display and cropped the
+        // selected page after capture. That kept correctness but made every preview refresh pay for
+        // a full 4K display frame; using sourceRect lets the native capture return only the same
+        // logical crop that Flutter will stitch/export, preserving preview/export consistency while
+        // removing the avoidable full-display capture cost.
+        streamConfiguration.sourceRect = sourceRect
+      }
       // Long screenshots stitch multiple captures together. If the system cursor is included in
       // every tile, the final image repeats the pointer at each sampled scroll position and also
       // corrupts overlap matching, so keep captured display pixels cursor-free.
       streamConfiguration.showsCursor = false
 
-      logScrollingCaptureTiming("event=native_sck_display_capture_start displayId=\(display.displayID) logical=\(formatTimingRect(display.frame)) pixel=\(streamConfiguration.width)x\(streamConfiguration.height)")
+      logScrollingCaptureTiming(
+        "event=native_sck_display_capture_start displayId=\(display.displayID) logical=\(formatTimingRect(captureLogicalBounds)) source=\(sourceRect.map { formatTimingRect($0) } ?? "full") pixel=\(streamConfiguration.width)x\(streamConfiguration.height)"
+      )
       let cgImage = try await SCScreenshotManager.captureImage(
         contentFilter: contentFilter,
         configuration: streamConfiguration
       )
-      let visibleFrame = matchedScreen.map { topLeftRect(fromAppKitRect: $0.visibleFrame) } ?? logicalFrame
       let rotation = Int(CGDisplayRotation(display.displayID).rounded())
 
       cachedCaptures.append(
         CachedDisplayCapture(
           displayId: String(display.displayID),
-          logicalBounds: logicalFrame,
-          visibleBounds: visibleFrame,
+          logicalBounds: captureLogicalBounds,
+          visibleBounds: captureVisibleBounds,
           scale: scale,
           rotation: rotation,
           image: cgImage
         )
       )
-      logScrollingCaptureTiming("event=native_sck_display_capture_done displayId=\(display.displayID) logical=\(formatTimingRect(logicalFrame)) pixel=\(cgImage.width)x\(cgImage.height) elapsedMs=\(elapsedMilliseconds(since: displayStart))")
+      logScrollingCaptureTiming(
+        "event=native_sck_display_capture_done displayId=\(display.displayID) logical=\(formatTimingRect(captureLogicalBounds)) pixel=\(cgImage.width)x\(cgImage.height) elapsedMs=\(elapsedMilliseconds(since: displayStart))"
+      )
     }
 
     if cachedCaptures.isEmpty && logicalSelection != nil {

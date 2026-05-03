@@ -19,7 +19,13 @@ class WoxScreenshotController extends GetxController {
   static const Color defaultAnnotationColor = Color(0xFFFF5B36);
   static const double minTextFontSize = 12;
   static const double maxTextFontSize = 48;
-  static const int _scrollingCaptureMaxFrames = 16;
+  // A fixed 16-frame cap made narrow scrolling captures stop updating while the user was still
+  // scrolling, even though those small frames used far less memory than a wide selection. The pixel
+  // budget keeps large captures bounded while allowing small page regions to collect enough frames
+  // for the live preview and final export to stay useful.
+  static const int _scrollingCaptureMinimumFrameLimit = 16;
+  static const int _scrollingCaptureMaximumFrameLimit = 96;
+  static const int _scrollingCaptureStoredPixelBudget = 24 * 1024 * 1024;
   static const double _scrollingCaptureWheelSteps = 7;
   static const Duration _scrollingCaptureSettleDelay = Duration(milliseconds: 120);
   static const double _scrollingCaptureOverlapThreshold = 20;
@@ -27,6 +33,7 @@ class WoxScreenshotController extends GetxController {
   static const double _scrollingCaptureMinimumOverlapRatio = 0.18;
   static const int _scrollingCaptureSeamFeatherRows = 10;
   static const double _scrollingCaptureToolbarMinWidth = 168;
+  static const double _scrollingCapturePreviewMaxWidth = 320;
 
   final isSessionActive = false.obs;
   final stage = ScreenshotSessionStage.idle.obs;
@@ -609,15 +616,23 @@ class WoxScreenshotController extends GetxController {
 
   Rect _calculateScrollingControlsBounds(Rect selection) {
     final bounds = virtualBoundsRect;
+    const verticalMargin = 24.0;
+    const toolbarReserveHeight = 72.0;
     final rightAvailableWidth = math.max(0.0, bounds.right - selection.right - 44);
     final leftAvailableWidth = math.max(0.0, selection.left - bounds.left - 44);
-    final maxAvailableWidth = math.max(rightAvailableWidth, leftAvailableWidth);
-    final previewSize = _calculateScrollingPreviewRenderSize(selection: selection, maxWidth: maxAvailableWidth, maxHeight: math.min(selection.height, 520.0));
+    final maxAvailableWidth = math.min(math.max(rightAvailableWidth, leftAvailableWidth), _scrollingCapturePreviewMaxWidth);
+    // The preview height used to be capped by the selected rectangle, which made long captures stay
+    // tiny even when the dimmed workspace had plenty of vertical room. Reserving only the toolbar
+    // and outer margins lets the side preview grow through the full masked area. Width still needs a
+    // hard cap so a fresh long screenshot remains a side preview instead of expanding into a large
+    // duplicate of the selected page.
+    final maxPreviewHeight = math.max(1.0, bounds.height - verticalMargin * 2 - toolbarReserveHeight);
+    final previewSize = _calculateScrollingPreviewRenderSize(selection: selection, maxWidth: maxAvailableWidth, maxHeight: maxPreviewHeight);
     final controlsWidth = math.max(previewSize.width, _scrollingCaptureToolbarMinWidth);
-    final controlsHeight = previewSize.height + 72;
+    final controlsHeight = previewSize.height + toolbarReserveHeight;
     final useRightSide = selection.right + 20 + controlsWidth <= bounds.right - 24 || rightAvailableWidth >= leftAvailableWidth;
-    final left = useRightSide ? selection.right + 20 : math.max(bounds.left + 24, selection.left - controlsWidth - 20);
-    final top = selection.top.clamp(bounds.top + 24, math.max(bounds.top + 24, bounds.bottom - controlsHeight - 24)).toDouble();
+    final left = useRightSide ? selection.right + 20 : math.max(bounds.left + verticalMargin, selection.left - controlsWidth - 20);
+    final top = selection.top.clamp(bounds.top + verticalMargin, math.max(bounds.top + verticalMargin, bounds.bottom - controlsHeight - verticalMargin)).toDouble();
 
     // The macOS scrolling overlay moves Flutter into a compact preview/toolbox panel while a native
     // mouse-transparent overlay dims only the outside of the selected region. Keeping this geometry
@@ -736,11 +751,13 @@ class WoxScreenshotController extends GetxController {
   Future<void> _appendScrollingCaptureFrame(String traceId, Rect selection) async {
     final appendWatch = Stopwatch()..start();
     final frameIndex = scrollingCaptureFrames.length;
-    if (scrollingCaptureFrames.length >= _scrollingCaptureMaxFrames) {
+    final frameLimit = _scrollingCaptureFrameLimit();
+    if (scrollingCaptureFrames.length >= frameLimit) {
       _logScrollingCaptureTiming(traceId, 'append_dropped_max_frames', {
         'elapsedMs': appendWatch.elapsedMilliseconds,
         'frameIndex': frameIndex,
         'frameCount': scrollingCaptureFrames.length,
+        'frameLimit': frameLimit,
       });
       return;
     }
@@ -814,6 +831,24 @@ class WoxScreenshotController extends GetxController {
       isScrollingCaptureUpdating.value = false;
       _logScrollingCaptureTiming(traceId, 'append_finished', {'elapsedMs': appendWatch.elapsedMilliseconds, 'frameIndex': frameIndex, 'frameCount': scrollingCaptureFrames.length});
     }
+  }
+
+  int _scrollingCaptureFrameLimit() {
+    if (scrollingCaptureFrames.isEmpty) {
+      return _scrollingCaptureMaximumFrameLimit;
+    }
+
+    final firstFrame = scrollingCaptureFrames.first;
+    final framePixels = firstFrame.pixelWidth * firstFrame.pixelHeight;
+    if (framePixels <= 0) {
+      return _scrollingCaptureMinimumFrameLimit;
+    }
+
+    // The old fixed frame cap was too small for narrow captures. Deriving the limit from the first
+    // captured frame's pixel count preserves the previous safety boundary for large selections while
+    // giving small selections more room before preview/export updates are intentionally stopped.
+    final pixelBudgetLimit = (_scrollingCaptureStoredPixelBudget / framePixels).floor();
+    return pixelBudgetLimit.clamp(_scrollingCaptureMinimumFrameLimit, _scrollingCaptureMaximumFrameLimit).toInt();
   }
 
   double _scrollDeltaToWheelSteps(double scrollDeltaY) {
