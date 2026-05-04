@@ -230,17 +230,27 @@ void registerLauncherScreenshotSmokeTests() {
       screenshotController.addShapeAnnotation(ScreenshotAnnotationType.rect, Rect.fromLTWH(selectionRect.left + 18, selectionRect.top + 16, 90, 44));
       screenshotController.addShapeAnnotation(ScreenshotAnnotationType.ellipse, Rect.fromLTWH(selectionRect.left + 130, selectionRect.top + 40, 76, 50));
       screenshotController.addArrowAnnotation(selectionRect.topLeft + const Offset(24, 96), selectionRect.topLeft + const Offset(160, 108));
+      screenshotController.setAnnotationCreationColor(const Color(0xFFF9C74F));
+      screenshotController.setMosaicBrushRadius(screenshotMosaicBrushRadii.last);
+      final mosaicAnnotationId = screenshotController.addMosaicAnnotation(selectionRect.topLeft + const Offset(215, 78));
+      screenshotController.appendMosaicPoint(mosaicAnnotationId, selectionRect.topLeft + const Offset(255, 110));
+      expect(screenshotController.annotationById(mosaicAnnotationId)?.color, equals(const Color(0xFF29FF72)));
+      expect(screenshotController.annotationById(mosaicAnnotationId)?.mosaicRadius, equals(screenshotMosaicBrushRadii.last));
+      screenshotController.selectAnnotation(mosaicAnnotationId);
+      screenshotController.updateSelectedMosaicBrushRadius(screenshotMosaicBrushRadii.first);
+      expect(screenshotController.annotationById(mosaicAnnotationId)?.mosaicRadius, equals(screenshotMosaicBrushRadii.first));
+      screenshotController.selectAnnotation(null);
       screenshotController.startTextDraft(selectionRect.topLeft + const Offset(32, 20));
       screenshotController.textDraftController.text = 'Smoke';
       screenshotController.commitTextDraft();
-      expect(screenshotController.annotations.length, equals(4));
+      expect(screenshotController.annotations.length, equals(5));
 
       screenshotController.undoAnnotation();
-      expect(screenshotController.annotations.length, equals(3));
+      expect(screenshotController.annotations.length, equals(4));
       screenshotController.startTextDraft(selectionRect.topLeft + const Offset(32, 20));
       screenshotController.textDraftController.text = 'Smoke';
       screenshotController.commitTextDraft();
-      expect(screenshotController.annotations.length, equals(4));
+      expect(screenshotController.annotations.length, equals(5));
 
       // Bug fix: macOS integration smoke can render the floating screenshot toolbar
       // outside the reliable hit-test root after repeated window handoffs. Confirm

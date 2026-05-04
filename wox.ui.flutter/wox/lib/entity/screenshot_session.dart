@@ -6,9 +6,17 @@ import 'package:wox/entity/wox_image.dart';
 
 enum ScreenshotSessionStage { idle, loading, selecting, annotating, scrolling, exporting, done, cancelled, failed }
 
-enum ScreenshotTool { select, rect, ellipse, arrow, text }
+enum ScreenshotTool { select, rect, ellipse, arrow, text, mosaic }
 
-enum ScreenshotAnnotationType { rect, ellipse, arrow, text }
+enum ScreenshotAnnotationType { rect, ellipse, arrow, text, mosaic }
+
+// Mosaic uses fixed brush geometry so preview, editing hit tests, and export all agree on the
+// privacy mask. Keeping these values in the session model avoids duplicated magic numbers across
+// the controller and screenshot view.
+const List<double> screenshotMosaicBrushRadii = <double>[10, 18, 28];
+const double screenshotMosaicBrushRadius = 18;
+const double screenshotMosaicBlockSize = 12;
+const double screenshotMosaicPointSpacing = 7;
 
 Map<String, dynamic>? _normalizeJsonMap(dynamic value) {
   if (value is Map<String, dynamic>) {
@@ -379,6 +387,8 @@ class ScreenshotAnnotation {
     this.color = const Color(0xFFFF5B36),
     this.strokeWidth = 3,
     this.fontSize = 20,
+    this.points = const <Offset>[],
+    this.mosaicRadius = screenshotMosaicBrushRadius,
   });
 
   final String id;
@@ -390,13 +400,27 @@ class ScreenshotAnnotation {
   final Color color;
   final double strokeWidth;
   final double fontSize;
+  // Mosaic annotations need path geometry rather than a bounding rect because the user paints an
+  // irregular privacy mask. Other annotation types leave this empty.
+  final List<Offset> points;
+  final double mosaicRadius;
 
   static const Object _unset = Object();
 
   // Screenshot editing now mutates existing annotations in place, so the model needs a local
   // copy helper instead of rebuilding ad-hoc objects in the view layer. Keeping the update logic
   // next to the annotation fields avoids duplicated constructor branches for every edit action.
-  ScreenshotAnnotation copyWith({Object? rect = _unset, Object? start = _unset, Object? end = _unset, Object? text = _unset, Color? color, double? strokeWidth, double? fontSize}) {
+  ScreenshotAnnotation copyWith({
+    Object? rect = _unset,
+    Object? start = _unset,
+    Object? end = _unset,
+    Object? text = _unset,
+    Color? color,
+    double? strokeWidth,
+    double? fontSize,
+    List<Offset>? points,
+    double? mosaicRadius,
+  }) {
     return ScreenshotAnnotation(
       id: id,
       type: type,
@@ -407,6 +431,8 @@ class ScreenshotAnnotation {
       color: color ?? this.color,
       strokeWidth: strokeWidth ?? this.strokeWidth,
       fontSize: fontSize ?? this.fontSize,
+      points: points ?? this.points,
+      mosaicRadius: mosaicRadius ?? this.mosaicRadius,
     );
   }
 }

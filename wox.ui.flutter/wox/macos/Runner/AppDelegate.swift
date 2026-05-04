@@ -67,6 +67,71 @@ private func scrollingCaptureControlsWindowLevel() -> NSWindow.Level {
   return NSWindow.Level(rawValue: screenshotWindowLevel().rawValue + 1)
 }
 
+private var screenshotDiagonalResizeCursorCache: [String: NSCursor] = [:]
+
+private func screenshotDiagonalResizeCursor(kind: String) -> NSCursor {
+  if let cachedCursor = screenshotDiagonalResizeCursorCache[kind] {
+    return cachedCursor
+  }
+
+  let cursor = makeScreenshotDiagonalResizeCursor(kind: kind)
+  screenshotDiagonalResizeCursorCache[kind] = cursor
+  return cursor
+}
+
+private func makeScreenshotDiagonalResizeCursor(kind: String) -> NSCursor {
+  let size: CGFloat = 24
+  let margin: CGFloat = 4.5
+  let image = NSImage(size: NSSize(width: size, height: size))
+
+  image.lockFocus()
+  defer { image.unlockFocus() }
+
+  guard let context = NSGraphicsContext.current?.cgContext else {
+    return NSCursor.arrow
+  }
+
+  let isNorthEastSouthWest = kind == "resizeUpRightDownLeft"
+  let start = isNorthEastSouthWest ? CGPoint(x: size - margin, y: size - margin) : CGPoint(x: margin, y: size - margin)
+  let end = isNorthEastSouthWest ? CGPoint(x: margin, y: margin) : CGPoint(x: size - margin, y: margin)
+
+  func addArrowHead(tip: CGPoint, toward: CGPoint) {
+    let dx = toward.x - tip.x
+    let dy = toward.y - tip.y
+    let length = max(1, sqrt(dx * dx + dy * dy))
+    let unit = CGPoint(x: dx / length, y: dy / length)
+    let perpendicular = CGPoint(x: -unit.y, y: unit.x)
+    let base = CGPoint(x: tip.x + unit.x * 6, y: tip.y + unit.y * 6)
+    let sideA = CGPoint(x: base.x + perpendicular.x * 4.5, y: base.y + perpendicular.y * 4.5)
+    let sideB = CGPoint(x: base.x - perpendicular.x * 4.5, y: base.y - perpendicular.y * 4.5)
+
+    context.move(to: tip)
+    context.addLine(to: sideA)
+    context.move(to: tip)
+    context.addLine(to: sideB)
+  }
+
+  func strokeCursor(color: NSColor, lineWidth: CGFloat) {
+    context.setStrokeColor(color.cgColor)
+    context.setLineWidth(lineWidth)
+    context.setLineCap(.round)
+    context.setLineJoin(.round)
+    context.beginPath()
+    context.move(to: start)
+    context.addLine(to: end)
+    addArrowHead(tip: start, toward: end)
+    addArrowHead(tip: end, toward: start)
+    context.strokePath()
+  }
+
+  // Flutter's macOS engine maps unsupported cursor names back to the arrow cursor, including the
+  // diagonal resize names used by screenshot corner handles. Drawing a tiny AppKit cursor here fixes
+  // that platform gap without changing the standard cursor behavior on Windows and Linux.
+  strokeCursor(color: NSColor.black.withAlphaComponent(0.82), lineWidth: 4.2)
+  strokeCursor(color: NSColor.white, lineWidth: 2.1)
+  return NSCursor(image: image, hotSpot: NSPoint(x: size / 2, y: size / 2))
+}
+
 private func applyScreenshotWindowPresentation(to window: NSWindow, level: NSWindow.Level) {
   window.collectionBehavior = screenshotCollectionBehavior()
   if let panel = window as? NSPanel {
@@ -1997,6 +2062,20 @@ class AppDelegate: FlutterAppDelegate {
 
         case "debugCaptureWorkspaceState":
           result(self?.debugCaptureWorkspaceState(for: window))
+
+        case "activateScreenshotDiagonalResizeCursor":
+          if let args = call.arguments as? [String: Any],
+            let kind = args["kind"] as? String,
+            kind == "resizeUpLeftDownRight" || kind == "resizeUpRightDownLeft"
+          {
+            // Bug fix: the Flutter macOS engine falls back to the arrow cursor for diagonal resize
+            // names, so screenshot corner handles looked inactive even though dragging worked. Use
+            // a Wox-owned native cursor only for those two missing diagonal directions.
+            screenshotDiagonalResizeCursor(kind: kind).set()
+            result(nil)
+          } else {
+            result(FlutterError(code: "INVALID_ARGS", message: "Invalid screenshot diagonal resize cursor", details: nil))
+          }
 
         case "setSize":
           if let args = call.arguments as? [String: Any],

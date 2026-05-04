@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -24,6 +26,7 @@ const Key screenshotToolRectKey = Key('screenshot-tool-rect');
 const Key screenshotToolEllipseKey = Key('screenshot-tool-ellipse');
 const Key screenshotToolArrowKey = Key('screenshot-tool-arrow');
 const Key screenshotToolTextKey = Key('screenshot-tool-text');
+const Key screenshotToolMosaicKey = Key('screenshot-tool-mosaic');
 
 const List<Color> _annotationPalette = <Color>[Color(0xFFFF5B36), Color(0xFFF9C74F), Color(0xFF29FF72), Color(0xFF4DA3FF), Color(0xFFC77DFF), Color(0xFFFFFFFF)];
 const double _selectionHandleSize = 12;
@@ -31,6 +34,52 @@ const double _annotationHandleSize = 12;
 const double _selectionEdgeTolerance = 7;
 const double _textDraftMaxWidth = 480;
 const double _scrollingPreviewMaxWidth = 320;
+const MethodChannel _macOSWindowManagerChannel = MethodChannel('com.wox.macos_window_manager');
+const MouseCursor _macOSResizeUpLeftDownRightCursor = _MacOSDiagonalResizeCursor('resizeUpLeftDownRight');
+const MouseCursor _macOSResizeUpRightDownLeftCursor = _MacOSDiagonalResizeCursor('resizeUpRightDownLeft');
+
+class _MacOSDiagonalResizeCursor extends MouseCursor {
+  const _MacOSDiagonalResizeCursor(this.kind);
+
+  final String kind;
+
+  @override
+  MouseCursorSession createSession(int device) => _MacOSDiagonalResizeCursorSession(this, device);
+
+  @override
+  String get debugDescription => 'MacOSDiagonalResizeCursor($kind)';
+
+  @override
+  bool operator ==(Object other) => other is _MacOSDiagonalResizeCursor && other.kind == kind;
+
+  @override
+  int get hashCode => kind.hashCode;
+}
+
+class _MacOSDiagonalResizeCursorSession extends MouseCursorSession {
+  _MacOSDiagonalResizeCursorSession(_MacOSDiagonalResizeCursor super.cursor, super.device);
+
+  @override
+  _MacOSDiagonalResizeCursor get cursor => super.cursor as _MacOSDiagonalResizeCursor;
+
+  @override
+  Future<void> activate() async {
+    try {
+      // Flutter's macOS cursor table does not map the diagonal resize cursors, so selection corner
+      // handles used to activate a plain arrow even though the hit test was correct. Route only
+      // those screenshot-specific diagonal handles through a native cursor image while keeping the
+      // normal system cursor path for supported edge resize cursors.
+      await _macOSWindowManagerChannel.invokeMethod<void>('activateScreenshotDiagonalResizeCursor', {'kind': cursor.kind});
+    } on MissingPluginException {
+      // Widget tests and older runners do not install the native cursor method. Leaving activation
+      // as a no-op keeps the interaction code testable and lets the next supported cursor update
+      // restore the platform cursor without crashing the screenshot session.
+    }
+  }
+
+  @override
+  void dispose() {}
+}
 
 class WoxScreenshotView extends StatefulWidget {
   const WoxScreenshotView({super.key});
@@ -39,7 +88,18 @@ class WoxScreenshotView extends StatefulWidget {
   State<WoxScreenshotView> createState() => _WoxScreenshotViewState();
 }
 
-enum _InteractionMode { createSelection, moveSelection, resizeSelection, createAnnotation, moveAnnotation, resizeShapeAnnotation, moveArrowStart, moveArrowEnd, moveText }
+enum _InteractionMode {
+  createSelection,
+  moveSelection,
+  resizeSelection,
+  createAnnotation,
+  paintMosaic,
+  moveAnnotation,
+  resizeShapeAnnotation,
+  moveArrowStart,
+  moveArrowEnd,
+  moveText,
+}
 
 enum _ResizeHandle { topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left }
 
@@ -56,6 +116,7 @@ class _AnnotationHitTarget {
 class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   final controller = Get.find<WoxScreenshotController>();
   final focusNode = FocusNode(debugLabel: 'screenshot-workspace');
+  final _mosaicBrushCenter = ValueNotifier<Offset?>(null);
   bool _isCancellingSession = false;
   bool _isConfirmingSession = false;
   bool _isScrollingCaptureSession = false;
@@ -70,6 +131,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   Offset? _annotationStart;
   Offset? _annotationEnd;
   String? _dragAnnotationId;
+  String? _mosaicAnnotationId;
   ScreenshotAnnotation? _annotationAtDragStart;
   MouseCursor _hoverCursor = SystemMouseCursors.basic;
 
@@ -87,6 +149,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleGlobalScreenshotKeyEvent);
+    _mosaicBrushCenter.dispose();
     focusNode.dispose();
     super.dispose();
   }
@@ -265,7 +328,10 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         MouseRegion(
           cursor: _hoverCursor,
           onHover: (event) => _handleHover(event.localPosition),
-          onExit: (_) => _setHoverCursor(SystemMouseCursors.basic),
+          onExit: (_) {
+            _setHoverCursor(SystemMouseCursors.basic);
+            _setMosaicBrushCenter(null);
+          },
           child: Listener(
             onPointerSignal: _handlePointerSignal,
             child: GestureDetector(
@@ -290,6 +356,8 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                     final textDraftPosition = controller.textDraftPosition.value;
                     final selectedAnnotationId = controller.selectedAnnotationId.value;
                     final isScrollingCapture = controller.stage.value == ScreenshotSessionStage.scrolling;
+                    final currentTool = controller.currentTool.value;
+                    final mosaicBrushRadius = controller.mosaicBrushRadius.value;
 
                     return Stack(
                       children: [
@@ -307,6 +375,8 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                               child: CustomPaint(
                                 painter: _AnnotationPainter(
                                   annotations: controller.annotations.toList(),
+                                  snapshots: controller.displaySnapshots.toList(),
+                                  decodedImages: controller.decodedDisplayImages,
                                   canvasOrigin: virtualBounds.topLeft,
                                   selectionClipRect: selectionLocalRect,
                                   draftRect: _annotationDraftRect,
@@ -316,6 +386,29 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                                   previewColor: controller.annotationCreationColor.value,
                                   selectedAnnotationId: selectedAnnotationId,
                                   editingTextAnnotationId: controller.editingTextAnnotationId.value,
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (selectionRect != null && !isScrollingCapture && currentTool == ScreenshotTool.mosaic)
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              // The brush-size marker is isolated from the annotation painter. Hover
+                              // updates now repaint only this tiny overlay instead of rebuilding the
+                              // screenshot workspace, so the circle can stay visible without making
+                              // the mosaic tool lag behind the mouse.
+                              child: RepaintBoundary(
+                                child: ValueListenableBuilder<Offset?>(
+                                  valueListenable: _mosaicBrushCenter,
+                                  builder: (context, center, child) {
+                                    return CustomPaint(
+                                      painter: _MosaicBrushMarkerPainter(
+                                        center: center == null ? null : center - virtualBounds.topLeft,
+                                        radius: mosaicBrushRadius,
+                                        color: WoxScreenshotController.mosaicAnnotationUiColor,
+                                      ),
+                                    );
+                                  },
                                 ),
                               ),
                             ),
@@ -439,7 +532,6 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     final isScrollingCapture = controller.stage.value == ScreenshotSessionStage.scrolling;
     final canConfirm = selectionRect != null && selectionRect.width >= 1 && selectionRect.height >= 1 && (!isScrollingCapture || controller.scrollingCaptureFrames.isNotEmpty);
     final selectionLocalRect = selectionRect?.shift(-virtualBounds.topLeft);
-    final creationColor = controller.annotationCreationColor.value;
     final hideAnnotationToolbar = controller.activeRequest?.hideAnnotationToolbar ?? false;
     final showBuiltInPinAction = controller.activeRequest?.callerIcon == null && !hideAnnotationToolbar;
     final canPin = showBuiltInPinAction && selectionRect != null && !isScrollingCapture && !_isPinningSession;
@@ -514,8 +606,19 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                     tooltip: controller.tr('ui_screenshot_tool_arrow'),
                     onPressed: () => controller.setTool(ScreenshotTool.arrow),
                   ),
-                  const SizedBox(width: 10),
-                  _buildColorPalette(selectedColor: creationColor, onColorSelected: controller.setAnnotationCreationColor, compact: true),
+                  _ToolButton(
+                    key: screenshotToolMosaicKey,
+                    iconBuilder: (foreground) => _MosaicToolIcon(color: foreground),
+                    selected: currentTool == ScreenshotTool.mosaic,
+                    activateOnTapDown: true,
+                    tooltip: controller.tr('ui_screenshot_tool_mosaic'),
+                    onPressed: () {
+                      // Tool changes usually happen over the toolbar, not the canvas. Clear any
+                      // stale marker so re-entering mosaic mode waits for the next real canvas hover.
+                      _setMosaicBrushCenter(null);
+                      controller.setTool(ScreenshotTool.mosaic);
+                    },
+                  ),
                   const SizedBox(width: 6),
                   _ToolButton(
                     key: screenshotUndoKey,
@@ -592,22 +695,26 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   Widget _buildEditBar(Rect virtualBounds) {
     final selectionRect = controller.selectionRect;
     final selectedAnnotation = controller.selectedAnnotation;
-    if (selectionRect == null || selectedAnnotation == null) {
+    final currentTool = controller.currentTool.value;
+    final showCreationConfig = selectedAnnotation == null && _isAnnotationCreationTool(currentTool);
+    if (selectionRect == null || (selectedAnnotation == null && !showCreationConfig)) {
       return const SizedBox.shrink();
     }
 
     final selectionLocalRect = selectionRect.shift(-virtualBounds.topLeft);
-    final annotationLocalRect = screenshotAnnotationBounds(selectedAnnotation)?.shift(-virtualBounds.topLeft);
+    final annotationLocalRect = selectedAnnotation == null ? null : screenshotAnnotationBounds(selectedAnnotation)?.shift(-virtualBounds.topLeft);
+    final isMosaicConfig = selectedAnnotation?.type == ScreenshotAnnotationType.mosaic || (selectedAnnotation == null && currentTool == ScreenshotTool.mosaic);
+    final editBarWidth = isMosaicConfig ? 116.0 : 92.0;
 
     return Positioned.fill(
       child: CustomSingleChildLayout(
         delegate: _SelectionEditBarLayoutDelegate(selectionRect: selectionLocalRect, anchorRect: annotationLocalRect),
-        // Existing annotations now use a dedicated edit bar anchored beside the selection frame.
-        // Keeping edit controls outside the captured content avoids covering the annotation while
-        // still keeping color/delete/font actions spatially tied to the selected element.
+        // The side bar now serves both creation tools and selected annotations. Clicking a bottom
+        // tool should expose its creation settings before drawing, while clicking an existing mark
+        // still reuses the same space for edit/delete actions anchored near that annotation.
         child: Container(
           key: screenshotEditBarKey,
-          width: 92,
+          width: editBarWidth,
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
           decoration: BoxDecoration(
             color: const Color(0xD91B1715),
@@ -616,29 +723,63 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildColorPalette(selectedColor: selectedAnnotation.color, onColorSelected: controller.updateSelectedAnnotationColor),
-              if (selectedAnnotation.type == ScreenshotAnnotationType.text) ...[
-                const SizedBox(height: 10),
-                _EditActionButton(icon: Icons.remove, tooltip: controller.tr('ui_screenshot_tool_decrease_text'), onPressed: () => controller.updateSelectedTextFontSize(-2)),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Text('${selectedAnnotation.fontSize.round()}', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
-                ),
-                _EditActionButton(icon: Icons.add, tooltip: controller.tr('ui_screenshot_tool_increase_text'), onPressed: () => controller.updateSelectedTextFontSize(2)),
-              ],
-              const SizedBox(height: 10),
-              _EditActionButton(
-                icon: Icons.delete_outline,
-                color: const Color(0xFFFF6B6B),
-                tooltip: controller.tr('ui_screenshot_tool_delete_annotation'),
-                onPressed: controller.deleteSelectedAnnotation,
-              ),
-            ],
+            children: selectedAnnotation != null ? _buildSelectedAnnotationEditActions(selectedAnnotation) : _buildCreationToolEditActions(currentTool),
           ),
         ),
       ),
     );
+  }
+
+  List<Widget> _buildSelectedAnnotationEditActions(ScreenshotAnnotation selectedAnnotation) {
+    final actions = <Widget>[];
+
+    if (selectedAnnotation.type != ScreenshotAnnotationType.mosaic) {
+      // Annotation color editing belongs to the selected annotation's side bar. Mosaic is excluded
+      // because its visible result is pixelation rather than a colored stroke, so size is the only
+      // user-facing setting that changes the privacy mask.
+      actions.add(_buildColorPalette(selectedColor: selectedAnnotation.color, onColorSelected: controller.updateSelectedAnnotationColor));
+    }
+
+    if (selectedAnnotation.type == ScreenshotAnnotationType.mosaic) {
+      actions.addAll([_buildMosaicBrushSizePicker(selectedRadius: selectedAnnotation.mosaicRadius, onRadiusSelected: controller.updateSelectedMosaicBrushRadius)]);
+    }
+
+    if (selectedAnnotation.type == ScreenshotAnnotationType.text) {
+      actions.addAll([
+        const SizedBox(height: 10),
+        _EditActionButton(icon: Icons.remove, tooltip: controller.tr('ui_screenshot_tool_decrease_text'), onPressed: () => controller.updateSelectedTextFontSize(-2)),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Text('${selectedAnnotation.fontSize.round()}', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+        ),
+        _EditActionButton(icon: Icons.add, tooltip: controller.tr('ui_screenshot_tool_increase_text'), onPressed: () => controller.updateSelectedTextFontSize(2)),
+      ]);
+    }
+
+    actions.addAll([
+      const SizedBox(height: 10),
+      _EditActionButton(
+        icon: Icons.delete_outline,
+        color: const Color(0xFFFF6B6B),
+        tooltip: controller.tr('ui_screenshot_tool_delete_annotation'),
+        onPressed: controller.deleteSelectedAnnotation,
+      ),
+    ]);
+    return actions;
+  }
+
+  List<Widget> _buildCreationToolEditActions(ScreenshotTool currentTool) {
+    if (currentTool == ScreenshotTool.mosaic) {
+      // Mosaic creation exposes brush size only. Keeping color out of this path avoids implying
+      // that pixelation can be tinted, while the fixed green marker still communicates the radius.
+      return <Widget>[_buildMosaicBrushSizePicker(selectedRadius: controller.mosaicBrushRadius.value, onRadiusSelected: controller.setMosaicBrushRadius)];
+    }
+
+    return <Widget>[
+      // Creation settings use the same side bar so users can choose color first, then draw. These
+      // controls update the defaults used by the next annotation instead of editing an existing one.
+      _buildColorPalette(selectedColor: controller.annotationCreationColor.value, onColorSelected: controller.setAnnotationCreationColor),
+    ];
   }
 
   Widget _buildScrollingPreview(Rect selectionLocalRect) {
@@ -709,6 +850,32 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
             .toList();
 
     return SizedBox(width: compact ? 56 : 72, child: Wrap(spacing: compact ? 4 : 8, runSpacing: compact ? 4 : 8, alignment: WrapAlignment.center, children: paletteChildren));
+  }
+
+  Widget _buildMosaicBrushSizePicker({required double selectedRadius, required ValueChanged<double> onRadiusSelected}) {
+    final options = <({double radius, String tooltip})>[
+      (radius: screenshotMosaicBrushRadii[0], tooltip: controller.tr('ui_screenshot_tool_mosaic_brush_small')),
+      (radius: screenshotMosaicBrushRadii[1], tooltip: controller.tr('ui_screenshot_tool_mosaic_brush_medium')),
+      (radius: screenshotMosaicBrushRadii[2], tooltip: controller.tr('ui_screenshot_tool_mosaic_brush_large')),
+    ];
+
+    // The picker is shared by mosaic creation and selected mosaic editing. Compact circle buttons
+    // keep the toolbox icon-driven while still making the current privacy brush radius explicit.
+    return SizedBox(
+      width: 96,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children:
+            options.map((option) {
+              return _MosaicBrushSizeButton(
+                radius: option.radius,
+                selected: (selectedRadius - option.radius).abs() < 0.1,
+                tooltip: option.tooltip,
+                onPressed: () => onRadiusSelected(option.radius),
+              );
+            }).toList(),
+      ),
+    );
   }
 
   Widget _buildSelectionFrame(Rect selectionLocalRect) {
@@ -783,19 +950,26 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     }
 
     final globalPosition = _toGlobalPosition(localPosition);
+    final selectedHandleHit = _hitTestSelectedAnnotationHandle(globalPosition);
+    if (selectedHandleHit != null) {
+      // GestureDetector fires tap-down before pan-start. Ellipse corner handles sit outside the
+      // ellipse body hit region, so tap-down used to clear the selected annotation before dragging
+      // could resize it. Preserve the selected handle here and let pan-start choose the resize path.
+      return;
+    }
+
     final annotation = _hitTestAnnotationBody(globalPosition);
     if (annotation != null) {
       // Text annotations should feel editable in place. A single click now both selects the label
       // and opens the inline editor so the cursor changes to text mode immediately instead of
       // forcing the user through a separate double-click gesture.
       if (annotation.type == ScreenshotAnnotationType.text && annotation.start != null) {
-        controller.selectAnnotation(annotation.id);
+        _selectAnnotationForEdit(annotation);
         controller.startTextDraft(annotation.start!, annotationId: annotation.id, initialText: annotation.text ?? '', fontSize: annotation.fontSize, color: annotation.color);
         return;
       }
 
-      // Non-text annotations still use single-click selection without entering a secondary mode.
-      controller.selectAnnotation(annotation.id);
+      _selectAnnotationForEdit(annotation);
       return;
     }
 
@@ -806,6 +980,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
       case ScreenshotTool.rect:
       case ScreenshotTool.ellipse:
       case ScreenshotTool.arrow:
+      case ScreenshotTool.mosaic:
         controller.selectAnnotation(null);
         return;
       case ScreenshotTool.text:
@@ -878,7 +1053,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
       case ScreenshotTool.select:
         final annotationBodyHit = _hitTestAnnotationBody(globalPosition);
         if (annotationBodyHit != null) {
-          controller.selectAnnotation(annotationBodyHit.id);
+          _selectAnnotationForEdit(annotationBodyHit);
           _dragAnnotationId = annotationBodyHit.id;
           _annotationAtDragStart = annotationBodyHit;
           _interactionMode = annotationBodyHit.type == ScreenshotAnnotationType.text ? _InteractionMode.moveText : _InteractionMode.moveAnnotation;
@@ -915,6 +1090,17 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         _annotationStart = globalPosition;
         _annotationEnd = globalPosition;
         _annotationDraftRect = Rect.fromPoints(globalPosition, globalPosition);
+        break;
+      case ScreenshotTool.mosaic:
+        controller.selectAnnotation(null);
+        if (selectionRect == null || !selectionRect.contains(globalPosition)) {
+          return;
+        }
+        // Mosaic paints immediately on drag start so a short press still creates a privacy mask.
+        // The controller owns the stroke id so later drag updates append to one undoable mark.
+        _interactionMode = _InteractionMode.paintMosaic;
+        _mosaicAnnotationId = controller.addMosaicAnnotation(globalPosition);
+        _setMosaicBrushCenter(globalPosition);
         break;
       case ScreenshotTool.text:
         break;
@@ -955,8 +1141,24 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         }
         final clamped = _clampOffsetToRect(globalPosition, currentSelection);
         _annotationEnd = clamped;
-        _annotationDraftRect = Rect.fromPoints(dragStart, clamped);
+        // Holding Shift while drawing rectangle/ellipse annotations should create a true square or
+        // circle. Keep the constraint in the geometry layer so the preview and final annotation use
+        // the same rect, while arrow drawing remains free-form.
+        _annotationDraftRect =
+            _isCurrentShapeCreationTool() && HardwareKeyboard.instance.isShiftPressed
+                ? _squareRectFromAnchorAndPoint(dragStart, clamped, currentSelection)
+                : Rect.fromPoints(dragStart, clamped);
         setState(() {});
+        break;
+      case _InteractionMode.paintMosaic:
+        final currentSelection = controller.selectionRect;
+        final mosaicAnnotationId = _mosaicAnnotationId;
+        if (currentSelection == null || mosaicAnnotationId == null) {
+          break;
+        }
+        final clamped = _clampOffsetToRect(globalPosition, currentSelection);
+        _setMosaicBrushCenter(clamped);
+        controller.appendMosaicPoint(mosaicAnnotationId, clamped);
         break;
       case _InteractionMode.moveAnnotation:
         _updateDraggedAnnotation(globalPosition, dragStart);
@@ -978,7 +1180,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
 
   void _handlePanEnd() {
     final interactionMode = _interactionMode;
-    final needsOverlayRefresh = interactionMode == _InteractionMode.createAnnotation;
+    final needsOverlayRefresh = interactionMode == _InteractionMode.createAnnotation || interactionMode == _InteractionMode.paintMosaic;
     final shouldAutoConfirmSelection = interactionMode == _InteractionMode.createSelection && (controller.activeRequest?.autoConfirm ?? false);
 
     if (interactionMode == _InteractionMode.createAnnotation && _annotationStart != null && _annotationEnd != null) {
@@ -997,6 +1199,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
           break;
         case ScreenshotTool.select:
         case ScreenshotTool.text:
+        case ScreenshotTool.mosaic:
           break;
       }
     }
@@ -1010,6 +1213,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     _annotationStart = null;
     _annotationEnd = null;
     _dragAnnotationId = null;
+    _mosaicAnnotationId = null;
     _annotationAtDragStart = null;
     if (needsOverlayRefresh) {
       setState(() {});
@@ -1046,12 +1250,25 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
       return;
     }
 
-    if (_interactionMode != null || controller.currentTool.value != ScreenshotTool.select) {
+    final currentTool = controller.currentTool.value;
+    if (currentTool == ScreenshotTool.mosaic) {
+      final selectionRect = controller.selectionRect;
+      final globalPosition = _toGlobalPosition(localPosition);
+      final brushCenter = selectionRect != null && selectionRect.contains(globalPosition) ? globalPosition : null;
+      // The mosaic brush marker is updated outside setState so it can show the active radius while
+      // avoiding the full-workspace hover rebuild that previously made the tool feel delayed.
+      _setMosaicBrushCenter(brushCenter);
+      _setHoverCursor(brushCenter == null ? SystemMouseCursors.basic : SystemMouseCursors.precise);
+      return;
+    }
+
+    if (_interactionMode != null || currentTool != ScreenshotTool.select) {
       _setHoverCursor(SystemMouseCursors.basic);
       return;
     }
 
     final globalPosition = _toGlobalPosition(localPosition);
+    final selectionRect = controller.selectionRect;
     final selectedHandleHit = _hitTestSelectedAnnotationHandle(globalPosition);
     if (selectedHandleHit != null) {
       _setHoverCursor(selectedHandleHit.cursor);
@@ -1068,7 +1285,6 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
       return;
     }
 
-    final selectionRect = controller.selectionRect;
     if (selectionRect != null) {
       final handle = _hitTestSelectionHandle(selectionRect, globalPosition);
       if (handle != null) {
@@ -1091,6 +1307,24 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     setState(() {
       _hoverCursor = cursor;
     });
+  }
+
+  void _setMosaicBrushCenter(Offset? center) {
+    if (_mosaicBrushCenter.value == center) {
+      return;
+    }
+    _mosaicBrushCenter.value = center;
+  }
+
+  void _selectAnnotationForEdit(ScreenshotAnnotation annotation) {
+    // Clicking an existing annotation is an edit intent, even when a drawing tool is still active.
+    // Switch back to select and hide transient mosaic brush UI so the annotation's side toolbox is
+    // the immediate focus for color, size, and delete changes.
+    _setMosaicBrushCenter(null);
+    if (controller.currentTool.value != ScreenshotTool.select) {
+      controller.setTool(ScreenshotTool.select);
+    }
+    controller.selectAnnotation(annotation.id);
   }
 
   void _updateDraggedAnnotation(Offset globalPosition, Offset dragStart) {
@@ -1131,6 +1365,15 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         final shiftedBounds = _shiftRectWithinBounds(textBounds, delta, currentSelection);
         controller.updateTextPosition(annotationId, start + (shiftedBounds.topLeft - textBounds.topLeft));
         break;
+      case ScreenshotAnnotationType.mosaic:
+        final mosaicBounds = screenshotAnnotationBounds(annotation);
+        if (mosaicBounds == null) {
+          return;
+        }
+        final shiftedBounds = _shiftRectWithinBounds(mosaicBounds, delta, currentSelection);
+        final clampedDelta = shiftedBounds.topLeft - mosaicBounds.topLeft;
+        controller.updateMosaicPoints(annotationId, annotation.points.map((point) => point + clampedDelta).toList(growable: false));
+        break;
     }
   }
 
@@ -1143,7 +1386,14 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
       return;
     }
 
-    controller.updateAnnotationRect(annotationId, _resizeShapeRect(annotation.rect!, handle, _clampOffsetToRect(globalPosition, currentSelection), currentSelection));
+    // Shift-resizing rectangle/ellipse annotations is an aspect-ratio constraint, not a different
+    // tool mode. Reading the current keyboard state here lets users press or release Shift mid-drag
+    // and immediately switch between free resize and square/circle scaling.
+    final constrainToSquare = HardwareKeyboard.instance.isShiftPressed;
+    controller.updateAnnotationRect(
+      annotationId,
+      _resizeShapeRect(annotation.rect!, handle, _clampOffsetToRect(globalPosition, currentSelection), currentSelection, constrainToSquare: constrainToSquare),
+    );
   }
 
   void _moveArrowEndpoint(Offset globalPosition, {required bool updateStart}) {
@@ -1225,6 +1475,8 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         return null;
       case ScreenshotAnnotationType.text:
         return null;
+      case ScreenshotAnnotationType.mosaic:
+        return null;
     }
   }
 
@@ -1267,6 +1519,8 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
       case ScreenshotAnnotationType.text:
         final bounds = screenshotAnnotationBounds(annotation);
         return bounds != null && bounds.inflate(8).contains(point);
+      case ScreenshotAnnotationType.mosaic:
+        return annotation.points.any((brushPoint) => (brushPoint - point).distance <= annotation.mosaicRadius + 4);
     }
   }
 
@@ -1320,8 +1574,8 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     return rect;
   }
 
-  Rect _resizeShapeRect(Rect original, _AnnotationHandle handle, Offset point, Rect bounds) {
-    final rect = _rectForAnnotationHandle(original, handle, point);
+  Rect _resizeShapeRect(Rect original, _AnnotationHandle handle, Offset point, Rect bounds, {required bool constrainToSquare}) {
+    final rect = constrainToSquare ? _squareRectForAnnotationHandle(original, handle, point, bounds) : _rectForAnnotationHandle(original, handle, point);
     return _clampRectToBounds(rect, bounds);
   }
 
@@ -1370,6 +1624,63 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     }
   }
 
+  Rect _squareRectForAnnotationHandle(Rect original, _AnnotationHandle handle, Offset point, Rect bounds) {
+    switch (handle) {
+      case _AnnotationHandle.topLeft:
+        return _squareRectFromAnchorAndPoint(original.bottomRight, point, bounds);
+      case _AnnotationHandle.topRight:
+        return _squareRectFromAnchorAndPoint(original.bottomLeft, point, bounds);
+      case _AnnotationHandle.bottomRight:
+        return _squareRectFromAnchorAndPoint(original.topLeft, point, bounds);
+      case _AnnotationHandle.bottomLeft:
+        return _squareRectFromAnchorAndPoint(original.topRight, point, bounds);
+      case _AnnotationHandle.top:
+        return _squareRectFromVerticalResize(original: original, point: point, bounds: bounds, resizeTop: true);
+      case _AnnotationHandle.bottom:
+        return _squareRectFromVerticalResize(original: original, point: point, bounds: bounds, resizeTop: false);
+      case _AnnotationHandle.left:
+        return _squareRectFromHorizontalResize(original: original, point: point, bounds: bounds, resizeLeft: true);
+      case _AnnotationHandle.right:
+        return _squareRectFromHorizontalResize(original: original, point: point, bounds: bounds, resizeLeft: false);
+      case _AnnotationHandle.arrowStart:
+      case _AnnotationHandle.arrowEnd:
+        return original;
+    }
+  }
+
+  Rect _squareRectFromAnchorAndPoint(Offset anchor, Offset point, Rect bounds) {
+    final dx = point.dx - anchor.dx;
+    final dy = point.dy - anchor.dy;
+    final directionX = dx < 0 ? -1.0 : 1.0;
+    final directionY = dy < 0 ? -1.0 : 1.0;
+    final maxSideX = directionX > 0 ? bounds.right - anchor.dx : anchor.dx - bounds.left;
+    final maxSideY = directionY > 0 ? bounds.bottom - anchor.dy : anchor.dy - bounds.top;
+    final side = math.min(math.max(dx.abs(), dy.abs()), math.min(maxSideX, maxSideY)).clamp(0.0, double.infinity).toDouble();
+    return Rect.fromPoints(anchor, Offset(anchor.dx + directionX * side, anchor.dy + directionY * side));
+  }
+
+  Rect _squareRectFromVerticalResize({required Rect original, required Offset point, required Rect bounds, required bool resizeTop}) {
+    final fixedY = resizeTop ? original.bottom : original.top;
+    final desiredSide = (fixedY - point.dy).abs();
+    final maxSideByHeight = resizeTop ? fixedY - bounds.top : bounds.bottom - fixedY;
+    final maxSideByWidth = 2 * math.min(original.center.dx - bounds.left, bounds.right - original.center.dx);
+    final side = math.min(desiredSide, math.min(maxSideByHeight, maxSideByWidth)).clamp(0.0, double.infinity).toDouble();
+    final top = resizeTop ? fixedY - side : fixedY;
+    final bottom = resizeTop ? fixedY : fixedY + side;
+    return Rect.fromLTRB(original.center.dx - side / 2, top, original.center.dx + side / 2, bottom);
+  }
+
+  Rect _squareRectFromHorizontalResize({required Rect original, required Offset point, required Rect bounds, required bool resizeLeft}) {
+    final fixedX = resizeLeft ? original.right : original.left;
+    final desiredSide = (fixedX - point.dx).abs();
+    final maxSideByWidth = resizeLeft ? fixedX - bounds.left : bounds.right - fixedX;
+    final maxSideByHeight = 2 * math.min(original.center.dy - bounds.top, bounds.bottom - original.center.dy);
+    final side = math.min(desiredSide, math.min(maxSideByWidth, maxSideByHeight)).clamp(0.0, double.infinity).toDouble();
+    final left = resizeLeft ? fixedX - side : fixedX;
+    final right = resizeLeft ? fixedX : fixedX + side;
+    return Rect.fromLTRB(left, original.center.dy - side / 2, right, original.center.dy + side / 2);
+  }
+
   Rect _shiftRectWithinBounds(Rect rect, Offset delta, Rect bounds) {
     var shifted = rect.shift(delta);
     if (shifted.left < bounds.left) {
@@ -1408,9 +1719,20 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     switch (handle) {
       case _ResizeHandle.topLeft:
       case _ResizeHandle.bottomRight:
+        if (Platform.isMacOS) {
+          // macOS Flutter does not provide this diagonal system cursor, but corner handles still
+          // resize diagonally. Use Wox's native screenshot cursor so the visible affordance matches
+          // the drag behavior instead of falling back to the default arrow.
+          return _macOSResizeUpLeftDownRightCursor;
+        }
         return SystemMouseCursors.resizeUpLeftDownRight;
       case _ResizeHandle.topRight:
       case _ResizeHandle.bottomLeft:
+        if (Platform.isMacOS) {
+          // Keep the macOS workaround local to diagonal corner handles; side handles already map to
+          // supported AppKit resize cursors and should keep the standard Flutter system path.
+          return _macOSResizeUpRightDownLeftCursor;
+        }
         return SystemMouseCursors.resizeUpRightDownLeft;
       case _ResizeHandle.top:
       case _ResizeHandle.bottom:
@@ -1425,9 +1747,20 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     switch (handle) {
       case _AnnotationHandle.topLeft:
       case _AnnotationHandle.bottomRight:
+        if (Platform.isMacOS) {
+          // Selected shape annotations share the same corner-resize affordance as the capture
+          // selection. Reusing the native diagonal cursor keeps annotation editing consistent with
+          // the fixed selection frame behavior.
+          return _macOSResizeUpLeftDownRightCursor;
+        }
         return SystemMouseCursors.resizeUpLeftDownRight;
       case _AnnotationHandle.topRight:
       case _AnnotationHandle.bottomLeft:
+        if (Platform.isMacOS) {
+          // Flutter's macOS cursor fallback is a plain arrow for this diagonal direction too, so
+          // shape annotation corners need the same screenshot-owned native cursor path.
+          return _macOSResizeUpRightDownLeftCursor;
+        }
         return SystemMouseCursors.resizeUpRightDownLeft;
       case _AnnotationHandle.top:
       case _AnnotationHandle.bottom:
@@ -1464,7 +1797,25 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
         return ScreenshotAnnotationType.arrow;
       case ScreenshotTool.select:
       case ScreenshotTool.text:
+      case ScreenshotTool.mosaic:
         return null;
+    }
+  }
+
+  bool _isCurrentShapeCreationTool() {
+    return controller.currentTool.value == ScreenshotTool.rect || controller.currentTool.value == ScreenshotTool.ellipse;
+  }
+
+  bool _isAnnotationCreationTool(ScreenshotTool tool) {
+    switch (tool) {
+      case ScreenshotTool.rect:
+      case ScreenshotTool.ellipse:
+      case ScreenshotTool.arrow:
+      case ScreenshotTool.text:
+      case ScreenshotTool.mosaic:
+        return true;
+      case ScreenshotTool.select:
+        return false;
     }
   }
 }
@@ -1663,7 +2014,10 @@ class _ToolButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final foreground = enabled ? (selected ? const Color(0xFF29FF72) : color) : Colors.white38;
+    // Tool buttons share one selected color so switching between annotation tools feels consistent;
+    // individual drawing previews still use the active annotation color where that color matters.
+    const activeColor = Color(0xFF29FF72);
+    final foreground = enabled ? (selected ? activeColor : color) : Colors.white38;
     final enabledAction = enabled ? onPressed : null;
     final iconWidget = iconBuilder?.call(foreground) ?? Icon(icon, color: foreground, size: 24);
 
@@ -1680,7 +2034,7 @@ class _ToolButton extends StatelessWidget {
         child: Container(
           width: 40,
           height: 40,
-          decoration: BoxDecoration(color: selected ? const Color(0x3329FF72) : Colors.transparent, borderRadius: BorderRadius.circular(10)),
+          decoration: BoxDecoration(color: selected ? activeColor.withValues(alpha: 0.2) : Colors.transparent, borderRadius: BorderRadius.circular(10)),
           child: iconWidget,
         ),
       ),
@@ -1708,6 +2062,86 @@ class _ScrollingCaptureToolIcon extends StatelessWidget {
     // users read as download/export. Keep it as a plain foreground-colored glyph so pin and
     // scrolling capture stay visually grouped with the white annotation tools.
     return Center(child: Icon(Icons.height, color: color, size: 24));
+  }
+}
+
+class _MosaicToolIcon extends StatelessWidget {
+  const _MosaicToolIcon({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    // The built-in grid icons read as layout controls. A bordered checkerboard matches common
+    // screenshot mosaic tools and mirrors the pixel blocks created by the brush itself.
+    return Center(child: CustomPaint(size: const Size.square(24), painter: _MosaicToolIconPainter(color)));
+  }
+}
+
+class _MosaicToolIconPainter extends CustomPainter {
+  const _MosaicToolIconPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cellSize = size.width / 5;
+    final fillPaint = Paint()..color = color;
+    for (var row = 0; row < 5; row++) {
+      for (var column = 0; column < 5; column++) {
+        if ((row + column).isEven) {
+          canvas.drawRect(Rect.fromLTWH(column * cellSize, row * cellSize, cellSize, cellSize), fillPaint);
+        }
+      }
+    }
+
+    final borderPaint =
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2;
+    canvas.drawRect((Offset.zero & size).deflate(1), borderPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MosaicToolIconPainter oldDelegate) {
+    return oldDelegate.color != color;
+  }
+}
+
+class _MosaicBrushSizeButton extends StatelessWidget {
+  const _MosaicBrushSizeButton({required this.radius, required this.selected, required this.tooltip, required this.onPressed});
+
+  final double radius;
+  final bool selected;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxRadius = screenshotMosaicBrushRadii.last;
+    final visualRadius = (4 + radius / maxRadius * 6).clamp(4.0, 10.0).toDouble();
+    final color = selected ? const Color(0xFF29FF72) : Colors.white70;
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 350),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(10),
+        child: SizedBox(
+          width: 32,
+          height: 32,
+          child: Center(
+            child: Container(
+              width: visualRadius * 2,
+              height: visualRadius * 2,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: color.withValues(alpha: selected ? 0.3 : 0.16), border: Border.all(color: color, width: selected ? 2 : 1.5)),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1899,9 +2333,51 @@ class _ScrollingPreviewPainter extends CustomPainter {
   }
 }
 
+class _MosaicBrushMarkerPainter extends CustomPainter {
+  const _MosaicBrushMarkerPainter({required this.center, required this.radius, required this.color});
+
+  final Offset? center;
+  final double radius;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final markerCenter = center;
+    if (markerCenter == null) {
+      return;
+    }
+
+    final fill =
+        Paint()
+          ..color = color.withValues(alpha: 0.12)
+          ..style = PaintingStyle.fill;
+    final darkStroke =
+        Paint()
+          ..color = const Color(0xAA000000)
+          ..strokeWidth = 3
+          ..style = PaintingStyle.stroke;
+    final colorStroke =
+        Paint()
+          ..color = color
+          ..strokeWidth = 2
+          ..style = PaintingStyle.stroke;
+
+    canvas.drawCircle(markerCenter, radius, fill);
+    canvas.drawCircle(markerCenter, radius, darkStroke);
+    canvas.drawCircle(markerCenter, radius, colorStroke);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MosaicBrushMarkerPainter oldDelegate) {
+    return oldDelegate.center != center || oldDelegate.radius != radius || oldDelegate.color != color;
+  }
+}
+
 class _AnnotationPainter extends CustomPainter {
   _AnnotationPainter({
     required this.annotations,
+    required this.snapshots,
+    required this.decodedImages,
     required this.canvasOrigin,
     required this.selectionClipRect,
     required this.draftRect,
@@ -1914,6 +2390,8 @@ class _AnnotationPainter extends CustomPainter {
   });
 
   final List<ScreenshotAnnotation> annotations;
+  final List<DisplaySnapshot> snapshots;
+  final Map<String, ui.Image> decodedImages;
   final Offset canvasOrigin;
   final Rect? selectionClipRect;
   final Rect? draftRect;
@@ -1927,11 +2405,12 @@ class _AnnotationPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final visibleAnnotations = editingTextAnnotationId == null ? annotations : annotations.where((annotation) => annotation.id != editingTextAnnotationId).toList(growable: false);
+    final mosaicSources = _buildMosaicSources();
 
     // Inline text editing paints the caret field directly above the annotation. Hiding the source
     // text while that editor is active prevents the stale rendered label from peeking through and
     // keeps editing visually identical to the non-editing state apart from the caret itself.
-    paintWorkspaceAnnotations(canvas, annotations: visibleAnnotations, canvasOrigin: canvasOrigin, selectionClipRect: selectionClipRect);
+    paintWorkspaceAnnotations(canvas, annotations: visibleAnnotations, canvasOrigin: canvasOrigin, selectionClipRect: selectionClipRect, mosaicSources: mosaicSources);
     if (draftType != null) {
       final previewAnnotations = <ScreenshotAnnotation>[];
       if (draftType == ScreenshotAnnotationType.arrow && draftStart != null && draftEnd != null) {
@@ -1939,7 +2418,7 @@ class _AnnotationPainter extends CustomPainter {
       } else if (draftRect != null) {
         previewAnnotations.add(ScreenshotAnnotation(id: 'draft-shape', type: draftType!, rect: draftRect, color: previewColor));
       }
-      paintWorkspaceAnnotations(canvas, annotations: previewAnnotations, canvasOrigin: canvasOrigin, selectionClipRect: selectionClipRect);
+      paintWorkspaceAnnotations(canvas, annotations: previewAnnotations, canvasOrigin: canvasOrigin, selectionClipRect: selectionClipRect, mosaicSources: mosaicSources);
     }
 
     ScreenshotAnnotation? selectedAnnotation;
@@ -1954,6 +2433,27 @@ class _AnnotationPainter extends CustomPainter {
     if (selectedAnnotation != null) {
       _paintSelectedAnnotationControls(canvas, selectedAnnotation, canvasOrigin);
     }
+  }
+
+  List<ScreenshotMosaicSource> _buildMosaicSources() {
+    final sources = <ScreenshotMosaicSource>[];
+    for (final snapshot in snapshots) {
+      final image = decodedImages[snapshot.displayId];
+      if (image == null) {
+        continue;
+      }
+
+      // The preview painter reuses the controller's decoded images so the mosaic mask
+      // pixelates the same display pixels that the export path later writes to the PNG.
+      sources.add(
+        ScreenshotMosaicSource(
+          image: image,
+          sourceRect: Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+          destinationRect: snapshot.logicalBounds.toRect().shift(-canvasOrigin),
+        ),
+      );
+    }
+    return sources;
   }
 
   void _paintSelectedAnnotationControls(Canvas canvas, ScreenshotAnnotation annotation, Offset origin) {
@@ -1995,6 +2495,21 @@ class _AnnotationPainter extends CustomPainter {
         break;
       case ScreenshotAnnotationType.text:
         break;
+      case ScreenshotAnnotationType.mosaic:
+        final bounds = screenshotAnnotationBounds(annotation)?.shift(-origin);
+        if (bounds == null) {
+          return;
+        }
+        // Mosaic annotations do not have resize handles because changing the brush footprint after
+        // drawing would make the privacy mask unpredictable; show a subtle color-matched outline instead.
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(bounds.inflate(2), const Radius.circular(8)),
+          Paint()
+            ..color = annotation.color
+            ..strokeWidth = 1.5
+            ..style = PaintingStyle.stroke,
+        );
+        break;
     }
   }
 
@@ -2032,12 +2547,20 @@ class _AnnotationPainter extends CustomPainter {
         oldDelegate.draftEnd != draftEnd ||
         oldDelegate.draftType != draftType ||
         oldDelegate.previewColor != previewColor ||
+        oldDelegate.snapshots != snapshots ||
+        oldDelegate.decodedImages != decodedImages ||
         oldDelegate.selectedAnnotationId != selectedAnnotationId ||
         oldDelegate.editingTextAnnotationId != editingTextAnnotationId;
   }
 }
 
-void paintWorkspaceAnnotations(Canvas canvas, {required List<ScreenshotAnnotation> annotations, required Offset canvasOrigin, required Rect? selectionClipRect}) {
+void paintWorkspaceAnnotations(
+  Canvas canvas, {
+  required List<ScreenshotAnnotation> annotations,
+  required Offset canvasOrigin,
+  required Rect? selectionClipRect,
+  List<ScreenshotMosaicSource> mosaicSources = const <ScreenshotMosaicSource>[],
+}) {
   if (selectionClipRect != null) {
     // Annotation tools must stay visually inside the captured selection. Clipping the workspace
     // paint to the selection rect keeps shapes aligned with the user's drag origin and prevents
@@ -2046,7 +2569,7 @@ void paintWorkspaceAnnotations(Canvas canvas, {required List<ScreenshotAnnotatio
     canvas.clipRect(selectionClipRect);
   }
 
-  paintScreenshotAnnotations(canvas, annotations, canvasOrigin);
+  paintScreenshotAnnotations(canvas, annotations, canvasOrigin, mosaicSources: mosaicSources);
 
   if (selectionClipRect != null) {
     canvas.restore();

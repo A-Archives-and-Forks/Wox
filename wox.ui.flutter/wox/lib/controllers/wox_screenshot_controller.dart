@@ -17,6 +17,7 @@ import 'package:wox/utils/windows/window_manager.dart';
 
 class WoxScreenshotController extends GetxController {
   static const Color defaultAnnotationColor = Color(0xFFFF5B36);
+  static const Color mosaicAnnotationUiColor = Color(0xFF29FF72);
   static const double minTextFontSize = 12;
   static const double maxTextFontSize = 48;
   // A fixed 16-frame cap made narrow scrolling captures stop updating while the user was still
@@ -49,6 +50,7 @@ class WoxScreenshotController extends GetxController {
   final selectedAnnotationId = RxnString();
   final editingTextAnnotationId = RxnString();
   final annotationCreationColor = defaultAnnotationColor.obs;
+  final mosaicBrushRadius = screenshotMosaicBrushRadius.obs;
   final textDraftPosition = Rxn<Offset>();
   final textDraftFontSize = 20.0.obs;
   final textDraftColor = defaultAnnotationColor.obs;
@@ -92,6 +94,11 @@ class WoxScreenshotController extends GetxController {
   Rect? get selectionRect => selection.value?.toRect();
 
   ScreenshotAnnotation? get selectedAnnotation => annotationById(selectedAnnotationId.value);
+
+  // Mosaic preview needs the same decoded display images that export uses. Exposing this map as
+  // read-only view state keeps the pixelated preview aligned with the final PNG instead of forcing
+  // the widget tree to decode MemoryImage bytes again on every brush movement.
+  Map<String, ui.Image> get decodedDisplayImages => _decodedImages;
 
   // Scrolling capture spans Flutter scheduling, native screen capture, image decoding, overlap
   // matching, and repaint. Centralizing timing log formatting keeps every probe searchable with the
@@ -1656,6 +1663,12 @@ class WoxScreenshotController extends GetxController {
     if (tool != ScreenshotTool.text) {
       cancelTextDraft();
     }
+    if (tool != ScreenshotTool.select) {
+      // Switching to a creation tool should immediately show that tool's side settings instead of
+      // leaving a previous annotation selected. It also avoids reusing the edit-first drag path when
+      // the user's next gesture is meant to draw a new mark.
+      selectAnnotation(null);
+    }
   }
 
   void selectAnnotation(String? annotationId) {
@@ -1731,6 +1744,43 @@ class WoxScreenshotController extends GetxController {
     annotations.add(ScreenshotAnnotation(id: const UuidV4().generate(), type: ScreenshotAnnotationType.arrow, start: start, end: end, color: annotationCreationColor.value));
   }
 
+  String addMosaicAnnotation(Offset point) {
+    final annotationId = const UuidV4().generate();
+    // Mosaic is stored as one brush annotation instead of many tiny rectangles so undo, selection,
+    // and export all treat a continuous smear as the single user action that created it.
+    annotations.add(
+      ScreenshotAnnotation(
+        id: annotationId,
+        type: ScreenshotAnnotationType.mosaic,
+        points: <Offset>[point],
+        // Mosaic does not expose user color configuration because it edits the underlying pixels
+        // instead of drawing a colored mark. A fixed UI color keeps selection outlines and brush
+        // hints consistent without coupling the privacy mask to the annotation palette.
+        color: mosaicAnnotationUiColor,
+        mosaicRadius: mosaicBrushRadius.value,
+      ),
+    );
+    return annotationId;
+  }
+
+  void appendMosaicPoint(String annotationId, Offset point) {
+    _replaceAnnotationById(annotationId, (annotation) {
+      if (annotation.type != ScreenshotAnnotationType.mosaic) {
+        return annotation;
+      }
+
+      final nextPoints = _extendMosaicPoints(annotation.points, point);
+      if (nextPoints.length == annotation.points.length) {
+        return annotation;
+      }
+      return annotation.copyWith(points: nextPoints);
+    });
+  }
+
+  void updateMosaicPoints(String annotationId, List<Offset> points) {
+    _replaceAnnotationById(annotationId, (annotation) => annotation.type == ScreenshotAnnotationType.mosaic ? annotation.copyWith(points: points) : annotation);
+  }
+
   // Existing annotations now support editing in place, so controller-level update helpers keep
   // geometry and color mutations out of the widget tree and make selection-aware edits reusable.
   void updateSelectedAnnotationColor(Color color) {
@@ -1740,7 +1790,14 @@ class WoxScreenshotController extends GetxController {
       return;
     }
 
-    _replaceAnnotationById(annotationId, (annotation) => annotation.copyWith(color: color));
+    _replaceAnnotationById(annotationId, (annotation) {
+      // Mosaic annotations intentionally ignore color edits. Their only editable user setting is
+      // brush size, while the stored color remains a fixed UI affordance for outlines and handles.
+      if (annotation.type == ScreenshotAnnotationType.mosaic) {
+        return annotation;
+      }
+      return annotation.copyWith(color: color);
+    });
     if (editingTextAnnotationId.value == annotationId) {
       textDraftColor.value = color;
     }
@@ -1761,6 +1818,27 @@ class WoxScreenshotController extends GetxController {
 
   void setAnnotationCreationColor(Color color) {
     annotationCreationColor.value = color;
+  }
+
+  void setMosaicBrushRadius(double radius) {
+    // The mosaic radius is session UI state, not part of the global annotation color palette.
+    // Clamp it to supported toolbar choices so preview size, hit testing, and exported masks stay
+    // aligned even if a future caller tries to set an arbitrary value.
+    mosaicBrushRadius.value = _nearestMosaicBrushRadius(radius);
+  }
+
+  void updateSelectedMosaicBrushRadius(double radius) {
+    final annotation = selectedAnnotation;
+    if (annotation == null || annotation.type != ScreenshotAnnotationType.mosaic) {
+      setMosaicBrushRadius(radius);
+      return;
+    }
+
+    final nearestRadius = _nearestMosaicBrushRadius(radius);
+    // Existing mosaic masks now expose their size in the annotation edit bar. Updating the stored
+    // radius keeps hit testing, selection bounds, live preview, and export all using the same brush.
+    _replaceAnnotationById(annotation.id, (current) => current.copyWith(mosaicRadius: nearestRadius));
+    mosaicBrushRadius.value = nearestRadius;
   }
 
   void updateAnnotationRect(String annotationId, Rect rect) {
@@ -1937,7 +2015,17 @@ class WoxScreenshotController extends GetxController {
         localDestRect.top - (slice.intersectionRect.top - selection.top) * slice.pixelScaleY,
       );
       canvas.scale(slice.pixelScaleX, slice.pixelScaleY);
-      paintScreenshotAnnotations(canvas, annotationsToPaint, selection.topLeft);
+      // Mosaic annotations need the original display pixels while normal marks only need geometry.
+      // Passing the active export slice into the shared annotation painter keeps preview and PNG
+      // output on the same brush model without re-sampling unrelated monitor regions.
+      paintScreenshotAnnotations(
+        canvas,
+        annotationsToPaint,
+        selection.topLeft,
+        mosaicSources: <ScreenshotMosaicSource>[
+          ScreenshotMosaicSource(image: slice.image, sourceRect: slice.sourceRect, destinationRect: slice.intersectionRect.shift(-selection.topLeft)),
+        ],
+      );
       canvas.restore();
     }
 
@@ -2019,6 +2107,40 @@ class WoxScreenshotController extends GetxController {
     final right = normalized.right.clamp(bounds.left, bounds.right);
     final bottom = normalized.bottom.clamp(bounds.top, bounds.bottom);
     return Rect.fromLTRB(left, top, right, bottom);
+  }
+
+  List<Offset> _extendMosaicPoints(List<Offset> points, Offset point) {
+    if (points.isEmpty) {
+      return <Offset>[point];
+    }
+
+    final lastPoint = points.last;
+    final distance = (point - lastPoint).distance;
+    if (distance < screenshotMosaicPointSpacing) {
+      return points;
+    }
+
+    final stepCount = math.max(1, (distance / screenshotMosaicPointSpacing).ceil());
+    final nextPoints = List<Offset>.of(points);
+    // Pointer updates can be sparse when the user moves quickly. Interpolating brush centers keeps
+    // the mosaic mask continuous instead of leaving unpixelated gaps between drag events.
+    for (var step = 1; step <= stepCount; step++) {
+      nextPoints.add(Offset.lerp(lastPoint, point, step / stepCount)!);
+    }
+    return nextPoints;
+  }
+
+  double _nearestMosaicBrushRadius(double radius) {
+    var nearestRadius = screenshotMosaicBrushRadii.first;
+    var nearestDistance = (nearestRadius - radius).abs();
+    for (final option in screenshotMosaicBrushRadii.skip(1)) {
+      final distance = (option - radius).abs();
+      if (distance < nearestDistance) {
+        nearestRadius = option;
+        nearestDistance = distance;
+      }
+    }
+    return nearestRadius;
   }
 
   void _replaceAnnotationById(String annotationId, ScreenshotAnnotation Function(ScreenshotAnnotation annotation) replace) {
@@ -2128,7 +2250,22 @@ class _ScrollingCaptureOverlapCandidate {
   final double averageDifference;
 }
 
-void paintScreenshotAnnotations(Canvas canvas, List<ScreenshotAnnotation> annotations, Offset selectionOrigin) {
+class ScreenshotMosaicSource {
+  const ScreenshotMosaicSource({required this.image, required this.sourceRect, required this.destinationRect});
+
+  // A mosaic source maps real screenshot pixels to the current canvas coordinate space. The painter
+  // samples from sourceRect and stretches tiny samples into destination blocks to create pixelation.
+  final ui.Image image;
+  final Rect sourceRect;
+  final Rect destinationRect;
+}
+
+void paintScreenshotAnnotations(
+  Canvas canvas,
+  List<ScreenshotAnnotation> annotations,
+  Offset selectionOrigin, {
+  List<ScreenshotMosaicSource> mosaicSources = const <ScreenshotMosaicSource>[],
+}) {
   for (final annotation in annotations) {
     final paint =
         Paint()
@@ -2175,8 +2312,90 @@ void paintScreenshotAnnotations(Canvas canvas, List<ScreenshotAnnotation> annota
 
         textPainter.paint(canvas, start - selectionOrigin);
         break;
+      case ScreenshotAnnotationType.mosaic:
+        _paintMosaicAnnotation(canvas, annotation, selectionOrigin, mosaicSources);
+        break;
     }
   }
+}
+
+void _paintMosaicAnnotation(Canvas canvas, ScreenshotAnnotation annotation, Offset selectionOrigin, List<ScreenshotMosaicSource> mosaicSources) {
+  final bounds = _mosaicAnnotationBounds(annotation)?.shift(-selectionOrigin);
+  if (bounds == null || bounds.isEmpty) {
+    return;
+  }
+
+  final brushPath = _mosaicAnnotationPath(annotation, selectionOrigin);
+  if (mosaicSources.isEmpty) {
+    _paintMosaicFallback(canvas, brushPath, annotation.color);
+    return;
+  }
+
+  canvas.save();
+  canvas.clipPath(brushPath);
+  final paint = Paint()..filterQuality = FilterQuality.none;
+  for (final source in mosaicSources) {
+    final paintBounds = bounds.intersect(source.destinationRect);
+    if (paintBounds.isEmpty) {
+      continue;
+    }
+    _paintMosaicSource(canvas, source, paintBounds, paint);
+  }
+  canvas.restore();
+}
+
+Path _mosaicAnnotationPath(ScreenshotAnnotation annotation, Offset selectionOrigin) {
+  final radius = math.max(1.0, annotation.mosaicRadius);
+  final path = Path();
+  // The brush mask is stored as dense circles rather than a stroked Path because both Flutter
+  // preview and export need the same filled clip region for pixel replacement.
+  for (final point in annotation.points) {
+    path.addOval(Rect.fromCircle(center: point - selectionOrigin, radius: radius));
+  }
+  return path;
+}
+
+void _paintMosaicSource(Canvas canvas, ScreenshotMosaicSource source, Rect bounds, Paint paint) {
+  final blockSize = math.max(1.0, screenshotMosaicBlockSize);
+  final startX = (bounds.left / blockSize).floorToDouble() * blockSize;
+  final startY = (bounds.top / blockSize).floorToDouble() * blockSize;
+
+  for (var y = startY; y < bounds.bottom; y += blockSize) {
+    for (var x = startX; x < bounds.right; x += blockSize) {
+      final blockRect = Rect.fromLTWH(x, y, blockSize, blockSize).intersect(bounds).intersect(source.destinationRect);
+      if (blockRect.isEmpty) {
+        continue;
+      }
+      canvas.drawImageRect(source.image, _mosaicSampleRect(source, blockRect.center), blockRect, paint);
+    }
+  }
+}
+
+Rect _mosaicSampleRect(ScreenshotMosaicSource source, Offset destinationPoint) {
+  final destinationRect = source.destinationRect;
+  final sourceRect = source.sourceRect;
+  final xRatio = ((destinationPoint.dx - destinationRect.left) / destinationRect.width).clamp(0.0, 1.0).toDouble();
+  final yRatio = ((destinationPoint.dy - destinationRect.top) / destinationRect.height).clamp(0.0, 1.0).toDouble();
+  final sampleWidth = math.min(sourceRect.width, math.max(1.0, sourceRect.width / destinationRect.width));
+  final sampleHeight = math.min(sourceRect.height, math.max(1.0, sourceRect.height / destinationRect.height));
+  final centerX = sourceRect.left + sourceRect.width * xRatio;
+  final centerY = sourceRect.top + sourceRect.height * yRatio;
+  final left = (centerX - sampleWidth / 2).clamp(sourceRect.left, sourceRect.right - sampleWidth).toDouble();
+  final top = (centerY - sampleHeight / 2).clamp(sourceRect.top, sourceRect.bottom - sampleHeight).toDouble();
+  return Rect.fromLTWH(left, top, sampleWidth, sampleHeight);
+}
+
+void _paintMosaicFallback(Canvas canvas, Path brushPath, Color color) {
+  // If a test or delayed hydration path paints before source pixels are available, show the exact
+  // brush footprint in the annotation color instead of pretending to pixelate unknown content.
+  canvas.drawPath(brushPath, Paint()..color = color.withValues(alpha: 0.24));
+  canvas.drawPath(
+    brushPath,
+    Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5,
+  );
 }
 
 // Text annotations now support selection, drag, and inline editing. Sharing the exact same text
@@ -2216,5 +2435,27 @@ Rect? screenshotAnnotationBounds(ScreenshotAnnotation annotation) {
         return null;
       }
       return start & textPainter.size;
+    case ScreenshotAnnotationType.mosaic:
+      return _mosaicAnnotationBounds(annotation);
   }
+}
+
+Rect? _mosaicAnnotationBounds(ScreenshotAnnotation annotation) {
+  if (annotation.points.isEmpty) {
+    return null;
+  }
+
+  var left = annotation.points.first.dx;
+  var top = annotation.points.first.dy;
+  var right = annotation.points.first.dx;
+  var bottom = annotation.points.first.dy;
+  for (final point in annotation.points.skip(1)) {
+    left = math.min(left, point.dx);
+    top = math.min(top, point.dy);
+    right = math.max(right, point.dx);
+    bottom = math.max(bottom, point.dy);
+  }
+
+  final radius = math.max(1.0, annotation.mosaicRadius);
+  return Rect.fromLTRB(left - radius, top - radius, right + radius, bottom + radius);
 }
