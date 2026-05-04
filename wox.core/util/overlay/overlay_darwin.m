@@ -3,6 +3,8 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreVideo/CoreVideo.h>
 #import <ApplicationServices/ApplicationServices.h>
+#include <math.h>
+#include <stdlib.h>
 
 // -----------------------------------------------------------------------------
 // Options Struct (Must match CGO / Go definition)
@@ -13,6 +15,12 @@ typedef struct {
     char* message;
     unsigned char* iconData;
     int iconLen;
+    bool transparent;
+    bool hitTestIconOnly;
+    float iconX;
+    float iconY;
+    float iconWidth;
+    float iconHeight;
     bool closable;
     int stickyWindowPid; // 0 = Screen, >0 = Window
     int anchor;          // 0-8: TL,TC,TR, LC,C,RC, BL,BC,BR
@@ -41,8 +49,18 @@ static const CGFloat kTooltipGap = 6;
 static const CGFloat kTooltipPadding = 8;
 static const CGFloat kTooltipMaxWidth = 400;
 static const CGFloat kTooltipFontSize = 12;
+static const CGFloat kStickyPredictiveCorrectionThreshold = 48;
 
 extern void overlayClickCallbackCGO(char* name);
+extern void overlayDebugLogCallbackCGO(char* message);
+
+static void OverlayDebugLog(NSString *message) {
+    if (!message) return;
+    char *raw = strdup([message UTF8String]);
+    if (!raw) return;
+    overlayDebugLogCallbackCGO(raw);
+    free(raw);
+}
 
 // -----------------------------------------------------------------------------
 // Overlay Window
@@ -74,14 +92,25 @@ extern void overlayClickCallbackCGO(char* name);
 // AXObserver for tracking window movement
 @property(nonatomic, assign) AXObserverRef axObserver;
 @property(nonatomic, assign) AXUIElementRef trackedWindow;
+@property(nonatomic, assign) pid_t trackedPid;
 @property(nonatomic, assign) OverlayOptions currentOpts;
-// Timer for checking tracked-window drag state and showing overlay on mouse release
-@property(nonatomic, strong) NSTimer *showAfterDragTimer;
 // Target window number for z-order management
 @property(nonatomic, assign) CGWindowID stickyWindowNumber;
 @property(nonatomic, strong) OverlayTooltipWindow *tooltipWindow;
 @property(nonatomic, copy) NSString *tooltipText;
 @property(nonatomic, assign) NSRect tooltipIconRect;
+@property(nonatomic, assign) BOOL transparentMode;
+@property(nonatomic, assign) BOOL hitTestIconOnly;
+@property(nonatomic, assign) NSRect iconHitRect;
+@property(nonatomic, assign) unsigned long long stickyMoveEventCount;
+@property(nonatomic, assign) CFTimeInterval lastStickyMoveEventTime;
+@property(nonatomic, assign) unsigned long long layoutUpdateCount;
+@property(nonatomic, assign) CFTimeInterval lastLayoutUpdateTime;
+@property(nonatomic, strong) NSTimer *stickyLiveFollowTimer;
+@property(nonatomic, assign) unsigned long long stickyLiveFollowPollCount;
+@property(nonatomic, assign) BOOL hasStickyPredictiveAnchor;
+@property(nonatomic, assign) CGRect stickyPredictiveAnchorTargetRect;
+@property(nonatomic, assign) NSPoint stickyPredictiveAnchorMouse;
 @end
 
 static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
@@ -163,6 +192,14 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 @implementation DraggableContentView
 - (BOOL)acceptsFirstMouse:(NSEvent *)event {
     return YES; // Accept click even when window is not key
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    OverlayWindow *overlay = [self.window isKindOfClass:[OverlayWindow class]] ? (OverlayWindow *)self.window : nil;
+    if (overlay && overlay.transparentMode && overlay.hitTestIconOnly && !NSPointInRect(point, overlay.iconHitRect)) {
+        return nil;
+    }
+    return [super hitTest:point];
 }
 @end
 
@@ -532,10 +569,9 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 }
 
 - (void)stopTrackingWindow {
-    // Cancel drag-release check timer
-    [self.showAfterDragTimer invalidate];
-    self.showAfterDragTimer = nil;
-    
+    [self stopStickyLiveFollowTimerWithReason:@"tracking-stopped"];
+    self.hasStickyPredictiveAnchor = NO;
+
     if (self.axObserver) {
         CFRunLoopRemoveSource(CFRunLoopGetMain(), 
                               AXObserverGetRunLoopSource(self.axObserver), 
@@ -547,6 +583,7 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
         CFRelease(self.trackedWindow);
         self.trackedWindow = NULL;
     }
+    self.trackedPid = 0;
 }
 
 // Get the focused window number for a given PID
@@ -575,6 +612,51 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
     return result;
 }
 
+- (BOOL)getWindowFrameForPid:(pid_t)pid outRect:(CGRect *)outRect {
+    if (pid <= 0 || !outRect) return NO;
+
+    CFArrayRef windowList = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+    if (!windowList) return NO;
+
+    BOOL found = NO;
+    for (CFIndex i = 0; i < CFArrayGetCount(windowList); i++) {
+        NSDictionary *windowInfo = (NSDictionary *)CFArrayGetValueAtIndex(windowList, i);
+        NSNumber *windowPid = windowInfo[(id)kCGWindowOwnerPID];
+        NSNumber *windowLayer = windowInfo[(id)kCGWindowLayer];
+        NSNumber *windowAlpha = windowInfo[(id)kCGWindowAlpha];
+        NSDictionary *boundsDict = windowInfo[(id)kCGWindowBounds];
+
+        if ([windowPid intValue] != pid || [windowLayer intValue] != 0 || !boundsDict) {
+            continue;
+        }
+        if (windowAlpha && [windowAlpha doubleValue] <= 0.01) {
+            continue;
+        }
+
+        CGRect cgBounds = CGRectZero;
+        if (!CGRectMakeWithDictionaryRepresentation((CFDictionaryRef)boundsDict, &cgBounds)) {
+            continue;
+        }
+        if (cgBounds.size.width <= 1 || cgBounds.size.height <= 1) {
+            continue;
+        }
+
+        // Bug fix: AX focused-window lookup can fail for debug builds or stale
+        // focus state. Sticky overlays must stay attached to their target window;
+        // falling back to the whole screen can place them offscreen. CGWindowList
+        // gives the native target rect without requiring AX, while preserving the
+        // existing AX observer path when accessibility is available.
+        CGFloat mainScreenH = [NSScreen mainScreen].frame.size.height;
+        CGFloat cocoaY = mainScreenH - cgBounds.origin.y - cgBounds.size.height;
+        *outRect = CGRectMake(cgBounds.origin.x, cocoaY, cgBounds.size.width, cgBounds.size.height);
+        found = YES;
+        break;
+    }
+
+    CFRelease(windowList);
+    return found;
+}
+
 // Order overlay window relative to sticky window
 - (void)orderRelativeToStickyWindow {
     if (self.stickyWindowNumber > 0) {
@@ -599,6 +681,14 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 }
 
 - (void)updateLayoutWithOptions:(OverlayOptions)opts {
+    CFTimeInterval layoutStart = CACurrentMediaTime();
+    double layoutIntervalMs = -1;
+    if (self.lastLayoutUpdateTime > 0) {
+        layoutIntervalMs = (layoutStart - self.lastLayoutUpdateTime) * 1000.0;
+    }
+    self.lastLayoutUpdateTime = layoutStart;
+    self.layoutUpdateCount++;
+
     // 0. Reset State
     self.isMovable = opts.movable;
     self.isDragging = NO;
@@ -636,114 +726,172 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 
     // 2. Measure & Layout
     CGFloat windowWidth = (opts.width > 0) ? opts.width : kDefaultWindowWidth;
-    // Paddings
-    CGFloat padLeft = 12;
-    CGFloat padRight = 12;
-    CGFloat padTop = 10;
-    CGFloat padBottom = 10;
-    
-    CGFloat iconSize = (opts.iconSize > 0) ? opts.iconSize : kDefaultIconSize;
-    CGFloat fontSize = (opts.fontSize > 0) ? opts.fontSize : [NSFont systemFontSize];
-    CGFloat tooltipIconSize = (opts.tooltipIconSize > 0) ? opts.tooltipIconSize : kDefaultIconSize;
-    CGFloat tooltipIconGap = self.tooltipIconView.hidden ? 0 : kTooltipIconGap;
+    CGFloat windowHeight = 0;
+    self.transparentMode = opts.transparent;
+    self.hitTestIconOnly = opts.hitTestIconOnly;
+    self.backgroundView.hidden = opts.transparent;
+    [self setHasShadow:!opts.transparent];
 
-    if (!self.iconView.hidden) padLeft += iconSize + 8;
-    if (!self.closeButton.hidden) padRight += kCloseSize + 4;
-    if (!self.tooltipIconView.hidden) padRight += tooltipIconSize + tooltipIconGap;
+    if (opts.transparent) {
+        // Transparent overlays are generic drawing surfaces. The default HUD layout
+        // centers content inside a blurred notification bubble, while surface mode
+        // lets callers place their own content inside a clear native window.
+        CGFloat sourceIconWidth = icon ? icon.size.width : kDefaultIconSize;
+        CGFloat sourceIconHeight = icon ? icon.size.height : kDefaultIconSize;
+        CGFloat fallbackIconSize = (opts.iconSize > 0) ? opts.iconSize : MAX(sourceIconWidth, sourceIconHeight);
+        CGFloat iconWidth = (opts.iconWidth > 0) ? opts.iconWidth : fallbackIconSize;
+        CGFloat iconHeight = (opts.iconHeight > 0) ? opts.iconHeight : fallbackIconSize;
+        windowWidth = (opts.width > 0) ? opts.width : iconWidth;
+        windowHeight = (opts.height > 0) ? opts.height : iconHeight;
 
-    CGFloat contentWidth = windowWidth - padLeft - padRight;
-    
-    // Setup TextView string
-    NSDictionary *attrs = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:fontSize],
-        NSForegroundColorAttributeName: [NSColor whiteColor]
-    };
-    NSAttributedString *attrStr = [[NSAttributedString alloc] initWithString:msg attributes:attrs];
-    [self.messageView.textStorage setAttributedString:attrStr];
-    
-    // Measure Height
-    NSSize textSize = [self.messageView.layoutManager usedRectForTextContainer:self.messageView.textContainer].size; 
-    NSTextContainer *tc = self.messageView.textContainer;
-    tc.containerSize = NSMakeSize(contentWidth, CGFLOAT_MAX);
-    tc.widthTracksTextView = NO;
-    [self.messageView.layoutManager ensureLayoutForTextContainer:tc];
-    textSize = [self.messageView.layoutManager usedRectForTextContainer:tc].size;
-
-    CGFloat textHeight = textSize.height;
-    CGFloat windowHeight = (opts.height > 0) ? opts.height : (textHeight + padTop + padBottom);
-    if (windowHeight < 40) windowHeight = 40; // Min height
-
-    // Update Frames
-    CGFloat currentY = (windowHeight - textHeight) / 2; // Center Vertically
-    if (currentY < padTop) currentY = padTop;
-
-    self.messageView.frame = NSMakeRect(padLeft, currentY, contentWidth, textHeight);
-    
-    if (!self.iconView.hidden) {
-        self.iconView.frame = NSMakeRect(12, (windowHeight - iconSize)/2, iconSize, iconSize);
-    }
-    if (!self.tooltipIconView.hidden) {
-        CGFloat textRight = padLeft + contentWidth;
-        CGFloat ty = (windowHeight - tooltipIconSize) / 2;
-        if (ty < padTop) ty = padTop;
-        self.tooltipIconView.frame = NSMakeRect(textRight + tooltipIconGap, ty, tooltipIconSize, tooltipIconSize);
-        self.tooltipIconRect = [self.contentView convertRect:self.tooltipIconView.frame toView:nil];
-        [self updateTooltipTrackingAreaWithRect:self.tooltipIconView.frame enabled:YES];
-    } else {
+        self.messageView.hidden = YES;
+        self.closeButton.hidden = YES;
+        self.tooltipIconView.hidden = YES;
         self.tooltipIconRect = NSZeroRect;
         [self updateTooltipTrackingAreaWithRect:NSZeroRect enabled:NO];
-    }
-    if (!self.closeButton.hidden) {
-        self.closeButton.frame = NSMakeRect(windowWidth - kCloseSize - 6, (windowHeight - kCloseSize)/2, kCloseSize, kCloseSize);
+
+        CGFloat iconX = opts.iconX;
+        CGFloat iconY = windowHeight - opts.iconY - iconHeight;
+        self.iconView.frame = NSMakeRect(iconX, iconY, iconWidth, iconHeight);
+        self.iconHitRect = self.iconView.hidden ? NSZeroRect : self.iconView.frame;
+    } else {
+        self.messageView.hidden = NO;
+        self.iconHitRect = NSZeroRect;
+
+        // Paddings
+        CGFloat padLeft = 12;
+        CGFloat padRight = 12;
+        CGFloat padTop = 10;
+        CGFloat padBottom = 10;
+        
+        CGFloat iconSize = (opts.iconSize > 0) ? opts.iconSize : kDefaultIconSize;
+        CGFloat fontSize = (opts.fontSize > 0) ? opts.fontSize : [NSFont systemFontSize];
+        CGFloat tooltipIconSize = (opts.tooltipIconSize > 0) ? opts.tooltipIconSize : kDefaultIconSize;
+        CGFloat tooltipIconGap = self.tooltipIconView.hidden ? 0 : kTooltipIconGap;
+
+        if (!self.iconView.hidden) padLeft += iconSize + 8;
+        if (!self.closeButton.hidden) padRight += kCloseSize + 4;
+        if (!self.tooltipIconView.hidden) padRight += tooltipIconSize + tooltipIconGap;
+
+        CGFloat contentWidth = windowWidth - padLeft - padRight;
+        
+        // Setup TextView string
+        NSDictionary *attrs = @{
+            NSFontAttributeName: [NSFont systemFontOfSize:fontSize],
+            NSForegroundColorAttributeName: [NSColor whiteColor]
+        };
+        NSAttributedString *attrStr = [[NSAttributedString alloc] initWithString:msg attributes:attrs];
+        [self.messageView.textStorage setAttributedString:attrStr];
+        
+        // Measure Height
+        NSSize textSize = [self.messageView.layoutManager usedRectForTextContainer:self.messageView.textContainer].size; 
+        NSTextContainer *tc = self.messageView.textContainer;
+        tc.containerSize = NSMakeSize(contentWidth, CGFLOAT_MAX);
+        tc.widthTracksTextView = NO;
+        [self.messageView.layoutManager ensureLayoutForTextContainer:tc];
+        textSize = [self.messageView.layoutManager usedRectForTextContainer:tc].size;
+
+        CGFloat textHeight = textSize.height;
+        windowHeight = (opts.height > 0) ? opts.height : (textHeight + padTop + padBottom);
+        if (windowHeight < 40) windowHeight = 40; // Min height
+
+        // Update Frames
+        CGFloat currentY = (windowHeight - textHeight) / 2; // Center Vertically
+        if (currentY < padTop) currentY = padTop;
+
+        self.messageView.frame = NSMakeRect(padLeft, currentY, contentWidth, textHeight);
+        
+        if (!self.iconView.hidden) {
+            self.iconView.frame = NSMakeRect(12, (windowHeight - iconSize)/2, iconSize, iconSize);
+        }
+        if (!self.tooltipIconView.hidden) {
+            CGFloat textRight = padLeft + contentWidth;
+            CGFloat ty = (windowHeight - tooltipIconSize) / 2;
+            if (ty < padTop) ty = padTop;
+            self.tooltipIconView.frame = NSMakeRect(textRight + tooltipIconGap, ty, tooltipIconSize, tooltipIconSize);
+            self.tooltipIconRect = [self.contentView convertRect:self.tooltipIconView.frame toView:nil];
+            [self updateTooltipTrackingAreaWithRect:self.tooltipIconView.frame enabled:YES];
+        } else {
+            self.tooltipIconRect = NSZeroRect;
+            [self updateTooltipTrackingAreaWithRect:NSZeroRect enabled:NO];
+        }
+        if (!self.closeButton.hidden) {
+            self.closeButton.frame = NSMakeRect(windowWidth - kCloseSize - 6, (windowHeight - kCloseSize)/2, kCloseSize, kCloseSize);
+        }
     }
 
     // 3. Position Calculation (Anchor)
     CGRect targetRect;
+    NSString *targetSource = @"screen";
+    BOOL preserveLiveFollowFrame = opts.stickyWindowPid > 0 && self.stickyLiveFollowTimer != nil;
+    NSPoint liveFollowOrigin = self.frame.origin;
     
-    if (opts.stickyWindowPid > 0) {
+    if (preserveLiveFollowFrame) {
+        // Bug fix: content refreshes can arrive while a sticky overlay is being
+        // live-followed. Re-anchoring from AX here can use stale geometry and pull
+        // the overlay behind the dragged window, so preserve the live-followed
+        // origin and let the poller own position updates during the active drag.
+        self.stickyWindowNumber = [self getWindowNumberForPid:(pid_t)opts.stickyWindowPid];
+        targetRect = CGRectMake(liveFollowOrigin.x, liveFollowOrigin.y, windowWidth, windowHeight);
+        targetSource = @"live-follow-preserve";
+    } else if (opts.stickyWindowPid > 0) {
         pid_t pid = (pid_t)opts.stickyWindowPid;
+        targetSource = @"none";
         
         // Get window number for z-order management
         self.stickyWindowNumber = [self getWindowNumberForPid:pid];
-        
+
+        BOOL targetFound = NO;
         AXUIElementRef app = AXUIElementCreateApplication(pid);
         AXUIElementRef frontWindow = NULL;
-        AXError err = AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute, (CFTypeRef *)&frontWindow);
+        AXError err = app ? AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute, (CFTypeRef *)&frontWindow) : kAXErrorFailure;
         if (err == kAXErrorSuccess && frontWindow) {
-            CFTypeRef posVal, sizeVal;
+            CFTypeRef posVal = NULL, sizeVal = NULL;
             CGPoint pos; CGSize size;
-            AXUIElementCopyAttributeValue(frontWindow, kAXPositionAttribute, &posVal);
-            AXUIElementCopyAttributeValue(frontWindow, kAXSizeAttribute, &sizeVal);
-            AXValueGetValue(posVal, kAXValueCGPointType, &pos);
-            AXValueGetValue(sizeVal, kAXValueCGSizeType, &size);
-            
-            // Find the screen containing the window center
-            NSPoint windowCenter = NSMakePoint(pos.x + size.width / 2, pos.y + size.height / 2);
-            NSScreen *targetScreen = nil;
-            for (NSScreen *screen in [NSScreen screens]) {
-                // Convert screen frame from Cocoa to CG coordinates for comparison
-                NSRect screenFrame = screen.frame;
-                CGFloat mainScreenH = [NSScreen mainScreen].frame.size.height;
-                CGRect cgScreenFrame = CGRectMake(screenFrame.origin.x, 
-                                                   mainScreenH - screenFrame.origin.y - screenFrame.size.height, 
-                                                   screenFrame.size.width, 
-                                                   screenFrame.size.height);
-                if (CGRectContainsPoint(cgScreenFrame, windowCenter)) {
-                    targetScreen = screen;
-                    break;
+            AXError posErr = AXUIElementCopyAttributeValue(frontWindow, kAXPositionAttribute, &posVal);
+            AXError sizeErr = AXUIElementCopyAttributeValue(frontWindow, kAXSizeAttribute, &sizeVal);
+            if (posErr == kAXErrorSuccess && sizeErr == kAXErrorSuccess && posVal && sizeVal) {
+                AXValueGetValue(posVal, kAXValueCGPointType, &pos);
+                AXValueGetValue(sizeVal, kAXValueCGSizeType, &size);
+
+                // Find the screen containing the window center
+                NSPoint windowCenter = NSMakePoint(pos.x + size.width / 2, pos.y + size.height / 2);
+                NSScreen *targetScreen = nil;
+                for (NSScreen *screen in [NSScreen screens]) {
+                    // Convert screen frame from Cocoa to CG coordinates for comparison
+                    NSRect screenFrame = screen.frame;
+                    CGFloat mainScreenH = [NSScreen mainScreen].frame.size.height;
+                    CGRect cgScreenFrame = CGRectMake(screenFrame.origin.x, 
+                                                       mainScreenH - screenFrame.origin.y - screenFrame.size.height, 
+                                                       screenFrame.size.width, 
+                                                       screenFrame.size.height);
+                    if (CGRectContainsPoint(cgScreenFrame, windowCenter)) {
+                        targetScreen = screen;
+                        break;
+                    }
                 }
+                if (!targetScreen) targetScreen = [NSScreen mainScreen];
+
+                // Convert CG coordinates to Cocoa coordinates using main screen height
+                CGFloat mainScreenH = [NSScreen mainScreen].frame.size.height;
+                CGFloat cocoaY = mainScreenH - pos.y - size.height;
+                targetRect = CGRectMake(pos.x, cocoaY, size.width, size.height);
+                targetFound = YES;
+                targetSource = @"initial-ax";
             }
-            if (!targetScreen) targetScreen = [NSScreen mainScreen];
-            
-            // Convert CG coordinates to Cocoa coordinates using main screen height
-            CGFloat mainScreenH = [NSScreen mainScreen].frame.size.height;
-            CGFloat cocoaY = mainScreenH - pos.y - size.height;
-            targetRect = CGRectMake(pos.x, cocoaY, size.width, size.height);
-            CFRelease(posVal); CFRelease(sizeVal); CFRelease(frontWindow);
-        } else {
-             targetRect = [NSScreen mainScreen].frame;
+            if (posVal) CFRelease(posVal);
+            if (sizeVal) CFRelease(sizeVal);
+            CFRelease(frontWindow);
         }
-        CFRelease(app);
+        if (app) CFRelease(app);
+        if (!targetFound) {
+            if ([self getWindowFrameForPid:pid outRect:&targetRect]) {
+                targetSource = @"initial-cg-window-list";
+            } else {
+                targetRect = [NSScreen mainScreen].visibleFrame;
+                targetSource = @"initial-screen-fallback";
+            }
+        }
     } else {
         self.stickyWindowNumber = 0;
         targetRect = [NSScreen mainScreen].frame;
@@ -781,10 +929,21 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 
     CGFloat finalX = px + ox + opts.offsetX;
     CGFloat finalY = py + oy + opts.offsetY;
+    if (preserveLiveFollowFrame) {
+        finalX = liveFollowOrigin.x;
+        finalY = liveFollowOrigin.y;
+    }
+    if (opts.stickyWindowPid > 0 && !preserveLiveFollowFrame && CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft)) {
+        // Optimization: layout refresh can detect mouse-down before the first AX
+        // move notification. Seeding the predictive anchor here gives the live
+        // poller a usable baseline instead of waiting for the low-frequency AX
+        // movement event.
+        [self refreshStickyPredictiveAnchorWithTargetRect:targetRect source:targetSource debug:NO];
+    }
 
     [self setFrame:NSMakeRect(finalX, finalY, windowWidth, windowHeight) display:YES];
     self.backgroundView.frame = self.contentView.bounds;
-    [self setCornerRadius:10.0];
+    [self setCornerRadius:opts.transparent ? 0 : 10.0];
     
     // 4. Auto Close (Timer)
     [self startAutoCloseTimer:(NSTimeInterval)opts.autoCloseSeconds];
@@ -793,91 +952,186 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
     self.currentOpts = opts;
     if (opts.stickyWindowPid > 0) {
         [self startTrackingWindowWithPid:opts.stickyWindowPid];
+        // Optimization: animation/content refreshes can observe the mouse-down
+        // state before the first coalesced AX move notification arrives. Starting
+        // live follow from this generic refresh path reduces the initial sticky
+        // lag without requiring callers to know when native dragging begins.
+        [self startStickyLiveFollowTimerIfNeeded];
     } else {
         [self stopTrackingWindow];
+    }
+
+    BOOL shouldLogLayout = opts.stickyWindowPid > 0 && (self.layoutUpdateCount <= 5 || self.layoutUpdateCount % 10 == 0 || layoutIntervalMs > 150.0);
+    if (shouldLogLayout) {
+        // Diagnostics: ShowOverlay can be called independently from sticky move
+        // notifications. Sampling this path separates animation/layout refresh
+        // cost from native window-follow cost when investigating drag lag.
+        double elapsedMs = (CACurrentMediaTime() - layoutStart) * 1000.0;
+        OverlayDebugLog([NSString stringWithFormat:@"sticky-layout name=%@ pid=%d count=%llu intervalMs=%.2f elapsedMs=%.2f source=%@ frame=(%.1f,%.1f %.1fx%.1f) transparent=%@ icon=(%.1f,%.1f %.1fx%.1f)",
+                         self.name ?: @"", opts.stickyWindowPid, self.layoutUpdateCount, layoutIntervalMs, elapsedMs, targetSource,
+                         self.frame.origin.x, self.frame.origin.y, self.frame.size.width, self.frame.size.height,
+                         opts.transparent ? @"true" : @"false", opts.iconX, opts.iconY, opts.iconWidth, opts.iconHeight]);
     }
 }
 
 // AXObserver callback - called when tracked window moves or resizes
 static void axObserverCallback(AXObserverRef observer, AXUIElementRef element, CFStringRef notification, void *refcon) {
     OverlayWindow *win = (__bridge OverlayWindow *)refcon;
-    // Hide immediately when window is being moved
     [win handleTrackedWindowMoved];
 }
 
 - (void)handleTrackedWindowMoved {
-    // Cancel any pending drag check timer
-    [self.showAfterDragTimer invalidate];
-    self.showAfterDragTimer = nil;
-    
-    // Hide the overlay immediately
-    self.alphaValue = 0;
-    [self hideTooltipWindow];
-
-    // Show immediately when user releases the mouse after dragging the tracked window.
-    if (!CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft)) {
-        [self showAfterWindowStopped];
-        return;
+    CFTimeInterval eventStart = CACurrentMediaTime();
+    double eventIntervalMs = -1;
+    if (self.lastStickyMoveEventTime > 0) {
+        eventIntervalMs = (eventStart - self.lastStickyMoveEventTime) * 1000.0;
     }
+    self.lastStickyMoveEventTime = eventStart;
+    self.stickyMoveEventCount++;
+    BOOL shouldLog = self.stickyMoveEventCount <= 5 || self.stickyMoveEventCount % 10 == 0 || eventIntervalMs > 50.0;
 
-    self.showAfterDragTimer = [NSTimer scheduledTimerWithTimeInterval:0.016
-                                                                target:self
-                                                              selector:@selector(checkTrackedWindowDragEnded)
-                                                              userInfo:nil
-                                                               repeats:YES];
-}
-
-- (void)checkTrackedWindowDragEnded {
-    if (CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft)) {
-        return;
-    }
-
-    [self.showAfterDragTimer invalidate];
-    self.showAfterDragTimer = nil;
-    [self showAfterWindowStopped];
-}
-
-- (void)showAfterWindowStopped {
-    [self.showAfterDragTimer invalidate];
-    self.showAfterDragTimer = nil;
-    
-    // Update stickyWindowNumber for z-order
-    if (self.currentOpts.stickyWindowPid > 0) {
-        self.stickyWindowNumber = [self getWindowNumberForPid:self.currentOpts.stickyWindowPid];
-    }
-    
-    // Update position and show
-    [self updatePositionFromTrackedWindow];
+    // Sticky overlays are a generic base capability. The earlier implementation
+    // hid overlays until the user released the target window, which made attached
+    // surfaces flicker and lag. Always live-follow here so every module gets the
+    // same stable window attachment behavior.
+    BOOL updated = [self updatePositionFromTrackedWindowWithDebug:shouldLog eventIntervalMs:eventIntervalMs];
+    [self startStickyLiveFollowTimerIfNeeded];
     [self orderRelativeToStickyWindow];
     self.alphaValue = 1.0;
+    [self hideTooltipWindow];
+
+    if (shouldLog) {
+        double totalMs = (CACurrentMediaTime() - eventStart) * 1000.0;
+        OverlayDebugLog([NSString stringWithFormat:@"sticky-move event name=%@ pid=%d count=%llu intervalMs=%.2f updated=%@ totalMs=%.2f frame=(%.1f,%.1f %.1fx%.1f)",
+                         self.name ?: @"", self.currentOpts.stickyWindowPid, self.stickyMoveEventCount, eventIntervalMs,
+                         updated ? @"true" : @"false", totalMs, self.frame.origin.x, self.frame.origin.y, self.frame.size.width, self.frame.size.height]);
+    }
+}
+
+- (void)startStickyLiveFollowTimerIfNeeded {
+    if (self.stickyLiveFollowTimer || self.currentOpts.stickyWindowPid <= 0) {
+        return;
+    }
+    if (!CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft)) {
+        return;
+    }
+
+    self.stickyLiveFollowPollCount = 0;
+    // Bug fix: AX moved notifications are coalesced by macOS and can arrive only
+    // every 90-120ms while the target window is dragged. Polling during the active
+    // drag keeps sticky overlays attached at frame cadence without changing the
+    // generic overlay API or adding module-specific follow modes.
+    self.stickyLiveFollowTimer = [NSTimer timerWithTimeInterval:(1.0 / 60.0)
+                                                         target:self
+                                                       selector:@selector(handleStickyLiveFollowTimer:)
+                                                       userInfo:nil
+                                                        repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:self.stickyLiveFollowTimer forMode:NSRunLoopCommonModes];
+    OverlayDebugLog([NSString stringWithFormat:@"sticky-live-poll started name=%@ pid=%d", self.name ?: @"", self.currentOpts.stickyWindowPid]);
+}
+
+- (void)stopStickyLiveFollowTimerWithReason:(NSString *)reason {
+    if (!self.stickyLiveFollowTimer) {
+        return;
+    }
+    [self.stickyLiveFollowTimer invalidate];
+    self.stickyLiveFollowTimer = nil;
+    self.hasStickyPredictiveAnchor = NO;
+    OverlayDebugLog([NSString stringWithFormat:@"sticky-live-poll stopped name=%@ pid=%d reason=%@ count=%llu",
+                     self.name ?: @"", self.currentOpts.stickyWindowPid, reason ?: @"unknown", self.stickyLiveFollowPollCount]);
+}
+
+- (void)refreshStickyPredictiveAnchorWithTargetRect:(CGRect)targetRect source:(NSString *)source debug:(BOOL)debug {
+    if (!CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft)) {
+        return;
+    }
+    // Predictive follow uses true sticky samples as anchors and then applies
+    // mouse deltas between those samples. This keeps the overlay moving at timer
+    // cadence even when AX/CG window geometry updates arrive at only ~10Hz.
+    self.stickyPredictiveAnchorTargetRect = targetRect;
+    self.stickyPredictiveAnchorMouse = [NSEvent mouseLocation];
+    self.hasStickyPredictiveAnchor = YES;
+
+    if (debug) {
+        OverlayDebugLog([NSString stringWithFormat:@"sticky-predictive anchor name=%@ pid=%d source=%@ target=(%.1f,%.1f %.1fx%.1f) mouse=(%.1f,%.1f)",
+                         self.name ?: @"", self.currentOpts.stickyWindowPid, source ?: @"unknown",
+                         targetRect.origin.x, targetRect.origin.y, targetRect.size.width, targetRect.size.height,
+                         self.stickyPredictiveAnchorMouse.x, self.stickyPredictiveAnchorMouse.y]);
+    }
+}
+
+- (BOOL)getStickyPredictiveTargetRect:(CGRect *)outRect {
+    if (!self.hasStickyPredictiveAnchor || !outRect) {
+        return NO;
+    }
+    NSPoint mouse = [NSEvent mouseLocation];
+    CGFloat dx = mouse.x - self.stickyPredictiveAnchorMouse.x;
+    CGFloat dy = mouse.y - self.stickyPredictiveAnchorMouse.y;
+    *outRect = CGRectOffset(self.stickyPredictiveAnchorTargetRect, dx, dy);
+    return YES;
+}
+
+- (void)handleStickyLiveFollowTimer:(NSTimer *)timer {
+    if (!CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft)) {
+        [self stopStickyLiveFollowTimerWithReason:@"mouse-up"];
+        return;
+    }
+
+    self.stickyLiveFollowPollCount++;
+    BOOL shouldLog = self.stickyLiveFollowPollCount <= 5 || self.stickyLiveFollowPollCount % 15 == 0;
+    BOOL updated = [self updatePositionFromTrackedWindowWithDebug:shouldLog eventIntervalMs:-1 preferCGWindowList:YES];
+    [self orderRelativeToStickyWindow];
+    self.alphaValue = 1.0;
+
+    if (shouldLog) {
+        OverlayDebugLog([NSString stringWithFormat:@"sticky-live-poll tick name=%@ pid=%d count=%llu updated=%@ frame=(%.1f,%.1f %.1fx%.1f)",
+                         self.name ?: @"", self.currentOpts.stickyWindowPid, self.stickyLiveFollowPollCount,
+                         updated ? @"true" : @"false", self.frame.origin.x, self.frame.origin.y, self.frame.size.width, self.frame.size.height]);
+    }
 }
 
 - (void)startTrackingWindowWithPid:(pid_t)pid {
+    if (pid > 0 && self.trackedPid == pid && self.axObserver && self.trackedWindow) {
+        // Optimization: reused overlays can refresh their content frequently.
+        // Reusing the existing AX observer avoids tearing down native tracking on
+        // every update, which keeps live-follow reliable for all overlay modules.
+        return;
+    }
+
     // Stop any existing tracking first
     [self stopTrackingWindow];
+    self.stickyMoveEventCount = 0;
+    self.lastStickyMoveEventTime = 0;
     
     // Create AXUIElement for the application
     AXUIElementRef app = AXUIElementCreateApplication(pid);
-    if (!app) return;
+    if (!app) {
+        OverlayDebugLog([NSString stringWithFormat:@"sticky-track failed name=%@ pid=%d reason=create-application", self.name ?: @"", pid]);
+        return;
+    }
     
     // Get the focused window
     AXUIElementRef frontWindow = NULL;
     AXError err = AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute, (CFTypeRef *)&frontWindow);
     if (err != kAXErrorSuccess || !frontWindow) {
+        OverlayDebugLog([NSString stringWithFormat:@"sticky-track failed name=%@ pid=%d reason=focused-window axErr=%d", self.name ?: @"", pid, err]);
         CFRelease(app);
         return;
     }
     
     // Store the tracked window
     self.trackedWindow = frontWindow;
+    self.trackedPid = pid;
     
     // Create AXObserver
     AXObserverRef observer = NULL;
     err = AXObserverCreate(pid, axObserverCallback, &observer);
     if (err != kAXErrorSuccess || !observer) {
+        OverlayDebugLog([NSString stringWithFormat:@"sticky-track failed name=%@ pid=%d reason=observer axErr=%d", self.name ?: @"", pid, err]);
         CFRelease(app);
         CFRelease(frontWindow);
         self.trackedWindow = NULL;
+        self.trackedPid = 0;
         return;
     }
     
@@ -890,56 +1144,89 @@ static void axObserverCallback(AXObserverRef observer, AXUIElementRef element, C
     // Add observer to run loop
     CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), kCFRunLoopDefaultMode);
     
+    OverlayDebugLog([NSString stringWithFormat:@"sticky-track started name=%@ pid=%d windowNumber=%u", self.name ?: @"", pid, self.stickyWindowNumber]);
+
     CFRelease(app);
 }
 
-- (void)updatePositionFromTrackedWindow {
-    if (self.currentOpts.stickyWindowPid <= 0) return;
-    
-    // Always get the current focused window (not the cached one)
-    AXUIElementRef app = AXUIElementCreateApplication(self.currentOpts.stickyWindowPid);
-    if (!app) return;
-    
-    AXUIElementRef frontWindow = NULL;
-    AXError err = AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute, (CFTypeRef *)&frontWindow);
-    if (err != kAXErrorSuccess || !frontWindow) {
-        CFRelease(app);
-        return;
-    }
-    
-    // Get current window position and size
+- (BOOL)updatePositionFromTrackedWindow {
+    return [self updatePositionFromTrackedWindowWithDebug:NO eventIntervalMs:-1];
+}
+
+- (BOOL)updatePositionFromTrackedWindowWithDebug:(BOOL)debug eventIntervalMs:(double)eventIntervalMs {
+    return [self updatePositionFromTrackedWindowWithDebug:debug eventIntervalMs:eventIntervalMs preferCGWindowList:NO];
+}
+
+- (BOOL)updatePositionFromTrackedWindowWithDebug:(BOOL)debug eventIntervalMs:(double)eventIntervalMs preferCGWindowList:(BOOL)preferCGWindowList {
+    if (self.currentOpts.stickyWindowPid <= 0) return NO;
+
+    CFTimeInterval start = CACurrentMediaTime();
+
+    CGRect targetRect;
+    BOOL targetFound = NO;
+    NSString *source = @"none";
     CFTypeRef posVal = NULL, sizeVal = NULL;
     CGPoint pos; CGSize size;
-    
-    AXError err1 = AXUIElementCopyAttributeValue(frontWindow, kAXPositionAttribute, &posVal);
-    AXError err2 = AXUIElementCopyAttributeValue(frontWindow, kAXSizeAttribute, &sizeVal);
-    
-    CFRelease(frontWindow);
-    CFRelease(app);
-    
-    if (err1 != kAXErrorSuccess || err2 != kAXErrorSuccess || !posVal || !sizeVal) {
+    BOOL preserveSmallPredictiveCorrection = self.stickyLiveFollowTimer != nil &&
+                                             self.hasStickyPredictiveAnchor &&
+                                             !preferCGWindowList &&
+                                             CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft);
+    NSPoint predictedOriginBeforeRealSample = self.frame.origin;
+
+    if (preferCGWindowList && [self getStickyPredictiveTargetRect:&targetRect]) {
+        targetFound = YES;
+        source = @"predictive-mouse";
+    }
+
+    if (!targetFound && preferCGWindowList) {
+        // Bug fix: during live dragging, AX position attributes can stay stale
+        // between coalesced move notifications. CGWindowList is queried first for
+        // the polling path because it reflects compositor window bounds without
+        // waiting for the next AX notification.
+        if ([self getWindowFrameForPid:(pid_t)self.currentOpts.stickyWindowPid outRect:&targetRect]) {
+            targetFound = YES;
+            source = @"cg-window-list-live";
+        }
+    }
+
+    if (!targetFound && self.trackedWindow) {
+        AXError posErr = AXUIElementCopyAttributeValue(self.trackedWindow, kAXPositionAttribute, &posVal);
+        AXError sizeErr = AXUIElementCopyAttributeValue(self.trackedWindow, kAXSizeAttribute, &sizeVal);
+        if (posErr == kAXErrorSuccess && sizeErr == kAXErrorSuccess && posVal && sizeVal) {
+            AXValueGetValue(posVal, kAXValueCGPointType, &pos);
+            AXValueGetValue(sizeVal, kAXValueCGSizeType, &size);
+
+            // Bug fix: use the tracked AX window instead of asking for the current
+            // focused window on every move. During drag, focus can lag behind the
+            // window geometry, while the observer element is the window that moved.
+            CGFloat mainScreenH = [NSScreen mainScreen].frame.size.height;
+            CGFloat cocoaY = mainScreenH - pos.y - size.height;
+            targetRect = CGRectMake(pos.x, cocoaY, size.width, size.height);
+            targetFound = YES;
+            source = @"tracked-ax";
+        }
         if (posVal) CFRelease(posVal);
         if (sizeVal) CFRelease(sizeVal);
-        return;
     }
-    
-    AXValueGetValue(posVal, kAXValueCGPointType, &pos);
-    AXValueGetValue(sizeVal, kAXValueCGSizeType, &size);
-    
-    CFRelease(posVal);
-    CFRelease(sizeVal);
-    
-    // Convert AX coordinates (top-left origin, primary screen) to Cocoa coordinates (bottom-left origin, primary screen)
-    // IMPORTANT: specific screen height must be the PRIMARY screen's height, not [NSScreen mainScreen] which changes based on focus
-    NSScreen *primaryScreen = [[NSScreen screens] firstObject];
-    CGFloat screenH = primaryScreen.frame.size.height;
-    CGFloat cocoaY = screenH - pos.y - size.height;
-    
-    NSLog(@"[OverlayDebug] PID: %d, AXPos:(%f, %f), AXSize:(%f, %f), PrimaryScreenH:%f, CocoaY:%f", 
-          self.currentOpts.stickyWindowPid, pos.x, pos.y, size.width, size.height, screenH, cocoaY);
-    
-    CGRect targetRect = CGRectMake(pos.x, cocoaY, size.width, size.height);
-    
+
+    if (!targetFound) {
+        if ([self getWindowFrameForPid:(pid_t)self.currentOpts.stickyWindowPid outRect:&targetRect]) {
+            targetFound = YES;
+            source = @"cg-window-list";
+        } else {
+            if (debug) {
+                double elapsedMs = (CACurrentMediaTime() - start) * 1000.0;
+                OverlayDebugLog([NSString stringWithFormat:@"sticky-position failed name=%@ pid=%d intervalMs=%.2f elapsedMs=%.2f",
+                                 self.name ?: @"", self.currentOpts.stickyWindowPid, eventIntervalMs, elapsedMs]);
+            }
+            return NO;
+        }
+    }
+
+    if (targetFound && !preferCGWindowList) {
+        [self refreshStickyPredictiveAnchorWithTargetRect:targetRect source:source debug:debug];
+    }
+
     // Calculate new position based on anchor
     OverlayOptions opts = self.currentOpts;
     CGFloat ax = targetRect.origin.x;
@@ -972,8 +1259,33 @@ static void axObserverCallback(AXObserverRef observer, AXUIElementRef element, C
     
     CGFloat finalX = px + ox + opts.offsetX;
     CGFloat finalY = py + oy + opts.offsetY;
+
+    if (preserveSmallPredictiveCorrection) {
+        CGFloat correctionX = finalX - predictedOriginBeforeRealSample.x;
+        CGFloat correctionY = finalY - predictedOriginBeforeRealSample.y;
+        if (fabs(correctionX) <= kStickyPredictiveCorrectionThreshold &&
+            fabs(correctionY) <= kStickyPredictiveCorrectionThreshold) {
+            // Optimization: low-frequency AX samples are still used to refresh the
+            // predictive anchor, but small real-sample corrections should not pull
+            // the overlay back to an older geometry point during an active drag.
+            // Preserving the timer-driven frame removes the visible snap while the
+            // threshold still allows large corrections for window snapping, screen
+            // edge changes, or other cases where prediction has genuinely drifted.
+            finalX = predictedOriginBeforeRealSample.x;
+            finalY = predictedOriginBeforeRealSample.y;
+            source = [source stringByAppendingString:@"-preserve"];
+        }
+    }
     
     [self setFrameOrigin:NSMakePoint(finalX, finalY)];
+    if (debug) {
+        double elapsedMs = (CACurrentMediaTime() - start) * 1000.0;
+        OverlayDebugLog([NSString stringWithFormat:@"sticky-position name=%@ pid=%d source=%@ intervalMs=%.2f elapsedMs=%.2f target=(%.1f,%.1f %.1fx%.1f) final=(%.1f,%.1f) overlaySize=(%.1fx%.1f)",
+                         self.name ?: @"", self.currentOpts.stickyWindowPid, source, eventIntervalMs, elapsedMs,
+                         targetRect.origin.x, targetRect.origin.y, targetRect.size.width, targetRect.size.height,
+                         finalX, finalY, self.frame.size.width, self.frame.size.height]);
+    }
+    return YES;
 }
 
 @end

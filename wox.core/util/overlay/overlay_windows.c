@@ -52,6 +52,12 @@ typedef struct {
     char* message;
     unsigned char* iconData;
     int iconLen;
+    bool transparent;
+    bool hitTestIconOnly;
+    float iconX;
+    float iconY;
+    float iconWidth;
+    float iconHeight;
     bool closable;
     int stickyWindowPid; // 0 = Screen, >0 = Window
     int anchor;          // 0-8
@@ -229,6 +235,8 @@ static BOOL TryEnableAcrylic(HWND hwnd)
 
 #define TIMER_AUTOCLOSE 1
 #define TIMER_TRACK 2
+#define TIMER_LIVE_FOLLOW 3
+#define PREDICTIVE_CORRECTION_THRESHOLD_PX 48
 
 #define WM_WOX_OVERLAY_COMMAND (WM_APP + 0x610)
 #define WM_WOX_OVERLAY_REPOSITION (WM_APP + 0x611)
@@ -540,6 +548,13 @@ typedef struct OverlayWindow
     HBITMAP iconBitmap;
     int iconWidth;
     int iconHeight;
+    BOOL transparent;
+    BOOL hitTestIconOnly;
+    float iconX;
+    float iconY;
+    float iconDrawWidth;
+    float iconDrawHeight;
+    RECT iconRect;
     HBITMAP tooltipIconBitmap;
     int tooltipIconWidth;
     int tooltipIconHeight;
@@ -571,6 +586,10 @@ typedef struct OverlayWindow
     POINT dragWindowOrigin;
     RECT lastTargetRect;
     BOOL hasLastTargetRect;
+    RECT predictiveAnchorTargetRect;
+    POINT predictiveAnchorMouse;
+    BOOL hasPredictiveAnchor;
+    BOOL liveFollowActive;
     BOOL hiddenForMove;
     BOOL targetReady;
     
@@ -592,6 +611,12 @@ typedef struct OverlayPayload
     WCHAR *tooltip;
     unsigned char *iconData;
     int iconLen;
+    BOOL transparent;
+    BOOL hitTestIconOnly;
+    float iconX;
+    float iconY;
+    float iconWidth;
+    float iconHeight;
     unsigned char *tooltipIconData;
     int tooltipIconLen;
     float tooltipIconSize;
@@ -632,6 +657,10 @@ static INIT_ONCE g_initOnce = INIT_ONCE_STATIC_INIT;
 static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK OverlayControllerProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static DWORD WINAPI OverlayThreadProc(LPVOID param);
+static BOOL GetTargetContentRect(HWND target, RECT *outRect);
+static void StartLiveFollowTimerIfNeeded(OverlayWindow *ow);
+static void StopLiveFollowTimer(OverlayWindow *ow);
+static void RepositionOverlayToTargetRect(OverlayWindow *ow, const RECT *targetRect, BOOL preserveSmallPredictiveCorrection);
 
 // -----------------------------------------------------------------------------
 // Overlay Helpers
@@ -823,6 +852,93 @@ static void StartTrackTimer(OverlayWindow *ow)
     }
 }
 
+static BOOL IsLeftButtonDown(void)
+{
+    return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+}
+
+static BOOL GetTargetContentRect(HWND target, RECT *outRect)
+{
+    if (!target || !IsWindow(target) || !outRect)
+        return FALSE;
+
+    RECT targetRect;
+    RECT clientRect;
+    if (GetClientRect(target, &clientRect))
+    {
+        POINT tl = {clientRect.left, clientRect.top};
+        POINT br = {clientRect.right, clientRect.bottom};
+        ClientToScreen(target, &tl);
+        ClientToScreen(target, &br);
+        targetRect.left = tl.x;
+        targetRect.top = tl.y;
+        targetRect.right = br.x;
+        targetRect.bottom = br.y;
+    }
+    else if (!GetWindowRect(target, &targetRect))
+    {
+        return FALSE;
+    }
+
+    if (targetRect.right - targetRect.left <= 1 || targetRect.bottom - targetRect.top <= 1)
+        return FALSE;
+
+    *outRect = targetRect;
+    return TRUE;
+}
+
+static void RefreshPredictiveAnchor(OverlayWindow *ow, const RECT *targetRect)
+{
+    if (!ow || !targetRect || !IsLeftButtonDown())
+        return;
+
+    // Predictive follow stores the latest trusted window sample with the cursor
+    // position observed at the same time. Later timer ticks can then move the
+    // sticky overlay from mouse deltas instead of waiting for lower-frequency
+    // location events from the window manager.
+    ow->predictiveAnchorTargetRect = *targetRect;
+    GetCursorPos(&ow->predictiveAnchorMouse);
+    ow->hasPredictiveAnchor = TRUE;
+}
+
+static BOOL GetPredictiveTargetRect(OverlayWindow *ow, RECT *outRect)
+{
+    if (!ow || !outRect || !ow->hasPredictiveAnchor)
+        return FALSE;
+
+    POINT cursor;
+    if (!GetCursorPos(&cursor))
+        return FALSE;
+
+    int dx = cursor.x - ow->predictiveAnchorMouse.x;
+    int dy = cursor.y - ow->predictiveAnchorMouse.y;
+    *outRect = ow->predictiveAnchorTargetRect;
+    OffsetRect(outRect, dx, dy);
+    return TRUE;
+}
+
+static void StartLiveFollowTimerIfNeeded(OverlayWindow *ow)
+{
+    if (!ow || !ow->hwnd || ow->liveFollowActive || ow->stickyWindowPid <= 0 || !IsLeftButtonDown())
+        return;
+
+    // Optimization: Windows location hooks can still be coalesced during native
+    // dragging. A 16ms live-follow timer keeps generic sticky overlays moving at
+    // frame cadence, while real window samples continue to calibrate the anchor.
+    SetTimer(ow->hwnd, TIMER_LIVE_FOLLOW, 16, NULL);
+    ow->liveFollowActive = TRUE;
+}
+
+static void StopLiveFollowTimer(OverlayWindow *ow)
+{
+    if (!ow || !ow->hwnd || !ow->liveFollowActive)
+        return;
+
+    KillTimer(ow->hwnd, TIMER_LIVE_FOLLOW);
+    ow->liveFollowActive = FALSE;
+    ow->hasPredictiveAnchor = FALSE;
+}
+
 static void UpdateCloseRect(OverlayWindow *ow, int width, int height, UINT dpi)
 {
     RECT r = {0, 0, 0, 0};
@@ -883,6 +999,45 @@ static void ComputeOverlayPosition(OverlayWindow *ow, const RECT *targetRect, in
         *outX = px + ox + offX;
     if (outY)
         *outY = py + oy + offY;
+}
+
+static void RepositionOverlayToTargetRect(OverlayWindow *ow, const RECT *targetRect, BOOL preserveSmallPredictiveCorrection)
+{
+    if (!ow || !ow->hwnd || !targetRect)
+        return;
+
+    RECT client;
+    GetClientRect(ow->hwnd, &client);
+    int width = client.right - client.left;
+    int height = client.bottom - client.top;
+    int x = 0;
+    int y = 0;
+    ComputeOverlayPosition(ow, targetRect, width, height, &x, &y);
+    RECT workArea = GetWorkAreaForRect(targetRect);
+    ClampWindowToWorkArea(&workArea, &x, &y, width, height);
+
+    if (preserveSmallPredictiveCorrection && ow->liveFollowActive && ow->hasPredictiveAnchor && IsLeftButtonDown())
+    {
+        RECT current;
+        if (GetWindowRect(ow->hwnd, &current))
+        {
+            int correctionX = x - current.left;
+            int correctionY = y - current.top;
+            if (abs(correctionX) <= PREDICTIVE_CORRECTION_THRESHOLD_PX &&
+                abs(correctionY) <= PREDICTIVE_CORRECTION_THRESHOLD_PX)
+            {
+                // Optimization: WinEvent location samples are still needed to
+                // refresh the predictive anchor, but small corrections should not
+                // pull the overlay back to an older point while the live timer is
+                // already following mouse movement. Large corrections still apply
+                // so snapping, monitor changes, and real drift can recover.
+                x = current.left;
+                y = current.top;
+            }
+        }
+    }
+
+    SetWindowPos(ow->hwnd, NULL, x, y, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER);
 }
 
 static void ApplyCornerRadius(HWND hwnd, UINT dpi, int width, int height)
@@ -989,65 +1144,76 @@ static void ApplyOverlayLayout(OverlayWindow *ow)
     if (height <= 0)
         height = topPad + bottomPad + contentHeight;
 
-    UpdateCloseRect(ow, width, height, ow->dpi);
-
-    if (ow->tooltip)
+    if (ow->transparent)
     {
-        int tx = textLeft + textWidth + tooltipIconGap;
-        // Center vertically in content area?
-        // Content area starts at topPad. contentHeight is height of content.
-        // Center of content area: topPad + contentHeight / 2
-        int cy = topPad + contentHeight / 2;
-        int ty = cy - tooltipIconSize / 2;
-        if (ty < topPad) ty = topPad;
-
-        RECT r = {tx, ty, tx + tooltipIconSize, ty + tooltipIconSize};
-        ow->tooltipRect = r;
+        // Transparent overlays use the native window as a clear drawing surface and
+        // move only their content rectangle inside it. This keeps the default HUD
+        // path intact while giving other modules a reusable custom surface.
+        int drawW = ow->iconBitmap ? (int)roundf(((ow->iconDrawWidth > 0.0f) ? ow->iconDrawWidth : iconSizeDip) * (float)ow->dpi / 96.0f) : 0;
+        int drawH = ow->iconBitmap ? (int)roundf(((ow->iconDrawHeight > 0.0f) ? ow->iconDrawHeight : iconSizeDip) * (float)ow->dpi / 96.0f) : 0;
+        int iconX = (int)roundf(ow->iconX * (float)ow->dpi / 96.0f);
+        int iconY = (int)roundf(ow->iconY * (float)ow->dpi / 96.0f);
+        RECT iconRect = {iconX, iconY, iconX + drawW, iconY + drawH};
+        ow->iconRect = iconRect;
+        RECT empty = {0, 0, 0, 0};
+        ow->closeRect = empty;
+        ow->tooltipRect = empty;
     }
     else
     {
-        RECT r = {0,0,0,0};
-        ow->tooltipRect = r;
+        UpdateCloseRect(ow, width, height, ow->dpi);
+
+        if (ow->tooltip)
+        {
+            int tx = textLeft + textWidth + tooltipIconGap;
+            // Center vertically in content area?
+            // Content area starts at topPad. contentHeight is height of content.
+            // Center of content area: topPad + contentHeight / 2
+            int cy = topPad + contentHeight / 2;
+            int ty = cy - tooltipIconSize / 2;
+            if (ty < topPad) ty = topPad;
+
+            RECT r = {tx, ty, tx + tooltipIconSize, ty + tooltipIconSize};
+            ow->tooltipRect = r;
+        }
+        else
+        {
+            RECT r = {0,0,0,0};
+            ow->tooltipRect = r;
+        }
     }
 
     RECT targetRect;
     BOOL targetFound = FALSE;
+    BOOL preserveLiveFollowFrame = ow->stickyWindowPid > 0 && ow->liveFollowActive;
     if (ow->stickyWindowPid > 0)
     {
         HWND target = NULL;
         if (FindWindowByPid(ow->stickyWindowPid, &target))
         {
-            targetFound = TRUE;
-            RECT clientRect;
-            if (GetClientRect(target, &clientRect))
-            {
-                POINT tl = {clientRect.left, clientRect.top};
-                POINT br = {clientRect.right, clientRect.bottom};
-                ClientToScreen(target, &tl);
-                ClientToScreen(target, &br);
-                targetRect.left = tl.x;
-                targetRect.top = tl.y;
-                targetRect.right = br.x;
-                targetRect.bottom = br.y;
-            }
-            else
-            {
-                GetWindowRect(target, &targetRect);
-            }
-
-            if (targetRect.right - targetRect.left <= 1 || targetRect.bottom - targetRect.top <= 1)
-            {
-                SystemParametersInfo(SPI_GETWORKAREA, 0, &targetRect, 0);
-                targetFound = FALSE;
-            }
-            else
+            ow->targetHwnd = target;
+            if (GetTargetContentRect(target, &targetRect))
             {
                 targetFound = TRUE;
+                if (IsLeftButtonDown())
+                {
+                    // Optimization: pet frame refreshes can arrive while the user
+                    // is already dragging the target window. Seeding the predictive
+                    // anchor from this layout path reduces initial lag before the
+                    // first WinEvent location notification is delivered.
+                    RefreshPredictiveAnchor(ow, &targetRect);
+                    StartLiveFollowTimerIfNeeded(ow);
+                }
+            }
+            else
+            {
+                SystemParametersInfo(SPI_GETWORKAREA, 0, &targetRect, 0);
             }
             SetOverlayZOrder(ow->hwnd, target);
         }
         else
         {
+            ow->targetHwnd = NULL;
             SystemParametersInfo(SPI_GETWORKAREA, 0, &targetRect, 0);
             SetOverlayZOrder(ow->hwnd, NULL);
         }
@@ -1073,9 +1239,31 @@ static void ApplyOverlayLayout(OverlayWindow *ow)
 
     RECT workArea = GetWorkAreaForRect(&targetRect);
     ClampWindowToWorkArea(&workArea, &x, &y, width, height);
+    if (preserveLiveFollowFrame)
+    {
+        RECT current;
+        if (GetWindowRect(ow->hwnd, &current))
+        {
+            // Bug fix: content refreshes should not re-anchor a sticky overlay
+            // from a stale window sample during live follow. Preserve the current
+            // predicted origin and let the live timer own position updates while
+            // this layout pass only updates size and drawing metrics.
+            x = current.left;
+            y = current.top;
+        }
+    }
 
     SetWindowPos(ow->hwnd, NULL, x, y, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
-    ApplyCornerRadius(ow->hwnd, ow->dpi, width, height);
+    if (ow->transparent)
+    {
+        SetWindowRgn(ow->hwnd, NULL, TRUE);
+        UINT pref = DWMWCP_DONOTROUND;
+        DwmSetWindowAttribute(ow->hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
+    }
+    else
+    {
+        ApplyCornerRadius(ow->hwnd, ow->dpi, width, height);
+    }
 
     if (ow->tooltipHwnd)
     {
@@ -1092,6 +1280,8 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
 {
     if (!ow || !payload)
         return;
+
+    int previousStickyWindowPid = ow->stickyWindowPid;
 
     if (!isNew)
     {
@@ -1157,6 +1347,12 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
         free(payload->tooltipIconData);
 
     ow->closable = payload->closable;
+    ow->transparent = payload->transparent;
+    ow->hitTestIconOnly = payload->hitTestIconOnly;
+    ow->iconX = payload->iconX;
+    ow->iconY = payload->iconY;
+    ow->iconDrawWidth = payload->iconWidth;
+    ow->iconDrawHeight = payload->iconHeight;
     ow->stickyWindowPid = payload->stickyWindowPid;
     ow->anchor = payload->anchor;
     ow->autoCloseSeconds = payload->autoCloseSeconds;
@@ -1170,6 +1366,20 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
     ow->tooltipIconSize = payload->tooltipIconSize;
     ow->hasLastTargetRect = FALSE;
     ow->hiddenForMove = FALSE;
+    if (!isNew && previousStickyWindowPid != ow->stickyWindowPid)
+    {
+        // Bug fix: predictive anchors are tied to a specific target window. When
+        // an overlay is reused for a different sticky PID, keep the generic API
+        // simple by clearing the old live-follow state at the platform boundary.
+        StopLiveFollowTimer(ow);
+        if (ow->locationHook)
+        {
+            UnhookWinEvent(ow->locationHook);
+            ow->locationHook = NULL;
+        }
+        ow->hasPredictiveAnchor = FALSE;
+        ow->targetHwnd = NULL;
+    }
 
     if (ow->title && ow->hwnd)
         SetWindowTextW(ow->hwnd, ow->title);
@@ -1418,29 +1628,32 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     {
         BOOL dark = TRUE;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
-        UINT cornerPreference = DWMWCP_ROUND;
+        UINT cornerPreference = (ow && ow->transparent) ? DWMWCP_DONOTROUND : DWMWCP_ROUND;
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &cornerPreference, sizeof(cornerPreference));
 
-        BOOL accentOk = TryEnableAcrylic(hwnd);
-        if (!accentOk)
-            accentOk = TryEnableHostBackdrop(hwnd);
-
-        if (accentOk)
+        if (!(ow && ow->transparent))
         {
-            MARGINS margins = {0, 0, 0, 0};
-            DwmExtendFrameIntoClientArea(hwnd, &margins);
+            BOOL accentOk = TryEnableAcrylic(hwnd);
+            if (!accentOk)
+                accentOk = TryEnableHostBackdrop(hwnd);
 
-            UINT noneBackdrop = DWMSBT_NONE;
-            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &noneBackdrop, sizeof(noneBackdrop));
-        }
-        else
-        {
-            UINT backdrop = DWMSBT_TRANSIENTWINDOW;
-            HRESULT hrBackdrop = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
-            if (SUCCEEDED(hrBackdrop))
+            if (accentOk)
             {
-                MARGINS margins = {-1};
+                MARGINS margins = {0, 0, 0, 0};
                 DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+                UINT noneBackdrop = DWMSBT_NONE;
+                DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &noneBackdrop, sizeof(noneBackdrop));
+            }
+            else
+            {
+                UINT backdrop = DWMSBT_TRANSIENTWINDOW;
+                HRESULT hrBackdrop = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
+                if (SUCCEEDED(hrBackdrop))
+                {
+                    MARGINS margins = {-1};
+                    DwmExtendFrameIntoClientArea(hwnd, &margins);
+                }
             }
         }
 
@@ -1494,6 +1707,33 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         if (paintBuf)
         {
             BufferedPaintClear(paintBuf, &client);
+        }
+
+        if (ow->transparent)
+        {
+            if (ow->iconBitmap)
+            {
+                HDC memDC = CreateCompatibleDC(hdc);
+                if (memDC)
+                {
+                    HGDIOBJ oldBmp = SelectObject(memDC, ow->iconBitmap);
+                    BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+                    AlphaBlend(hdc, ow->iconRect.left, ow->iconRect.top,
+                               ow->iconRect.right - ow->iconRect.left,
+                               ow->iconRect.bottom - ow->iconRect.top,
+                               memDC, 0, 0, ow->iconWidth, ow->iconHeight, bf);
+                    if (oldBmp)
+                        SelectObject(memDC, oldBmp);
+                    DeleteDC(memDC);
+                }
+            }
+
+            if (paintBuf)
+            {
+                EndBufferedPaint(paintBuf, TRUE);
+            }
+            EndPaint(hwnd, &ps);
+            return 0;
         }
 
         int leftPad = MulDiv(PADDING_X_DIP, (int)ow->dpi, 96);
@@ -1581,6 +1821,17 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
 
         EndPaint(hwnd, &ps);
         return 0;
+    }
+    case WM_NCHITTEST:
+    {
+        if (ow && ow->transparent && ow->hitTestIconOnly)
+        {
+            POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(hwnd, &pt);
+            if (!PtInRect(&ow->iconRect, pt))
+                return HTTRANSPARENT;
+        }
+        break;
     }
     case WM_SETCURSOR:
     {
@@ -1740,7 +1991,7 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                 HWND target = NULL;
                 if (FindWindowByPid(ow->stickyWindowPid, &target))
                 {
-                    if (ow->targetHwnd != target)
+                    if (ow->targetHwnd != target || !ow->locationHook)
                     {
                         if (ow->locationHook) UnhookWinEvent(ow->locationHook);
                         ow->targetHwnd = target;
@@ -1749,6 +2000,7 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                         ow->locationHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, 
                                                            NULL, OverlayLocationChangeHook, pid, tid, WINEVENT_OUTOFCONTEXT);
                     }
+                    StartLiveFollowTimerIfNeeded(ow);
                     SendMessage(hwnd, WM_WOX_OVERLAY_REPOSITION, 0, 0);
                 }
                 else
@@ -1763,6 +2015,31 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             }
             return 0;
         }
+        if (wParam == TIMER_LIVE_FOLLOW)
+        {
+            if (!IsLeftButtonDown() || ow->dragging)
+            {
+                StopLiveFollowTimer(ow);
+                SendMessage(hwnd, WM_WOX_OVERLAY_REPOSITION, 0, 0);
+                return 0;
+            }
+
+            RECT targetRect;
+            BOOL targetFound = GetPredictiveTargetRect(ow, &targetRect);
+            if (!targetFound && ow->targetHwnd && IsWindow(ow->targetHwnd))
+                targetFound = GetTargetContentRect(ow->targetHwnd, &targetRect);
+            if (!targetFound)
+                return 0;
+
+            // Optimization: live follow uses mouse-predicted geometry for smooth
+            // movement between lower-frequency location events. Real samples keep
+            // updating the anchor through WM_WOX_OVERLAY_REPOSITION.
+            RepositionOverlayToTargetRect(ow, &targetRect, FALSE);
+            SetOverlayZOrder(hwnd, ow->targetHwnd);
+            if (!IsWindowVisible(hwnd))
+                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            return 0;
+        }
         break;
     }
     case WM_WOX_OVERLAY_REPOSITION:
@@ -1772,39 +2049,19 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
 
         HWND target = ow->targetHwnd;
         RECT targetRect;
-        RECT clientRect;
-        if (GetClientRect(target, &clientRect))
-        {
-            POINT tl = {clientRect.left, clientRect.top};
-            POINT br = {clientRect.right, clientRect.bottom};
-            ClientToScreen(target, &tl);
-            ClientToScreen(target, &br);
-            targetRect.left = tl.x;
-            targetRect.top = tl.y;
-            targetRect.right = br.x;
-            targetRect.bottom = br.y;
-        }
-        else
-        {
-            GetWindowRect(target, &targetRect);
-        }
-
-        if (targetRect.right - targetRect.left <= 1 || targetRect.bottom - targetRect.top <= 1)
+        if (!GetTargetContentRect(target, &targetRect))
         {
             return 0;
         }
 
-        RECT client;
-        GetClientRect(hwnd, &client);
-        int width = client.right - client.left;
-        int height = client.bottom - client.top;
-        int x = 0;
-        int y = 0;
-        ComputeOverlayPosition(ow, &targetRect, width, height, &x, &y);
-        RECT workArea = GetWorkAreaForRect(&targetRect);
-        ClampWindowToWorkArea(&workArea, &x, &y, width, height);
+        if (IsLeftButtonDown())
+        {
+            RefreshPredictiveAnchor(ow, &targetRect);
+            StartLiveFollowTimerIfNeeded(ow);
+        }
+
         SetOverlayZOrder(hwnd, target);
-        SetWindowPos(hwnd, NULL, x, y, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER);
+        RepositionOverlayToTargetRect(ow, &targetRect, TRUE);
         
         if (!IsWindowVisible(hwnd))
              ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -1822,6 +2079,7 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             }
             KillTimer(hwnd, TIMER_AUTOCLOSE);
             KillTimer(hwnd, TIMER_TRACK);
+            KillTimer(hwnd, TIMER_LIVE_FOLLOW);
             RemoveOverlay(ow);
             if (ow->messageFont)
                 DeleteObject(ow->messageFont);
@@ -1891,6 +2149,8 @@ static void HandleShowCommand(OverlayPayload *payload)
     ApplyPayloadToOverlay(ow, payload, TRUE);
 
     DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+    if (ow->transparent)
+        exStyle |= WS_EX_LAYERED;
     if (ow->stickyWindowPid <= 0)
         exStyle |= WS_EX_TOPMOST;
 
@@ -2085,6 +2345,12 @@ void ShowOverlay(OverlayOptions opts)
     payload->title = DupUtf8ToWide(opts.title);
     payload->message = DupUtf8ToWide(opts.message);
     payload->tooltip = DupUtf8ToWide(opts.tooltip);
+    payload->transparent = opts.transparent ? TRUE : FALSE;
+    payload->hitTestIconOnly = opts.hitTestIconOnly ? TRUE : FALSE;
+    payload->iconX = opts.iconX;
+    payload->iconY = opts.iconY;
+    payload->iconWidth = opts.iconWidth;
+    payload->iconHeight = opts.iconHeight;
     payload->closable = opts.closable ? TRUE : FALSE;
     payload->stickyWindowPid = opts.stickyWindowPid;
     payload->anchor = opts.anchor;

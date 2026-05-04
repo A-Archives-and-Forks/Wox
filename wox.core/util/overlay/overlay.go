@@ -26,6 +26,19 @@ type OverlayOptions struct {
 	Message string
 	// Icon is the image for the icon. If nil, no icon is shown.
 	Icon image.Image
+	// Transparent makes the overlay a clear drawing surface instead of the default notification HUD.
+	// This is a generic surface mode for modules that need custom drawing without the default frame.
+	Transparent bool
+	// HitTestIconOnly lets transparent overlay whitespace pass through while keeping the icon interactive.
+	// It keeps non-content regions from acting like invisible blocking windows.
+	HitTestIconOnly bool
+	// IconX and IconY position Icon inside a transparent overlay using DIP/pt coordinates from the top-left.
+	IconX float64
+	IconY float64
+	// IconWidth and IconHeight draw Icon at a custom size inside a transparent overlay.
+	// If either value is 0, IconSize or the source image size is used as a fallback.
+	IconWidth  float64
+	IconHeight float64
 	// Closable determines if a close button (X) is shown.
 	Closable bool
 	// StickyWindowPid determines the positioning context.

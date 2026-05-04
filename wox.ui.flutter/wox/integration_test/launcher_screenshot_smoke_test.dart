@@ -27,7 +27,7 @@ class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
   final ScreenshotPlatformBridge _delegate = MethodChannelScreenshotPlatformBridge();
 
   @override
-  Future<List<DisplaySnapshot>> captureAllDisplays() => _capture();
+  Future<List<DisplaySnapshot>> captureAllDisplays({ScreenshotRect? logicalSelection, String? traceId}) => _capture();
 
   @override
   Future<List<DisplaySnapshot>> captureDisplayMetadata() async {
@@ -145,9 +145,17 @@ class _FakeScreenshotBridge implements ScreenshotPlatformBridge {
   }
 
   @override
-  Future<void> beginScrollingCaptureOverlay({required ScreenshotRect workspaceBounds, required ScreenshotRect selection, required ScreenshotRect controlsBounds}) async {
+  Future<void> beginScrollingCaptureOverlay({
+    required ScreenshotRect workspaceBounds,
+    required ScreenshotRect selection,
+    required ScreenshotRect controlsBounds,
+    String? traceId,
+  }) async {
     if (delegateNativePresentation) {
-      await _delegate.beginScrollingCaptureOverlay(workspaceBounds: workspaceBounds, selection: selection, controlsBounds: controlsBounds);
+      // The fake bridge mirrors the production bridge's optional trace id so
+      // screenshot smoke tests keep compiling when observability data is added
+      // to bridge calls without changing the fake capture behavior.
+      await _delegate.beginScrollingCaptureOverlay(workspaceBounds: workspaceBounds, selection: selection, controlsBounds: controlsBounds, traceId: traceId);
     }
   }
 

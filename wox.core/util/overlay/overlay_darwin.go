@@ -2,7 +2,7 @@ package overlay
 
 /*
 #cgo CFLAGS: -x objective-c
-#cgo LDFLAGS: -framework Cocoa -framework ApplicationServices -framework CoreVideo
+#cgo LDFLAGS: -framework Cocoa -framework ApplicationServices -framework CoreVideo -framework QuartzCore
 #include <stdlib.h>
 #include <stdbool.h>
 
@@ -12,6 +12,12 @@ typedef struct {
     char* message;
     unsigned char* iconData;
     int iconLen;
+    bool transparent;
+    bool hitTestIconOnly;
+    float iconX;
+    float iconY;
+    float iconWidth;
+    float iconHeight;
     bool closable;
     int stickyWindowPid;
     int anchor;
@@ -34,31 +40,55 @@ void CloseOverlay(char* name);
 
 // Callback from C
 void overlayClickCallbackCGO(char* name);
+void overlayDebugLogCallbackCGO(char* message);
 
 */
 import "C"
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/png"
+	"sync"
 	"unsafe"
 
+	"wox/util"
 	"wox/util/mainthread"
 )
 
 var clickCallbacks = make(map[string]func())
+var clickCallbacksMu sync.RWMutex
 
 //export overlayClickCallbackCGO
 func overlayClickCallbackCGO(cName *C.char) {
 	name := C.GoString(cName)
-	if cb, ok := clickCallbacks[name]; ok {
+	clickCallbacksMu.RLock()
+	cb, ok := clickCallbacks[name]
+	clickCallbacksMu.RUnlock()
+	if ok {
 		cb()
 	}
 }
 
+//export overlayDebugLogCallbackCGO
+func overlayDebugLogCallbackCGO(cMessage *C.char) {
+	if cMessage == nil {
+		return
+	}
+	// Diagnostics are emitted at INFO because the default Wox log level filters
+	// DEBUG. Native-side sampling keeps the output useful without hiding the drag
+	// timing evidence needed to diagnose sticky overlay lag.
+	util.GetLogger().Info(context.Background(), "[Overlay] "+C.GoString(cMessage))
+}
+
 func Show(opts OverlayOptions) {
 	if opts.OnClick != nil {
+		// Reused overlays can refresh their callbacks while native click events are
+		// delivered from another thread. Guard replacement so the overlay API stays
+		// safe for high-frequency updates and ordinary notification windows.
+		clickCallbacksMu.Lock()
 		clickCallbacks[opts.Name] = opts.OnClick
+		clickCallbacksMu.Unlock()
 	}
 
 	mainthread.Call(func() {
@@ -97,6 +127,12 @@ func Show(opts OverlayOptions) {
 			message:          cMessage,
 			iconData:         cIconData,
 			iconLen:          cIconLen,
+			transparent:      C.bool(opts.Transparent),
+			hitTestIconOnly:  C.bool(opts.HitTestIconOnly),
+			iconX:            C.float(opts.IconX),
+			iconY:            C.float(opts.IconY),
+			iconWidth:        C.float(opts.IconWidth),
+			iconHeight:       C.float(opts.IconHeight),
 			closable:         C.bool(opts.Closable),
 			stickyWindowPid:  C.int(opts.StickyWindowPid),
 			anchor:           C.int(opts.Anchor),
@@ -130,7 +166,9 @@ func imageToPNG(img image.Image) ([]byte, error) {
 }
 
 func Close(name string) {
+	clickCallbacksMu.Lock()
 	delete(clickCallbacks, name)
+	clickCallbacksMu.Unlock()
 	mainthread.Call(func() {
 		cName := C.CString(name)
 		defer C.free(unsafe.Pointer(cName))
