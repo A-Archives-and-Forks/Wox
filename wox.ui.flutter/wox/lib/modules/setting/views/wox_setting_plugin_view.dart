@@ -41,6 +41,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
   const WoxSettingPluginView({super.key});
   static const String _triggerKeywordColumnKey = "keyword";
   static const String _triggerKeywordOriginalColumnKey = "_wox_original_trigger_keyword";
+  static const String _globalTriggerKeyword = "*";
   // Local refreshing state for showing loading spinner on refresh button
   static final RxBool _refreshing = false.obs;
   static final GlobalKey _pluginFilterIconKey = GlobalKey();
@@ -585,6 +586,13 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
     if (keyword.isEmpty) {
       return const [];
     }
+    if (keyword == _globalTriggerKeyword) {
+      // "*" is a shared global-query marker rather than an exclusive route.
+      // The previous duplicate checks treated it like a normal keyword, which
+      // blocked a second plugin from opting into global queries even though the
+      // core can fan out empty-trigger input to every plugin that declares "*".
+      return const [];
+    }
 
     final originalKeyword = _normalizeTriggerKeyword(rowValues[_triggerKeywordOriginalColumnKey]);
     // Duplicate checks need to ignore the row being edited. Counting only the
@@ -618,7 +626,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
   }
 
   Widget? _buildTriggerKeywordCell(PluginSettingValueTableColumn column, Map<String, dynamic> row) {
-    if (column.key != _triggerKeywordColumnKey || row[column.key] != "*") {
+    if (column.key != _triggerKeywordColumnKey || row[column.key] != _globalTriggerKeyword) {
       return null;
     }
 
