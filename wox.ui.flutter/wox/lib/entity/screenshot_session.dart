@@ -231,6 +231,7 @@ class CaptureScreenshotResult {
     required this.status,
     this.screenshotPath,
     this.logicalSelectionRect,
+    this.pinToScreen = false,
     this.clipboardWriteSucceeded,
     this.clipboardWarningMessage,
     this.errorCode,
@@ -240,6 +241,10 @@ class CaptureScreenshotResult {
   final String status;
   final String? screenshotPath;
   final ScreenshotRect? logicalSelectionRect;
+  // Pin completion uses the normal screenshot export result plus this explicit intent flag. The old
+  // result shape could only mean "saved/copied", which left Go unable to decide when to create a
+  // desktop overlay for the image the user just selected.
+  final bool pinToScreen;
   // Clipboard export is intentionally modeled as a warning channel so screenshot file export can
   // still complete successfully even when the platform clipboard rejects the image handoff.
   final bool? clipboardWriteSucceeded;
@@ -247,11 +252,18 @@ class CaptureScreenshotResult {
   final String? errorCode;
   final String? errorMessage;
 
-  factory CaptureScreenshotResult.completed({required Rect selectionRect, required String screenshotPath, bool clipboardWriteSucceeded = true, String? clipboardWarningMessage}) {
+  factory CaptureScreenshotResult.completed({
+    required Rect selectionRect,
+    required String screenshotPath,
+    bool pinToScreen = false,
+    bool clipboardWriteSucceeded = true,
+    String? clipboardWarningMessage,
+  }) {
     return CaptureScreenshotResult(
       status: 'completed',
       screenshotPath: screenshotPath,
       logicalSelectionRect: ScreenshotRect.fromRect(selectionRect),
+      pinToScreen: pinToScreen,
       clipboardWriteSucceeded: clipboardWriteSucceeded,
       clipboardWarningMessage: clipboardWarningMessage,
     );
@@ -270,6 +282,7 @@ class CaptureScreenshotResult {
       status: json['status'] as String? ?? json['Status'] as String? ?? 'failed',
       screenshotPath: json['screenshotPath'] as String? ?? json['ScreenshotPath'] as String?,
       logicalSelectionRect: logicalSelectionRect != null ? ScreenshotRect.fromJson(logicalSelectionRect) : null,
+      pinToScreen: json['pinToScreen'] as bool? ?? json['PinToScreen'] as bool? ?? false,
       clipboardWriteSucceeded: json['clipboardWriteSucceeded'] as bool? ?? json['ClipboardWriteSucceeded'] as bool?,
       clipboardWarningMessage: json['clipboardWarningMessage'] as String? ?? json['ClipboardWarningMessage'] as String?,
       errorCode: json['errorCode'] as String? ?? json['ErrorCode'] as String?,
@@ -282,6 +295,7 @@ class CaptureScreenshotResult {
       'status': status,
       'screenshotPath': screenshotPath,
       'logicalSelectionRect': logicalSelectionRect?.toJson(),
+      'pinToScreen': pinToScreen,
       'clipboardWriteSucceeded': clipboardWriteSucceeded,
       'clipboardWarningMessage': clipboardWarningMessage,
       'errorCode': errorCode,

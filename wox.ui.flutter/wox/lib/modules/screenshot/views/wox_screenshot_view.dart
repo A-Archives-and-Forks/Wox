@@ -16,6 +16,7 @@ const Key screenshotToolbarKey = Key('screenshot-toolbar');
 const Key screenshotEditBarKey = Key('screenshot-edit-bar');
 const Key screenshotConfirmKey = Key('screenshot-confirm');
 const Key screenshotScrollingCaptureKey = Key('screenshot-scrolling-capture');
+const Key screenshotPinKey = Key('screenshot-pin');
 const Key screenshotCancelKey = Key('screenshot-cancel');
 const Key screenshotUndoKey = Key('screenshot-undo');
 const Key screenshotToolSelectKey = Key('screenshot-tool-select');
@@ -58,6 +59,7 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
   bool _isCancellingSession = false;
   bool _isConfirmingSession = false;
   bool _isScrollingCaptureSession = false;
+  bool _isPinningSession = false;
 
   _InteractionMode? _interactionMode;
   _ResizeHandle? _resizeHandle;
@@ -174,6 +176,27 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
       if (mounted) {
         setState(() {
           _isScrollingCaptureSession = false;
+        });
+      }
+    });
+  }
+
+  void _pinSelectionFromToolbar() {
+    if (_isPinningSession || !controller.isSessionActive.value || controller.selectionRect == null || controller.stage.value == ScreenshotSessionStage.scrolling) {
+      return;
+    }
+
+    if (controller.textDraftPosition.value != null) {
+      controller.commitTextDraft();
+    }
+
+    setState(() {
+      _isPinningSession = true;
+    });
+    controller.pinSelection(const UuidV4().generate()).whenComplete(() {
+      if (mounted) {
+        setState(() {
+          _isPinningSession = false;
         });
       }
     });
@@ -418,6 +441,8 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
     final selectionLocalRect = selectionRect?.shift(-virtualBounds.topLeft);
     final creationColor = controller.annotationCreationColor.value;
     final hideAnnotationToolbar = controller.activeRequest?.hideAnnotationToolbar ?? false;
+    final showBuiltInPinAction = controller.activeRequest?.callerIcon == null && !hideAnnotationToolbar;
+    final canPin = showBuiltInPinAction && selectionRect != null && !isScrollingCapture && !_isPinningSession;
 
     return Positioned.fill(
       child: CustomSingleChildLayout(
@@ -508,11 +533,25 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
                   _ToolButton(
                     key: screenshotScrollingCaptureKey,
                     iconBuilder: (foreground) => _ScrollingCaptureToolIcon(color: foreground),
-                    color: const Color(0xFF4DA3FF),
                     selected: isScrollingCapture,
                     enabled: selectionRect != null && !_isScrollingCaptureSession && !isScrollingCapture,
                     tooltip: controller.tr('ui_screenshot_tool_scrolling_capture'),
                     onPressed: selectionRect != null ? _startScrollingSelectionFromToolbar : null,
+                  ),
+                ],
+                if (showBuiltInPinAction) ...[
+                  const SizedBox(width: 6),
+                  // Pin is intentionally a completion action, not an annotation tool. Keeping it
+                  // beside confirm/cancel makes the toolbar flow explicit: draw a region, then
+                  // either copy it, pin it as a desktop overlay, or cancel the session. It still
+                  // uses the default white toolbar foreground so only destructive/confirm actions
+                  // carry special colors.
+                  _ToolButton(
+                    key: screenshotPinKey,
+                    icon: Icons.push_pin_outlined,
+                    enabled: canPin,
+                    tooltip: controller.tr('ui_screenshot_tool_pin'),
+                    onPressed: canPin ? _pinSelectionFromToolbar : null,
                   ),
                 ],
                 _ToolButton(
@@ -1666,16 +1705,9 @@ class _ScrollingCaptureToolIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Long screenshot needs a distinct vertical-expansion symbol instead of a down arrow, which
-    // users read as download/export. A compact colored tile mirrors the requested visual while
-    // staying inside the existing 40px toolbar button footprint.
-    return Center(
-      child: Container(
-        width: 26,
-        height: 26,
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.white24)),
-        child: const Icon(Icons.height, color: Colors.white, size: 22),
-      ),
-    );
+    // users read as download/export. Keep it as a plain foreground-colored glyph so pin and
+    // scrolling capture stay visually grouped with the white annotation tools.
+    return Center(child: Icon(Icons.height, color: color, size: 24));
   }
 }
 

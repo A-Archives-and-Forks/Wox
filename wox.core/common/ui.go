@@ -193,6 +193,10 @@ type CaptureScreenshotResult struct {
 	Status               CaptureScreenshotStatus `json:"status"`
 	ScreenshotPath       string                  `json:"screenshotPath,omitempty"`
 	LogicalSelectionRect *ScreenshotRect         `json:"logicalSelectionRect,omitempty"`
+	// PinToScreen tells the Go screenshot plugin that Flutter exported the image for a pinned
+	// desktop overlay. The previous completed result only described file/clipboard output, so Go had
+	// no way to distinguish a normal confirmation from a toolbar pin action.
+	PinToScreen bool `json:"pinToScreen,omitempty"`
 	// ClipboardWriteSucceeded stays explicit instead of overloading Status so export-success plus
 	// clipboard-failure can still return a completed screenshot together with a warning.
 	ClipboardWriteSucceeded bool   `json:"clipboardWriteSucceeded"`

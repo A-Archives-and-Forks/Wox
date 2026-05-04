@@ -3,6 +3,8 @@ package system
 import (
 	"context"
 	"fmt"
+	"image"
+	_ "image/png" // Register PNG header decoding for file-backed pinned screenshots.
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +15,7 @@ import (
 	"wox/plugin"
 	"wox/util"
 	"wox/util/clipboard"
+	"wox/util/overlay"
 	"wox/util/shell"
 
 	"github.com/disintegration/imaging"
@@ -22,6 +25,7 @@ var screenshotIcon = common.PluginScreenshotIcon
 var screenshotCommandNew = "new"
 var screenshotHistoryPreviewWidth = 400
 var screenshotHistoryIconWidth = 40
+var screenshotPinnedOverlayPrefix = "wox_screenshot_pin_"
 
 func init() {
 	plugin.AllSystemPlugin = append(plugin.AllSystemPlugin, &ScreenshotPlugin{})
@@ -395,6 +399,87 @@ func (p *ScreenshotPlugin) formatFileSize(size int64) string {
 	return fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
 }
 
+func (p *ScreenshotPlugin) readScreenshotImageSize(screenshotPath string) (int, int, error) {
+	// DecodeConfig reads only the PNG header. It is used only when Flutter did not return a logical
+	// selection size, so the file-backed pin path still avoids full image decoding on the common path.
+	file, err := os.Open(screenshotPath)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to open pinned screenshot image: %w", err)
+	}
+	defer file.Close()
+
+	config, _, err := image.DecodeConfig(file)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to read pinned screenshot image size: %w", err)
+	}
+	return config.Width, config.Height, nil
+}
+
+func (p *ScreenshotPlugin) pinScreenshotToScreen(ctx context.Context, screenshotPath string, selectionRect *common.ScreenshotRect) error {
+	// File-backed overlays depend on the PNG remaining readable after Flutter writes it. Validate the
+	// path cheaply here so native decode failures do not become silent missing pinned windows.
+	info, err := os.Stat(screenshotPath)
+	if err != nil {
+		return fmt.Errorf("failed to read pinned screenshot file info: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("pinned screenshot path is a directory")
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("pinned screenshot file is empty")
+	}
+
+	width := 0.0
+	height := 0.0
+	offsetX := 0.0
+	offsetY := 0.0
+	if selectionRect != nil {
+		// The PNG may be device-pixel sized on high-DPI screens, while the overlay API positions and
+		// sizes windows in logical desktop coordinates. Use Flutter's selection rect for the pinned
+		// window so the image appears at the same desktop size the user selected.
+		if selectionRect.Width >= 1 {
+			width = selectionRect.Width
+		}
+		if selectionRect.Height >= 1 {
+			height = selectionRect.Height
+		}
+		offsetX = selectionRect.X
+		offsetY = selectionRect.Y
+	}
+	// File-backed overlays usually get logical size from Flutter, but this header-only fallback keeps
+	// older or incomplete capture results usable without returning to the full image decode path.
+	if width < 1 || height < 1 {
+		pixelWidth, pixelHeight, err := p.readScreenshotImageSize(screenshotPath)
+		if err != nil {
+			return err
+		}
+		if width < 1 {
+			width = float64(pixelWidth)
+		}
+		if height < 1 {
+			height = float64(pixelHeight)
+		}
+	}
+
+	name := screenshotPinnedOverlayPrefix + util.Md5([]byte(fmt.Sprintf("%s:%d", screenshotPath, time.Now().UnixNano())))
+	overlay.Show(overlay.OverlayOptions{
+		Name:          name,
+		Title:         "Wox pinned screenshot",
+		Icon:          overlay.NewFileIcon(screenshotPath),
+		Transparent:   true,
+		Movable:       true,
+		CloseOnEscape: true,
+		Anchor:        overlay.AnchorTopLeft,
+		OffsetX:       offsetX,
+		OffsetY:       offsetY,
+		Width:         width,
+		Height:        height,
+		IconWidth:     width,
+		IconHeight:    height,
+	})
+	return nil
+}
+
 func (p *ScreenshotPlugin) captureScreenshot(ctx context.Context, actionContext plugin.ActionContext) {
 	request := common.DefaultCaptureScreenshotRequest()
 	result, err := plugin.GetPluginManager().GetUI().CaptureScreenshot(ctx, request)
@@ -420,6 +505,17 @@ func (p *ScreenshotPlugin) captureScreenshot(ctx context.Context, actionContext 
 			// history result will temporarily fall back to the default icon and the next init warm-up
 			// can repair the cache.
 			p.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to generate screenshot history thumbnails: path=%s err=%s", result.ScreenshotPath, err.Error()))
+		}
+
+		if result.PinToScreen {
+			// Flutter owns final image composition, but the pinned desktop window belongs in Go because
+			// util/overlay is already the native surface abstraction used by core. Branching on the
+			// explicit result flag avoids overloading normal clipboard confirmation with pin behavior.
+			if err := p.pinScreenshotToScreen(ctx, result.ScreenshotPath, result.LogicalSelectionRect); err != nil {
+				p.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to pin screenshot: path=%s err=%s", result.ScreenshotPath, err.Error()))
+				p.api.Notify(ctx, "plugin_screenshot_pin_failed")
+			}
+			return
 		}
 
 		p.api.Notify(ctx, "plugin_screenshot_capture_success")

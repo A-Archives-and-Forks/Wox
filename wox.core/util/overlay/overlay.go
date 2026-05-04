@@ -4,6 +4,14 @@ import (
 	"image"
 )
 
+// OverlayImageKind identifies the transport used for an overlay image.
+type OverlayImageKind string
+
+const (
+	OverlayImageKindImage OverlayImageKind = "image"
+	OverlayImageKindFile  OverlayImageKind = "file"
+)
+
 const (
 	AnchorTopLeft      = 0
 	AnchorTopCenter    = 1
@@ -16,6 +24,45 @@ const (
 	AnchorBottomRight  = 8
 )
 
+// OverlayImage describes how the overlay icon is supplied to the native layer.
+// Large pinned screenshots already exist as files, so a file-backed icon avoids
+// the previous image.Image decode plus PNG re-encode cost in the Go bridge while
+// preserving the in-memory image path used by notification overlays.
+type OverlayImage struct {
+	Kind     OverlayImageKind
+	Image    image.Image
+	FilePath string
+}
+
+func NewImageIcon(img image.Image) OverlayImage {
+	return OverlayImage{
+		Kind:  OverlayImageKindImage,
+		Image: img,
+	}
+}
+
+func NewFileIcon(filePath string) OverlayImage {
+	return OverlayImage{
+		Kind:     OverlayImageKindFile,
+		FilePath: filePath,
+	}
+}
+
+func (img OverlayImage) activeKind() OverlayImageKind {
+	if img.Kind != "" {
+		return img.Kind
+	}
+	if img.Image != nil {
+		// Compatibility fallback for callers that construct OverlayImage literals
+		// without a Kind while migrating from the old image.Image-only API.
+		return OverlayImageKindImage
+	}
+	if img.FilePath != "" {
+		return OverlayImageKindFile
+	}
+	return ""
+}
+
 // OverlayOptions defines the configuration for displaying an overlay window.
 type OverlayOptions struct {
 	// Name is a unique identifier for the overlay. Reusing the same name updates the existing overlay.
@@ -24,8 +71,8 @@ type OverlayOptions struct {
 	Title string
 	// Message is the main text content to display.
 	Message string
-	// Icon is the image for the icon. If nil, no icon is shown.
-	Icon image.Image
+	// Icon is the image source for the icon. If empty, no icon is shown.
+	Icon OverlayImage
 	// Transparent makes the overlay a clear drawing surface instead of the default notification HUD.
 	// This is a generic surface mode for modules that need custom drawing without the default frame.
 	Transparent bool
@@ -41,6 +88,10 @@ type OverlayOptions struct {
 	IconHeight float64
 	// Closable determines if a close button (X) is shown.
 	Closable bool
+	// CloseOnEscape lets a focused overlay close itself on Esc.
+	// This is intentionally handled inside the overlay window instead of a global key listener so
+	// only the overlay with keyboard focus is dismissed.
+	CloseOnEscape bool
 	// StickyWindowPid determines the positioning context.
 	// If 0, the overlay is positioned relative to the screen (work area).
 	// If > 0, the overlay is positioned relative to the window owned by this PID.

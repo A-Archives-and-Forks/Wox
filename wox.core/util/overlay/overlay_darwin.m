@@ -15,6 +15,7 @@ typedef struct {
     char* message;
     unsigned char* iconData;
     int iconLen;
+    char* iconFilePath;
     bool transparent;
     bool hitTestIconOnly;
     float iconX;
@@ -22,6 +23,7 @@ typedef struct {
     float iconWidth;
     float iconHeight;
     bool closable;
+    bool closeOnEscape;
     int stickyWindowPid; // 0 = Screen, >0 = Window
     int anchor;          // 0-8: TL,TC,TR, LC,C,RC, BL,BC,BR
     int autoCloseSeconds;
@@ -101,6 +103,7 @@ static void OverlayDebugLog(NSString *message) {
 @property(nonatomic, assign) NSRect tooltipIconRect;
 @property(nonatomic, assign) BOOL transparentMode;
 @property(nonatomic, assign) BOOL hitTestIconOnly;
+@property(nonatomic, assign) BOOL closeOnEscape;
 @property(nonatomic, assign) NSRect iconHitRect;
 @property(nonatomic, assign) unsigned long long stickyMoveEventCount;
 @property(nonatomic, assign) CFTimeInterval lastStickyMoveEventTime;
@@ -413,6 +416,12 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 
 - (void)mouseDown:(NSEvent *)event {
     [self hideTooltipWindow];
+    if (self.closeOnEscape) {
+        // Focus-sensitive overlays, such as pinned screenshots, should close only when they own
+        // keyboard focus. Make the clicked overlay key here so Escape targets this window instead
+        // of relying on a process-wide shortcut that would dismiss unrelated overlays.
+        [self makeKeyWindow];
+    }
     self.initialLocation = [NSEvent mouseLocation];
     self.initialWindowOrigin = self.frame.origin;
 
@@ -451,6 +460,16 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
     if (self.isAutoClosePending && !self.isMouseInside) {
         [self onClose];
     }
+}
+
+- (void)keyDown:(NSEvent *)event {
+    if (self.closeOnEscape && event.keyCode == 53) {
+        // Escape is scoped to the focused overlay window. This preserves multiple pinned
+        // screenshots: clicking one gives it focus, and Escape dismisses only that image.
+        [self onClose];
+        return;
+    }
+    [super keyDown:event];
 }
 
 - (void)setupTrackingArea {
@@ -698,7 +717,12 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
     [self hideTooltipWindow];
     NSString *msg = opts.message ? [NSString stringWithUTF8String:opts.message] : @"";
     NSImage *icon = nil;
-    if (opts.iconData && opts.iconLen > 0) {
+    NSString *iconPath = opts.iconFilePath ? [NSString stringWithUTF8String:opts.iconFilePath] : @"";
+    if (iconPath.length > 0) {
+        // File-backed icons let pinned screenshots reuse the PNG written by Flutter instead of
+        // receiving a Go re-encoded byte buffer for every large capture.
+        icon = [[NSImage alloc] initWithContentsOfFile:iconPath];
+    } else if (opts.iconData && opts.iconLen > 0) {
         NSData *data = [NSData dataWithBytes:opts.iconData length:opts.iconLen];
         icon = [[NSImage alloc] initWithData:data];
     }
@@ -707,6 +731,7 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
     self.iconView.hidden = (icon == nil);
     
     self.closeButton.hidden = !opts.closable;
+    self.closeOnEscape = opts.closeOnEscape;
 
     NSString *tooltip = opts.tooltip ? [NSString stringWithUTF8String:opts.tooltip] : @"";
     self.tooltipText = tooltip;

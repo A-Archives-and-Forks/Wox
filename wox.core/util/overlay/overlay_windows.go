@@ -12,6 +12,7 @@ typedef struct {
     char* message;
     unsigned char* iconData;
     int iconLen;
+    char* iconFilePath;
     bool transparent;
     bool hitTestIconOnly;
     float iconX;
@@ -19,6 +20,7 @@ typedef struct {
     float iconWidth;
     float iconHeight;
     bool closable;
+    bool closeOnEscape;
     int stickyWindowPid;
     int anchor;
     int autoCloseSeconds;
@@ -75,10 +77,21 @@ func Show(opts OverlayOptions) {
 
 	var cIconData *C.uchar
 	var cIconLen C.int
-	pngBytes, _ := imageToPNG(opts.Icon)
-	if len(pngBytes) > 0 {
-		cIconData = (*C.uchar)(unsafe.Pointer(&pngBytes[0]))
-		cIconLen = C.int(len(pngBytes))
+	var cIconFilePath *C.char
+	iconKind := opts.Icon.activeKind()
+	var pngBytes []byte
+	switch iconKind {
+	case OverlayImageKindFile:
+		if opts.Icon.FilePath != "" {
+			cIconFilePath = C.CString(opts.Icon.FilePath)
+			defer C.free(unsafe.Pointer(cIconFilePath))
+		}
+	case OverlayImageKindImage:
+		pngBytes, _ = imageToPNG(opts.Icon.Image)
+		if len(pngBytes) > 0 {
+			cIconData = (*C.uchar)(unsafe.Pointer(&pngBytes[0]))
+			cIconLen = C.int(len(pngBytes))
+		}
 	}
 
 	var cTooltipIconData *C.uchar
@@ -95,6 +108,7 @@ func Show(opts OverlayOptions) {
 		message:          cMessage,
 		iconData:         cIconData,
 		iconLen:          cIconLen,
+		iconFilePath:     cIconFilePath,
 		transparent:      C.bool(opts.Transparent),
 		hitTestIconOnly:  C.bool(opts.HitTestIconOnly),
 		iconX:            C.float(opts.IconX),
@@ -102,6 +116,7 @@ func Show(opts OverlayOptions) {
 		iconWidth:        C.float(opts.IconWidth),
 		iconHeight:       C.float(opts.IconHeight),
 		closable:         C.bool(opts.Closable),
+		closeOnEscape:    C.bool(opts.CloseOnEscape),
 		stickyWindowPid:  C.int(opts.StickyWindowPid),
 		anchor:           C.int(opts.Anchor),
 		autoCloseSeconds: C.int(opts.AutoCloseSeconds),

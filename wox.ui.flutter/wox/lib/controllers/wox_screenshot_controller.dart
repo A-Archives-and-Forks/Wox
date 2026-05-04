@@ -420,27 +420,11 @@ class WoxScreenshotController extends GetxController {
 
     stage.value = ScreenshotSessionStage.exporting;
     try {
-      await _hideScreenshotWindowBeforeFinish(traceId);
-      await _ensureSelectionSnapshotsReady(currentSelection);
-
-      // Screenshot completion used to push full PNG/base64 payloads back through the websocket
-      // bridge. The backend now preallocates the export path inside woxDataDirectory so Flutter can
-      // write the final PNG there and immediately hand the same file to the platform clipboard code.
-      final activeRequest = _activeRequest;
-      if (activeRequest == null || activeRequest.exportFilePath.isEmpty) {
-        throw StateError('Screenshot export file path is missing');
-      }
-
-      final screenshotPath = await _writeSelectionPngFile(
-        exportFilePath: activeRequest.exportFilePath,
-        selection: currentSelection,
-        snapshots: displaySnapshots.toList(),
-        annotationsToPaint: annotations.toList(),
-      );
+      final screenshotPath = await _exportCurrentSelectionPngFile(traceId: traceId, selection: currentSelection);
 
       var clipboardWriteSucceeded = true;
       String? clipboardWarningMessage;
-      if (activeRequest.output == 'clipboard') {
+      if (_activeRequest?.output == 'clipboard') {
         try {
           await ScreenshotPlatformBridge.instance.writeClipboardImageFile(filePath: screenshotPath);
         } catch (e) {
@@ -464,6 +448,48 @@ class WoxScreenshotController extends GetxController {
       Logger.instance.error(traceId, 'Failed to export screenshot: $e');
       await failSession(traceId, errorCode: 'export_failed', errorMessage: e.toString());
     }
+  }
+
+  Future<void> pinSelection(String traceId) async {
+    final currentSelection = selectionRect;
+    if (currentSelection == null || currentSelection.width < 1 || currentSelection.height < 1) {
+      return;
+    }
+
+    stage.value = ScreenshotSessionStage.exporting;
+    try {
+      final screenshotPath = await _exportCurrentSelectionPngFile(traceId: traceId, selection: currentSelection);
+      // Pin is a third completion mode for the same selected image. It deliberately skips clipboard
+      // handoff and returns an explicit flag so the Go screenshot plugin can create the native,
+      // draggable overlay after Flutter has finished composing the PNG.
+      final result = CaptureScreenshotResult.completed(selectionRect: currentSelection, screenshotPath: screenshotPath, pinToScreen: true);
+      await _finishSession(traceId, result, ScreenshotSessionStage.done, restoreVisibility: false, windowAlreadyHidden: true);
+    } catch (e) {
+      Logger.instance.error(traceId, 'Failed to pin screenshot: $e');
+      await failSession(traceId, errorCode: 'pin_failed', errorMessage: e.toString());
+    }
+  }
+
+  Future<String> _exportCurrentSelectionPngFile({required String traceId, required Rect selection}) async {
+    await _hideScreenshotWindowBeforeFinish(traceId);
+
+    await _ensureSelectionSnapshotsReady(selection);
+
+    // Screenshot completion used to push full PNG/base64 payloads back through the websocket
+    // bridge. The backend now preallocates the export path inside woxDataDirectory so both confirm
+    // and pin actions write the same durable PNG before choosing clipboard or overlay behavior.
+    final activeRequest = _activeRequest;
+    if (activeRequest == null || activeRequest.exportFilePath.isEmpty) {
+      throw StateError('Screenshot export file path is missing');
+    }
+
+    final screenshotPath = await _writeSelectionPngFile(
+      exportFilePath: activeRequest.exportFilePath,
+      selection: selection,
+      snapshots: displaySnapshots.toList(),
+      annotationsToPaint: annotations.toList(),
+    );
+    return screenshotPath;
   }
 
   Future<void> startScrollingCapture(String traceId) async {
@@ -742,6 +768,7 @@ class WoxScreenshotController extends GetxController {
     required List<ScreenshotAnnotation> annotationsToPaint,
   }) async {
     final rendered = await _renderSelectionImage(selection: selection, snapshots: snapshots, annotationsToPaint: annotationsToPaint);
+
     final exportFile = File(exportFilePath);
     await exportFile.parent.create(recursive: true);
     await exportFile.writeAsBytes(rendered.pngBytes, flush: true);

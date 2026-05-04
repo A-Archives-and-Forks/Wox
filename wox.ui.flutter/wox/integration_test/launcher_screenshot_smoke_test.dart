@@ -299,6 +299,39 @@ void registerLauncherScreenshotSmokeTests() {
       expect(Get.find<WoxScreenshotController>().isSessionActive.value, isFalse);
     });
 
+    testWidgets('T11-02P: Screenshot pin exports a PNG and marks the result for screen pinning', (tester) async {
+      await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final screenshotController = Get.find<WoxScreenshotController>();
+      ScreenshotPlatformBridge.setInstanceForTest(
+        _FakeScreenshotBridge(() async => [await _buildSnapshot('display-pin', const Color(0xFF31572C), const ScreenshotRect(x: 0, y: 0, width: 420, height: 280))]),
+      );
+
+      final sessionFuture = screenshotController.startCaptureSession('smoke-pin', _defaultRequest());
+      await pumpUntil(tester, () => find.byKey(screenshotCanvasKey).evaluate().isNotEmpty, timeout: const Duration(seconds: 15));
+
+      screenshotController.updateSelection(const Rect.fromLTWH(40, 32, 180, 120));
+      await tester.pumpAndSettle();
+
+      // Pin uses the same export path as confirm but returns an explicit result flag so Go can decide
+      // to display the saved PNG through the native overlay instead of treating it as a clipboard-only capture.
+      await screenshotController.pinSelection('smoke-pin-confirm');
+      final result = (await sessionFuture.timeout(const Duration(seconds: 15))).toJson();
+
+      expect(result['status'], equals('completed'));
+      expect(result['pinToScreen'], isTrue);
+      final screenshotPath = result['screenshotPath'] as String? ?? '';
+      expect(screenshotPath, isNotEmpty);
+      expect(await File(screenshotPath).exists(), isTrue);
+      final codec = await ui.instantiateImageCodec(await File(screenshotPath).readAsBytes());
+      final frame = await codec.getNextFrame();
+      expect(frame.image.width, equals(180));
+      expect(frame.image.height, equals(120));
+      frame.image.dispose();
+
+      await waitForWindowVisibility(tester, false, timeout: const Duration(seconds: 15));
+      expect(screenshotController.isSessionActive.value, isFalse);
+    });
+
     testWidgets('T11-02A: Plugin-triggered screenshot shows the caller icon before the tools', (tester) async {
       await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       final screenshotController = Get.find<WoxScreenshotController>();

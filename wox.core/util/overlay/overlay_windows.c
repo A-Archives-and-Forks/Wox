@@ -52,6 +52,7 @@ typedef struct {
     char* message;
     unsigned char* iconData;
     int iconLen;
+    char* iconFilePath;
     bool transparent;
     bool hitTestIconOnly;
     float iconX;
@@ -59,6 +60,7 @@ typedef struct {
     float iconWidth;
     float iconHeight;
     bool closable;
+    bool closeOnEscape;
     int stickyWindowPid; // 0 = Screen, >0 = Window
     int anchor;          // 0-8
     int autoCloseSeconds;
@@ -326,6 +328,81 @@ static HBITMAP Create32BitDIBSection(HDC hdc, int width, int height, void **bits
     return CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, bits, NULL, 0);
 }
 
+static HBITMAP CreateBitmapFromWicDecoder(IWICImagingFactory *factory, IWICBitmapDecoder *decoder, int *outW, int *outH)
+{
+    if (!factory || !decoder)
+        return NULL;
+
+    IWICBitmapFrameDecode *frame = NULL;
+    HRESULT hr = IWICBitmapDecoder_GetFrame(decoder, 0, &frame);
+    if (FAILED(hr) || !frame)
+        return NULL;
+
+    IWICFormatConverter *converter = NULL;
+    hr = IWICImagingFactory_CreateFormatConverter(factory, &converter);
+    if (FAILED(hr) || !converter)
+    {
+        IWICBitmapFrameDecode_Release(frame);
+        return NULL;
+    }
+
+    hr = IWICFormatConverter_Initialize(converter, (IWICBitmapSource *)frame,
+                                        &GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone,
+                                        NULL, 0.0, WICBitmapPaletteTypeCustom);
+    if (FAILED(hr))
+    {
+        IWICFormatConverter_Release(converter);
+        IWICBitmapFrameDecode_Release(frame);
+        return NULL;
+    }
+
+    UINT w = 0, h = 0;
+    IWICBitmapSource_GetSize((IWICBitmapSource *)converter, &w, &h);
+    if (w == 0 || h == 0)
+    {
+        IWICFormatConverter_Release(converter);
+        IWICBitmapFrameDecode_Release(frame);
+        return NULL;
+    }
+
+    HDC hdc = GetDC(NULL);
+    void *bits = NULL;
+    HBITMAP dib = Create32BitDIBSection(hdc, (int)w, (int)h, &bits);
+    ReleaseDC(NULL, hdc);
+    if (!dib || !bits)
+    {
+        if (dib)
+            DeleteObject(dib);
+        IWICFormatConverter_Release(converter);
+        IWICBitmapFrameDecode_Release(frame);
+        return NULL;
+    }
+
+    WICRect rc;
+    rc.X = 0;
+    rc.Y = 0;
+    rc.Width = (INT)w;
+    rc.Height = (INT)h;
+    hr = IWICBitmapSource_CopyPixels((IWICBitmapSource *)converter, &rc, w * 4, w * h * 4, (BYTE *)bits);
+    if (FAILED(hr))
+    {
+        DeleteObject(dib);
+        dib = NULL;
+    }
+    else
+    {
+        if (outW)
+            *outW = (int)w;
+        if (outH)
+            *outH = (int)h;
+    }
+
+    IWICFormatConverter_Release(converter);
+    IWICBitmapFrameDecode_Release(frame);
+
+    return dib;
+}
+
 static HBITMAP CreateBitmapFromPngData(const unsigned char *data, int len, int *outW, int *outH)
 {
     if (outW)
@@ -375,94 +452,42 @@ static HBITMAP CreateBitmapFromPngData(const unsigned char *data, int len, int *
         return NULL;
     }
 
-    IWICBitmapFrameDecode *frame = NULL;
-    hr = IWICBitmapDecoder_GetFrame(decoder, 0, &frame);
-    if (FAILED(hr) || !frame)
-    {
-        IWICBitmapDecoder_Release(decoder);
-        IStream_Release(stream);
-        IWICImagingFactory_Release(factory);
-        return NULL;
-    }
-
-    IWICFormatConverter *converter = NULL;
-    hr = IWICImagingFactory_CreateFormatConverter(factory, &converter);
-    if (FAILED(hr) || !converter)
-    {
-        IWICBitmapFrameDecode_Release(frame);
-        IWICBitmapDecoder_Release(decoder);
-        IStream_Release(stream);
-        IWICImagingFactory_Release(factory);
-        return NULL;
-    }
-
-    hr = IWICFormatConverter_Initialize(converter, (IWICBitmapSource *)frame,
-                                        &GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone,
-                                        NULL, 0.0, WICBitmapPaletteTypeCustom);
-    if (FAILED(hr))
-    {
-        IWICFormatConverter_Release(converter);
-        IWICBitmapFrameDecode_Release(frame);
-        IWICBitmapDecoder_Release(decoder);
-        IStream_Release(stream);
-        IWICImagingFactory_Release(factory);
-        return NULL;
-    }
-
-    UINT w = 0, h = 0;
-    IWICBitmapSource_GetSize((IWICBitmapSource *)converter, &w, &h);
-    if (w == 0 || h == 0)
-    {
-        IWICFormatConverter_Release(converter);
-        IWICBitmapFrameDecode_Release(frame);
-        IWICBitmapDecoder_Release(decoder);
-        IStream_Release(stream);
-        IWICImagingFactory_Release(factory);
-        return NULL;
-    }
-
-    HDC hdc = GetDC(NULL);
-    void *bits = NULL;
-    HBITMAP dib = Create32BitDIBSection(hdc, (int)w, (int)h, &bits);
-    ReleaseDC(NULL, hdc);
-    if (!dib || !bits)
-    {
-        if (dib)
-            DeleteObject(dib);
-        IWICFormatConverter_Release(converter);
-        IWICBitmapFrameDecode_Release(frame);
-        IWICBitmapDecoder_Release(decoder);
-        IStream_Release(stream);
-        IWICImagingFactory_Release(factory);
-        return NULL;
-    }
-
-    WICRect rc;
-    rc.X = 0;
-    rc.Y = 0;
-    rc.Width = (INT)w;
-    rc.Height = (INT)h;
-    hr = IWICBitmapSource_CopyPixels((IWICBitmapSource *)converter, &rc, w * 4, w * h * 4, (BYTE *)bits);
-    if (FAILED(hr))
-    {
-        DeleteObject(dib);
-        dib = NULL;
-    }
-    else
-    {
-        if (outW)
-            *outW = (int)w;
-        if (outH)
-            *outH = (int)h;
-    }
-
-    IWICFormatConverter_Release(converter);
-    IWICBitmapFrameDecode_Release(frame);
+    HBITMAP bitmap = CreateBitmapFromWicDecoder(factory, decoder, outW, outH);
     IWICBitmapDecoder_Release(decoder);
     IStream_Release(stream);
     IWICImagingFactory_Release(factory);
+    return bitmap;
+}
 
-    return dib;
+static HBITMAP CreateBitmapFromImageFilePath(const WCHAR *path, int *outW, int *outH)
+{
+    if (outW)
+        *outW = 0;
+    if (outH)
+        *outH = 0;
+    if (!path || !*path)
+        return NULL;
+
+    IWICImagingFactory *factory = NULL;
+    HRESULT hr = CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
+                                  &IID_IWICImagingFactory, (LPVOID *)&factory);
+    if (FAILED(hr) || !factory)
+        return NULL;
+
+    IWICBitmapDecoder *decoder = NULL;
+    // File-backed pinned screenshots bypass the Go PNG re-encode path and let WIC
+    // decode the capture from disk, matching the macOS AppKit file-source path.
+    hr = IWICImagingFactory_CreateDecoderFromFilename(factory, path, NULL, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &decoder);
+    if (FAILED(hr) || !decoder)
+    {
+        IWICImagingFactory_Release(factory);
+        return NULL;
+    }
+
+    HBITMAP bitmap = CreateBitmapFromWicDecoder(factory, decoder, outW, outH);
+    IWICBitmapDecoder_Release(decoder);
+    IWICImagingFactory_Release(factory);
+    return bitmap;
 }
 
 static int MeasureTextHeightW(HDC hdc, const WCHAR *text, int width)
@@ -560,6 +585,7 @@ typedef struct OverlayWindow
     int tooltipIconHeight;
     float tooltipIconSize;
     BOOL closable;
+    BOOL closeOnEscape;
     BOOL movable;
     int autoCloseSeconds;
     int stickyWindowPid;
@@ -611,6 +637,7 @@ typedef struct OverlayPayload
     WCHAR *tooltip;
     unsigned char *iconData;
     int iconLen;
+    WCHAR *iconFilePath;
     BOOL transparent;
     BOOL hitTestIconOnly;
     float iconX;
@@ -621,6 +648,7 @@ typedef struct OverlayPayload
     int tooltipIconLen;
     float tooltipIconSize;
     BOOL closable;
+    BOOL closeOnEscape;
     int stickyWindowPid;
     int anchor;
     int autoCloseSeconds;
@@ -1308,11 +1336,12 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
     ow->iconWidth = 0;
     ow->iconHeight = 0;
 
-    if (payload->iconData && payload->iconLen > 0)
+    if ((payload->iconFilePath && payload->iconFilePath[0]) || (payload->iconData && payload->iconLen > 0))
     {
         int iw = 0;
         int ih = 0;
-        HBITMAP bmp = CreateBitmapFromPngData(payload->iconData, payload->iconLen, &iw, &ih);
+        BOOL useFileIcon = payload->iconFilePath && payload->iconFilePath[0];
+        HBITMAP bmp = useFileIcon ? CreateBitmapFromImageFilePath(payload->iconFilePath, &iw, &ih) : CreateBitmapFromPngData(payload->iconData, payload->iconLen, &iw, &ih);
         if (bmp)
         {
             ow->iconBitmap = bmp;
@@ -1342,11 +1371,14 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
 
     if (payload->iconData)
         free(payload->iconData);
+    if (payload->iconFilePath)
+        free(payload->iconFilePath);
 
     if (payload->tooltipIconData)
         free(payload->tooltipIconData);
 
     ow->closable = payload->closable;
+    ow->closeOnEscape = payload->closeOnEscape;
     ow->transparent = payload->transparent;
     ow->hitTestIconOnly = payload->hitTestIconOnly;
     ow->iconX = payload->iconX;
@@ -1921,6 +1953,13 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     {
         if (!ow)
             break;
+        if (ow->closeOnEscape)
+        {
+            // Focus-sensitive overlays must receive Escape themselves. Setting focus only when this
+            // option is enabled keeps notification overlays non-activating while pinned screenshots
+            // close one focused image at a time.
+            SetFocus(hwnd);
+        }
         POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         if (ow->closable && PtInRect(&ow->closeRect, pt))
         {
@@ -1965,6 +2004,17 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             HandleOverlayClick(ow);
         }
         return 0;
+    }
+    case WM_KEYDOWN:
+    {
+        if (ow && ow->closeOnEscape && wParam == VK_ESCAPE)
+        {
+            // Escape is intentionally scoped to the overlay window that currently has focus instead
+            // of being handled by a global keyboard hook that would close every pinned screenshot.
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
     }
     case WM_TIMER:
     {
@@ -2113,7 +2163,21 @@ static void HandleShowCommand(OverlayPayload *payload)
     if (!payload || !payload->name)
     {
         if (payload)
+        {
+            if (payload->title)
+                free(payload->title);
+            if (payload->message)
+                free(payload->message);
+            if (payload->tooltip)
+                free(payload->tooltip);
+            if (payload->iconData)
+                free(payload->iconData);
+            if (payload->iconFilePath)
+                free(payload->iconFilePath);
+            if (payload->tooltipIconData)
+                free(payload->tooltipIconData);
             free(payload);
+        }
         return;
     }
 
@@ -2140,6 +2204,8 @@ static void HandleShowCommand(OverlayPayload *payload)
             free(payload->tooltip);
         if (payload->iconData)
             free(payload->iconData);
+        if (payload->iconFilePath)
+            free(payload->iconFilePath);
         if (payload->tooltipIconData)
             free(payload->tooltipIconData);
         free(payload);
@@ -2148,7 +2214,9 @@ static void HandleShowCommand(OverlayPayload *payload)
 
     ApplyPayloadToOverlay(ow, payload, TRUE);
 
-    DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+    DWORD exStyle = WS_EX_TOOLWINDOW;
+    if (!ow->closeOnEscape)
+        exStyle |= WS_EX_NOACTIVATE;
     if (ow->transparent)
         exStyle |= WS_EX_LAYERED;
     if (ow->stickyWindowPid <= 0)
@@ -2345,6 +2413,7 @@ void ShowOverlay(OverlayOptions opts)
     payload->title = DupUtf8ToWide(opts.title);
     payload->message = DupUtf8ToWide(opts.message);
     payload->tooltip = DupUtf8ToWide(opts.tooltip);
+    payload->iconFilePath = DupUtf8ToWide(opts.iconFilePath);
     payload->transparent = opts.transparent ? TRUE : FALSE;
     payload->hitTestIconOnly = opts.hitTestIconOnly ? TRUE : FALSE;
     payload->iconX = opts.iconX;
@@ -2352,6 +2421,7 @@ void ShowOverlay(OverlayOptions opts)
     payload->iconWidth = opts.iconWidth;
     payload->iconHeight = opts.iconHeight;
     payload->closable = opts.closable ? TRUE : FALSE;
+    payload->closeOnEscape = opts.closeOnEscape ? TRUE : FALSE;
     payload->stickyWindowPid = opts.stickyWindowPid;
     payload->anchor = opts.anchor;
     payload->autoCloseSeconds = opts.autoCloseSeconds;
@@ -2397,6 +2467,8 @@ void ShowOverlay(OverlayOptions opts)
             free(payload->tooltip);
         if (payload->iconData)
             free(payload->iconData);
+        if (payload->iconFilePath)
+            free(payload->iconFilePath);
         if (payload->tooltipIconData)
             free(payload->tooltipIconData);
         free(payload);
@@ -2417,6 +2489,8 @@ void ShowOverlay(OverlayOptions opts)
             free(payload->tooltip);
         if (payload->iconData)
             free(payload->iconData);
+        if (payload->iconFilePath)
+            free(payload->iconFilePath);
         if (payload->tooltipIconData)
             free(payload->tooltipIconData);
         free(payload);
