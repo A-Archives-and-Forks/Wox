@@ -61,6 +61,7 @@ typedef struct {
     float iconHeight;
     bool closable;
     bool closeOnEscape;
+    bool topmost;
     int stickyWindowPid; // 0 = Screen, >0 = Window
     int anchor;          // 0-8
     int autoCloseSeconds;
@@ -586,6 +587,7 @@ typedef struct OverlayWindow
     float tooltipIconSize;
     BOOL closable;
     BOOL closeOnEscape;
+    BOOL topmost;
     BOOL movable;
     int autoCloseSeconds;
     int stickyWindowPid;
@@ -649,6 +651,7 @@ typedef struct OverlayPayload
     float tooltipIconSize;
     BOOL closable;
     BOOL closeOnEscape;
+    BOOL topmost;
     int stickyWindowPid;
     int anchor;
     int autoCloseSeconds;
@@ -689,6 +692,7 @@ static BOOL GetTargetContentRect(HWND target, RECT *outRect);
 static void StartLiveFollowTimerIfNeeded(OverlayWindow *ow);
 static void StopLiveFollowTimer(OverlayWindow *ow);
 static void RepositionOverlayToTargetRect(OverlayWindow *ow, const RECT *targetRect, BOOL preserveSmallPredictiveCorrection);
+static void ShowOverlayWindowWithFocusPolicy(OverlayWindow *ow);
 
 // -----------------------------------------------------------------------------
 // Overlay Helpers
@@ -965,6 +969,25 @@ static void StopLiveFollowTimer(OverlayWindow *ow)
     KillTimer(ow->hwnd, TIMER_LIVE_FOLLOW);
     ow->liveFollowActive = FALSE;
     ow->hasPredictiveAnchor = FALSE;
+}
+
+static void ShowOverlayWindowWithFocusPolicy(OverlayWindow *ow)
+{
+    if (!ow || !ow->hwnd)
+        return;
+
+    if (ow->closeOnEscape)
+    {
+        // Bug fix: SW_SHOWNOACTIVATE made Escape-to-close overlays visible but left keyboard focus
+        // on the launcher. Focus only keyboard-dismissable overlays so ordinary notification
+        // overlays keep their non-activating behavior.
+        ShowWindow(ow->hwnd, SW_SHOW);
+        SetForegroundWindow(ow->hwnd);
+        SetFocus(ow->hwnd);
+        return;
+    }
+
+    ShowWindow(ow->hwnd, SW_SHOWNOACTIVATE);
 }
 
 static void UpdateCloseRect(OverlayWindow *ow, int width, int height, UINT dpi)
@@ -1379,6 +1402,7 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
 
     ow->closable = payload->closable;
     ow->closeOnEscape = payload->closeOnEscape;
+    ow->topmost = payload->topmost;
     ow->transparent = payload->transparent;
     ow->hitTestIconOnly = payload->hitTestIconOnly;
     ow->iconX = payload->iconX;
@@ -2087,7 +2111,7 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             RepositionOverlayToTargetRect(ow, &targetRect, FALSE);
             SetOverlayZOrder(hwnd, ow->targetHwnd);
             if (!IsWindowVisible(hwnd))
-                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                ShowOverlayWindowWithFocusPolicy(ow);
             return 0;
         }
         break;
@@ -2114,7 +2138,7 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         RepositionOverlayToTargetRect(ow, &targetRect, TRUE);
         
         if (!IsWindowVisible(hwnd))
-             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+             ShowOverlayWindowWithFocusPolicy(ow);
 
         return 0;
     }
@@ -2186,7 +2210,7 @@ static void HandleShowCommand(OverlayPayload *payload)
     {
         ApplyPayloadToOverlay(ow, payload, FALSE);
         ApplyOverlayLayout(ow);
-        ShowWindow(ow->hwnd, SW_SHOWNOACTIVATE);
+        ShowOverlayWindowWithFocusPolicy(ow);
         InvalidateRect(ow->hwnd, NULL, TRUE);
         return;
     }
@@ -2219,7 +2243,7 @@ static void HandleShowCommand(OverlayPayload *payload)
         exStyle |= WS_EX_NOACTIVATE;
     if (ow->transparent)
         exStyle |= WS_EX_LAYERED;
-    if (ow->stickyWindowPid <= 0)
+    if (ow->topmost || ow->stickyWindowPid <= 0)
         exStyle |= WS_EX_TOPMOST;
 
     HWND owner = NULL;
@@ -2274,7 +2298,7 @@ static void HandleShowCommand(OverlayPayload *payload)
     }
     else
     {
-        ShowWindow(ow->hwnd, SW_SHOWNOACTIVATE);
+        ShowOverlayWindowWithFocusPolicy(ow);
         UpdateWindow(ow->hwnd);
     }
 
@@ -2422,6 +2446,7 @@ void ShowOverlay(OverlayOptions opts)
     payload->iconHeight = opts.iconHeight;
     payload->closable = opts.closable ? TRUE : FALSE;
     payload->closeOnEscape = opts.closeOnEscape ? TRUE : FALSE;
+    payload->topmost = opts.topmost ? TRUE : FALSE;
     payload->stickyWindowPid = opts.stickyWindowPid;
     payload->anchor = opts.anchor;
     payload->autoCloseSeconds = opts.autoCloseSeconds;

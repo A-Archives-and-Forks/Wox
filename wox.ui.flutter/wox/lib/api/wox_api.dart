@@ -5,6 +5,7 @@ import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_backup.dart';
 import 'package:wox/entity/wox_lang.dart';
 import 'package:wox/entity/wox_glance.dart';
+import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/wox_plugin.dart';
 import 'package:wox/entity/wox_query.dart';
 import 'package:wox/entity/wox_runtime_status.dart';
@@ -227,6 +228,10 @@ class WoxApi {
 
   Future<void> open(String traceId, String path) async {
     await WoxHttpUtil.instance.postData(traceId, "/open", {"path": path});
+  }
+
+  Future<void> showPreviewImageOverlay(String traceId, WoxImage image) async {
+    await WoxHttpUtil.instance.postData(traceId, "/preview/image/overlay", {"Image": image.toJson()});
   }
 
   Future<String> getWoxVersion(String traceId) async {

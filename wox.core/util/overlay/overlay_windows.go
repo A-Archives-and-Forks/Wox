@@ -21,6 +21,7 @@ typedef struct {
     float iconHeight;
     bool closable;
     bool closeOnEscape;
+    bool topmost;
     int stickyWindowPid;
     int anchor;
     int autoCloseSeconds;
@@ -117,6 +118,7 @@ func Show(opts OverlayOptions) {
 		iconHeight:       C.float(opts.IconHeight),
 		closable:         C.bool(opts.Closable),
 		closeOnEscape:    C.bool(opts.CloseOnEscape),
+		topmost:          C.bool(opts.Topmost),
 		stickyWindowPid:  C.int(opts.StickyWindowPid),
 		anchor:           C.int(opts.Anchor),
 		autoCloseSeconds: C.int(opts.AutoCloseSeconds),

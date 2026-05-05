@@ -24,6 +24,7 @@ typedef struct {
     float iconHeight;
     bool closable;
     bool closeOnEscape;
+    bool topmost;
     int stickyWindowPid; // 0 = Screen, >0 = Window
     int anchor;          // 0-8: TL,TC,TR, LC,C,RC, BL,BC,BR
     int autoCloseSeconds;
@@ -678,6 +679,16 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 
 // Order overlay window relative to sticky window
 - (void)orderRelativeToStickyWindow {
+    if (self.currentOpts.topmost) {
+        // Bug fix: Wox's launcher window uses the pop-up-menu level on macOS, so the previous
+        // floating overlay level could be visually underneath Wox. Topmost overlays are explicit
+        // user surfaces such as enlarged image previews, so lift them above the launcher without
+        // changing ordinary notification overlays.
+        [self setLevel:NSPopUpMenuWindowLevel + 1];
+        [self orderFrontRegardless];
+        return;
+    }
+
     if (self.stickyWindowNumber > 0) {
         // Use normal window level and order above the target window
         [self setLevel:NSNormalWindowLevel];
@@ -687,6 +698,18 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
         [self setLevel:NSFloatingWindowLevel];
         [self orderFront:nil];
     }
+}
+
+- (void)focusForKeyboardDismissalIfNeeded {
+    if (!self.closeOnEscape) {
+        return;
+    }
+
+    // Bug fix: showing a panel with orderFront/orderFrontRegardless only changes visibility and
+    // z-order; it does not guarantee keyboard focus. Overlays that advertise Escape-to-close must
+    // become the key window as soon as they appear so Escape works without an extra click.
+    [NSApp activateIgnoringOtherApps:YES];
+    [self makeKeyAndOrderFront:nil];
 }
 
 - (void)onClick {
@@ -1341,6 +1364,7 @@ void ShowOverlay(OverlayOptions opts) {
 
         [win updateLayoutWithOptions:opts];
         [win orderRelativeToStickyWindow];
+        [win focusForKeyboardDismissalIfNeeded];
         win.alphaValue = 1.0;
     }
 }

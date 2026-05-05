@@ -92,6 +92,9 @@ type OverlayOptions struct {
 	// This is intentionally handled inside the overlay window instead of a global key listener so
 	// only the overlay with keyboard focus is dismissed.
 	CloseOnEscape bool
+	// Topmost puts the overlay above Wox's launcher window instead of using the default notification
+	// level. Use it for user-requested pinned/preview surfaces, not transient notifications.
+	Topmost bool
 	// StickyWindowPid determines the positioning context.
 	// If 0, the overlay is positioned relative to the screen (work area).
 	// If > 0, the overlay is positioned relative to the window owned by this PID.

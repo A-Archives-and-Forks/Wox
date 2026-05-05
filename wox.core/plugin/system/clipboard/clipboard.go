@@ -830,6 +830,7 @@ func (c *ClipboardPlugin) convertTextRecord(ctx context.Context, record Clipboar
 // convertImageRecord converts an image record to a query result
 func (c *ClipboardPlugin) convertImageRecord(ctx context.Context, record ClipboardRecord, query plugin.Query) plugin.QueryResult {
 	previewWoxImage, iconWoxImage := c.generateImagePreviewAndIcon(ctx, record)
+	overlayWoxImage := common.NewWoxImageAbsolutePath(record.FilePath)
 
 	group, groupScore := c.getResultGroup(ctx, record)
 
@@ -854,9 +855,12 @@ func (c *ClipboardPlugin) convertImageRecord(ctx context.Context, record Clipboa
 		Group:      group,
 		GroupScore: groupScore,
 		Preview: plugin.WoxPreview{
-			PreviewType:       plugin.WoxPreviewTypeImage,
-			PreviewData:       previewWoxImage.String(),
-			PreviewProperties: previewProperties,
+			PreviewType: plugin.WoxPreviewTypeImage,
+			PreviewData: previewWoxImage.String(),
+			// Keep the inline preview on the cached thumbnail for query performance, but route
+			// click-to-enlarge through the original PNG so the native overlay shows the real image.
+			PreviewOverlayData: overlayWoxImage.String(),
+			PreviewProperties:  previewProperties,
 		},
 		Score: record.Timestamp,
 		Actions: []plugin.QueryResultAction{

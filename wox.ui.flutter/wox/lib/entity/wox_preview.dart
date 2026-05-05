@@ -5,24 +5,30 @@ import 'package:wox/utils/wox_http_util.dart';
 class WoxPreview {
   late WoxPreviewType previewType;
   late String previewData;
+  late String previewOverlayData;
   late Map<String, String> previewProperties;
   late WoxPreviewScrollPosition scrollPosition;
 
-  WoxPreview({required this.previewType, required this.previewData, required this.previewProperties, required this.scrollPosition});
+  WoxPreview({required this.previewType, required this.previewData, this.previewOverlayData = "", required this.previewProperties, required this.scrollPosition});
 
   @override
-  int get hashCode => previewType.hashCode ^ previewData.hashCode ^ previewProperties.hashCode;
+  int get hashCode => previewType.hashCode ^ previewData.hashCode ^ previewOverlayData.hashCode ^ previewProperties.hashCode;
 
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
 
-    return other is WoxPreview && other.previewType == previewType && other.previewData == previewData && other.previewProperties == previewProperties;
+    return other is WoxPreview &&
+        other.previewType == previewType &&
+        other.previewData == previewData &&
+        other.previewOverlayData == previewOverlayData &&
+        other.previewProperties == previewProperties;
   }
 
   WoxPreview.fromJson(Map<String, dynamic> json) {
     previewType = json['PreviewType'];
     previewData = json['PreviewData'];
+    previewOverlayData = json['PreviewOverlayData'] ?? "";
     previewProperties = Map<String, String>.from(json['PreviewProperties'] ?? {});
     scrollPosition = json['ScrollPosition'];
   }
@@ -31,6 +37,7 @@ class WoxPreview {
     final Map<String, dynamic> data = <String, dynamic>{};
     data['PreviewType'] = previewType;
     data['PreviewData'] = previewData;
+    data['PreviewOverlayData'] = previewOverlayData;
     data['PreviewProperties'] = previewProperties;
     data['ScrollPosition'] = scrollPosition;
     return data;

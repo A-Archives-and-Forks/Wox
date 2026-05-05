@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -14,6 +15,7 @@ import 'package:highlight/languages/typescript.dart';
 import 'package:highlight/languages/yaml.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:uuid/v4.dart';
+import 'package:wox/api/wox_api.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_ai_chat_view.dart';
 import 'package:wox/components/wox_ai_stream_preview_view.dart';
@@ -37,6 +39,7 @@ import 'package:wox/entity/wox_query_requirement_settings_preview.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/enums/wox_preview_scroll_position_enum.dart';
 import 'package:wox/enums/wox_preview_type_enum.dart';
+import 'package:wox/enums/wox_image_type_enum.dart';
 import 'package:wox/utils/log.dart';
 import 'package:wox/utils/color_util.dart';
 import 'package:flutter_highlight/themes/monokai.dart';
@@ -174,24 +177,51 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
     );
   }
 
-  Widget buildImageSurface(Widget image) {
+  bool canOpenPreviewImageOverlay(WoxImage image) {
+    return image.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_ABSOLUTE_PATH.code ||
+        image.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_BASE64.code ||
+        image.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_SVG.code;
+  }
+
+  Future<void> openPreviewImageOverlay(WoxImage image) async {
+    final traceId = const UuidV4().generate();
+    try {
+      await WoxApi.instance.showPreviewImageOverlay(traceId, image);
+    } catch (e) {
+      Logger.instance.error(traceId, "Failed to open preview image overlay: $e");
+    }
+  }
+
+  Widget buildImageSurface(Widget image, {WoxImage? overlayImage}) {
     final splitLineColor = safeFromCssColor(widget.woxTheme.previewSplitLineColor);
     final fontColor = safeFromCssColor(widget.woxTheme.previewFontColor);
 
     // Image previews need a quiet substrate so small screenshots, transparent
     // images, and dark assets stay legible without adding plugin-specific chrome.
     return LayoutBuilder(
-      builder:
-          (context, constraints) => Container(
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            decoration: BoxDecoration(
-              color: fontColor.withValues(alpha: 0.035),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: splitLineColor.withValues(alpha: 0.45)),
-            ),
-            child: Padding(padding: const EdgeInsets.all(12), child: Center(child: image)),
+      builder: (context, constraints) {
+        final content = Container(
+          width: constraints.maxWidth,
+          height: constraints.maxHeight,
+          decoration: BoxDecoration(
+            color: fontColor.withValues(alpha: 0.035),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: splitLineColor.withValues(alpha: 0.45)),
           ),
+          child: Padding(padding: const EdgeInsets.all(12), child: Center(child: image)),
+        );
+        if (overlayImage == null || !canOpenPreviewImageOverlay(overlayImage)) {
+          return content;
+        }
+
+        // The inline image already communicates the visual target, but it previously behaved like
+        // static decoration. The cursor plus click handler make the native overlay affordance clear
+        // while keeping all enlarged-image rendering in core's overlay layer.
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => unawaited(openPreviewImageOverlay(overlayImage)), child: content),
+        );
+      },
     );
   }
 
@@ -233,10 +263,16 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
           if (File(widget.woxPreview.previewData).existsSync()) {
             if (fileExtension == "svg") {
               contentHandlesScrolling = true;
-              contentWidget = buildImageSurface(SvgPicture.file(File(widget.woxPreview.previewData), fit: BoxFit.contain));
+              contentWidget = buildImageSurface(
+                SvgPicture.file(File(widget.woxPreview.previewData), fit: BoxFit.contain),
+                overlayImage: WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_ABSOLUTE_PATH.code, imageData: widget.woxPreview.previewData),
+              );
             } else {
               contentHandlesScrolling = true;
-              contentWidget = buildImageSurface(Image.file(File(widget.woxPreview.previewData), fit: BoxFit.contain));
+              contentWidget = buildImageSurface(
+                Image.file(File(widget.woxPreview.previewData), fit: BoxFit.contain),
+                overlayImage: WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_ABSOLUTE_PATH.code, imageData: widget.woxPreview.previewData),
+              );
             }
           } else {
             contentWidget = buildText("Image file not found: ${widget.woxPreview.previewData}");
@@ -272,7 +308,8 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
         contentWidget = SelectableText("Invalid image data: ${widget.woxPreview.previewData}", style: const TextStyle(color: Colors.red));
       } else {
         contentHandlesScrolling = true;
-        contentWidget = buildImageSurface(WoxImageView(woxImage: parsedWoxImage));
+        final overlayWoxImage = widget.woxPreview.previewOverlayData.isNotEmpty ? WoxImage.parse(widget.woxPreview.previewOverlayData) ?? parsedWoxImage : parsedWoxImage;
+        contentWidget = buildImageSurface(WoxImageView(woxImage: parsedWoxImage), overlayImage: overlayWoxImage);
       }
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_PLUGIN_DETAIL.code) {
       contentHandlesScrolling = true;

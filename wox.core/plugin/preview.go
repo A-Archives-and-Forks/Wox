@@ -41,10 +41,14 @@ const (
 )
 
 type WoxPreview struct {
-	PreviewType       WoxPreviewType
-	PreviewData       string
-	PreviewProperties map[string]string // key support i18n
-	ScrollPosition    WoxPreviewScrollPosition
+	PreviewType WoxPreviewType
+	PreviewData string
+	// PreviewOverlayData is the optional full-size image payload used when the UI opens an image
+	// preview in the native overlay. PreviewData often points at a lightweight thumbnail, which is
+	// correct for the inline preview but not enough for the click-to-enlarge flow.
+	PreviewOverlayData string
+	PreviewProperties  map[string]string // key support i18n
+	ScrollPosition     WoxPreviewScrollPosition
 }
 
 func (p *WoxPreview) IsEmpty() bool {

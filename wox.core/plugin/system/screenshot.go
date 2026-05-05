@@ -305,6 +305,7 @@ func (p *ScreenshotPlugin) screenshotHistoryThumbnailPaths(item screenshotHistor
 func (p *ScreenshotPlugin) screenshotHistoryResult(item screenshotHistoryItem) plugin.QueryResult {
 	group, groupScore := p.screenshotHistoryGroup(item.timestamp)
 	previewImage, iconImage, thumbnailsReady := p.getScreenshotHistoryThumbnails(item)
+	overlayImage := common.NewWoxImageAbsolutePath(item.path)
 	if !thumbnailsReady {
 		// Query must never generate thumbnails: doing image decode/write work here made the first
 		// screenshot search slow. A default icon keeps listing responsive while init/new-capture
@@ -322,6 +323,9 @@ func (p *ScreenshotPlugin) screenshotHistoryResult(item screenshotHistoryItem) p
 		Preview: plugin.WoxPreview{
 			PreviewType: plugin.WoxPreviewTypeImage,
 			PreviewData: previewImage.String(),
+			// Thumbnail previews keep screenshot search responsive, while the overlay click should
+			// reuse the original screenshot file so users can inspect it at full available size.
+			PreviewOverlayData: overlayImage.String(),
 			PreviewProperties: map[string]string{
 				"i18n:plugin_screenshot_history_date": util.FormatTimestamp(item.timestamp),
 				"i18n:plugin_screenshot_history_size": p.formatFileSize(item.size),
