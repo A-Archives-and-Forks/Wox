@@ -228,11 +228,24 @@ class WoxLauncherController extends GetxController {
   }
 
   double getGlanceItemWidth(GlanceItem item) {
-    // Glance text has variable length: battery is short, date is longer. A
-    // content-based width keeps short items quiet without truncating date text.
-    final textWidth = item.text.characters.length * 9.0;
-    final iconWidth = item.icon.imageData.isNotEmpty ? 21.0 : 0.0;
-    return (textWidth + iconWidth + 16).clamp(76.0, 144.0);
+    // Glance text has variable length and glyphs are not evenly sized. Measuring
+    // the actual text keeps short text-only items compact without clipping them
+    // into an ellipsis when the minimum width is lower than the rendered text.
+    final textPainter = TextPainter(text: TextSpan(text: item.text, style: const TextStyle(fontSize: 15)), maxLines: 1, textDirection: TextDirection.ltr)..layout();
+    final textWidth = textPainter.width.ceilToDouble();
+    // The icon can now be hidden by user preference. Width must follow the
+    // rendered content so text-only Glance does not reserve empty icon space.
+    final hasIcon = shouldShowGlanceIcon(item);
+    final iconWidth = hasIcon ? 21.0 : 0.0;
+    final minWidth = hasIcon ? 76.0 : 44.0;
+    return (textWidth + iconWidth + 20).clamp(minWidth, 144.0);
+  }
+
+  bool shouldShowGlanceIcon(GlanceItem item) {
+    final setting = WoxSettingUtil.instance.currentSetting;
+    // Keep the render decision in one place so layout width and widget content
+    // stay synchronized when users switch Glance into text-only mode.
+    return !setting.hideGlanceIcon && item.icon.imageData.isNotEmpty;
   }
 
   List<GlanceRef> selectedGlanceRefs() {

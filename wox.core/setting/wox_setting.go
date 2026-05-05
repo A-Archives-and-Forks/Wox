@@ -45,6 +45,10 @@ type WoxSetting struct {
 	AppFontFamily  *PlatformValue[string]
 	EnableGlance   *WoxSettingValue[bool]
 	PrimaryGlance  *WoxSettingValue[GlanceRef]
+	// HideGlanceIcon is a presentation-only switch for the query-box glance.
+	// Glance providers still return icons for metadata and future surfaces, but
+	// the launcher can render a quieter text-only accessory when users prefer it.
+	HideGlanceIcon *WoxSettingValue[bool]
 
 	// Development-only debug display switches. Score and performance tails were
 	// previously hard-coded around dev-only code paths, so storing the switches
@@ -222,6 +226,7 @@ func NewWoxSetting(store *WoxSettingStore) *WoxSetting {
 		AppFontFamily:             NewPlatformValue(store, "AppFontFamily", "", "", ""),
 		EnableGlance:              NewWoxSettingValue(store, "EnableGlance", false),
 		PrimaryGlance:             NewWoxSettingValue(store, "PrimaryGlance", GlanceRef{PluginId: "e3ad9f18-fbbe-4f22-8c1b-8274c751f6e6", GlanceId: "time"}),
+		HideGlanceIcon:            NewWoxSettingValue(store, "HideGlanceIcon", false),
 		ShowScoreTail:             NewWoxSettingValue(store, "ShowScoreTail", false),
 		ShowPerformanceTail:       NewWoxSettingValue(store, "ShowPerformanceTail", false),
 		EnableAutostart:           NewPlatformValue(store, "EnableAutostart", false, false, false),

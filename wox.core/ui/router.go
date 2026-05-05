@@ -739,6 +739,7 @@ func handleSettingWox(w http.ResponseWriter, r *http.Request) {
 	settingDto.AppFontFamily = woxSetting.AppFontFamily.Get()
 	settingDto.EnableGlance = woxSetting.EnableGlance.Get()
 	settingDto.PrimaryGlance = woxSetting.PrimaryGlance.Get()
+	settingDto.HideGlanceIcon = woxSetting.HideGlanceIcon.Get()
 	settingDto.ShowScoreTail = woxSetting.ShowScoreTail.Get()
 	settingDto.ShowPerformanceTail = woxSetting.ShowPerformanceTail.Get()
 
@@ -962,6 +963,11 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		woxSetting.PrimaryGlance.Set(glance)
+	case "HideGlanceIcon":
+		// This setting only changes the launcher presentation. Persisting it in
+		// the shared settings API keeps the behavior consistent after reloads
+		// without asking Glance providers to omit useful icon metadata.
+		woxSetting.HideGlanceIcon.Set(vb)
 	case "ShowScoreTail":
 		// New dev setting: score tails used to be compiled into a helper but
 		// effectively disabled by commented call sites. Persisting this switch

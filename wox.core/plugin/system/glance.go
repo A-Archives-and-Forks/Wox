@@ -97,8 +97,23 @@ func (p *GlancePlugin) macOSBatteryGlance(ctx context.Context) (plugin.GlanceIte
 		return plugin.GlanceItem{}, false
 	}
 	text := match[1] + "%"
-	tooltip := strings.TrimSpace(strings.ReplaceAll(string(output), "\n", " "))
+	tooltip := p.macOSBatteryTooltip(text, string(output))
 	return plugin.GlanceItem{Id: "battery", Text: text, Icon: common.NewWoxImageEmoji("🔋"), Tooltip: tooltip}, true
+}
+
+func (p *GlancePlugin) macOSBatteryTooltip(text string, output string) string {
+	// pmset returns a diagnostic sentence with battery ids and presence flags.
+	// Glance tooltips are small UI labels, so keep only the state users can act
+	// on instead of exposing the raw command output.
+	cleanOutput := strings.TrimSpace(strings.ReplaceAll(output, "\n", " "))
+	parts := []string{text}
+	if statusMatch := regexp.MustCompile(`%;\s*([^;]+);`).FindStringSubmatch(cleanOutput); len(statusMatch) >= 2 {
+		parts = append(parts, strings.TrimSpace(statusMatch[1]))
+	}
+	if remainingMatch := regexp.MustCompile(`;\s*([^;]+ remaining)`).FindStringSubmatch(cleanOutput); len(remainingMatch) >= 2 {
+		parts = append(parts, strings.TrimSpace(remainingMatch[1]))
+	}
+	return joinBatteryTooltipParts(parts...)
 }
 
 func (p *GlancePlugin) linuxBatteryGlance(ctx context.Context) (plugin.GlanceItem, bool) {
@@ -113,6 +128,20 @@ func (p *GlancePlugin) linuxBatteryGlance(ctx context.Context) (plugin.GlanceIte
 	text := strings.TrimSpace(string(capacity)) + "%"
 	statusPath := filepath.Join(filepath.Dir(paths[0]), "status")
 	status, _ := os.ReadFile(statusPath)
-	tooltip := strings.TrimSpace(string(status))
+	// Linux exposes battery status as a clean field already. Include the percent
+	// so the tooltip remains useful without becoming a second verbose data dump.
+	tooltip := joinBatteryTooltipParts(text, string(status))
 	return plugin.GlanceItem{Id: "battery", Text: text, Icon: common.NewWoxImageEmoji("🔋"), Tooltip: tooltip}, true
+}
+
+func joinBatteryTooltipParts(parts ...string) string {
+	// Tooltip parts come from platform commands, and some fields are optional.
+	// Filtering blanks here avoids dangling separators in compact Glance labels.
+	nonEmptyParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			nonEmptyParts = append(nonEmptyParts, trimmed)
+		}
+	}
+	return strings.Join(nonEmptyParts, " · ")
 }

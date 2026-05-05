@@ -26,6 +26,7 @@ class WoxSetting {
   late String appFontFamily;
   late bool enableGlance;
   late GlanceRef primaryGlance;
+  late bool hideGlanceIcon;
   late bool httpProxyEnabled;
   late String httpProxyUrl;
   late bool enableAutoBackup;
@@ -61,6 +62,7 @@ class WoxSetting {
     required this.appFontFamily,
     required this.enableGlance,
     required this.primaryGlance,
+    required this.hideGlanceIcon,
     required this.httpProxyEnabled,
     required this.httpProxyUrl,
     required this.enableAutoBackup,
@@ -137,6 +139,7 @@ class WoxSetting {
     appFontFamily = json['AppFontFamily'] ?? '';
     enableGlance = json['EnableGlance'] ?? true;
     primaryGlance = GlanceRef.fromJson(json['PrimaryGlance']);
+    hideGlanceIcon = json['HideGlanceIcon'] ?? false;
     httpProxyEnabled = json['HttpProxyEnabled'] ?? false;
     httpProxyUrl = json['HttpProxyUrl'] ?? '';
     enableAutoBackup = json['EnableAutoBackup'] ?? false;
@@ -174,6 +177,7 @@ class WoxSetting {
     data['AppFontFamily'] = appFontFamily;
     data['EnableGlance'] = enableGlance;
     data['PrimaryGlance'] = primaryGlance.toJson();
+    data['HideGlanceIcon'] = hideGlanceIcon;
     data['HttpProxyEnabled'] = httpProxyEnabled;
     data['HttpProxyUrl'] = httpProxyUrl;
     data['EnableAutoBackup'] = enableAutoBackup;

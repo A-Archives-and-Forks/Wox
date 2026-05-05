@@ -369,6 +369,8 @@
   "ui_glance_enable_tips": "Show selected glance items in the query box while Wox is in global mode.",
   "ui_glance_primary": "Glance item",
   "ui_glance_primary_tips": "Choose the glance item shown in the query box.",
+  "ui_glance_hide_icon": "Hide icon",
+  "ui_glance_hide_icon_tips": "Show only the glance text in the query box.",
   "ui_glance_none": "None",
   "ui_ai_chat_select_model": "Please select a model",
   "ui_ai_chat_input_hint": "Type a message here, press ← to send",

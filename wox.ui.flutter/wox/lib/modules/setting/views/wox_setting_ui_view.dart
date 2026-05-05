@@ -213,6 +213,21 @@ class WoxSettingUIView extends WoxSettingBaseView {
                 }),
               ),
               formField(
+                label: controller.tr("ui_glance_hide_icon"),
+                tips: controller.tr("ui_glance_hide_icon_tips"),
+                child: Obx(() {
+                  return WoxSwitch(
+                    value: controller.woxSetting.value.hideGlanceIcon,
+                    onChanged: (bool value) {
+                      // HideGlanceIcon is separated from EnableGlance so users
+                      // can keep the same selected item and only choose whether
+                      // the query-box accessory spends space on the icon.
+                      controller.updateConfig("HideGlanceIcon", value.toString());
+                    },
+                  );
+                }),
+              ),
+              formField(
                 label: controller.tr("ui_glance_primary"),
                 tips: controller.tr("ui_glance_primary_tips"),
                 child: Obx(() {

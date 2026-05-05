@@ -39,6 +39,9 @@ type WoxSettingDto struct {
 	AppFontFamily  string
 	EnableGlance   bool
 	PrimaryGlance  setting.GlanceRef
+	// HideGlanceIcon is kept beside the Glance selection because Flutter needs
+	// it with the rest of the UI settings to render the query-box accessory.
+	HideGlanceIcon bool
 
 	// Debug display switches are only shown by the dev UI, but the DTO keeps
 	// them beside other settings so backend tail rendering and Flutter toggles

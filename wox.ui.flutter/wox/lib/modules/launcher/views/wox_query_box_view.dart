@@ -406,7 +406,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
     final baseTextColor = safeFromCssColor(currentTheme.queryBoxFontColor);
     // Glance now has no status field in v1; keeping one quiet opacity preserves
     // the auxiliary feel without exposing unused state semantics in the API.
-    const textAlpha = 0.9;
+    const textAlpha = 0.8;
     final textColor = baseTextColor.withValues(alpha: textAlpha);
     var isHovered = false;
 
@@ -435,7 +435,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (item.icon.imageData.isNotEmpty) ...[
+                    if (controller.shouldShowGlanceIcon(item)) ...[
                       Opacity(opacity: textAlpha * 0.9, child: WoxImageView(woxImage: item.icon, width: 16, height: 16)),
                       const SizedBox(width: 5),
                     ],

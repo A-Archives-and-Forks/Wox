@@ -367,6 +367,8 @@
   "ui_glance_enable_tips": "在 Wox 全局模式下，在搜索框右侧显示选中的速览信息。",
   "ui_glance_primary": "速览项",
   "ui_glance_primary_tips": "选择搜索框中显示的速览项。",
+  "ui_glance_hide_icon": "隐藏图标",
+  "ui_glance_hide_icon_tips": "在搜索框中只显示速览文字。",
   "ui_glance_none": "无",
   "ui_ai_chat_select_model": "请选择模型",
   "ui_ai_chat_input_hint": "在这里输入消息，按 ← 发送",
