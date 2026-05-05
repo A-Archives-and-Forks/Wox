@@ -15,32 +15,29 @@ class WoxFileListPreviewView extends StatelessWidget {
   Widget build(BuildContext context) {
     final fontColor = safeFromCssColor(woxTheme.previewFontColor);
     final splitLineColor = safeFromCssColor(woxTheme.previewSplitLineColor);
-    final surfaceColor = fontColor.withValues(alpha: 0.035);
-    final borderColor = splitLineColor.withValues(alpha: 0.48);
 
     // File selection previews used to arrive as markdown, which made paths look
     // like raw debug text. A native file-list surface gives each path a clear
     // filename, parent folder, and type chip without adding action controls.
-    return Container(
-      decoration: BoxDecoration(color: surfaceColor, borderRadius: BorderRadius.circular(8), border: Border.all(color: borderColor)),
-      child:
-          data.filePaths.isEmpty
-              ? Center(child: Text("No files", style: TextStyle(color: fontColor.withValues(alpha: 0.62), fontSize: 14)))
-              : Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                // Scrolling is owned by WoxPreviewScaffold. Keeping this view as
-                // a plain column avoids nested scrollables and the unbounded
-                // height layout failures that happen when preview metadata
-                // changes the available content area.
-                child: Column(
-                  children: [
-                    for (var index = 0; index < data.filePaths.length; index++) ...[
-                      _FileListPreviewRow(filePath: data.filePaths[index], woxTheme: woxTheme),
-                      if (index != data.filePaths.length - 1) Divider(height: 1, color: splitLineColor.withValues(alpha: 0.28)),
-                    ],
-                  ],
-                ),
-              ),
+    // The outer frame and scrollbar belong to WoxPreviewScaffold now, so this
+    // view only renders list content and row separators.
+    if (data.filePaths.isEmpty) {
+      return Center(child: Text("No files", style: TextStyle(color: fontColor.withValues(alpha: 0.62), fontSize: 14)));
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      // Scrolling is owned by WoxPreviewScaffold. Keeping this view as a plain
+      // column avoids nested scrollables and the unbounded height layout failures
+      // that happen when preview metadata changes the available content area.
+      child: Column(
+        children: [
+          for (var index = 0; index < data.filePaths.length; index++) ...[
+            _FileListPreviewRow(filePath: data.filePaths[index], woxTheme: woxTheme),
+            if (index != data.filePaths.length - 1) Divider(height: 1, color: splitLineColor.withValues(alpha: 0.28)),
+          ],
+        ],
+      ),
     );
   }
 }

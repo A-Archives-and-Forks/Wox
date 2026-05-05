@@ -64,24 +64,26 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
   }
 
   Widget buildMarkdown(String markdownData) {
-    return scrollableContent(child: WoxMarkdownView(data: markdownData, fontColor: safeFromCssColor(widget.woxTheme.previewFontColor)));
+    final textColor = safeFromCssColor(widget.woxTheme.previewFontColor);
+
+    // Markdown no longer draws its own frame because WoxPreviewScaffold owns the
+    // shared scroll surface. Keeping only content padding here lets markdown,
+    // text, and image previews share one outer background and scrollbar model.
+    return scrollableContent(child: Padding(padding: const EdgeInsets.all(20), child: WoxMarkdownView(data: markdownData, fontColor: textColor)));
   }
 
   Widget buildText(String txtData) {
     final textColor = safeFromCssColor(widget.woxTheme.previewFontColor);
-    final surfaceColor = textColor.withValues(alpha: 0.035);
-    final borderColor = textColor.withValues(alpha: 0.14);
     final quoteColor = textColor.withValues(alpha: 0.16);
     final bodyColor = textColor.withValues(alpha: 0.86);
     final quoteTextStyle = TextStyle(color: bodyColor, fontSize: 17, height: 1.45, fontWeight: FontWeight.w400, letterSpacing: 0);
     final plainTextStyle = TextStyle(color: bodyColor, fontSize: 15, height: 1.55, fontWeight: FontWeight.w400, letterSpacing: 0);
 
-    // Text previews used to render as raw SelectableText, which made clipboard
-    // and selection previews look like debug output. The reader style keeps the
-    // content dominant while adding just enough rhythm for longer copied text.
-    // The quote treatment is chosen from measured layout space instead of a
-    // character-count heuristic because the preview height changes when metadata
-    // pills are present.
+    // Text previews keep their reader typography and optional quote treatment,
+    // but the frame moved to WoxPreviewScaffold so the scrollbar sits inside the
+    // same outer surface used by markdown and image previews. The quote
+    // treatment is still chosen from measured layout space because the preview
+    // height changes when metadata pills are present.
     return scrollableContent(
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -109,30 +111,25 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
 
           return SizedBox(
             height: shouldShowQuote ? viewportHeight : null,
-            child: Container(
-              width: double.infinity,
-              constraints: BoxConstraints(minHeight: shouldShowQuote ? 0 : 180),
-              decoration: BoxDecoration(color: surfaceColor, borderRadius: BorderRadius.circular(8), border: Border.all(color: borderColor)),
-              child: Stack(
-                children: [
-                  if (shouldShowQuote)
-                    Positioned(left: 22, top: quoteTop, child: Text("“", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
-                  if (shouldShowQuote)
-                    Positioned(right: 22, bottom: quoteBottom, child: Text("”", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      shouldShowQuote ? quoteHorizontalPadding : 24,
-                      shouldShowQuote ? quoteTextTopPadding : 24,
-                      shouldShowQuote ? quoteHorizontalPadding : 24,
-                      shouldShowQuote ? quoteTextBottomPadding : 24,
-                    ),
-                    child: Align(
-                      alignment: shouldShowQuote ? Alignment.center : Alignment.topLeft,
-                      child: SelectableText(txtData, textAlign: shouldShowQuote ? TextAlign.center : TextAlign.left, style: shouldShowQuote ? quoteTextStyle : plainTextStyle),
-                    ),
+            child: Stack(
+              children: [
+                if (shouldShowQuote)
+                  Positioned(left: 22, top: quoteTop, child: Text("“", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
+                if (shouldShowQuote)
+                  Positioned(right: 22, bottom: quoteBottom, child: Text("”", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    shouldShowQuote ? quoteHorizontalPadding : 24,
+                    shouldShowQuote ? quoteTextTopPadding : 24,
+                    shouldShowQuote ? quoteHorizontalPadding : 24,
+                    shouldShowQuote ? quoteTextBottomPadding : 24,
                   ),
-                ],
-              ),
+                  child: Align(
+                    alignment: shouldShowQuote ? Alignment.center : Alignment.topLeft,
+                    child: SelectableText(txtData, textAlign: shouldShowQuote ? TextAlign.center : TextAlign.left, style: shouldShowQuote ? quoteTextStyle : plainTextStyle),
+                  ),
+                ),
+              ],
             ),
           );
         },
@@ -160,13 +157,20 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
         if (snapshot.hasData) {
           return CodeTheme(
             data: CodeThemeData(styles: monokaiTheme),
-            child: SingleChildScrollView(
+            // Code preview keeps its own editor scroller, but the scrollbar now
+            // lives inside the scaffold-provided frame instead of floating on
+            // the launcher panel.
+            child: Scrollbar(
+              thumbVisibility: true,
               controller: scrollController,
-              child: CodeField(
-                textStyle: const TextStyle(fontSize: 13),
-                readOnly: true,
-                gutterStyle: GutterStyle.none,
-                controller: CodeController(text: snapshot.data, readOnly: true, language: allCodeLanguages[fileExtension]!),
+              child: SingleChildScrollView(
+                controller: scrollController,
+                child: CodeField(
+                  textStyle: const TextStyle(fontSize: 13),
+                  readOnly: true,
+                  gutterStyle: GutterStyle.none,
+                  controller: CodeController(text: snapshot.data, readOnly: true, language: allCodeLanguages[fileExtension]!),
+                ),
               ),
             ),
           );
@@ -193,23 +197,12 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
   }
 
   Widget buildImageSurface(Widget image, {WoxImage? overlayImage}) {
-    final splitLineColor = safeFromCssColor(widget.woxTheme.previewSplitLineColor);
-    final fontColor = safeFromCssColor(widget.woxTheme.previewFontColor);
-
-    // Image previews need a quiet substrate so small screenshots, transparent
-    // images, and dark assets stay legible without adding plugin-specific chrome.
+    // The scaffold now supplies the shared image/text/markdown substrate. This
+    // renderer only centers the asset and keeps the overlay affordance so images
+    // do not create a nested frame inside the unified preview surface.
     return LayoutBuilder(
       builder: (context, constraints) {
-        final content = Container(
-          width: constraints.maxWidth,
-          height: constraints.maxHeight,
-          decoration: BoxDecoration(
-            color: fontColor.withValues(alpha: 0.035),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: splitLineColor.withValues(alpha: 0.45)),
-          ),
-          child: Padding(padding: const EdgeInsets.all(12), child: Center(child: image)),
-        );
+        final content = SizedBox(width: constraints.maxWidth, height: constraints.maxHeight, child: Padding(padding: const EdgeInsets.all(12), child: Center(child: image)));
         if (overlayImage == null || !canOpenPreviewImageOverlay(overlayImage)) {
           return content;
         }

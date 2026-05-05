@@ -56,49 +56,42 @@ class _WoxAIStreamPreviewViewState extends State<WoxAIStreamPreviewView> {
     final textColor = safeFromCssColor(widget.woxTheme.previewFontColor);
     final splitLineColor = safeFromCssColor(widget.woxTheme.previewSplitLineColor);
     final propertyColor = safeFromCssColor(widget.woxTheme.previewPropertyContentColor);
-    final surfaceColor = textColor.withValues(alpha: 0.035);
-    final borderColor = textColor.withValues(alpha: 0.14);
     final bodyColor = textColor.withValues(alpha: 0.86);
     final answerText = widget.data.answer.trim();
     final reasoningText = widget.data.reasoning.trim();
 
-    // AI stream previews reuse the text-preview reading surface so AI output,
-    // clipboard text, and selection text share one visual language. Reasoning is
-    // kept inside the same frame as lower-priority context instead of becoming a
-    // separate card that competes with the final answer.
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(minHeight: 180),
-      decoration: BoxDecoration(color: surfaceColor, borderRadius: BorderRadius.circular(8), border: Border.all(color: borderColor)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (reasoningText.isNotEmpty) ...[
-              _ReasoningSection(
-                title: widget.data.reasoningTitle,
-                statusLabel: widget.data.statusLabel,
-                reasoning: reasoningText,
-                isExpanded: isReasoningExpanded,
-                woxTheme: widget.woxTheme,
-                onToggle: () {
-                  setState(() {
-                    isReasoningExpanded = !isReasoningExpanded;
-                  });
-                },
-              ),
-              Padding(padding: const EdgeInsets.symmetric(vertical: 18), child: Divider(height: 1, color: splitLineColor.withValues(alpha: 0.28))),
-            ],
-            if (widget.data.answerTitle.isNotEmpty && reasoningText.isNotEmpty) ...[
-              Text(widget.data.answerTitle, style: TextStyle(color: propertyColor.withValues(alpha: 0.72), fontSize: 12, height: 1.2, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 10),
-            ],
-            answerText.isEmpty
-                ? _WaitingForAnswer(statusLabel: widget.data.statusLabel, woxTheme: widget.woxTheme)
-                : SelectableText(answerText, style: TextStyle(color: bodyColor, fontSize: 16, height: 1.52, fontWeight: FontWeight.w400, letterSpacing: 0)),
+    // AI stream previews reuse the scaffold's framed scroll surface so answer
+    // text, markdown, images, and files share one outer background. Reasoning
+    // remains an inner low-priority section because it is contextual detail, not
+    // a separate preview surface.
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (reasoningText.isNotEmpty) ...[
+            _ReasoningSection(
+              title: widget.data.reasoningTitle,
+              statusLabel: widget.data.statusLabel,
+              reasoning: reasoningText,
+              isExpanded: isReasoningExpanded,
+              woxTheme: widget.woxTheme,
+              onToggle: () {
+                setState(() {
+                  isReasoningExpanded = !isReasoningExpanded;
+                });
+              },
+            ),
+            Padding(padding: const EdgeInsets.symmetric(vertical: 18), child: Divider(height: 1, color: splitLineColor.withValues(alpha: 0.28))),
           ],
-        ),
+          if (widget.data.answerTitle.isNotEmpty && reasoningText.isNotEmpty) ...[
+            Text(widget.data.answerTitle, style: TextStyle(color: propertyColor.withValues(alpha: 0.72), fontSize: 12, height: 1.2, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+          ],
+          answerText.isEmpty
+              ? _WaitingForAnswer(statusLabel: widget.data.statusLabel, woxTheme: widget.woxTheme)
+              : SelectableText(answerText, style: TextStyle(color: bodyColor, fontSize: 16, height: 1.52, fontWeight: FontWeight.w400, letterSpacing: 0)),
+        ],
       ),
     );
   }
