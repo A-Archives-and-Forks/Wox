@@ -3,23 +3,28 @@
 ## v2.0.4 -
 
 - Add
-  - [`Screenshot`] Add scrolling capture support
-  - [`Screenshot`] Add plugin screenshot API with hidden toolbar and auto-confirm options for direct capture workflows #4394
-  - [`WebView`] Add actions to open previews in the system browser and clear saved webview state
-  - [`Usage`] Add X sharing for usage statistics
-  - [`Plugin Store`] Add LuxTranslate and Screenshot OCR listings
+  - [`Glance`] Add Glance to the query box so users can see lightweight real-time information, such as time, date, and battery status, without typing a query. Plugins can provide glance metadata, and users can choose the primary glance item or hide the glance icon for a cleaner query box.
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/glance.png)
+  - [`Screenshot`] Expand Screenshot with scrolling capture, pinned screenshot overlays, and a plugin screenshot API. Users can capture long pages or windows, pin captures above other windows as visual references, and plugins can start direct capture workflows with hidden toolbar and auto-confirm options #4394
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/screenshot_pin.png)
+  - [`Preview`] Add image overlay previews so image-heavy results, including clipboard and screenshot results, can open in a lightweight overlay instead of only inside the launcher preview panel.
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/new_preview.png)
+  - [`WebView`] Add actions to open preview pages in the system browser and clear saved WebView state, making embedded website previews easier to inspect, reset, and recover when a site keeps stale session data.
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/webview_open_in_browser.png)
+  - [`Usage`] Add X sharing for usage statistics so users can post their Wox usage summary directly from the usage page.
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/usage_share_x.png)
 
 - Improve
   - [`Query Box`] Improve multi-line query wrapping and pasted text handling #4397
-  - [`Plugin Setting`] Improve trigger keyword editing with validation, clearer empty states, stable tab switching, and app-owned setting layout
-  - [`Settings`] Improve settings layout consistency, navigation scrolling, and hotkey recorder hint placement
+  - [`Settings`] Redesign the settings pages with clearer section structure, more consistent form controls, and cleaner spacing across General, Data, UI, Plugin, AI, Network, Privacy, Runtime, Usage, and About pages. Plugin-provided pixel styling is deprecated so settings can stay visually consistent while still preserving each setting's behavior and validation.
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/settings_redesign.png)
   - [`App`] Improve macOS app icon handling and default icon detection
   - [`AI`] Improve OpenAI-compatible streaming so tagged reasoning content is separated from answer text
   - [`File Explorer Search`] Improve type-to-search routing from launcher queries
 
 - Fix
   - [`Plugin Store`] Fix plugin installation by starting the required runtime host when possible before install #4395
-  - [`Plugin Setting`] Fix plugin search, update rows, dropdowns, and AI model selectors so active state is preserved during UI interactions
+  - [`Plugin Setting`] Fix trigger keyword validation so multiple plugins can use the global `*` query
 
 ## v2.0.3 - 2026-04-26
 
