@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"wox/common"
 	"wox/plugin"
 	"wox/plugin/system"
@@ -813,8 +814,11 @@ func (c *ClipboardPlugin) convertTextRecord(ctx context.Context, record Clipboar
 			PreviewType: plugin.WoxPreviewTypeText,
 			PreviewData: record.Content,
 			PreviewProperties: map[string]string{
-				"i18n:plugin_clipboard_copy_date":       util.FormatTimestamp(record.Timestamp),
-				"i18n:plugin_clipboard_copy_characters": fmt.Sprintf("%d", len(record.Content)),
+				"i18n:plugin_clipboard_copy_date": util.FormatTimestamp(record.Timestamp),
+				// Preview pills show values only, so the character unit belongs in
+				// the value. Keep that unit localized instead of hard-coding a
+				// Chinese suffix into English and other languages.
+				"i18n:plugin_clipboard_copy_characters": fmt.Sprintf(c.api.GetTranslation(ctx, "plugin_clipboard_copy_characters_value"), utf8.RuneCountInString(record.Content)),
 			},
 		},
 
@@ -834,11 +838,11 @@ func (c *ClipboardPlugin) convertImageRecord(ctx context.Context, record Clipboa
 		"i18n:plugin_clipboard_copy_date": util.FormatTimestamp(record.Timestamp),
 	}
 
-	if record.Width != nil {
-		previewProperties["i18n:plugin_clipboard_image_width"] = fmt.Sprintf("%d", *record.Width)
-	}
-	if record.Height != nil {
-		previewProperties["i18n:plugin_clipboard_image_height"] = fmt.Sprintf("%d", *record.Height)
+	if record.Width != nil && record.Height != nil {
+		// Width and height now share one value because the preview shell only
+		// shows metadata values by default. Keeping dimensions together saves
+		// pill space while preserving the exact image size in the tooltip.
+		previewProperties["i18n:plugin_clipboard_image_dimensions"] = fmt.Sprintf("%dx%d", *record.Width, *record.Height)
 	}
 	if record.FileSize != nil {
 		previewProperties["i18n:plugin_clipboard_image_size"] = c.formatFileSize(*record.FileSize)

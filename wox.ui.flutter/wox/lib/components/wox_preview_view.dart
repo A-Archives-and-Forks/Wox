@@ -16,11 +16,13 @@ import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_ai_chat_view.dart';
+import 'package:wox/components/wox_ai_stream_preview_view.dart';
+import 'package:wox/components/wox_file_list_preview_view.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
 import 'package:wox/components/wox_markdown.dart';
 import 'package:wox/components/wox_plugin_detail_view.dart';
+import 'package:wox/components/wox_preview_scaffold.dart';
 import 'package:wox/components/wox_query_requirement_settings_preview_view.dart';
-import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/components/wox_update_view.dart';
 import 'package:wox/components/wox_webview_preview.dart';
 import 'package:wox/components/wox_terminal_preview_view.dart';
@@ -29,6 +31,8 @@ import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/wox_preview.dart';
+import 'package:wox/entity/wox_preview_ai_stream.dart';
+import 'package:wox/entity/wox_preview_file_list.dart';
 import 'package:wox/entity/wox_query_requirement_settings_preview.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/enums/wox_preview_scroll_position_enum.dart';
@@ -61,7 +65,76 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
   }
 
   Widget buildText(String txtData) {
-    return scrollableContent(child: SelectableText(txtData, style: TextStyle(color: safeFromCssColor(widget.woxTheme.previewFontColor))));
+    final textColor = safeFromCssColor(widget.woxTheme.previewFontColor);
+    final surfaceColor = textColor.withValues(alpha: 0.035);
+    final borderColor = textColor.withValues(alpha: 0.14);
+    final quoteColor = textColor.withValues(alpha: 0.16);
+    final bodyColor = textColor.withValues(alpha: 0.86);
+    final quoteTextStyle = TextStyle(color: bodyColor, fontSize: 17, height: 1.45, fontWeight: FontWeight.w400, letterSpacing: 0);
+    final plainTextStyle = TextStyle(color: bodyColor, fontSize: 15, height: 1.55, fontWeight: FontWeight.w400, letterSpacing: 0);
+
+    // Text previews used to render as raw SelectableText, which made clipboard
+    // and selection previews look like debug output. The reader style keeps the
+    // content dominant while adding just enough rhythm for longer copied text.
+    // The quote treatment is chosen from measured layout space instead of a
+    // character-count heuristic because the preview height changes when metadata
+    // pills are present.
+    return scrollableContent(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final viewportHeight = constraints.hasBoundedHeight ? constraints.maxHeight : constraints.minHeight;
+          final viewportWidth = constraints.hasBoundedWidth ? constraints.maxWidth : constraints.minWidth;
+          const quoteHorizontalPadding = 44.0;
+          const quoteTop = 12.0;
+          const quoteBottom = 4.0;
+          const quoteSize = 72.0;
+          const quoteTextTopPadding = 62.0;
+          const quoteTextBottomPadding = 62.0;
+          final quoteTextMaxWidth = viewportWidth - quoteHorizontalPadding * 2;
+          // The quote glyphs are decorative background marks, so the fit check
+          // should use the text padding area instead of subtracting the full
+          // glyph height. Subtracting the full quote boxes was too conservative
+          // and hid quotes even when the text visually fit between them.
+          final quoteSafeHeight = viewportHeight - quoteTextTopPadding - quoteTextBottomPadding;
+          var shouldShowQuote = false;
+
+          if (viewportWidth.isFinite && viewportHeight.isFinite && quoteTextMaxWidth > 0 && quoteSafeHeight > 0) {
+            final textPainter = TextPainter(text: TextSpan(text: txtData, style: quoteTextStyle), textAlign: TextAlign.center, textDirection: Directionality.of(context))
+              ..layout(maxWidth: quoteTextMaxWidth);
+            shouldShowQuote = textPainter.height <= quoteSafeHeight;
+          }
+
+          return SizedBox(
+            height: shouldShowQuote ? viewportHeight : null,
+            child: Container(
+              width: double.infinity,
+              constraints: BoxConstraints(minHeight: shouldShowQuote ? 0 : 180),
+              decoration: BoxDecoration(color: surfaceColor, borderRadius: BorderRadius.circular(8), border: Border.all(color: borderColor)),
+              child: Stack(
+                children: [
+                  if (shouldShowQuote)
+                    Positioned(left: 22, top: quoteTop, child: Text("“", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
+                  if (shouldShowQuote)
+                    Positioned(right: 22, bottom: quoteBottom, child: Text("”", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      shouldShowQuote ? quoteHorizontalPadding : 24,
+                      shouldShowQuote ? quoteTextTopPadding : 24,
+                      shouldShowQuote ? quoteHorizontalPadding : 24,
+                      shouldShowQuote ? quoteTextBottomPadding : 24,
+                    ),
+                    child: Align(
+                      alignment: shouldShowQuote ? Alignment.center : Alignment.topLeft,
+                      child: SelectableText(txtData, textAlign: shouldShowQuote ? TextAlign.center : TextAlign.left, style: shouldShowQuote ? quoteTextStyle : plainTextStyle),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
   Widget buildPdf(String pdfPath) {
@@ -101,6 +174,27 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
     );
   }
 
+  Widget buildImageSurface(Widget image) {
+    final splitLineColor = safeFromCssColor(widget.woxTheme.previewSplitLineColor);
+    final fontColor = safeFromCssColor(widget.woxTheme.previewFontColor);
+
+    // Image previews need a quiet substrate so small screenshots, transparent
+    // images, and dark assets stay legible without adding plugin-specific chrome.
+    return LayoutBuilder(
+      builder:
+          (context, constraints) => Container(
+            width: constraints.maxWidth,
+            height: constraints.maxHeight,
+            decoration: BoxDecoration(
+              color: fontColor.withValues(alpha: 0.035),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: splitLineColor.withValues(alpha: 0.45)),
+            ),
+            child: Padding(padding: const EdgeInsets.all(12), child: Center(child: image)),
+          ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (LoggerSwitch.enablePaintLog) {
@@ -109,7 +203,7 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
 
     Widget contentWidget = const SizedBox();
     bool isPdfViewer = false;
-    bool isCustomScrollable = false;
+    bool contentHandlesScrolling = false;
     if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_MARKDOWN.code) {
       contentWidget = buildMarkdown(widget.woxPreview.previewData);
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_TEXT.code) {
@@ -138,9 +232,11 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
             fileExtension == "svg") {
           if (File(widget.woxPreview.previewData).existsSync()) {
             if (fileExtension == "svg") {
-              contentWidget = Center(child: SvgPicture.file(File(widget.woxPreview.previewData)));
+              contentHandlesScrolling = true;
+              contentWidget = buildImageSurface(SvgPicture.file(File(widget.woxPreview.previewData), fit: BoxFit.contain));
             } else {
-              contentWidget = Center(child: Image.file(File(widget.woxPreview.previewData)));
+              contentHandlesScrolling = true;
+              contentWidget = buildImageSurface(Image.file(File(widget.woxPreview.previewData), fit: BoxFit.contain));
             }
           } else {
             contentWidget = buildText("Image file not found: ${widget.woxPreview.previewData}");
@@ -150,10 +246,8 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
           var file = File(widget.woxPreview.previewData);
           if (file.lengthSync() > 1 * 1024 * 1024) {
             contentWidget = buildText("File too big to preview, current size: ${(file.lengthSync() / 1024 / 1024).toInt()} MB");
-            return contentWidget;
-          }
-
-          if (File(widget.woxPreview.previewData).existsSync()) {
+          } else if (File(widget.woxPreview.previewData).existsSync()) {
+            contentHandlesScrolling = true;
             contentWidget = buildCode(widget.woxPreview.previewData, fileExtension);
           } else {
             contentWidget = buildText("Code file not found: ${widget.woxPreview.previewData}");
@@ -163,14 +257,25 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
           contentWidget = buildText("Unsupported file type preview: $fileExtension");
         }
       }
+    } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_FILE_LIST.code) {
+      try {
+        // Core sends selection-file previews as JSON so this renderer can make
+        // file paths scannable. The old markdown fallback is still handled by
+        // the catch branch to keep malformed payloads debuggable.
+        contentWidget = WoxFileListPreviewView(data: WoxPreviewFileList.fromPreviewData(widget.woxPreview.previewData), woxTheme: widget.woxTheme);
+      } catch (e) {
+        contentWidget = buildText("Invalid file list preview data: $e");
+      }
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_IMAGE.code) {
       final parsedWoxImage = WoxImage.parse(widget.woxPreview.previewData);
       if (parsedWoxImage == null) {
         contentWidget = SelectableText("Invalid image data: ${widget.woxPreview.previewData}", style: const TextStyle(color: Colors.red));
       } else {
-        contentWidget = Center(child: WoxImageView(woxImage: parsedWoxImage));
+        contentHandlesScrolling = true;
+        contentWidget = buildImageSurface(WoxImageView(woxImage: parsedWoxImage));
       }
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_PLUGIN_DETAIL.code) {
+      contentHandlesScrolling = true;
       contentWidget = WoxPluginDetailView(pluginDetailJson: widget.woxPreview.previewData);
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_CHAT.code) {
       var previewChatData = WoxAIChatData.fromJson(jsonDecode(widget.woxPreview.previewData));
@@ -193,6 +298,14 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
       } catch (e) {
         contentWidget = buildText("Invalid update preview data: $e");
       }
+    } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_AI_STREAM.code) {
+      try {
+        // AI streams are rendered as a text-preview variant so reasoning can be
+        // visually muted while metadata remains in the shared external pill row.
+        contentWidget = WoxAIStreamPreviewView(data: WoxPreviewAIStream.fromPreviewData(widget.woxPreview.previewData), woxTheme: widget.woxTheme);
+      } catch (e) {
+        contentWidget = buildText("Invalid AI stream preview data: $e");
+      }
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_QUERY_REQUIREMENT_SETTINGS.code) {
       try {
         // Core generates this preview when query prerequisites block plugin
@@ -204,11 +317,20 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
         contentWidget = buildText("Invalid query requirement settings preview data: $e");
       }
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_TERMINAL.code) {
-      isCustomScrollable = true;
-      contentWidget = WoxTerminalPreviewView(woxPreview: widget.woxPreview, woxTheme: widget.woxTheme);
+      // Terminal previews have their own status bar, search state, and scrolling.
+      // Keep them out of the generic shell so the new default styling does not
+      // disturb the interactive terminal surface.
+      return Container(
+        padding: launcherController.isFullscreenPreviewOnly() ? EdgeInsets.zero : const EdgeInsets.only(top: 10.0, bottom: 10.0, left: 10.0),
+        child: WoxTerminalPreviewView(woxPreview: widget.woxPreview, woxTheme: widget.woxTheme),
+      );
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_WEBVIEW.code) {
-      isCustomScrollable = true;
-      contentWidget = WoxWebViewPreview(previewData: widget.woxPreview.previewData);
+      // WebView owns platform view sizing and navigation, so only preserve the
+      // existing preview padding instead of wrapping it in the generic scroller.
+      return Container(
+        padding: launcherController.isFullscreenPreviewOnly() ? EdgeInsets.zero : const EdgeInsets.only(top: 10.0, bottom: 10.0, left: 10.0),
+        child: WoxWebViewPreview(previewData: widget.woxPreview.previewData),
+      );
     }
 
     if (widget.woxPreview.scrollPosition == WoxPreviewScrollPositionEnum.WOX_PREVIEW_SCROLL_POSITION_BOTTOM.code) {
@@ -219,70 +341,12 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
       });
     }
 
-    return Container(
-      padding: launcherController.isFullscreenPreviewOnly() ? EdgeInsets.zero : const EdgeInsets.only(top: 10.0, bottom: 10.0, left: 10.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final themedContent = Theme(
-                  data: ThemeData(textSelectionTheme: TextSelectionThemeData(selectionColor: safeFromCssColor(widget.woxTheme.previewTextSelectionColor))),
-                  child: contentWidget,
-                );
-
-                if (isPdfViewer || isCustomScrollable) {
-                  return SizedBox(width: constraints.maxWidth, height: constraints.maxHeight, child: themedContent);
-                }
-
-                return Scrollbar(
-                  thumbVisibility: true,
-                  controller: scrollController,
-                  child: SingleChildScrollView(
-                    controller: scrollController,
-                    child: ConstrainedBox(constraints: BoxConstraints(minWidth: constraints.maxWidth), child: themedContent),
-                  ),
-                );
-              },
-            ),
-          ),
-          if (widget.woxPreview.previewProperties.isNotEmpty && !(launcherController.supportsPreviewFullscreen(widget.woxPreview) && launcherController.isPreviewFullscreen.value))
-            Container(
-              padding: const EdgeInsets.only(top: 10.0, right: 10.0),
-              child: Column(
-                children: [
-                  ...widget.woxPreview.previewProperties.entries.map(
-                    (e) => Column(
-                      children: [
-                        Divider(color: safeFromCssColor(widget.woxTheme.previewSplitLineColor)),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 80),
-                              child: WoxTooltip(
-                                message: e.key,
-                                child: Text(e.key, overflow: TextOverflow.ellipsis, style: TextStyle(color: safeFromCssColor(widget.woxTheme.previewPropertyTitleColor))),
-                              ),
-                            ),
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 260),
-                              child: WoxTooltip(
-                                message: e.value,
-                                child: Text(e.value, overflow: TextOverflow.ellipsis, style: TextStyle(color: safeFromCssColor(widget.woxTheme.previewPropertyContentColor))),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
+    return WoxPreviewScaffold(
+      woxTheme: widget.woxTheme,
+      scrollController: scrollController,
+      properties: launcherController.supportsPreviewFullscreen(widget.woxPreview) && launcherController.isPreviewFullscreen.value ? {} : widget.woxPreview.previewProperties,
+      contentHandlesScrolling: isPdfViewer || contentHandlesScrolling,
+      child: contentWidget,
     );
   }
 }

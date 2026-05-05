@@ -29,6 +29,15 @@ type commandSetting struct {
 	Vision  bool   `json:"vision"` // does the command interact with vision
 }
 
+type aiStreamPreviewData struct {
+	Answer         string `json:"answer"`
+	Reasoning      string `json:"reasoning"`
+	Status         string `json:"status"`
+	StatusLabel    string `json:"statusLabel"`
+	ReasoningTitle string `json:"reasoningTitle"`
+	AnswerTitle    string `json:"answerTitle"`
+}
+
 func (c *commandSetting) AIModel() (model common.Model) {
 	err := json.Unmarshal([]byte(c.Model), &model)
 	if err != nil {
@@ -180,6 +189,76 @@ func (c *Plugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryRe
 	return c.queryCommand(ctx, query)
 }
 
+func (c *Plugin) buildAIStreamPreview(ctx context.Context, streamResult common.ChatStreamData, modelLabel string) plugin.WoxPreview {
+	statusLabel := i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_answering")
+	if streamResult.Status == common.ChatStreamStatusFinished {
+		statusLabel = i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_preview_finished")
+	}
+	if streamResult.Status == common.ChatStreamStatusError {
+		statusLabel = i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_preview_error")
+	}
+
+	previewData, err := json.Marshal(aiStreamPreviewData{
+		Answer:         streamResult.Data,
+		Reasoning:      streamResult.Reasoning,
+		Status:         string(streamResult.Status),
+		StatusLabel:    statusLabel,
+		ReasoningTitle: i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_preview_reasoning"),
+		AnswerTitle:    i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_preview_answer"),
+	})
+	if err != nil {
+		// Streaming output can still fall back to markdown because the action is
+		// already running. The structured type is only needed for clearer visual
+		// separation between reasoning and answer, not for correctness.
+		c.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to marshal ai stream preview: %s", err.Error()))
+		return plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeMarkdown, PreviewData: streamResult.ToMarkdown()}
+	}
+
+	// Keep metadata in preview properties so WoxPreviewScaffold renders it as
+	// the same external pill strip used by text, clipboard, and file previews.
+	return plugin.WoxPreview{
+		PreviewType:       plugin.WoxPreviewTypeAIStream,
+		PreviewData:       string(previewData),
+		PreviewProperties: map[string]string{"i18n:plugin_ai_command_model": modelLabel},
+		ScrollPosition:    plugin.WoxPreviewScrollPositionBottom,
+	}
+}
+
+func (c *Plugin) buildSelectionPreview(ctx context.Context, command commandSetting, query plugin.Query) plugin.WoxPreview {
+	model := command.AIModel()
+	modelLabel := fmt.Sprintf("%s - %s", model.ProviderName(), model.Name)
+	previewProperties := map[string]string{
+		"i18n:plugin_ai_command_model": modelLabel,
+	}
+
+	if query.Selection.Type == selection.SelectionTypeText {
+		previewProperties["i18n:plugin_ai_command_preview_selected_text"] = fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_selection_characters_value"), len([]rune(query.Selection.Text)))
+		// AI command selection previews do not need a dedicated type: before the
+		// model runs, the most useful preview is the selected text itself. Reusing
+		// the shared text renderer keeps visual behavior consistent with clipboard
+		// and normal selection previews.
+		return plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeText, PreviewData: query.Selection.Text, PreviewProperties: previewProperties}
+	}
+
+	if query.Selection.Type == selection.SelectionTypeFile {
+		previewProperties["i18n:plugin_ai_command_preview_selected_files"] = fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "selection_files_count_value"), len(query.Selection.FilePaths))
+		previewJson, err := json.Marshal(struct {
+			FilePaths []string `json:"filePaths"`
+		}{FilePaths: query.Selection.FilePaths})
+		if err != nil {
+			// File selections still reuse the generic file-list preview so vision
+			// commands get the same structured path layout as other selection
+			// queries. If JSON encoding fails, keep the legacy hint rather than
+			// blocking the command from running.
+			c.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to marshal ai command file selection preview: %s", err.Error()))
+			return plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeMarkdown, PreviewData: "i18n:plugin_ai_command_enter_to_start"}
+		}
+		return plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeFileList, PreviewData: string(previewJson), PreviewProperties: previewProperties}
+	}
+
+	return plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeMarkdown, PreviewData: "i18n:plugin_ai_command_enter_to_start", PreviewProperties: previewProperties}
+}
+
 func (c *Plugin) querySelection(ctx context.Context, query plugin.Query) []plugin.QueryResult {
 	commands, commandsErr := c.getAllCommands(ctx)
 	if commandsErr != nil {
@@ -222,12 +301,13 @@ func (c *Plugin) querySelection(ctx context.Context, query plugin.Query) []plugi
 		}
 
 		model := command.AIModel()
+		modelLabel := fmt.Sprintf("%s - %s", model.ProviderName(), model.Name)
 		result := plugin.QueryResult{
 			Id:       uuid.NewString(),
 			Title:    command.Name,
-			SubTitle: fmt.Sprintf("%s - %s", model.ProviderName(), model.Name),
+			SubTitle: modelLabel,
 			Icon:     aiCommandIcon,
-			Preview:  plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeMarkdown, PreviewData: "i18n:plugin_ai_command_enter_to_start"},
+			Preview:  c.buildSelectionPreview(ctx, command, query),
 			Actions: []plugin.QueryResultAction{
 				{
 					Name:                   "i18n:plugin_ai_command_run",
@@ -238,9 +318,8 @@ func (c *Plugin) querySelection(ctx context.Context, query plugin.Query) []plugi
 
 							// Show preparing state
 							if updatable := c.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
-								previewData := i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_answering")
 								subTitle := "i18n:plugin_ai_command_answering"
-								preview := plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeMarkdown, PreviewData: previewData}
+								preview := c.buildAIStreamPreview(ctx, common.ChatStreamData{Status: common.ChatStreamStatusStreaming}, modelLabel)
 								updatable.Preview = &preview
 								updatable.SubTitle = &subTitle
 								startAnsweringTime = util.GetSystemTimestamp()
@@ -259,22 +338,14 @@ func (c *Plugin) querySelection(ctx context.Context, query plugin.Query) []plugi
 								switch streamResult.Status {
 								case common.ChatStreamStatusStreaming:
 									subTitle := "i18n:plugin_ai_command_answering"
-									preview := plugin.WoxPreview{
-										PreviewType:    plugin.WoxPreviewTypeMarkdown,
-										PreviewData:    streamResult.ToMarkdown(),
-										ScrollPosition: plugin.WoxPreviewScrollPositionBottom,
-									}
+									preview := c.buildAIStreamPreview(ctx, streamResult, modelLabel)
 									updatable.SubTitle = &subTitle
 									updatable.Preview = &preview
 									c.api.UpdateResult(ctx, *updatable)
 
 								case common.ChatStreamStatusFinished:
 									subTitle := fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_answered_cost"), util.GetSystemTimestamp()-startAnsweringTime)
-									preview := plugin.WoxPreview{
-										PreviewType:    plugin.WoxPreviewTypeMarkdown,
-										PreviewData:    streamResult.ToMarkdown(),
-										ScrollPosition: plugin.WoxPreviewScrollPositionBottom,
-									}
+									preview := c.buildAIStreamPreview(ctx, streamResult, modelLabel)
 									actions := []plugin.QueryResultAction{
 										{
 											Name: "i18n:plugin_ai_command_copy",
@@ -296,21 +367,15 @@ func (c *Plugin) querySelection(ctx context.Context, query plugin.Query) []plugi
 									c.api.UpdateResult(ctx, *updatable)
 
 								case common.ChatStreamStatusError:
-									if updatable.Preview != nil {
-										previewData := updatable.Preview.PreviewData + fmt.Sprintf("\n\nError: %s", streamResult.Data)
-										preview := *updatable.Preview
-										preview.PreviewData = previewData
-										updatable.Preview = &preview
-										c.api.UpdateResult(ctx, *updatable)
-									}
+									preview := c.buildAIStreamPreview(ctx, streamResult, modelLabel)
+									updatable.Preview = &preview
+									c.api.UpdateResult(ctx, *updatable)
 								}
 							})
 
 							if err != nil {
 								if updatable := c.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil && updatable.Preview != nil {
-									previewData := updatable.Preview.PreviewData + fmt.Sprintf("\n\nError: %s", err.Error())
-									preview := *updatable.Preview
-									preview.PreviewData = previewData
+									preview := c.buildAIStreamPreview(ctx, common.ChatStreamData{Status: common.ChatStreamStatusError, Data: err.Error()}, modelLabel)
 									updatable.Preview = &preview
 									c.api.UpdateResult(ctx, *updatable)
 								}
@@ -447,10 +512,11 @@ func (c *Plugin) queryCommand(ctx context.Context, query plugin.Query) []plugin.
 	}
 
 	var contextData string
+	chatModelLabel := fmt.Sprintf("%s - %s", aiCommandSetting.AIModel().Provider, aiCommandSetting.AIModel().Name)
 	result := plugin.QueryResult{
 		Id:       uuid.NewString(),
 		Title:    fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_chat_with"), aiCommandSetting.Name),
-		SubTitle: fmt.Sprintf("%s - %s", aiCommandSetting.AIModel().Provider, aiCommandSetting.AIModel().Name),
+		SubTitle: chatModelLabel,
 		Preview:  plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeMarkdown, PreviewData: ""},
 		Icon:     aiCommandIcon,
 		Actions: []plugin.QueryResultAction{
@@ -485,40 +551,26 @@ func (c *Plugin) queryCommand(ctx context.Context, query plugin.Query) []plugin.
 			switch streamResult.Status {
 			case common.ChatStreamStatusStreaming:
 				contextData = streamResult.Data
-				preview := plugin.WoxPreview{
-					PreviewType:    plugin.WoxPreviewTypeMarkdown,
-					PreviewData:    streamResult.ToMarkdown(),
-					ScrollPosition: plugin.WoxPreviewScrollPositionBottom,
-				}
+				preview := c.buildAIStreamPreview(ctx, streamResult, chatModelLabel)
 				updatable.Preview = &preview
 				c.api.UpdateResult(ctx, *updatable)
 
 			case common.ChatStreamStatusFinished:
 				contextData = streamResult.Data
-				preview := plugin.WoxPreview{
-					PreviewType:    plugin.WoxPreviewTypeMarkdown,
-					PreviewData:    streamResult.ToMarkdown(),
-					ScrollPosition: plugin.WoxPreviewScrollPositionBottom,
-				}
+				preview := c.buildAIStreamPreview(ctx, streamResult, chatModelLabel)
 				updatable.Preview = &preview
 				c.api.UpdateResult(ctx, *updatable)
 
 			case common.ChatStreamStatusError:
-				if updatable.Preview != nil {
-					previewData := updatable.Preview.PreviewData + fmt.Sprintf("\n\nError: %s", streamResult.Data)
-					preview := *updatable.Preview
-					preview.PreviewData = previewData
-					updatable.Preview = &preview
-					c.api.UpdateResult(ctx, *updatable)
-				}
+				preview := c.buildAIStreamPreview(ctx, streamResult, chatModelLabel)
+				updatable.Preview = &preview
+				c.api.UpdateResult(ctx, *updatable)
 			}
 		})
 
 		if err != nil {
 			if updatable := c.api.GetUpdatableResult(ctx, result.Id); updatable != nil && updatable.Preview != nil {
-				previewData := updatable.Preview.PreviewData + fmt.Sprintf("\n\nError: %s", err.Error())
-				preview := *updatable.Preview
-				preview.PreviewData = previewData
+				preview := c.buildAIStreamPreview(ctx, common.ChatStreamData{Status: common.ChatStreamStatusError, Data: err.Error()}, chatModelLabel)
 				updatable.Preview = &preview
 				c.api.UpdateResult(ctx, *updatable)
 			}

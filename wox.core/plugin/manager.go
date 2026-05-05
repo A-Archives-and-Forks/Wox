@@ -1124,6 +1124,23 @@ func (m *Manager) formatFileListPreview(ctx context.Context, filePaths []string)
 	return sb.String()
 }
 
+type fileListPreviewData struct {
+	FilePaths []string `json:"filePaths"`
+}
+
+func (m *Manager) buildFileListPreviewData(ctx context.Context, filePaths []string) string {
+	previewData, err := json.Marshal(fileListPreviewData{FilePaths: filePaths})
+	if err != nil {
+		// File-list previews used to be markdown strings, which forced the UI to
+		// render paths as generic text. Fall back to that stable legacy format if
+		// JSON encoding ever fails so selection query preview still works.
+		util.GetLogger().Warn(ctx, fmt.Sprintf("failed to marshal file list preview data: %s", err.Error()))
+		return m.formatFileListPreview(ctx, filePaths)
+	}
+
+	return string(previewData)
+}
+
 func (m *Manager) calculateResultScore(ctx context.Context, pluginId, title, subTitle string, currentQuery string) int64 {
 	var score int64 = 0
 
@@ -1557,8 +1574,13 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 		}
 		if query.Selection.Type == selection.SelectionTypeFile {
 			result.Preview = WoxPreview{
-				PreviewType: WoxPreviewTypeMarkdown,
-				PreviewData: m.formatFileListPreview(ctx, query.Selection.FilePaths),
+				// Selection-file preview is structured so the UI can render a
+				// modern file list instead of treating paths as markdown text.
+				PreviewType: WoxPreviewTypeFileList,
+				PreviewData: m.buildFileListPreviewData(ctx, query.Selection.FilePaths),
+				PreviewProperties: map[string]string{
+					"i18n:selection_files_count": fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "selection_files_count_value"), len(query.Selection.FilePaths)),
+				},
 			}
 		}
 	}
