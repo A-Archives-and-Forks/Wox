@@ -7,7 +7,8 @@
     ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/glance.png)
   - [`Screenshot`] Expand Screenshot with scrolling capture, pinned screenshot overlays, and a plugin screenshot API. Users can capture long pages or windows, pin captures above other windows as visual references, and plugins can start direct capture workflows with hidden toolbar and auto-confirm options #4394
     ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/screenshot_pin.png)
-  - [`Preview`] Add image overlay previews so image-heavy results, including clipboard and screenshot results, can open in a lightweight overlay instead of only inside the launcher preview panel.
+  - [`Preview`] Redesign the preview UI and add image overlay previews so result previews have a cleaner, more consistent surface, while image-heavy results, including clipboard and screenshot results, can open in a lightweight overlay instead of only inside the launcher preview panel.
+    ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/preview_image_click.png)
     ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/new_preview.png)
   - [`WebView`] Add actions to open preview pages in the system browser and clear saved WebView state, making embedded website previews easier to inspect, reset, and recover when a site keeps stale session data.
     ![](https://raw.githubusercontent.com/Wox-launcher/Wox/refs/heads/master/screenshots/webview_open_in_browser.png)
