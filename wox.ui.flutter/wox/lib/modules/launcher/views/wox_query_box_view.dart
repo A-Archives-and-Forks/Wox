@@ -58,6 +58,80 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
     }
   }
 
+  int getQueryBoxWordBoundaryOffset(String text, int offset, {required bool forward}) {
+    if (text.isEmpty) {
+      return 0;
+    }
+
+    final painter = TextPainter(text: TextSpan(text: text), textDirection: TextDirection.ltr)..layout();
+    try {
+      final wordBoundary = painter.wordBoundaries.moveByWordBoundary;
+      if (forward) {
+        return wordBoundary.getTrailingTextBoundaryAt(offset.clamp(0, text.length)) ?? text.length;
+      }
+
+      return wordBoundary.getLeadingTextBoundaryAt((offset - 1).clamp(0, text.length)) ?? 0;
+    } finally {
+      painter.dispose();
+    }
+  }
+
+  TextEditingValue buildQueryBoxReplacementValue(TextEditingValue value, int baseOffset, int extentOffset) {
+    final text = value.text;
+    final start = baseOffset.clamp(0, text.length);
+    final end = extentOffset.clamp(0, text.length);
+    final rangeStart = start < end ? start : end;
+    final rangeEnd = start < end ? end : start;
+    if (rangeStart == rangeEnd) {
+      return value;
+    }
+
+    final newText = text.replaceRange(rangeStart, rangeEnd, '');
+    return TextEditingValue(text: newText, selection: TextSelection.collapsed(offset: rangeStart), composing: TextRange.empty);
+  }
+
+  TextEditingValue buildQueryBoxWordDeletionValue(TextEditingValue value, {required bool forward}) {
+    final text = value.text;
+    final selection = value.selection;
+    if (!selection.isValid) {
+      return value;
+    }
+
+    if (!selection.isCollapsed) {
+      return buildQueryBoxReplacementValue(value, selection.start, selection.end);
+    }
+
+    final offset = selection.baseOffset.clamp(0, text.length);
+    final boundaryOffset = getQueryBoxWordBoundaryOffset(text, offset, forward: forward);
+    return buildQueryBoxReplacementValue(value, offset, boundaryOffset);
+  }
+
+  TextEditingValue normalizeMacOptionDeleteInFormatter(TextEditingValue oldValue, TextEditingValue newValue) {
+    final isDeletionFromTextInput = oldValue.text.length > newValue.text.length;
+    if (!Platform.isMacOS || !isDeletionFromTextInput || !oldValue.selection.isValid || !oldValue.selection.isCollapsed) {
+      return newValue;
+    }
+
+    final oldComposing = oldValue.composing;
+    final newComposing = newValue.composing;
+    final isComposing = (oldComposing.start >= 0 && oldComposing.end >= 0) || (newComposing.start >= 0 && newComposing.end >= 0);
+    if (isComposing) {
+      return newValue;
+    }
+
+    if (!HardwareKeyboard.instance.isAltPressed) {
+      return newValue;
+    }
+
+    final oldOffset = oldValue.selection.baseOffset.clamp(0, oldValue.text.length);
+    final newOffset = newValue.selection.baseOffset.clamp(0, newValue.text.length);
+    final forward = newOffset >= oldOffset;
+    // Bug fix: macOS can deliver Option+Backspace to the formatter as a plain one-character
+    // deletion instead of a KeyEvent or selector intent. Rewriting the formatter value here keeps
+    // the native word-deletion contract at the only layer that still observes the committed edit.
+    return buildQueryBoxWordDeletionValue(oldValue, forward: forward);
+  }
+
   // Build the TextField widget
   Widget _buildTextField(dynamic currentTheme) {
     return ExtendedTextField(
@@ -82,7 +156,8 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
       inputFormatters: [
         TextInputFormatter.withFunction((oldValue, newValue) {
           var traceId = const UuidV4().generate();
-          Logger.instance.debug(traceId, "IME Formatter - old: ${oldValue.text}, new: ${newValue.text}, composing: ${newValue.composing}");
+          final formattedValue = normalizeMacOptionDeleteInFormatter(oldValue, newValue);
+          Logger.instance.debug(traceId, "IME Formatter - old: ${oldValue.text}, new: ${formattedValue.text}, composing: ${formattedValue.composing}");
 
           // Flutter's IME handling has inconsistencies across platforms, especially on Windows
           // So we use input formatter to detect IME input completion instead of onChanged event
@@ -101,30 +176,30 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
           // Check if both states are in IME editing mode
           // composing.start >= 0 indicates an active IME composition region
           bool wasComposing = oldValue.composing.start >= 0 && oldValue.composing.end >= 0;
-          bool isComposing = newValue.composing.start >= 0 && newValue.composing.end >= 0;
+          bool isComposing = formattedValue.composing.start >= 0 && formattedValue.composing.end >= 0;
 
           if (wasComposing && !isComposing) {
             // Scenario 1: IME composition completed
             // Transition from composing to non-composing state indicates user has finished word selection
             // Example: The moment when "wo'zhi'dao" converts to "我知道"
             Future.microtask(() {
-              Logger.instance.info(traceId, "IME: composition completed, start query: ${newValue.text}");
-              controller.onQueryBoxTextChanged(newValue.text);
+              Logger.instance.info(traceId, "IME: composition completed, start query: ${formattedValue.text}");
+              controller.onQueryBoxTextChanged(formattedValue.text);
             });
-          } else if (!wasComposing && !isComposing && oldValue.text != newValue.text) {
+          } else if (!wasComposing && !isComposing && oldValue.text != formattedValue.text) {
             // Scenario 2: Normal text input (non-IME)
             // Text has changed but neither state is in IME composition
             // Example: Direct input of English letters or numbers
             Future.microtask(() {
-              Logger.instance.info(traceId, "IME: normal input, start query: ${newValue.text}");
-              controller.onQueryBoxTextChanged(newValue.text);
+              Logger.instance.info(traceId, "IME: normal input, start query: ${formattedValue.text}");
+              controller.onQueryBoxTextChanged(formattedValue.text);
             });
           }
 
           // Use Future.microtask to ensure query is triggered after text update is complete
           // This prevents querying with incomplete state updates
 
-          return newValue;
+          return formattedValue;
         }),
       ],
     );
