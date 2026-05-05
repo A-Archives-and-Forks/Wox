@@ -19,6 +19,12 @@ type FallbackSearcher interface {
 	QueryFallback(ctx context.Context, query Query) []QueryResult
 }
 
+// GlanceProvider is implemented by plugins that expose Global Glance items.
+// The method is optional so existing plugins keep the minimal Init/Query contract.
+type GlanceProvider interface {
+	Glance(ctx context.Context, request GlanceRequest) GlanceResponse
+}
+
 // ActionProxyCreator is implemented by plugins that need to create proxy callbacks for actions
 // This is used by external plugins (Node.js/Python) to create callbacks that invoke the host
 type ActionProxyCreator interface {

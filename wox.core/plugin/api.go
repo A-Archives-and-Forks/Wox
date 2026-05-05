@@ -179,6 +179,10 @@ type API interface {
 	//   }
 	RefreshQuery(ctx context.Context, param RefreshQueryParam)
 
+	// RefreshGlance asks Wox UI to pull the latest Global Glance data for this plugin.
+	// It deliberately does not push UI content so user slot settings remain authoritative.
+	RefreshGlance(ctx context.Context, ids []string)
+
 	// Copy copies the given content to the system clipboard.
 	// Supports text, image, or both simultaneously.
 	Copy(ctx context.Context, params CopyParams)
@@ -553,6 +557,13 @@ func (a *APIImpl) IsVisible(ctx context.Context) bool {
 
 func (a *APIImpl) RefreshQuery(ctx context.Context, param RefreshQueryParam) {
 	GetPluginManager().GetUI().RefreshQuery(ctx, param.PreserveSelectedIndex)
+}
+
+func (a *APIImpl) RefreshGlance(ctx context.Context, ids []string) {
+	if a.pluginInstance == nil {
+		return
+	}
+	GetPluginManager().GetUI().RefreshGlance(ctx, a.pluginInstance.Metadata.Id, ids)
 }
 
 func (a *APIImpl) Copy(ctx context.Context, params CopyParams) {

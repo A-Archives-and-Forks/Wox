@@ -43,6 +43,8 @@ type WoxSetting struct {
 	MaxResultCount *WoxSettingValue[int]
 	ThemeId        *WoxSettingValue[string]
 	AppFontFamily  *PlatformValue[string]
+	EnableGlance   *WoxSettingValue[bool]
+	PrimaryGlance  *WoxSettingValue[GlanceRef]
 
 	// Development-only debug display switches. Score and performance tails were
 	// previously hard-coded around dev-only code paths, so storing the switches
@@ -155,6 +157,17 @@ type TrayQuery struct {
 	Disabled       bool
 }
 
+type GlanceRef struct {
+	// PluginId plus GlanceId forms the persisted global identity so plugins can
+	// reuse simple local ids without colliding with other providers.
+	PluginId string
+	GlanceId string
+}
+
+func (g GlanceRef) IsEmpty() bool {
+	return g.PluginId == "" || g.GlanceId == ""
+}
+
 // ResultHash is a unique identifier for a result.
 // It is used to store actioned results and favorite results.
 type ResultHash string
@@ -207,6 +220,8 @@ func NewWoxSetting(store *WoxSettingStore) *WoxSetting {
 		MaxResultCount:            NewWoxSettingValue(store, "MaxResultCount", 10),
 		ThemeId:                   NewWoxSettingValue(store, "ThemeId", DefaultThemeId),
 		AppFontFamily:             NewPlatformValue(store, "AppFontFamily", "", "", ""),
+		EnableGlance:              NewWoxSettingValue(store, "EnableGlance", false),
+		PrimaryGlance:             NewWoxSettingValue(store, "PrimaryGlance", GlanceRef{PluginId: "e3ad9f18-fbbe-4f22-8c1b-8274c751f6e6", GlanceId: "time"}),
 		ShowScoreTail:             NewWoxSettingValue(store, "ShowScoreTail", false),
 		ShowPerformanceTail:       NewWoxSettingValue(store, "ShowPerformanceTail", false),
 		EnableAutostart:           NewPlatformValue(store, "EnableAutostart", false, false, false),

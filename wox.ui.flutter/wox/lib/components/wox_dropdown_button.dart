@@ -9,11 +9,13 @@ import 'package:wox/utils/wox_setting_focus_util.dart';
 class WoxDropdownItem<T> {
   final T value;
   final String label;
+  final String? subtitle;
   final String? tooltip;
   final Widget? leading;
+  final Widget? trailing;
   final bool isSelectAll;
 
-  const WoxDropdownItem({required this.value, required this.label, this.tooltip, this.leading, this.isSelectAll = false});
+  const WoxDropdownItem({required this.value, required this.label, this.subtitle, this.tooltip, this.leading, this.trailing, this.isSelectAll = false});
 }
 
 /// Wox dropdown button with theme-aware styling
@@ -252,7 +254,11 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
       } else {
         _filteredItems =
             widget.items.where((item) {
-              return item.label.toLowerCase().contains(query.toLowerCase());
+              // Dropdown rows can now carry secondary text, so filtering checks both lines to keep richer setting pickers discoverable.
+              final normalizedQuery = query.toLowerCase();
+              final normalizedSubtitle = item.subtitle?.toLowerCase() ?? "";
+              final normalizedTooltip = item.tooltip?.toLowerCase() ?? "";
+              return item.label.toLowerCase().contains(normalizedQuery) || normalizedSubtitle.contains(normalizedQuery) || normalizedTooltip.contains(normalizedQuery);
             }).toList();
       }
     });
@@ -524,15 +530,37 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
   // Build dropdown menu item with optional tooltip icon
   Widget _buildDropdownMenuItem(WoxDropdownItem<T> item, Color activeTextColor) {
     final hasLeading = item.leading != null;
+    final hasSubtitle = item.subtitle != null && item.subtitle!.isNotEmpty;
     final hasTooltip = item.tooltip != null && item.tooltip!.isNotEmpty;
-    if (!hasLeading && !hasTooltip) {
+    final hasTrailing = item.trailing != null;
+    if (!hasLeading && !hasSubtitle && !hasTooltip && !hasTrailing) {
       return Text(item.label);
     }
 
     return Row(
       children: [
         if (hasLeading) ...[SizedBox(width: 18, height: 18, child: item.leading!), const SizedBox(width: 8)],
-        Expanded(child: Text(item.label)),
+        Expanded(
+          // A second line makes metadata-backed pickers such as Glance easier to understand without changing the compact selected state.
+          child:
+              hasSubtitle
+                  ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(item.label, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 2),
+                      Text(
+                        item.subtitle!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: activeTextColor.withValues(alpha: 0.62), fontSize: widget.fontSize - 1),
+                      ),
+                    ],
+                  )
+                  : Text(item.label),
+        ),
+        if (hasTrailing) ...[const SizedBox(width: 12), item.trailing!],
         if (hasTooltip) Tooltip(message: item.tooltip!, child: Icon(Icons.info_outline, size: 16, color: activeTextColor)),
       ],
     );
@@ -546,6 +574,11 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
         children: [
           if (item.leading != null) ...[SizedBox(width: 18, height: 18, child: item.leading!), const SizedBox(width: 8)],
           Expanded(child: Text(item.label, style: TextStyle(color: textColor, fontSize: widget.fontSize).useSystemChineseFont())),
+          if (item.trailing != null) ...[
+            // Selected dropdowns stay one line, but metadata previews such as Glance still need room to show the value users are choosing.
+            const SizedBox(width: 10),
+            item.trailing!,
+          ],
         ],
       ),
     );

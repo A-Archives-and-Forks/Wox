@@ -11,6 +11,7 @@ import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
 import 'package:wox/components/wox_platform_focus.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
+import 'package:wox/entity/wox_glance.dart';
 import 'package:wox/entity/wox_hotkey.dart';
 import 'package:wox/utils/color_util.dart';
 import 'package:wox/utils/consts.dart';
@@ -63,7 +64,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
       key: controller.queryBoxTextFieldKey,
       style: TextStyle(fontSize: 28.0, color: safeFromCssColor(currentTheme.queryBoxFontColor)),
       decoration: InputDecoration(
-        contentPadding: const EdgeInsets.only(left: 8, right: 68, top: QUERY_BOX_CONTENT_PADDING_TOP, bottom: QUERY_BOX_CONTENT_PADDING_BOTTOM),
+        contentPadding: EdgeInsets.only(left: 8, right: controller.getQueryBoxRightAccessoryWidth(), top: QUERY_BOX_CONTENT_PADDING_TOP, bottom: QUERY_BOX_CONTENT_PADDING_BOTTOM),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(currentTheme.queryBoxBorderRadius.toDouble()), borderSide: BorderSide.none),
         filled: true,
         fillColor: safeFromCssColor(currentTheme.queryBoxBackgroundColor),
@@ -266,7 +267,10 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                     // same text width used by the input decoration. This keeps pasted multi-line text intact
                     // while giving long single-line queries enough vertical room for caret navigation.
                     SchedulerBinding.instance.addPostFrameCallback((_) {
-                      controller.updateQueryBoxTextWrapWidth(const UuidV4().generate(), (constraints.maxWidth - 8 - 68).clamp(0, double.infinity));
+                      controller.updateQueryBoxTextWrapWidth(
+                        const UuidV4().generate(),
+                        (constraints.maxWidth - 8 - controller.getQueryBoxRightAccessoryWidth()).clamp(0, double.infinity),
+                      );
                     });
 
                     return Theme(
@@ -286,31 +290,88 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                 controller.focusQueryBox();
               },
               child: SizedBox(
-                width: 55,
+                width: controller.getQueryBoxRightAccessoryWidth(),
                 height: 55,
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: MouseRegion(
-                      cursor: controller.queryIcon.value.action != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
-                      child: GestureDetector(
-                        onTap: () {
-                          controller.queryIcon.value.action?.call();
-                          controller.focusQueryBox();
-                        },
-                        child:
-                            controller.isLoading.value
-                                ? WoxLoadingIndicator(size: 20, color: safeFromCssColor(currentTheme.queryBoxCursorColor))
-                                : WoxImageView(woxImage: controller.queryIcon.value.icon, width: 30, height: 30),
-                      ),
-                    ),
-                  ),
-                ),
+                child: Center(child: Padding(padding: const EdgeInsets.all(8.0), child: _buildRightAccessory(currentTheme))),
               ),
             ),
           ),
         ],
       );
     });
+  }
+
+  Widget _buildRightAccessory(dynamic currentTheme) {
+    if (controller.isLoading.value) {
+      return WoxLoadingIndicator(size: 20, color: safeFromCssColor(currentTheme.queryBoxCursorColor));
+    }
+    if (controller.shouldShowGlance) {
+      final items = controller.glanceItems.take(1).toList();
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          for (var index = 0; index < items.length; index++) ...[if (index > 0) const SizedBox(width: 8), _buildGlanceItem(currentTheme, items[index])],
+        ],
+      );
+    }
+
+    return MouseRegion(
+      cursor: controller.queryIcon.value.action != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      child: GestureDetector(
+        onTap: () {
+          controller.queryIcon.value.action?.call();
+          controller.focusQueryBox();
+        },
+        child: WoxImageView(woxImage: controller.queryIcon.value.icon, width: 30, height: 30),
+      ),
+    );
+  }
+
+  Widget _buildGlanceItem(dynamic currentTheme, GlanceItem item) {
+    final baseTextColor = safeFromCssColor(currentTheme.queryBoxFontColor);
+    // Glance now has no status field in v1; keeping one quiet opacity preserves
+    // the auxiliary feel without exposing unused state semantics in the API.
+    const textAlpha = 0.9;
+    final textColor = baseTextColor.withValues(alpha: textAlpha);
+    var isHovered = false;
+
+    // Glance is auxiliary status, so the default state is fully transparent and
+    // visually merges with the query box; hover is only a light affordance.
+    return Tooltip(
+      message: item.tooltip.isNotEmpty ? item.tooltip : item.text,
+      child: StatefulBuilder(
+        builder: (context, setHovered) {
+          return MouseRegion(
+            cursor: item.action == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
+            onEnter: (_) => setHovered(() => isHovered = true),
+            onExit: (_) => setHovered(() => isHovered = false),
+            child: GestureDetector(
+              onTap: item.action == null ? null : () => controller.executeGlanceDefaultAction(const UuidV4().generate(), item),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                width: controller.getGlanceItemWidth(item),
+                height: 30,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: isHovered ? baseTextColor.withValues(alpha: 0.10) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: isHovered ? baseTextColor.withValues(alpha: 0.08) : Colors.transparent),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (item.icon.imageData.isNotEmpty) ...[
+                      Opacity(opacity: textAlpha * 0.9, child: WoxImageView(woxImage: item.icon, width: 16, height: 16)),
+                      const SizedBox(width: 5),
+                    ],
+                    Flexible(child: Text(item.text, overflow: TextOverflow.ellipsis, maxLines: 1, style: TextStyle(color: textColor, fontSize: 15))),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 }

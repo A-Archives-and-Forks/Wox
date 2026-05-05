@@ -53,6 +53,13 @@ func (u *uiImpl) RefreshQuery(ctx context.Context, preserveSelectedIndex bool) {
 	})
 }
 
+func (u *uiImpl) RefreshGlance(ctx context.Context, pluginId string, ids []string) {
+	u.invokeWebsocketMethod(ctx, "RefreshGlance", map[string]any{
+		"PluginId": pluginId,
+		"Ids":      ids,
+	})
+}
+
 func (u *uiImpl) HideApp(ctx context.Context) {
 	u.invokeWebsocketMethod(ctx, "HideApp", nil)
 }

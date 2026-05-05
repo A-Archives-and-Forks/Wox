@@ -48,3 +48,30 @@ func TestGetFeatureParamsForDebounceParsesJSONNumbers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 200, params.IntervalMs)
 }
+
+func TestValidateGlancesRejectsDuplicateIds(t *testing.T) {
+	metadata := Metadata{
+		Glances: []MetadataGlance{
+			{Id: "time", Name: "Time"},
+			{Id: "time", Name: "Duplicate Time"},
+		},
+	}
+
+	err := metadata.ValidateGlances()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate glance id")
+}
+
+func TestValidateGlancesAcceptsPluginLocalIds(t *testing.T) {
+	metadata := Metadata{
+		Glances: []MetadataGlance{
+			{Id: "time", Name: "Time", RefreshIntervalMs: 60000},
+			{Id: "battery", Name: "Battery", RefreshIntervalMs: 60000},
+		},
+	}
+
+	err := metadata.ValidateGlances()
+
+	require.NoError(t, err)
+}

@@ -107,6 +107,8 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	"/log/open":         handleLogOpen,
 	"/hotkey/available": handleHotkeyAvailable,
 	"/query/metadata":   handleQueryMetadata,
+	"/glance":           handleGlance,
+	"/glance/action":    handleGlanceAction,
 	"/deeplink":         handleDeeplink,
 	"/version":          handleVersion,
 
@@ -256,6 +258,7 @@ func convertPluginInstanceToDto(ctx context.Context, pluginInstance *plugin.Inst
 	installedPlugin.IsDisable = pluginInstance.Setting.Disabled.Get()
 	installedPlugin.TriggerKeywords = pluginInstance.GetTriggerKeywords()
 	installedPlugin.Commands = pluginInstance.GetQueryCommands()
+	installedPlugin.Glances = translatePluginGlances(ctx, pluginInstance)
 
 	//load screenshot urls from store if exist
 	storePlugin, foundErr := plugin.GetStoreManager().GetStorePluginManifestById(ctx, pluginInstance.Metadata.Id)
@@ -279,6 +282,18 @@ func convertPluginInstanceToDto(ctx context.Context, pluginInstance *plugin.Inst
 	installedPlugin = convertPluginDto(ctx, installedPlugin, pluginInstance)
 
 	return installedPlugin, nil
+}
+
+func translatePluginGlances(ctx context.Context, pluginInstance *plugin.Instance) []plugin.MetadataGlance {
+	glances := make([]plugin.MetadataGlance, 0, len(pluginInstance.Metadata.Glances))
+	for _, glance := range pluginInstance.Metadata.Glances {
+		// Glance definitions are metadata used by settings. Translating them here
+		// keeps Flutter dropdowns simple while preserving i18n keys in plugin.json.
+		glance.Name = common.I18nString(pluginInstance.TranslateMetadataText(ctx, glance.Name))
+		glance.Description = common.I18nString(pluginInstance.TranslateMetadataText(ctx, glance.Description))
+		glances = append(glances, glance)
+	}
+	return glances
 }
 
 func handlePluginInstall(w http.ResponseWriter, r *http.Request) {
@@ -568,6 +583,8 @@ func handleSettingWox(w http.ResponseWriter, r *http.Request) {
 	settingDto.MaxResultCount = woxSetting.MaxResultCount.Get()
 	settingDto.ThemeId = woxSetting.ThemeId.Get()
 	settingDto.AppFontFamily = woxSetting.AppFontFamily.Get()
+	settingDto.EnableGlance = woxSetting.EnableGlance.Get()
+	settingDto.PrimaryGlance = woxSetting.PrimaryGlance.Get()
 	settingDto.ShowScoreTail = woxSetting.ShowScoreTail.Get()
 	settingDto.ShowPerformanceTail = woxSetting.ShowPerformanceTail.Get()
 
@@ -782,6 +799,15 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 	case "AppFontFamily":
 		vs = font.NormalizeConfiguredFontFamily(vs, font.GetSystemFontFamilies(ctx))
 		woxSetting.AppFontFamily.Set(vs)
+	case "EnableGlance":
+		woxSetting.EnableGlance.Set(vb)
+	case "PrimaryGlance":
+		var glance setting.GlanceRef
+		if err := json.Unmarshal([]byte(vs), &glance); err != nil {
+			writeErrorResponse(w, err.Error())
+			return
+		}
+		woxSetting.PrimaryGlance.Set(glance)
 	case "ShowScoreTail":
 		// New dev setting: score tails used to be compiled into a helper but
 		// effectively disabled by commented call sites. Persisting this switch
@@ -804,6 +830,57 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	GetUIManager().PostSettingUpdate(getTraceContext(r), kv.Key, updatedValue)
+
+	writeSuccessResponse(w, "")
+}
+
+func handleGlance(w http.ResponseWriter, r *http.Request) {
+	type glanceRequest struct {
+		Glances []setting.GlanceRef
+		Reason  plugin.GlanceRefreshReason
+	}
+
+	var request glanceRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+
+	keys := make([]plugin.GlanceKey, 0, len(request.Glances))
+	for _, glance := range request.Glances {
+		if glance.IsEmpty() {
+			continue
+		}
+		keys = append(keys, plugin.GlanceKey{PluginId: glance.PluginId, GlanceId: glance.GlanceId})
+	}
+
+	// Glance data is requested by the UI only for user-selected slots. Keeping
+	// this pull path in HTTP avoids giving plugins a persistent UI push channel.
+	items := plugin.GetPluginManager().GetGlanceItems(getTraceContext(r), keys, request.Reason)
+	writeSuccessResponse(w, items)
+}
+
+func handleGlanceAction(w http.ResponseWriter, r *http.Request) {
+	type glanceActionRequest struct {
+		PluginId string
+		GlanceId string
+		ActionId string
+	}
+
+	var request glanceActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+	if request.PluginId == "" || request.GlanceId == "" || request.ActionId == "" {
+		writeErrorResponse(w, "pluginId, glanceId and actionId are required")
+		return
+	}
+
+	if err := plugin.GetPluginManager().ExecuteGlanceAction(getTraceContext(r), request.PluginId, request.GlanceId, request.ActionId); err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
 
 	writeSuccessResponse(w, "")
 }

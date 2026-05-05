@@ -133,6 +133,7 @@ type Manager struct {
 
 	toolbarMsgActions   *util.HashMap[string, *toolbarMsgActionEntry]
 	pluginToolbarMsgIds *util.HashMap[string, string]
+	glanceActions       *util.HashMap[string, GlanceAction]
 
 	// sessionPluginQueries tracks which plugin query is currently active for each UI session (sessionId -> state)
 	sessionPluginQueries *util.HashMap[string, *sessionPluginQueryState]
@@ -154,6 +155,7 @@ func GetPluginManager() *Manager {
 			pluginQueryLatency:      util.NewHashMap[string, *util.EWMA](),
 			toolbarMsgActions:       util.NewHashMap[string, *toolbarMsgActionEntry](),
 			pluginToolbarMsgIds:     util.NewHashMap[string, string](),
+			glanceActions:           util.NewHashMap[string, GlanceAction](),
 			sessionPluginQueries:    util.NewHashMap[string, *sessionPluginQueryState](),
 		}
 		logger = util.GetLogger()
@@ -586,6 +588,12 @@ func (m *Manager) ParseMetadata(ctx context.Context, pluginDirectory string) (Me
 	if !IsAllSupportedOS(metadata.SupportedOS) {
 		return Metadata{}, fmt.Errorf("unsupported os in plugin.json file (%s), os=%s", pluginDirectory, metadata.SupportedOS)
 	}
+	if err := metadata.ValidateGlances(); err != nil {
+		// Global Glance selections are persisted as PluginId + GlanceId, so the
+		// backend must reject ambiguous plugin-local ids before settings can point
+		// at a candidate that cannot be resolved deterministically.
+		return Metadata{}, fmt.Errorf("invalid glances in plugin.json file (%s): %w", pluginDirectory, err)
+	}
 
 	metadata.Directory = pluginDirectory
 	metadata.LoadPluginI18nFromDirectory(ctx)
@@ -880,6 +888,15 @@ func (m *Manager) WaitForSystemPlugins() {
 
 func (m *Manager) GetPluginInstances() []*Instance {
 	return m.instances
+}
+
+func (m *Manager) GetPluginInstanceById(pluginId string) *Instance {
+	for _, instance := range m.instances {
+		if instance.Metadata.Id == pluginId {
+			return instance
+		}
+	}
+	return nil
 }
 
 func (m *Manager) canOperateQuery(ctx context.Context, pluginInstance *Instance, query Query) bool {
@@ -2775,6 +2792,133 @@ func normalizeHotkeyForPlatform(hotkey string) string {
 type toolbarMsgActionEntry struct {
 	PluginId string
 	Actions  map[string]ToolbarMsgAction
+}
+
+func glanceActionCacheKey(pluginId, glanceId, actionId string) string {
+	return pluginId + "\x00" + glanceId + "\x00" + actionId
+}
+
+func (m *Manager) clearGlanceActions(pluginId string, glanceIds []string) {
+	// A refreshed glance may return no items, so stale callbacks must be removed
+	// before the new response is normalized instead of relying on UI visibility.
+	prefixes := make([]string, 0, len(glanceIds))
+	for _, glanceId := range glanceIds {
+		prefixes = append(prefixes, glanceActionCacheKey(pluginId, glanceId, ""))
+	}
+
+	for _, key := range m.glanceActions.Keys() {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(key, prefix) {
+				m.glanceActions.Delete(key)
+				break
+			}
+		}
+	}
+}
+
+func (m *Manager) GetGlanceItems(ctx context.Context, keys []GlanceKey, reason GlanceRefreshReason) []GlanceItemUI {
+	requestIdsByPlugin := map[string][]string{}
+	requested := map[string]bool{}
+	for _, key := range keys {
+		if key.PluginId == "" || key.GlanceId == "" {
+			continue
+		}
+		cacheKey := key.PluginId + "\x00" + key.GlanceId
+		if requested[cacheKey] {
+			continue
+		}
+		requested[cacheKey] = true
+		requestIdsByPlugin[key.PluginId] = append(requestIdsByPlugin[key.PluginId], key.GlanceId)
+	}
+
+	var uiItems []GlanceItemUI
+	for pluginId, ids := range requestIdsByPlugin {
+		pluginInstance := m.GetPluginInstanceById(pluginId)
+		if pluginInstance == nil || pluginInstance.Setting.Disabled.Get() {
+			continue
+		}
+		provider, ok := pluginInstance.Plugin.(GlanceProvider)
+		if !ok {
+			continue
+		}
+
+		declared := map[string]bool{}
+		var declaredIds []string
+		for _, id := range ids {
+			if pluginInstance.Metadata.HasGlance(id) {
+				declared[id] = true
+				declaredIds = append(declaredIds, id)
+			}
+		}
+		if len(declaredIds) == 0 {
+			continue
+		}
+
+		// Global Glance is a pull-based API. Calling the plugin only for user-selected
+		// ids keeps third-party providers from occupying the query-box accessory area
+		// unless the setting explicitly points at them.
+		m.clearGlanceActions(pluginId, declaredIds)
+		response := provider.Glance(ctx, GlanceRequest{Ids: declaredIds, Reason: reason})
+		for _, item := range response.Items {
+			if !declared[item.Id] {
+				continue
+			}
+			uiItems = append(uiItems, m.normalizeGlanceItem(ctx, pluginInstance, item))
+		}
+	}
+	return uiItems
+}
+
+func (m *Manager) normalizeGlanceItem(ctx context.Context, pluginInstance *Instance, item GlanceItem) GlanceItemUI {
+	uiItem := GlanceItemUI{
+		PluginId: pluginInstance.Metadata.Id,
+		Id:       item.Id,
+		Text:     pluginInstance.translateMetadataText(ctx, common.I18nString(item.Text)),
+		Icon:     common.ConvertIcon(ctx, item.Icon, pluginInstance.PluginDirectory),
+		Tooltip:  pluginInstance.translateMetadataText(ctx, common.I18nString(item.Tooltip)),
+	}
+
+	if item.Action != nil {
+		// Glance intentionally exposes only one action in v1. A single optional
+		// callback keeps the query-box accessory glanceable instead of turning it
+		// into a secondary action menu.
+		action := *item.Action
+		if action.Id == "" {
+			action.Id = uuid.NewString()
+		}
+		action.Name = pluginInstance.translateMetadataText(ctx, common.I18nString(action.Name))
+		action.ContextData = common.ContextData(lo.Assign(map[string]string{}, action.ContextData))
+		if !action.Icon.IsEmpty() {
+			action.Icon = common.ConvertIcon(ctx, action.Icon, pluginInstance.PluginDirectory)
+		}
+		m.glanceActions.Store(glanceActionCacheKey(pluginInstance.Metadata.Id, item.Id, action.Id), action)
+		uiItem.Action = &GlanceActionUI{
+			Id:                     action.Id,
+			Name:                   action.Name,
+			Icon:                   action.Icon,
+			PreventHideAfterAction: action.PreventHideAfterAction,
+			ContextData:            common.ContextData(lo.Assign(map[string]string{}, action.ContextData)),
+		}
+	}
+
+	return uiItem
+}
+
+func (m *Manager) ExecuteGlanceAction(ctx context.Context, pluginId string, glanceId string, actionId string) error {
+	action, found := m.glanceActions.Load(glanceActionCacheKey(pluginId, glanceId, actionId))
+	if !found {
+		return fmt.Errorf("glance action not found: %s/%s/%s", pluginId, glanceId, actionId)
+	}
+	if action.Action == nil {
+		return fmt.Errorf("glance action callback missing: %s", actionId)
+	}
+	action.Action(ctx, GlanceActionContext{
+		PluginId:    pluginId,
+		GlanceId:    glanceId,
+		ActionId:    actionId,
+		ContextData: common.ContextData(lo.Assign(map[string]string{}, action.ContextData)),
+	})
+	return nil
 }
 
 type sessionPluginQueryState struct {

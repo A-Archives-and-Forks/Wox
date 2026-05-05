@@ -38,6 +38,10 @@ func (i *Instance) translateMetadataText(ctx context.Context, text common.I18nSt
 	return i.Metadata.translate(ctx, text)
 }
 
+func (i *Instance) TranslateMetadataText(ctx context.Context, text common.I18nString) string {
+	return i.translateMetadataText(ctx, text)
+}
+
 func (i *Instance) GetName(ctx context.Context) string {
 	return i.Metadata.GetName(ctx)
 }

@@ -77,6 +77,7 @@ type Metadata struct {
 	Commands           []MetadataCommand
 	SupportedOS        []string
 	Features           []MetadataFeature
+	Glances            []MetadataGlance
 	SettingDefinitions definition.PluginSettingDefinitions
 	QueryRequirements  MetadataQueryRequirements
 
@@ -304,6 +305,41 @@ type MetadataFeature struct {
 type MetadataCommand struct {
 	Command     string
 	Description common.I18nString // support i18n: prefix
+}
+
+// MetadataGlance declares one plugin-local Global Glance candidate. The UI stores
+// selections as PluginId + Id, so only the Id needs to be unique within this
+// metadata object.
+type MetadataGlance struct {
+	Id                string
+	Name              common.I18nString
+	Description       common.I18nString
+	Icon              string
+	RefreshIntervalMs int
+}
+
+func (m *Metadata) ValidateGlances() error {
+	seen := map[string]bool{}
+	for _, glance := range m.Glances {
+		id := strings.TrimSpace(glance.Id)
+		if id == "" {
+			return fmt.Errorf("glance id is empty")
+		}
+		if seen[id] {
+			return fmt.Errorf("duplicate glance id: %s", id)
+		}
+		seen[id] = true
+	}
+	return nil
+}
+
+func (m *Metadata) HasGlance(id string) bool {
+	for _, glance := range m.Glances {
+		if glance.Id == id {
+			return true
+		}
+	}
+	return false
 }
 
 // MetadataQueryRequirement declares a setting that must pass validation before

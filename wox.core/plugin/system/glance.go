@@ -1,0 +1,118 @@
+package system
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+	"wox/common"
+	"wox/plugin"
+	"wox/util"
+)
+
+const systemGlancePluginId = "e3ad9f18-fbbe-4f22-8c1b-8274c751f6e6"
+
+func init() {
+	plugin.AllSystemPlugin = append(plugin.AllSystemPlugin, &GlancePlugin{})
+}
+
+type GlancePlugin struct {
+	api plugin.API
+}
+
+func (p *GlancePlugin) GetMetadata() plugin.Metadata {
+	return plugin.Metadata{
+		Id:              systemGlancePluginId,
+		Name:            "i18n:plugin_glance_plugin_name",
+		Author:          "Wox Launcher",
+		Website:         "https://github.com/Wox-launcher/Wox",
+		Version:         "1.0.0",
+		MinWoxVersion:   "2.0.0",
+		Runtime:         "Go",
+		Description:     "i18n:plugin_glance_plugin_description",
+		Icon:            glanceImageString("👀"),
+		Entry:           "",
+		TriggerKeywords: []string{"glance"},
+		SupportedOS:     []string{"Windows", "Macos", "Linux"},
+		Glances: []plugin.MetadataGlance{
+			{Id: "time", Name: "i18n:plugin_glance_time_name", Description: "i18n:plugin_glance_time_description", Icon: glanceImageString("🕒"), RefreshIntervalMs: 60000},
+			{Id: "date", Name: "i18n:plugin_glance_date_name", Description: "i18n:plugin_glance_date_description", Icon: glanceImageString("📅"), RefreshIntervalMs: 60000},
+			{Id: "battery", Name: "i18n:plugin_glance_battery_name", Description: "i18n:plugin_glance_battery_description", Icon: glanceImageString("🔋"), RefreshIntervalMs: 60000},
+		},
+	}
+}
+
+func glanceImageString(emoji string) string {
+	image := common.NewWoxImageEmoji(emoji)
+	return image.String()
+}
+
+func (p *GlancePlugin) Init(ctx context.Context, initParams plugin.InitParams) {
+	p.api = initParams.API
+}
+
+func (p *GlancePlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+	return []plugin.QueryResult{}
+}
+
+func (p *GlancePlugin) Glance(ctx context.Context, request plugin.GlanceRequest) plugin.GlanceResponse {
+	items := make([]plugin.GlanceItem, 0, len(request.Ids))
+	for _, id := range request.Ids {
+		switch id {
+		case "time":
+			items = append(items, plugin.GlanceItem{Id: id, Text: time.Now().Format("15:04"), Icon: common.NewWoxImageEmoji("🕒")})
+		case "date":
+			items = append(items, plugin.GlanceItem{Id: id, Text: time.Now().Format("Mon 01/02"), Icon: common.NewWoxImageEmoji("📅")})
+		case "battery":
+			if item, ok := p.batteryGlance(ctx); ok {
+				items = append(items, item)
+			}
+		}
+	}
+	return plugin.GlanceResponse{Items: items}
+}
+
+func (p *GlancePlugin) batteryGlance(ctx context.Context) (plugin.GlanceItem, bool) {
+	// Battery is a system-specific signal. Returning no item when no battery can
+	// be detected keeps desktop machines from showing stale or misleading data.
+	if util.IsMacOS() {
+		return p.macOSBatteryGlance(ctx)
+	}
+	if util.IsLinux() {
+		return p.linuxBatteryGlance(ctx)
+	}
+	return plugin.GlanceItem{}, false
+}
+
+func (p *GlancePlugin) macOSBatteryGlance(ctx context.Context) (plugin.GlanceItem, bool) {
+	output, err := exec.CommandContext(ctx, "pmset", "-g", "batt").Output()
+	if err != nil {
+		return plugin.GlanceItem{}, false
+	}
+	match := regexp.MustCompile(`(\d+)%`).FindStringSubmatch(string(output))
+	if len(match) < 2 {
+		return plugin.GlanceItem{}, false
+	}
+	text := match[1] + "%"
+	tooltip := strings.TrimSpace(strings.ReplaceAll(string(output), "\n", " "))
+	return plugin.GlanceItem{Id: "battery", Text: text, Icon: common.NewWoxImageEmoji("🔋"), Tooltip: tooltip}, true
+}
+
+func (p *GlancePlugin) linuxBatteryGlance(ctx context.Context) (plugin.GlanceItem, bool) {
+	paths, err := filepath.Glob("/sys/class/power_supply/BAT*/capacity")
+	if err != nil || len(paths) == 0 {
+		return plugin.GlanceItem{}, false
+	}
+	capacity, err := os.ReadFile(paths[0])
+	if err != nil {
+		return plugin.GlanceItem{}, false
+	}
+	text := strings.TrimSpace(string(capacity)) + "%"
+	statusPath := filepath.Join(filepath.Dir(paths[0]), "status")
+	status, _ := os.ReadFile(statusPath)
+	tooltip := strings.TrimSpace(string(status))
+	return plugin.GlanceItem{Id: "battery", Text: text, Icon: common.NewWoxImageEmoji("🔋"), Tooltip: tooltip}, true
+}

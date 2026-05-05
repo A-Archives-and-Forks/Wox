@@ -19,6 +19,7 @@ import 'package:wox/controllers/wox_grid_controller.dart';
 import 'package:wox/controllers/wox_list_controller.dart';
 import 'package:wox/controllers/wox_screenshot_controller.dart';
 import 'package:wox/entity/wox_ai.dart';
+import 'package:wox/entity/wox_glance.dart';
 import 'package:wox/entity/wox_list_item.dart';
 import 'package:wox/entity/screenshot_session.dart';
 import 'package:wox/models/doctor_check_result.dart';
@@ -164,6 +165,8 @@ class WoxLauncherController extends GetxController {
 
   /// The icon at end of query box.
   final queryIcon = QueryIconInfo.empty().obs;
+  final glanceItems = <GlanceItem>[].obs;
+  Timer? glanceRefreshTimer;
 
   /// The result of the doctor check.
   var doctorCheckPassed = true;
@@ -207,6 +210,116 @@ class WoxLauncherController extends GetxController {
   void stopDoctorCheckTimer() {
     doctorCheckTimer?.cancel();
     doctorCheckTimer = null;
+  }
+
+  bool get shouldShowGlance {
+    final setting = WoxSettingUtil.instance.currentSetting;
+    return setting.enableGlance && isGlobalInputQuery(currentQuery.value) && queryIcon.value.icon.imageData.isEmpty && glanceItems.isNotEmpty && !isLoading.value;
+  }
+
+  double getQueryBoxRightAccessoryWidth() {
+    if (!shouldShowGlance) {
+      return 68;
+    }
+
+    final visibleItems = glanceItems.take(1).toList();
+    final itemWidth = visibleItems.fold<double>(0, (sum, item) => sum + getGlanceItemWidth(item));
+    return 16 + itemWidth + math.max(visibleItems.length - 1, 0) * 8;
+  }
+
+  double getGlanceItemWidth(GlanceItem item) {
+    // Glance text has variable length: battery is short, date is longer. A
+    // content-based width keeps short items quiet without truncating date text.
+    final textWidth = item.text.characters.length * 9.0;
+    final iconWidth = item.icon.imageData.isNotEmpty ? 21.0 : 0.0;
+    return (textWidth + iconWidth + 16).clamp(76.0, 144.0);
+  }
+
+  List<GlanceRef> selectedGlanceRefs() {
+    final setting = WoxSettingUtil.instance.currentSetting;
+    final refs = <GlanceRef>[];
+    if (!setting.primaryGlance.isEmpty) {
+      refs.add(setting.primaryGlance);
+    }
+    return refs;
+  }
+
+  Future<void> refreshGlance(String traceId, String reason, {String pluginId = "", List<String> ids = const []}) async {
+    glanceRefreshTimer?.cancel();
+    final setting = WoxSettingUtil.instance.currentSetting;
+    if (!setting.enableGlance || !isGlobalInputQuery(currentQuery.value)) {
+      // Global Glance must not leak into plugin contexts because the query-box
+      // accessory is already reserved for plugin identity there.
+      glanceItems.clear();
+      return;
+    }
+
+    var refs = selectedGlanceRefs();
+    if (pluginId.isNotEmpty) {
+      refs = refs.where((ref) => ref.pluginId == pluginId && (ids.isEmpty || ids.contains(ref.glanceId))).toList();
+    }
+    if (refs.isEmpty) {
+      glanceItems.clear();
+      return;
+    }
+
+    try {
+      final items = await WoxApi.instance.getGlanceItems(traceId, refs, reason);
+      final byKey = {for (final item in items) '${item.pluginId}\x00${item.id}': item};
+      // Preserve slot order from settings instead of plugin response order so the
+      // primary item remains visually stable across refreshes.
+      glanceItems.assignAll(refs.map((ref) => byKey[ref.key]).whereType<GlanceItem>().where((item) => !item.isEmpty).toList());
+      scheduleNextGlanceRefresh(traceId);
+    } catch (e) {
+      Logger.instance.error(traceId, "refresh glance failed: $e");
+      glanceItems.clear();
+    }
+  }
+
+  void scheduleNextGlanceRefresh(String traceId) {
+    final interval = resolveSelectedGlanceRefreshInterval();
+    if (interval == null || interval <= Duration.zero) {
+      return;
+    }
+    glanceRefreshTimer = Timer(interval, () {
+      unawaited(refreshGlance(const UuidV4().generate(), "interval"));
+    });
+  }
+
+  Duration? resolveSelectedGlanceRefreshInterval() {
+    final refs = selectedGlanceRefs();
+    if (refs.isEmpty || !Get.isRegistered<WoxSettingController>()) {
+      return null;
+    }
+    final settingController = Get.find<WoxSettingController>();
+    int? minIntervalMs;
+    for (final ref in refs) {
+      for (final plugin in settingController.installedPlugins) {
+        if (plugin.id != ref.pluginId) {
+          continue;
+        }
+        for (final glance in plugin.glances) {
+          if (glance.id == ref.glanceId && glance.refreshIntervalMs > 0) {
+            minIntervalMs = minIntervalMs == null ? glance.refreshIntervalMs : math.min(minIntervalMs, glance.refreshIntervalMs);
+          }
+        }
+      }
+    }
+    if (minIntervalMs == null) {
+      return null;
+    }
+    return Duration(milliseconds: math.max(minIntervalMs, 60000));
+  }
+
+  Future<void> executeGlanceDefaultAction(String traceId, GlanceItem item) async {
+    final action = item.action;
+    if (action == null) {
+      return;
+    }
+    await WoxApi.instance.executeGlanceAction(traceId, item.pluginId, item.id, action.id);
+    if (!action.preventHideAfterAction) {
+      hideApp(traceId);
+    }
   }
 
   /// Reset controller state for integration testing without full disposal.
@@ -343,6 +456,10 @@ class WoxLauncherController extends GetxController {
       style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxTextSelectionColor)),
       enabled: queryBoxFocusNode.hasFocus,
     );
+  }
+
+  bool isGlobalInputQuery(PlainQuery query) {
+    return query.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code && !query.queryText.contains(" ");
   }
 
   bool get isShowDoctorCheckInfo => currentQuery.value.isEmpty && !doctorCheckInfo.value.allPassed;
@@ -1123,6 +1240,7 @@ class WoxLauncherController extends GetxController {
     }
 
     WoxApi.instance.onShow(traceId);
+    unawaited(refreshGlance(traceId, "windowShown"));
   }
 
   void resetLayoutState(String traceId) {
@@ -1837,6 +1955,12 @@ class WoxLauncherController extends GetxController {
     } else if (msg.method == "RefreshQuery") {
       final preserveSelectedIndex = msg.data['preserveSelectedIndex'] as bool? ?? false;
       onRefreshQuery(msg.traceId, preserveSelectedIndex);
+      responseWoxWebsocketRequest(msg, true, null);
+    } else if (msg.method == "RefreshGlance") {
+      final data = msg.data as Map<String, dynamic>? ?? {};
+      final pluginId = data['PluginId'] as String? ?? "";
+      final ids = (data['Ids'] as List<dynamic>? ?? []).map((item) => item.toString()).toList();
+      await refreshGlance(msg.traceId, "manualRefresh", pluginId: pluginId, ids: ids);
       responseWoxWebsocketRequest(msg, true, null);
     } else if (msg.method == "ChangeTheme") {
       final theme = WoxTheme.fromJson(msg.data);
@@ -2661,6 +2785,7 @@ class WoxLauncherController extends GetxController {
   @override
   void dispose() {
     stopDoctorCheckTimer();
+    glanceRefreshTimer?.cancel();
     cancelPendingResultTransitions();
     loadingTimer?.cancel();
     queryBoxFocusNode.dispose();
@@ -3065,6 +3190,7 @@ class WoxLauncherController extends GetxController {
   /// Change the query icon based on the query
   Future<void> updateQueryIconOnQueryChanged(String traceId, PlainQuery query, QueryMetadata queryMetadata) async {
     if (query.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code) {
+      glanceItems.clear();
       if (query.querySelection.type == WoxSelectionTypeEnum.WOX_SELECTION_TYPE_FILE.code) {
         queryIcon.value = QueryIconInfo(icon: WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_SVG.code, imageData: QUERY_ICON_SELECTION_FILE));
       }
@@ -3078,9 +3204,11 @@ class WoxLauncherController extends GetxController {
       // if there is no space in the query, then this must be a global query
       if (!query.queryText.contains(" ")) {
         queryIcon.value = QueryIconInfo.empty();
+        unawaited(refreshGlance(traceId, "manualRefresh"));
         return;
       }
 
+      glanceItems.clear();
       queryIcon.value = QueryIconInfo(icon: queryMetadata.icon);
       return;
     }

@@ -37,6 +37,8 @@ type WoxSettingDto struct {
 	MaxResultCount int
 	ThemeId        string
 	AppFontFamily  string
+	EnableGlance   bool
+	PrimaryGlance  setting.GlanceRef
 
 	// Debug display switches are only shown by the dev UI, but the DTO keeps
 	// them beside other settings so backend tail rendering and Flutter toggles

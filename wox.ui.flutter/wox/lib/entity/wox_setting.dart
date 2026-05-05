@@ -1,4 +1,5 @@
 import 'package:wox/entity/wox_image.dart';
+import 'package:wox/entity/wox_glance.dart';
 
 class WoxSetting {
   late bool enableAutostart;
@@ -23,6 +24,8 @@ class WoxSetting {
   late int maxResultCount;
   late String themeId;
   late String appFontFamily;
+  late bool enableGlance;
+  late GlanceRef primaryGlance;
   late bool httpProxyEnabled;
   late String httpProxyUrl;
   late bool enableAutoBackup;
@@ -56,6 +59,8 @@ class WoxSetting {
     required this.maxResultCount,
     required this.themeId,
     required this.appFontFamily,
+    required this.enableGlance,
+    required this.primaryGlance,
     required this.httpProxyEnabled,
     required this.httpProxyUrl,
     required this.enableAutoBackup,
@@ -130,6 +135,8 @@ class WoxSetting {
     maxResultCount = json['MaxResultCount'];
     themeId = json['ThemeId'];
     appFontFamily = json['AppFontFamily'] ?? '';
+    enableGlance = json['EnableGlance'] ?? true;
+    primaryGlance = GlanceRef.fromJson(json['PrimaryGlance']);
     httpProxyEnabled = json['HttpProxyEnabled'] ?? false;
     httpProxyUrl = json['HttpProxyUrl'] ?? '';
     enableAutoBackup = json['EnableAutoBackup'] ?? false;
@@ -165,6 +172,8 @@ class WoxSetting {
     data['MaxResultCount'] = maxResultCount;
     data['ThemeId'] = themeId;
     data['AppFontFamily'] = appFontFamily;
+    data['EnableGlance'] = enableGlance;
+    data['PrimaryGlance'] = primaryGlance.toJson();
     data['HttpProxyEnabled'] = httpProxyEnabled;
     data['HttpProxyUrl'] = httpProxyUrl;
     data['EnableAutoBackup'] = enableAutoBackup;

@@ -7,6 +7,7 @@ import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/entity/wox_backup.dart';
+import 'package:wox/entity/wox_glance.dart';
 import 'package:wox/entity/wox_plugin.dart';
 import 'package:wox/entity/wox_runtime_status.dart';
 import 'package:wox/entity/wox_theme.dart';
@@ -34,6 +35,9 @@ class WoxSettingController extends GetxController {
   final usageStatsError = ''.obs;
   final usageStatsPeriod = '30d'.obs;
   final systemFontFamilies = <String>[].obs;
+  final settingGlancePreviewItems = <String, GlanceItem>{}.obs;
+  bool _isRefreshingSettingGlancePreviews = false;
+  bool _hasRefreshedSettingGlancePreviewsForUIEntry = false;
 
   //plugins
   final pluginList = <PluginDetail>[];
@@ -83,6 +87,20 @@ class WoxSettingController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    ever<String>(activeNavPath, _handleActiveNavPathChanged);
+  }
+
+  void _handleActiveNavPathChanged(String path) {
+    if (path != 'ui') {
+      // The Glance preview belongs to the UI settings page only. Clearing the
+      // entry flag on navigation keeps the next visit a fresh real API snapshot
+      // without running background refreshes while the page is not visible.
+      _hasRefreshedSettingGlancePreviewsForUIEntry = false;
+      settingGlancePreviewItems.clear();
+      return;
+    }
+
+    unawaited(refreshSettingGlancePreviewsForUIEntry(const UuidV4().generate()));
   }
 
   void preloadSettingViewData(String traceId, {bool forceRefresh = false}) {
@@ -341,6 +359,55 @@ class WoxSettingController extends GetxController {
   void preloadPlugins(String traceId) {
     unawaited(loadInstalledPlugins(traceId));
     unawaited(loadStorePlugins(traceId));
+  }
+
+  Future<void> refreshSettingGlancePreviewsForUIEntry(String traceId) async {
+    if (_hasRefreshedSettingGlancePreviewsForUIEntry) {
+      return;
+    }
+
+    _hasRefreshedSettingGlancePreviewsForUIEntry = true;
+    settingGlancePreviewItems.clear();
+    if (installedPlugins.isEmpty) {
+      await loadInstalledPlugins(traceId);
+    }
+    await refreshSettingGlancePreviews(traceId);
+  }
+
+  Future<void> refreshSettingGlancePreviews(String traceId) async {
+    final refs = <GlanceRef>[];
+    for (final plugin in installedPlugins) {
+      for (final glance in plugin.glances) {
+        refs.add(GlanceRef(pluginId: plugin.id, glanceId: glance.id));
+      }
+    }
+
+    if (refs.isEmpty) {
+      settingGlancePreviewItems.clear();
+      return;
+    }
+
+    if (_isRefreshingSettingGlancePreviews) {
+      return;
+    }
+
+    _isRefreshingSettingGlancePreviews = true;
+    try {
+      // The UI settings page asks the same Glance API once when it becomes
+      // visible, so the dropdown is a real snapshot without a background cache.
+      final items = await WoxApi.instance.getGlanceItems(traceId, refs, "manualRefresh");
+      final nextItems = <String, GlanceItem>{};
+      for (final item in items) {
+        if (!item.isEmpty) {
+          nextItems[GlanceRef(pluginId: item.pluginId, glanceId: item.id).key] = item;
+        }
+      }
+      settingGlancePreviewItems.assignAll(nextItems);
+    } catch (e) {
+      Logger.instance.error(traceId, 'Failed to refresh setting glance previews: $e');
+    } finally {
+      _isRefreshingSettingGlancePreviews = false;
+    }
   }
 
   Future<void> reloadPlugins(String traceId) async {
@@ -1156,6 +1223,9 @@ class WoxSettingController extends GetxController {
     await WoxSettingUtil.instance.loadSetting(traceId);
     woxSetting.value = WoxSettingUtil.instance.currentSetting;
     Logger.instance.setLogLevel(woxSetting.value.logLevel);
+    if (Get.isRegistered<WoxLauncherController>()) {
+      unawaited(Get.find<WoxLauncherController>().refreshGlance(traceId, "settingsChanged"));
+    }
     Logger.instance.info(traceId, 'Setting reloaded');
   }
 

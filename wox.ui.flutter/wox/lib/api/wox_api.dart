@@ -4,6 +4,7 @@ import 'dart:core';
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_backup.dart';
 import 'package:wox/entity/wox_lang.dart';
+import 'package:wox/entity/wox_glance.dart';
 import 'package:wox/entity/wox_plugin.dart';
 import 'package:wox/entity/wox_query.dart';
 import 'package:wox/entity/wox_runtime_status.dart';
@@ -182,6 +183,14 @@ class WoxApi {
 
   Future<List<DoctorCheckResult>> doctorCheck(String traceId) async {
     return await WoxHttpUtil.instance.postData<List<DoctorCheckResult>>(traceId, "/doctor/check", null);
+  }
+
+  Future<List<GlanceItem>> getGlanceItems(String traceId, List<GlanceRef> glances, String reason) async {
+    return await WoxHttpUtil.instance.postData<List<GlanceItem>>(traceId, "/glance", {"Glances": glances.map((item) => item.toJson()).toList(), "Reason": reason});
+  }
+
+  Future<void> executeGlanceAction(String traceId, String pluginId, String glanceId, String actionId) async {
+    await WoxHttpUtil.instance.postData(traceId, "/glance/action", {"PluginId": pluginId, "GlanceId": glanceId, "ActionId": actionId});
   }
 
   Future<String> getUserDataLocation(String traceId) async {

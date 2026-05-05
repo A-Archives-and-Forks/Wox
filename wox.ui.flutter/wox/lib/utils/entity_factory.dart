@@ -2,6 +2,7 @@ import 'package:uuid/v4.dart';
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_backup.dart';
 import 'package:wox/entity/wox_image.dart';
+import 'package:wox/entity/wox_glance.dart';
 import 'package:wox/entity/wox_lang.dart';
 import 'package:wox/entity/wox_plugin.dart';
 import 'package:wox/entity/wox_preview.dart';
@@ -44,6 +45,7 @@ class EntityFactory {
     'List<AIAgent>': (json) => _createList<AIAgent>(json, (e) => AIAgent.fromJson(e)),
     'List<DoctorCheckResult>': (json) => _createList<DoctorCheckResult>(json, (e) => DoctorCheckResult.fromJson(e)),
     'List<WoxRuntimeStatus>': (json) => _createList<WoxRuntimeStatus>(json, (e) => WoxRuntimeStatus.fromJson(e)),
+    'List<GlanceItem>': (json) => _createList<GlanceItem>(json, (e) => GlanceItem.fromJson(e)),
     'List<String>': (json) => _createList<String>(json, (e) => e.toString()),
   };
 
