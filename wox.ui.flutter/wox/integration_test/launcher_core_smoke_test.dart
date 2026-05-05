@@ -141,7 +141,15 @@ void registerLauncherCoreSmokeTests() {
     testWidgets('T2-08: Fresh launch clears stale query when shown from the default source', (tester) async {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
 
-      await queryAndWaitForResults(tester, controller, 'wox launcher test xyz123');
+      await enterQueryTextAndWait(tester, controller, 'wox launcher test xyz123');
+      final staleQueryId = controller.currentQuery.value.queryId;
+      // Bug fix: this case only needs a stale query/result before hide+show.
+      // queryAndWaitForResults adds an extra visual settle pump for resize
+      // assertions, and on macOS that non-essential pump can wait forever when
+      // earlier show/hide tests leave the panel visible but not frontmost.
+      // Stop once the backend result has reached controller state so the fresh
+      // launch behavior stays covered without depending on resize-settle vsync.
+      await pumpUntil(tester, () => controller.activeResultViewController.items.any((item) => item.value.data.queryId == staleQueryId), timeout: const Duration(seconds: 30));
       expect(controller.queryBoxTextFieldController.text, equals('wox launcher test xyz123'));
 
       await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
