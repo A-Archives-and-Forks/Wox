@@ -47,6 +47,10 @@ class WoxApi {
     return await WoxHttpUtil.instance.postData(traceId, "/runtime/status", null);
   }
 
+  Future<void> restartRuntime(String traceId, String runtime) async {
+    await WoxHttpUtil.instance.postData(traceId, "/runtime/restart", {"Runtime": runtime});
+  }
+
   Future<void> updatePluginSetting(String traceId, String pluginId, String key, String value) async {
     await WoxHttpUtil.instance.postData(traceId, "/setting/plugin/update", {"PluginId": pluginId, "Key": key, "Value": value});
   }

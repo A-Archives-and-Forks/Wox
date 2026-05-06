@@ -2,8 +2,10 @@ package host
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -16,6 +18,8 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/mitchellh/go-homedir"
 )
+
+const pythonInstallUrl = "https://www.python.org/downloads/"
 
 func init() {
 	host := &PythonHost{}
@@ -35,13 +39,22 @@ func (n *PythonHost) GetRuntime(ctx context.Context) plugin.Runtime {
 }
 
 func (n *PythonHost) Start(ctx context.Context) error {
-	return n.websocketHost.StartHost(ctx, n.findPythonPath(ctx), path.Join(util.GetLocation().GetHostDirectory(), "python-host.pyz"), []string{"SHIV_ROOT=" + util.GetLocation().GetCacheDirectory()})
+	pythonPath, pythonErr := n.resolvePythonPath(ctx)
+	if pythonErr != nil {
+		return pythonErr
+	}
+
+	return n.websocketHost.StartHost(ctx, pythonPath, path.Join(util.GetLocation().GetHostDirectory(), "python-host.pyz"), []string{"SHIV_ROOT=" + util.GetLocation().GetCacheDirectory()})
 }
 
 // FindPythonPath finds the best available Python interpreter path
 // It checks custom path first, then auto-detects from common installation locations
 func FindPythonPath(ctx context.Context) string {
-	return (&PythonHost{}).findPythonPath(ctx)
+	pythonPath, err := (&PythonHost{}).resolvePythonPath(ctx)
+	if err != nil {
+		return defaultPythonExecutableNames()[0]
+	}
+	return pythonPath
 }
 
 // minimumPythonVersion is the minimum Python version required by Wox.
@@ -49,45 +62,55 @@ func FindPythonPath(ctx context.Context) string {
 // (e.g. Python 3.6 crashes on macOS 13+ due to missing CoreFoundation framework).
 var minimumPythonVersion, _ = semver.NewVersion("v3.9.0")
 
-func (n *PythonHost) findPythonPath(ctx context.Context) string {
+func (n *PythonHost) resolvePythonPath(ctx context.Context) (string, error) {
 	util.GetLogger().Debug(ctx, "start finding python path")
 
-	// Check if user has configured a custom Python path
+	// Bug fix: a broken custom path is a user-actionable configuration problem,
+	// not a generic host startup failure, so do not hide it behind auto-detect.
 	customPath := setting.GetSettingManager().GetWoxSetting(ctx).CustomPythonPath.Get()
 	if customPath != "" {
 		if util.IsFileExists(customPath) {
+			installedVersion, versionErr := getPythonExecutableVersion(ctx, customPath)
+			if versionErr != nil {
+				return "", fmt.Errorf("failed to get custom Python version at %s: %w", customPath, versionErr)
+			}
+			if installedVersion.LessThan(minimumPythonVersion) {
+				message := fmt.Sprintf("Python %s at %s is below the minimum required version %s.", installedVersion.String(), customPath, minimumPythonVersion.String())
+				util.GetLogger().Warn(ctx, message)
+				return "", &runtimeExecutableError{statusCode: plugin.RuntimeHostStatusUnsupportedVersion, message: message, path: customPath}
+			}
+
 			util.GetLogger().Info(ctx, fmt.Sprintf("using custom python path: %s", customPath))
-			return customPath
-		} else {
-			util.GetLogger().Warn(ctx, fmt.Sprintf("custom python path not found, falling back to auto-detection: %s", customPath))
+			return customPath, nil
 		}
+		message := fmt.Sprintf("custom Python path does not exist: %s", customPath)
+		util.GetLogger().Warn(ctx, message)
+		return "", &runtimeExecutableError{statusCode: plugin.RuntimeHostStatusExecutableMissing, message: message, path: customPath}
 	}
 
 	possiblePythonPaths := collectPythonPaths()
 
 	foundVersion, _ := semver.NewVersion("v0.0.1")
 	foundPath := ""
+	var unsupportedPath string
+	var unsupportedVersion *semver.Version
 	for _, p := range possiblePythonPaths {
 		if util.IsFileExists(p) {
-			versionOriginal, versionErr := shell.RunOutput(p, "--version")
+			installedVersion, versionErr := getPythonExecutableVersion(ctx, p)
 			if versionErr != nil {
 				util.GetLogger().Error(ctx, fmt.Sprintf("failed to get python version: %s, path=%s", versionErr, p))
 				continue
 			}
-			// Python version output format is like "Python 3.9.0"
-			version := strings.TrimSpace(string(versionOriginal))
-			version = strings.TrimPrefix(version, "Python ")
-			version = "v" + version
-			installedVersion, err := semver.NewVersion(version)
-			if err != nil {
-				util.GetLogger().Error(ctx, fmt.Sprintf("failed to parse python version: %s, path=%s", err, p))
-				continue
-			}
 			util.GetLogger().Debug(ctx, fmt.Sprintf("found python path: %s, version: %s", p, installedVersion.String()))
 
-			// Skip Python versions that are too old and known to be incompatible
+			// Feature: preserve the best unsupported version so the UI can guide
+			// users to upgrade Python instead of reporting a vague missing host.
 			if installedVersion.LessThan(minimumPythonVersion) {
 				util.GetLogger().Warn(ctx, fmt.Sprintf("skipping python %s at %s: version is below minimum required %s, please upgrade your Python installation", installedVersion.String(), p, minimumPythonVersion.String()))
+				if unsupportedVersion == nil || installedVersion.GreaterThan(unsupportedVersion) {
+					unsupportedPath = p
+					unsupportedVersion = installedVersion
+				}
 				continue
 			}
 
@@ -100,19 +123,97 @@ func (n *PythonHost) findPythonPath(ctx context.Context) string {
 
 	if foundPath != "" {
 		util.GetLogger().Info(ctx, fmt.Sprintf("finally use python path: %s, version: %s", foundPath, foundVersion.String()))
-		return foundPath
+		return foundPath, nil
 	}
 
-	defaultPython := "python3"
-	if runtime.GOOS == "windows" {
-		defaultPython = "python"
+	for _, executableName := range defaultPythonExecutableNames() {
+		envPath, lookErr := exec.LookPath(executableName)
+		if lookErr != nil {
+			continue
+		}
+		installedVersion, versionErr := getPythonExecutableVersion(ctx, envPath)
+		if versionErr != nil {
+			util.GetLogger().Error(ctx, fmt.Sprintf("failed to get python version from env path: %s, path=%s", versionErr, envPath))
+			continue
+		}
+		if installedVersion.LessThan(minimumPythonVersion) {
+			if unsupportedVersion == nil || installedVersion.GreaterThan(unsupportedVersion) {
+				unsupportedPath = envPath
+				unsupportedVersion = installedVersion
+			}
+			continue
+		}
+
+		util.GetLogger().Info(ctx, fmt.Sprintf("finally use python path from env: %s, version: %s", envPath, installedVersion.String()))
+		return envPath, nil
 	}
-	util.GetLogger().Info(ctx, fmt.Sprintf("finally use default %s from env path", defaultPython))
-	return defaultPython
+
+	if unsupportedVersion != nil {
+		message := fmt.Sprintf("Python %s at %s is below the minimum required version %s.", unsupportedVersion.String(), unsupportedPath, minimumPythonVersion.String())
+		util.GetLogger().Warn(ctx, message)
+		return "", &runtimeExecutableError{statusCode: plugin.RuntimeHostStatusUnsupportedVersion, message: message, path: unsupportedPath}
+	}
+
+	message := "Python executable was not found. Install Python or configure the Python path in runtime settings."
+	util.GetLogger().Warn(ctx, message)
+	return "", &runtimeExecutableError{statusCode: plugin.RuntimeHostStatusExecutableMissing, message: message}
 }
 
 func (n *PythonHost) IsStarted(ctx context.Context) bool {
 	return n.websocketHost.IsHostStarted(ctx)
+}
+
+func (n *PythonHost) RuntimeStatus(ctx context.Context) plugin.RuntimeHostStatus {
+	if n.IsStarted(ctx) {
+		return plugin.RuntimeHostStatus{
+			StatusCode:     plugin.RuntimeHostStatusRunning,
+			StatusMessage:  "Python host is running.",
+			ExecutablePath: n.websocketHost.GetExecutablePath(),
+			CanRestart:     true,
+			InstallUrl:     pythonInstallUrl,
+		}
+	}
+
+	pythonPath, resolveErr := n.resolvePythonPath(ctx)
+	if resolveErr != nil {
+		var executableErr *runtimeExecutableError
+		if errors.As(resolveErr, &executableErr) {
+			return plugin.RuntimeHostStatus{
+				StatusCode:     executableErr.statusCode,
+				StatusMessage:  executableErr.message,
+				ExecutablePath: executableErr.path,
+				LastStartError: executableErr.message,
+				CanRestart:     false,
+				InstallUrl:     pythonInstallUrl,
+			}
+		}
+		return plugin.RuntimeHostStatus{
+			StatusCode:     plugin.RuntimeHostStatusStartFailed,
+			StatusMessage:  "Python host status could not be resolved.",
+			LastStartError: resolveErr.Error(),
+			CanRestart:     false,
+			InstallUrl:     pythonInstallUrl,
+		}
+	}
+
+	if lastStartError := n.websocketHost.GetLastStartError(); lastStartError != "" {
+		return plugin.RuntimeHostStatus{
+			StatusCode:     plugin.RuntimeHostStatusStartFailed,
+			StatusMessage:  "Python host failed to start.",
+			ExecutablePath: pythonPath,
+			LastStartError: lastStartError,
+			CanRestart:     true,
+			InstallUrl:     pythonInstallUrl,
+		}
+	}
+
+	return plugin.RuntimeHostStatus{
+		StatusCode:     plugin.RuntimeHostStatusStopped,
+		StatusMessage:  "Python host is not running.",
+		ExecutablePath: pythonPath,
+		CanRestart:     true,
+		InstallUrl:     pythonInstallUrl,
+	}
 }
 
 func (n *PythonHost) Stop(ctx context.Context) {
@@ -136,6 +237,34 @@ func collectPythonPaths() []string {
 	default:
 		return collectPythonPathsForLinux()
 	}
+}
+
+func getPythonExecutableVersion(ctx context.Context, pythonPath string) (*semver.Version, error) {
+	versionOriginal, versionErr := shell.RunOutput(pythonPath, "--version")
+	if versionErr != nil {
+		return nil, versionErr
+	}
+
+	// Python version output format is like "Python 3.9.0". Normalizing here
+	// keeps all resolver branches on the same minimum-version comparison.
+	version := strings.TrimSpace(string(versionOriginal))
+	version = strings.TrimPrefix(version, "Python ")
+	version = "v" + version
+	installedVersion, err := semver.NewVersion(version)
+	if err != nil {
+		return nil, err
+	}
+
+	util.GetLogger().Debug(ctx, fmt.Sprintf("resolved python version: %s, path=%s", installedVersion.String(), pythonPath))
+	return installedVersion, nil
+}
+
+func defaultPythonExecutableNames() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"python", "python3"}
+	}
+
+	return []string{"python3", "python"}
 }
 
 func collectPythonPathsForDarwin() []string {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 	"wox/common"
 	"wox/plugin"
@@ -24,6 +25,13 @@ type WebsocketHost struct {
 	host        plugin.Host
 	requestMap  *util.HashMap[string, chan JsonRpcResponse]
 	hostProcess *os.Process
+	statusLock  sync.RWMutex
+
+	// Runtime status needs the exact executable and startup error. The previous
+	// IsStarted-only state collapsed missing interpreters, process launch
+	// failures, and websocket connection failures into the same stopped state.
+	executablePath string
+	lastStartError string
 }
 
 func (w *WebsocketHost) getHostName(ctx context.Context) string {
@@ -31,9 +39,13 @@ func (w *WebsocketHost) getHostName(ctx context.Context) string {
 }
 
 func (w *WebsocketHost) StartHost(ctx context.Context, executablePath string, entry string, envs []string, executableArgs ...string) error {
+	w.setStartState(executablePath, "")
+
 	port, portErr := util.GetAvailableTcpPort(ctx)
 	if portErr != nil {
-		return fmt.Errorf("failed to get available port: %w", portErr)
+		startErr := fmt.Errorf("failed to get available port: %w", portErr)
+		w.setStartState(executablePath, startErr.Error())
+		return startErr
 	}
 
 	util.GetLogger().Info(ctx, fmt.Sprintf("<%s> starting host on port %d", w.getHostName(ctx), port))
@@ -49,7 +61,9 @@ func (w *WebsocketHost) StartHost(ctx context.Context, executablePath string, en
 
 	cmd, err := shell.RunWithEnv(executablePath, envs, args...)
 	if err != nil {
-		return fmt.Errorf("failed to start host: %w", err)
+		startErr := fmt.Errorf("failed to start host process with %s: %w", executablePath, err)
+		w.setStartState(executablePath, startErr.Error())
+		return startErr
 	}
 	util.GetLogger().Info(ctx, fmt.Sprintf("<%s> host pid: %d", w.getHostName(ctx), cmd.Process.Pid))
 
@@ -58,10 +72,13 @@ func (w *WebsocketHost) StartHost(ctx context.Context, executablePath string, en
 		if killErr := cmd.Process.Kill(); killErr != nil {
 			util.GetLogger().Error(ctx, fmt.Sprintf("<%s> failed to kill disconnected host process(%d): %s", w.getHostName(ctx), cmd.Process.Pid, killErr))
 		}
-		return connectErr
+		startErr := fmt.Errorf("host process started but websocket connection failed: %w", connectErr)
+		w.setStartState(executablePath, startErr.Error())
+		return startErr
 	}
 
 	w.hostProcess = cmd.Process
+	w.setStartState(executablePath, "")
 	return nil
 }
 
@@ -76,10 +93,37 @@ func (w *WebsocketHost) StopHost(ctx context.Context) {
 			util.GetLogger().Info(ctx, fmt.Sprintf("<%s> killed host process(%d)", w.getHostName(ctx), pid))
 		}
 	}
+	// Bug fix: StopHost used to leave the websocket client object in place, so
+	// status checks could briefly report a killed host as still connected. Clear
+	// local process state immediately; a fresh StartHost creates a new client.
+	w.hostProcess = nil
+	w.ws = nil
 }
 
 func (w *WebsocketHost) IsHostStarted(ctx context.Context) bool {
 	return w.ws != nil && w.ws.IsConnected()
+}
+
+func (w *WebsocketHost) GetExecutablePath() string {
+	w.statusLock.RLock()
+	defer w.statusLock.RUnlock()
+
+	return w.executablePath
+}
+
+func (w *WebsocketHost) GetLastStartError() string {
+	w.statusLock.RLock()
+	defer w.statusLock.RUnlock()
+
+	return w.lastStartError
+}
+
+func (w *WebsocketHost) setStartState(executablePath string, lastStartError string) {
+	w.statusLock.Lock()
+	defer w.statusLock.Unlock()
+
+	w.executablePath = executablePath
+	w.lastStartError = lastStartError
 }
 
 func (w *WebsocketHost) LoadPlugin(ctx context.Context, metadata plugin.Metadata, pluginDirectory string) (plugin.Plugin, error) {

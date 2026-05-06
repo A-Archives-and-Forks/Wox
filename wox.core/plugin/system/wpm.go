@@ -514,7 +514,7 @@ func (w *WPMPlugin) createInstallAction(pluginManifest plugin.StorePluginManifes
 					w.api.Notify(ctx, fmt.Sprintf(
 						w.api.GetTranslation(ctx, "i18n:plugin_installer_action_failed"),
 						w.api.GetTranslation(ctx, "i18n:plugin_installer_install"),
-						fmt.Sprintf("%s(%s): %s", pluginName, pluginManifest.Version, installErr.Error()),
+						formatPluginInstallError(ctx, w.api, pluginManifest.Runtime, pluginName, pluginManifest.Version, installErr),
 					))
 					return
 				}
@@ -680,7 +680,7 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 								w.api.Notify(ctx, fmt.Sprintf(
 									w.api.GetTranslation(ctx, "i18n:plugin_installer_action_failed"),
 									w.api.GetTranslation(ctx, "i18n:plugin_installer_upgrade"),
-									fmt.Sprintf("%s(%s): %s", pluginName, pluginManifest.Version, installErr.Error()),
+									formatPluginInstallError(ctx, w.api, pluginManifest.Runtime, pluginName, pluginManifest.Version, installErr),
 								))
 								return
 							}

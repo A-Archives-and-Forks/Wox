@@ -47,6 +47,16 @@ func (s *ScriptHost) IsStarted(ctx context.Context) bool {
 	return true
 }
 
+func (s *ScriptHost) RuntimeStatus(ctx context.Context) plugin.RuntimeHostStatus {
+	// Script plugins are run directly per invocation, so exposing a running
+	// status preserves the shared host contract without adding fake restart UI.
+	return plugin.RuntimeHostStatus{
+		StatusCode:    plugin.RuntimeHostStatusRunning,
+		StatusMessage: "Script runtime does not use a persistent host process.",
+		CanRestart:    false,
+	}
+}
+
 func (s *ScriptHost) LoadPlugin(ctx context.Context, metadata plugin.Metadata, pluginDirectory string) (plugin.Plugin, error) {
 	// For script plugins, the actual script file is in the user script plugins directory
 	userScriptPluginDirectory := util.GetLocation().GetUserScriptPluginsDirectory()

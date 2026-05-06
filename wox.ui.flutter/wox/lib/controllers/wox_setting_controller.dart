@@ -27,6 +27,7 @@ class WoxSettingController extends GetxController {
   final runtimeStatuses = <WoxRuntimeStatus>[].obs;
   final isRuntimeStatusLoading = false.obs;
   final runtimeStatusError = ''.obs;
+  final restartingRuntime = ''.obs;
   final isClearingLogs = false.obs;
   final isUpdatingLogLevel = false.obs;
 
@@ -219,6 +220,63 @@ class WoxSettingController extends GetxController {
     } finally {
       isRuntimeStatusLoading.value = false;
     }
+  }
+
+  WoxRuntimeStatus? getRuntimeStatus(String runtime) {
+    final normalizedRuntime = runtime.toUpperCase();
+    for (final status in runtimeStatuses) {
+      if (status.runtime.toUpperCase() == normalizedRuntime) {
+        return status;
+      }
+    }
+    return null;
+  }
+
+  WoxRuntimeStatus? getActionableRuntimeStatusForPlugin(PluginDetail plugin) {
+    if (!WoxPluginRuntimeEnum.equals(plugin.runtime, WoxPluginRuntimeEnum.NODEJS) && !WoxPluginRuntimeEnum.equals(plugin.runtime, WoxPluginRuntimeEnum.PYTHON)) {
+      return null;
+    }
+
+    final status = getRuntimeStatus(plugin.runtime);
+    if (status == null || !status.isActionableFailure) {
+      return null;
+    }
+
+    return status;
+  }
+
+  Future<void> restartRuntime(WoxRuntimeStatus status) async {
+    if (!status.canRestart || restartingRuntime.value.isNotEmpty) {
+      return;
+    }
+
+    final traceId = const UuidV4().generate();
+    final runtime = status.runtime.toUpperCase();
+    try {
+      // Feature: restarting a runtime host from settings makes path fixes usable
+      // immediately and keeps users out of the old "restart Wox and retry" loop.
+      runtimeStatusError.value = '';
+      restartingRuntime.value = runtime;
+      await WoxApi.instance.restartRuntime(traceId, runtime);
+    } catch (e) {
+      Logger.instance.error(traceId, 'Failed to restart runtime $runtime: $e');
+      runtimeStatusError.value = e.toString();
+    } finally {
+      restartingRuntime.value = '';
+      await refreshRuntimeStatuses();
+    }
+  }
+
+  Future<void> openRuntimeInstallUrl(WoxRuntimeStatus status) async {
+    if (status.installUrl.isEmpty) {
+      return;
+    }
+
+    final uri = Uri.tryParse(status.installUrl);
+    if (uri == null) {
+      return;
+    }
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   Future<void> refreshUsageStats({String? period}) async {
@@ -763,6 +821,12 @@ class WoxSettingController extends GetxController {
       final traceId = const UuidV4().generate();
       Logger.instance.error(traceId, 'Failed to install plugin ${plugin.name}: $e');
       pluginInstallError.value = e.toString();
+      // Bug fix: install errors used to display only a raw exception. Refreshing
+      // runtime status lets the detail pane show whether Node.js/Python is
+      // missing, unsupported, or failed to launch, plus the recovery action.
+      if (WoxPluginRuntimeEnum.equals(plugin.runtime, WoxPluginRuntimeEnum.NODEJS) || WoxPluginRuntimeEnum.equals(plugin.runtime, WoxPluginRuntimeEnum.PYTHON)) {
+        await refreshRuntimeStatuses();
+      }
     } finally {
       isInstallingPlugin.value = false;
     }
@@ -785,6 +849,9 @@ class WoxSettingController extends GetxController {
       final traceId = const UuidV4().generate();
       Logger.instance.error(traceId, 'Failed to upgrade plugin ${plugin.name}: $e');
       pluginInstallError.value = e.toString();
+      if (WoxPluginRuntimeEnum.equals(plugin.runtime, WoxPluginRuntimeEnum.NODEJS) || WoxPluginRuntimeEnum.equals(plugin.runtime, WoxPluginRuntimeEnum.PYTHON)) {
+        await refreshRuntimeStatuses();
+      }
     } finally {
       isUpgradingPlugin.value = false;
     }

@@ -2618,6 +2618,20 @@ func (m *Manager) IsHostStarted(ctx context.Context, runtime Runtime) bool {
 	return false
 }
 
+func (m *Manager) RuntimeStatusForRuntime(ctx context.Context, runtime Runtime) (RuntimeHostStatus, bool) {
+	pluginHost, exist := lo.Find(AllHosts, func(item Host) bool {
+		return strings.EqualFold(string(item.GetRuntime(ctx)), string(runtime))
+	})
+	if !exist {
+		return RuntimeHostStatus{}, false
+	}
+
+	// Feature: callers that present install/load failures can reuse the same
+	// structured runtime diagnosis as /runtime/status instead of parsing wrapped
+	// startup errors that are meant for logs.
+	return pluginHost.RuntimeStatus(ctx), true
+}
+
 // EnsureHostStarted makes runtime startup an explicit, reusable preflight for
 // install and load paths that need a live plugin host before mutating plugin files.
 func (m *Manager) EnsureHostStarted(ctx context.Context, runtime Runtime) error {

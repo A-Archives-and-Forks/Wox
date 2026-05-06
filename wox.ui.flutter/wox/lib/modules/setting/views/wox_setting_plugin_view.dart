@@ -30,6 +30,7 @@ import 'package:wox/entity/setting/wox_plugin_setting_textbox.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_checkbox_view.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_textbox_view.dart';
 import 'package:wox/components/wox_button.dart';
+import 'package:wox/entity/wox_runtime_status.dart';
 import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/strings.dart';
@@ -45,6 +46,44 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
   // Local refreshing state for showing loading spinner on refresh button
   static final RxBool _refreshing = false.obs;
   static final GlobalKey _pluginFilterIconKey = GlobalKey();
+
+  String _runtimeDisplayName(String runtime) {
+    switch (runtime.toUpperCase()) {
+      case 'PYTHON':
+        return controller.tr("ui_runtime_name_python");
+      case 'NODEJS':
+        return controller.tr("ui_runtime_name_nodejs");
+      default:
+        return runtime;
+    }
+  }
+
+  String _runtimeStatusLabel(String statusCode) {
+    switch (statusCode) {
+      case 'executable_missing':
+        return controller.tr("ui_runtime_status_executable_missing");
+      case 'unsupported_version':
+        return controller.tr("ui_runtime_status_unsupported_version");
+      case 'start_failed':
+        return controller.tr("ui_runtime_status_start_failed");
+      default:
+        return controller.tr("ui_runtime_status_stopped");
+    }
+  }
+
+  String _pluginInstallRuntimeStatusDetail(PluginDetail plugin, WoxRuntimeStatus status) {
+    final runtimeName = _runtimeDisplayName(status.runtime);
+    switch (status.statusCode) {
+      case 'executable_missing':
+        return controller.tr("ui_plugin_install_runtime_missing_detail").replaceAll("{plugin}", plugin.name).replaceAll("{runtime}", runtimeName);
+      case 'unsupported_version':
+        return controller.tr("ui_plugin_install_runtime_unsupported_detail").replaceAll("{plugin}", plugin.name).replaceAll("{runtime}", runtimeName);
+      case 'start_failed':
+        return status.lastStartError.isNotEmpty ? status.lastStartError : controller.tr("ui_plugin_install_runtime_start_failed_detail").replaceAll("{runtime}", runtimeName);
+      default:
+        return status.statusMessage;
+    }
+  }
 
   String _extractSettingLabelText(dynamic settingDefinitionValue, String settingType) {
     if (settingType == "checkbox") {
@@ -467,6 +506,11 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
             ),
             Obx(() {
               if (controller.pluginInstallError.value.isNotEmpty) {
+                final runtimeStatus = controller.getActionableRuntimeStatusForPlugin(plugin);
+                final bool isRestarting = runtimeStatus != null && controller.restartingRuntime.value == runtimeStatus.runtime.toUpperCase();
+                final String errorTitle =
+                    runtimeStatus == null ? controller.pluginInstallError.value : '${_runtimeDisplayName(runtimeStatus.runtime)}: ${_runtimeStatusLabel(runtimeStatus.statusCode)}';
+                final String errorDetail = runtimeStatus == null ? '' : _pluginInstallRuntimeStatusDetail(plugin, runtimeStatus);
                 return Container(
                   margin: const EdgeInsets.only(left: 16, right: 16, top: 8),
                   padding: const EdgeInsets.all(12),
@@ -475,19 +519,65 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                     border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.error_outline, color: Colors.red, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text(controller.pluginInstallError.value, style: TextStyle(color: Colors.red, fontSize: 13))),
-                      IconButton(
-                        icon: Icon(Icons.close, size: 18, color: Colors.red),
-                        padding: EdgeInsets.zero,
-                        constraints: BoxConstraints(),
-                        onPressed: () {
-                          controller.pluginInstallError.value = '';
-                        },
+                      Row(
+                        children: [
+                          Icon(Icons.error_outline, color: Colors.red, size: 20),
+                          const SizedBox(width: 8),
+                          // Bug fix: when core can identify a runtime problem, hide the wrapped
+                          // install exception chain and show one localized recovery message. The
+                          // raw chain is still logged by core and remains available when no
+                          // structured runtime diagnosis exists.
+                          Expanded(
+                            child: Text(errorTitle, style: TextStyle(color: Colors.red, fontSize: 13, fontWeight: runtimeStatus == null ? FontWeight.normal : FontWeight.w600)),
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.close, size: 18, color: Colors.red),
+                            padding: EdgeInsets.zero,
+                            constraints: BoxConstraints(),
+                            onPressed: () {
+                              controller.pluginInstallError.value = '';
+                            },
+                          ),
+                        ],
                       ),
+                      if (runtimeStatus != null) ...[
+                        const SizedBox(height: 8),
+                        Text(errorDetail, style: TextStyle(color: getThemeSubTextColor(), fontSize: 12)),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            if (runtimeStatus.installUrl.isNotEmpty && (runtimeStatus.statusCode == 'executable_missing' || runtimeStatus.statusCode == 'unsupported_version')) ...[
+                              WoxButton.secondary(
+                                text: controller
+                                    .tr(runtimeStatus.statusCode == 'unsupported_version' ? "ui_runtime_upgrade_runtime" : "ui_runtime_install_runtime")
+                                    .replaceAll("{runtime}", _runtimeDisplayName(runtimeStatus.runtime)),
+                                icon: Icon(Icons.open_in_new, size: 14, color: getThemeTextColor()),
+                                onPressed: () {
+                                  controller.openRuntimeInstallUrl(runtimeStatus);
+                                },
+                              ),
+                              const SizedBox(width: 8),
+                            ],
+                            if (runtimeStatus.canRestart)
+                              WoxButton.secondary(
+                                text: isRestarting ? controller.tr("ui_runtime_restarting_host") : controller.tr("ui_runtime_restart_host"),
+                                icon:
+                                    isRestarting
+                                        ? WoxLoadingIndicator(size: 14, color: getThemeActionItemActiveColor())
+                                        : Icon(Icons.restart_alt, size: 14, color: getThemeTextColor()),
+                                onPressed:
+                                    isRestarting
+                                        ? null
+                                        : () {
+                                          controller.restartRuntime(runtimeStatus);
+                                        },
+                              ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 );

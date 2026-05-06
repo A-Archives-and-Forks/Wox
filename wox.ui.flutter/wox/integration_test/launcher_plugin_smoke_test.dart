@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
+import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/enums/wox_preview_type_enum.dart';
 
 import 'smoke_test_helper.dart';
@@ -13,6 +15,8 @@ const String _testNodeTemplatePluginTriggerKeywordEnv = 'WOX_TEST_NODE_TEMPLATE_
 const String _testPythonTemplatePluginIdEnv = 'WOX_TEST_PYTHON_TEMPLATE_PLUGIN_ID';
 const String _testPythonTemplatePluginNameEnv = 'WOX_TEST_PYTHON_TEMPLATE_PLUGIN_NAME';
 const String _testPythonTemplatePluginTriggerKeywordEnv = 'WOX_TEST_PYTHON_TEMPLATE_PLUGIN_TRIGGER_KEYWORD';
+const String _customCommandsPluginId = '09785021-7f9e-4482-903a-51c90a585a7d';
+const String _customCommandsPluginName = 'Custom Commands';
 
 class _SmokeTemplatePluginConfig {
   const _SmokeTemplatePluginConfig({required this.id, required this.name, required this.triggerKeyword, required this.runtime});
@@ -32,6 +36,13 @@ class _SmokeTemplatePluginConfig {
 
     return _SmokeTemplatePluginConfig(id: id, name: name, triggerKeyword: triggerKeyword, runtime: runtime);
   }
+}
+
+class _RuntimeMissingPathSmokeCase {
+  const _RuntimeMissingPathSmokeCase({required this.runtime, required this.settingKey});
+
+  final String runtime;
+  final String settingKey;
 }
 
 void registerLauncherPluginSmokeTests() {
@@ -124,5 +135,130 @@ void registerLauncherPluginSmokeTests() {
       controller.executeDefaultAction(const UuidV4().generate());
       await waitForWindowVisibility(tester, true);
     });
+
+    testWidgets('T4-03: Runtime status distinguishes missing Node.js and Python executables', (tester) async {
+      await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+
+      const cases = <_RuntimeMissingPathSmokeCase>[
+        _RuntimeMissingPathSmokeCase(runtime: 'NODEJS', settingKey: 'CustomNodejsPath'),
+        _RuntimeMissingPathSmokeCase(runtime: 'PYTHON', settingKey: 'CustomPythonPath'),
+      ];
+
+      for (final testCase in cases) {
+        final missingPath = _missingExecutablePath(testCase.runtime);
+        try {
+          // Smoke coverage: force the same user-visible failure that happens
+          // when a plugin install needs a missing runtime executable. The
+          // backend must report executable_missing instead of a generic stopped
+          // host so the UI can render install/path guidance.
+          await updateSettingDirect(testCase.settingKey, missingPath);
+          await _expectRuntimeRestartFailure(testCase.runtime);
+
+          final statuses = await WoxApi.instance.getRuntimeStatuses(const UuidV4().generate());
+          final status = statuses.firstWhere((status) => status.runtime.toUpperCase() == testCase.runtime);
+          expect(status.isStarted, isFalse);
+          expect(status.statusCode, equals('executable_missing'));
+          expect(status.executablePath, equals(missingPath));
+          expect(status.lastStartError, isNotEmpty);
+          expect(status.canRestart, isFalse);
+        } finally {
+          await updateSettingDirect(testCase.settingKey, '');
+          await _bestEffortRestartRuntime(testCase.runtime);
+        }
+      }
+    });
+
+    testWidgets('T4-04: Settings store install shows actionable Node.js missing runtime guidance', (tester) async {
+      await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+
+      final settingController = Get.find<WoxSettingController>();
+      final missingPath = _missingExecutablePath('NODEJS');
+      try {
+        await updateSettingDirect('CustomNodejsPath', missingPath);
+        await _expectRuntimeRestartFailure('NODEJS');
+
+        // Settings Store smoke: exercise the same controller path used by the
+        // Install button. It must populate runtime diagnosis UI state instead
+        // of leaving users with only the raw install exception.
+        final traceId = const UuidV4().generate();
+        await settingController.loadStorePlugins(traceId);
+        await settingController.switchToPluginList(traceId, true);
+        final storePlugin = settingController.storePlugins.firstWhere((plugin) => plugin.id == _customCommandsPluginId);
+        await settingController.installPlugin(storePlugin);
+
+        final runtimeStatus = settingController.getActionableRuntimeStatusForPlugin(storePlugin);
+        expect(settingController.pluginInstallError.value, contains(_customCommandsPluginName));
+        expect(settingController.pluginInstallError.value, isNot(contains('runtime is not started')));
+        expect(runtimeStatus, isNotNull);
+        expect(runtimeStatus!.statusCode, equals('executable_missing'));
+        expect(runtimeStatus.executablePath, equals(missingPath));
+        expect(runtimeStatus.lastStartError, contains('custom Node.js path does not exist'));
+        expect(runtimeStatus.statusMessage, contains('Node.js was not found'));
+        expect(runtimeStatus.statusMessage, isNot(contains('failed to prepare')));
+        expect(runtimeStatus.installUrl, equals('https://nodejs.org/'));
+      } finally {
+        await updateSettingDirect('CustomNodejsPath', '');
+        await _bestEffortRestartRuntime('NODEJS');
+      }
+    });
+
+    testWidgets('T4-05: WPM install reports Node.js missing runtime instead of generic not-started error', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final missingPath = _missingExecutablePath('NODEJS');
+      try {
+        await updateSettingDirect('CustomNodejsPath', missingPath);
+        await _expectRuntimeRestartFailure('NODEJS');
+
+        final result = await queryAndWaitForResultWhere(
+          tester,
+          controller,
+          'wpm install $_customCommandsPluginName',
+          (candidate) => candidate.title == _customCommandsPluginName,
+          description: 'Expected WPM to return the Custom Commands store plugin.',
+        );
+        final installAction = expectResultActionByName(result, 'Install');
+        await controller.executeAction(const UuidV4().generate(), result, installAction);
+
+        await pumpUntil(tester, () {
+          final text = controller.resolvedToolbarText ?? '';
+          return text.contains('requires Node.js') && !text.contains('runtime is not started') && !text.contains('failed to prepare');
+        }, timeout: const Duration(seconds: 10));
+
+        final toolbarText = controller.resolvedToolbarText ?? '';
+        expect(toolbarText, contains(_customCommandsPluginName));
+        expect(toolbarText, contains('requires Node.js'));
+        expect(toolbarText, contains('Node.js was not found'));
+        expect(toolbarText, isNot(contains('failed to prepare')));
+        expect(toolbarText, isNot(contains('custom Node.js path does not exist')));
+        expect(toolbarText, isNot(contains('runtime is not started')));
+      } finally {
+        await updateSettingDirect('CustomNodejsPath', '');
+        await _bestEffortRestartRuntime('NODEJS');
+      }
+    });
   });
+}
+
+String _missingExecutablePath(String runtime) {
+  final suffix = Platform.isWindows ? '.exe' : '';
+  return '${Directory.systemTemp.path}${Platform.pathSeparator}wox-smoke-missing-${runtime.toLowerCase()}-${DateTime.now().microsecondsSinceEpoch}$suffix';
+}
+
+Future<void> _expectRuntimeRestartFailure(String runtime) async {
+  try {
+    await WoxApi.instance.restartRuntime(const UuidV4().generate(), runtime);
+  } catch (_) {
+    return;
+  }
+
+  fail('Restarting $runtime with a missing executable path should fail.');
+}
+
+Future<void> _bestEffortRestartRuntime(String runtime) async {
+  try {
+    await WoxApi.instance.restartRuntime(const UuidV4().generate(), runtime);
+  } catch (_) {
+    // Smoke cleanup must tolerate machines that genuinely do not have the
+    // runtime installed; the negative tests already assert that diagnosis.
+  }
 }

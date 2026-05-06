@@ -2,8 +2,10 @@ package host
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -16,6 +18,8 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/mitchellh/go-homedir"
 )
+
+const nodejsInstallUrl = "https://nodejs.org/"
 
 func init() {
 	host := &NodejsHost{}
@@ -35,27 +39,38 @@ func (n *NodejsHost) GetRuntime(ctx context.Context) plugin.Runtime {
 }
 
 func (n *NodejsHost) Start(ctx context.Context) error {
-	return n.websocketHost.StartHost(ctx, n.findNodejsPath(ctx), path.Join(util.GetLocation().GetHostDirectory(), "node-host.js"), nil)
+	nodePath, nodeErr := n.resolveNodejsPath(ctx)
+	if nodeErr != nil {
+		return nodeErr
+	}
+
+	return n.websocketHost.StartHost(ctx, nodePath, path.Join(util.GetLocation().GetHostDirectory(), "node-host.js"), nil)
 }
 
 // FindNodejsPath finds the best available Node.js interpreter path
 // It checks custom path first, then auto-detects from common installation locations
 func FindNodejsPath(ctx context.Context) string {
-	return (&NodejsHost{}).findNodejsPath(ctx)
+	nodePath, err := (&NodejsHost{}).resolveNodejsPath(ctx)
+	if err != nil {
+		return "node"
+	}
+	return nodePath
 }
 
-func (n *NodejsHost) findNodejsPath(ctx context.Context) string {
+func (n *NodejsHost) resolveNodejsPath(ctx context.Context) (string, error) {
 	util.GetLogger().Debug(ctx, "start finding nodejs path")
 
-	// Check if user has configured a custom Node.js path
+	// Bug fix: a missing custom path must stay actionable instead of silently
+	// falling back to another Node.js binary and later surfacing as "not started".
 	customPath := setting.GetSettingManager().GetWoxSetting(ctx).CustomNodejsPath.Get()
 	if customPath != "" {
 		if util.IsFileExists(customPath) {
 			util.GetLogger().Info(ctx, fmt.Sprintf("using custom nodejs path: %s", customPath))
-			return customPath
-		} else {
-			util.GetLogger().Warn(ctx, fmt.Sprintf("custom nodejs path not found, falling back to auto-detection: %s", customPath))
+			return customPath, nil
 		}
+		message := fmt.Sprintf("custom Node.js path does not exist: %s", customPath)
+		util.GetLogger().Warn(ctx, message)
+		return "", &runtimeExecutableError{statusCode: plugin.RuntimeHostStatusExecutableMissing, message: message, path: customPath}
 	}
 
 	possibleNodejsPaths := collectNodejsPaths()
@@ -70,7 +85,11 @@ func (n *NodejsHost) findNodejsPath(ctx context.Context) string {
 				continue
 			}
 			version := strings.TrimSpace(string(versionOriginal))
-			installedVersion, _ := semver.NewVersion(version)
+			installedVersion, parseErr := semver.NewVersion(version)
+			if parseErr != nil {
+				util.GetLogger().Error(ctx, fmt.Sprintf("failed to parse nodejs version: %s, path=%s", parseErr, p))
+				continue
+			}
 			util.GetLogger().Debug(ctx, fmt.Sprintf("found nodejs path: %s, version: %s", p, installedVersion.String()))
 
 			if installedVersion.GreaterThan(foundVersion) {
@@ -82,15 +101,76 @@ func (n *NodejsHost) findNodejsPath(ctx context.Context) string {
 
 	if foundPath != "" {
 		util.GetLogger().Info(ctx, fmt.Sprintf("finally use nodejs path: %s, version: %s", foundPath, foundVersion.String()))
-		return foundPath
+		return foundPath, nil
 	}
 
-	util.GetLogger().Info(ctx, "finally use default node from env path")
-	return "node"
+	// Feature: PATH lookup is still supported, but now it is explicit so the UI
+	// can tell users when Node.js is truly absent instead of showing a host error.
+	if envPath, lookErr := exec.LookPath("node"); lookErr == nil {
+		util.GetLogger().Info(ctx, fmt.Sprintf("finally use nodejs path from env: %s", envPath))
+		return envPath, nil
+	}
+
+	message := "Node.js executable was not found. Install Node.js or configure the Node.js path in runtime settings."
+	util.GetLogger().Warn(ctx, message)
+	return "", &runtimeExecutableError{statusCode: plugin.RuntimeHostStatusExecutableMissing, message: message}
 }
 
 func (n *NodejsHost) IsStarted(ctx context.Context) bool {
 	return n.websocketHost.IsHostStarted(ctx)
+}
+
+func (n *NodejsHost) RuntimeStatus(ctx context.Context) plugin.RuntimeHostStatus {
+	if n.IsStarted(ctx) {
+		return plugin.RuntimeHostStatus{
+			StatusCode:     plugin.RuntimeHostStatusRunning,
+			StatusMessage:  "Node.js host is running.",
+			ExecutablePath: n.websocketHost.GetExecutablePath(),
+			CanRestart:     true,
+			InstallUrl:     nodejsInstallUrl,
+		}
+	}
+
+	nodePath, resolveErr := n.resolveNodejsPath(ctx)
+	if resolveErr != nil {
+		var executableErr *runtimeExecutableError
+		if errors.As(resolveErr, &executableErr) {
+			return plugin.RuntimeHostStatus{
+				StatusCode:     executableErr.statusCode,
+				StatusMessage:  executableErr.message,
+				ExecutablePath: executableErr.path,
+				LastStartError: executableErr.message,
+				CanRestart:     false,
+				InstallUrl:     nodejsInstallUrl,
+			}
+		}
+		return plugin.RuntimeHostStatus{
+			StatusCode:     plugin.RuntimeHostStatusStartFailed,
+			StatusMessage:  "Node.js host status could not be resolved.",
+			LastStartError: resolveErr.Error(),
+			CanRestart:     false,
+			InstallUrl:     nodejsInstallUrl,
+		}
+	}
+
+	if lastStartError := n.websocketHost.GetLastStartError(); lastStartError != "" {
+		return plugin.RuntimeHostStatus{
+			StatusCode:     plugin.RuntimeHostStatusStartFailed,
+			StatusMessage:  "Node.js host failed to start.",
+			ExecutablePath: nodePath,
+			LastStartError: lastStartError,
+			CanRestart:     true,
+			InstallUrl:     nodejsInstallUrl,
+		}
+	}
+
+	return plugin.RuntimeHostStatus{
+		StatusCode:     plugin.RuntimeHostStatusStopped,
+		StatusMessage:  "Node.js host is not running.",
+		ExecutablePath: nodePath,
+		CanRestart:     true,
+		InstallUrl:     nodejsInstallUrl,
+	}
 }
 
 func (n *NodejsHost) Stop(ctx context.Context) {

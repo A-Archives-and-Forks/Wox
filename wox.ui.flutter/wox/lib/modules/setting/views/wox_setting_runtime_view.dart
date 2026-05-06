@@ -19,6 +19,8 @@ import 'package:wox/utils/picker.dart';
 // ignore: must_be_immutable
 class WoxSettingRuntimeView extends WoxSettingBaseView {
   WoxSettingRuntimeView({super.key});
+  static const double _runtimeStatusDetailAreaHeight = 40;
+  static const double _runtimeStatusDetailBottomSpacing = 14;
 
   String _runtimeDisplayName(String runtime) {
     switch (runtime.toUpperCase()) {
@@ -48,23 +50,73 @@ class WoxSettingRuntimeView extends WoxSettingBaseView {
     }
   }
 
-  Widget _buildRuntimeStatusCard(BuildContext context, WoxRuntimeStatus status) {
-    final bool isRunning = status.isStarted;
+  String _runtimeStatusLabel(WoxRuntimeStatus status) {
+    switch (status.statusCode) {
+      case 'running':
+        return controller.tr("ui_runtime_status_running");
+      case 'executable_missing':
+        return controller.tr("ui_runtime_status_executable_missing");
+      case 'unsupported_version':
+        return controller.tr("ui_runtime_status_unsupported_version");
+      case 'start_failed':
+        return controller.tr("ui_runtime_status_start_failed");
+      default:
+        return controller.tr("ui_runtime_status_stopped");
+    }
+  }
+
+  String _runtimeStatusDetail(WoxRuntimeStatus status) {
+    switch (status.statusCode) {
+      case 'executable_missing':
+        return controller.tr("ui_runtime_status_executable_missing_detail").replaceAll("{runtime}", _runtimeDisplayName(status.runtime));
+      case 'unsupported_version':
+        return controller.tr("ui_runtime_status_unsupported_version_detail").replaceAll("{runtime}", _runtimeDisplayName(status.runtime));
+      case 'start_failed':
+        return status.lastStartError.isNotEmpty ? status.lastStartError : controller.tr("ui_runtime_status_start_failed_detail");
+      default:
+        return status.executablePath;
+    }
+  }
+
+  Color _runtimeStatusColor(WoxRuntimeStatus status) {
+    switch (status.statusCode) {
+      case 'running':
+        return Colors.green;
+      case 'executable_missing':
+      case 'unsupported_version':
+      case 'start_failed':
+        return Colors.red;
+      default:
+        return Colors.orange;
+    }
+  }
+
+  double _runtimeStatusCardHeight(WoxRuntimeStatus status) {
+    // Layout fix: normal runtimes can show a title, status pill, two-line path,
+    // and plugin count. The previous compact height only worked for shorter
+    // paths and overflowed under Chinese text metrics, so keep a small buffer
+    // instead of relying on exact pixel-fit math.
+    return status.isActionableFailure ? 196 : 140;
+  }
+
+  Widget _buildRuntimeStatusCard(BuildContext context, WoxRuntimeStatus status, double cardHeight) {
     final bool isDarkTheme = isThemeDark();
     final Color textColor = getThemeTextColor();
     final Color subTextColor = getThemeSubTextColor();
-    final Color statusColor = isRunning ? Colors.green : Colors.red;
+    final Color statusColor = _runtimeStatusColor(status);
     final Color iconBackgroundColor = getThemeTextColor().withValues(alpha: isDarkTheme ? 0.10 : 0.05);
 
-    final String stateLabel = isRunning ? controller.tr("ui_runtime_status_running") : controller.tr("ui_runtime_status_stopped");
+    final String stateLabel = _runtimeStatusLabel(status);
+    final String statusDetail = _runtimeStatusDetail(status);
     final String pluginCountLabel = controller.tr("ui_runtime_status_plugin_count").replaceAll("{count}", status.loadedPluginCount.toString());
     final String hostVersionLabel = status.hostVersion.isNotEmpty && !status.hostVersion.toLowerCase().startsWith('v') ? 'v${status.hostVersion}' : status.hostVersion;
     final WoxImage runtimeIcon = WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_SVG.code, imageData: _runtimeIcon(status.runtime));
+    final bool isRestarting = controller.restartingRuntime.value == status.runtime.toUpperCase();
 
     return WoxPanel(
       padding: const EdgeInsets.all(14),
       child: SizedBox(
-        height: 88,
+        height: cardHeight,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -94,18 +146,70 @@ class WoxSettingRuntimeView extends WoxSettingBaseView {
                         ],
                       ),
                       const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(color: statusColor.withValues(alpha: isDarkTheme ? 0.22 : 0.12), borderRadius: BorderRadius.circular(999)),
-                        child: Text(stateLabel, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: statusColor)),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(color: statusColor.withValues(alpha: isDarkTheme ? 0.22 : 0.12), borderRadius: BorderRadius.circular(999)),
+                            child: Text(stateLabel, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: statusColor)),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
               ],
             ),
-            const Spacer(),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.only(left: 46),
+              child: SizedBox(
+                height: _runtimeStatusDetailAreaHeight,
+                // Layout fix: the detail area is reserved even when a runtime has
+                // no executable path, such as Script. This keeps plugin counts
+                // aligned without duplicating the plugin count as fake detail text.
+                child:
+                    statusDetail.isEmpty
+                        ? const SizedBox.shrink()
+                        : Text(statusDetail, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: subTextColor, fontSize: 12)),
+              ),
+            ),
+            const SizedBox(height: _runtimeStatusDetailBottomSpacing),
             Padding(padding: const EdgeInsets.only(left: 46), child: Text(pluginCountLabel, style: TextStyle(color: subTextColor, fontSize: 13))),
+            const Spacer(),
+            if (status.isActionableFailure) ...[
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.only(left: 46),
+                child: Row(
+                  children: [
+                    if (status.installUrl.isNotEmpty && (status.statusCode == 'executable_missing' || status.statusCode == 'unsupported_version')) ...[
+                      WoxButton.secondary(
+                        text: controller
+                            .tr(status.statusCode == 'unsupported_version' ? "ui_runtime_upgrade_runtime" : "ui_runtime_install_runtime")
+                            .replaceAll("{runtime}", _runtimeDisplayName(status.runtime)),
+                        icon: Icon(Icons.open_in_new, size: 14, color: getThemeTextColor()),
+                        onPressed: () {
+                          controller.openRuntimeInstallUrl(status);
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    if (status.canRestart)
+                      WoxButton.secondary(
+                        text: isRestarting ? controller.tr("ui_runtime_restarting_host") : controller.tr("ui_runtime_restart_host"),
+                        icon: isRestarting ? WoxLoadingIndicator(size: 14, color: getThemeActionItemActiveColor()) : Icon(Icons.restart_alt, size: 14, color: getThemeTextColor()),
+                        onPressed:
+                            isRestarting
+                                ? null
+                                : () {
+                                  controller.restartRuntime(status);
+                                },
+                      ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -125,11 +229,35 @@ class WoxSettingRuntimeView extends WoxSettingBaseView {
                 : 1;
         final double cardWidth = columnCount == 1 ? availableWidth : (availableWidth - spacing * (columnCount - 1)) / columnCount;
 
-        // Runtime status is a summary, not a normal label/control pair, so use the full page width and keep all three runtimes visually grouped.
-        return Wrap(
-          spacing: spacing,
-          runSpacing: spacing,
-          children: visibleStatuses.map((status) => SizedBox(width: cardWidth, child: _buildRuntimeStatusCard(context, status))).toList(),
+        final rows = <Widget>[];
+        for (var start = 0; start < visibleStatuses.length; start += columnCount) {
+          final rowStatuses = visibleStatuses.skip(start).take(columnCount).toList();
+          final rowHeight = rowStatuses.map(_runtimeStatusCardHeight).reduce((a, b) => a > b ? a : b);
+
+          // Layout fix: when one runtime in a row expands to show recovery actions,
+          // every card in that row uses the same height. The old per-card height
+          // made healthy runtimes visually float above the failed runtime and broke
+          // scan alignment across the status summary.
+          rows.add(
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var index = 0; index < rowStatuses.length; index++) ...[
+                  SizedBox(width: cardWidth, child: _buildRuntimeStatusCard(context, rowStatuses[index], rowHeight)),
+                  if (index < rowStatuses.length - 1) SizedBox(width: spacing),
+                ],
+              ],
+            ),
+          );
+        }
+
+        // Runtime status is a summary, not a normal label/control pair, so use
+        // the full page width and keep runtimes visually grouped by row.
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var index = 0; index < rows.length; index++) ...[rows[index], if (index < rows.length - 1) SizedBox(height: spacing)],
+          ],
         );
       },
     );

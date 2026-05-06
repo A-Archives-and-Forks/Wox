@@ -19,7 +19,6 @@ import (
 	"wox/database"
 	"wox/i18n"
 	"wox/plugin"
-	"wox/plugin/host"
 	appplugin "wox/plugin/system/app"
 	"wox/setting"
 	"wox/telemetry"
@@ -67,6 +66,7 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	"/setting/userdata/location/update": handleUserDataLocationUpdate,
 	"/setting/position":                 handleSaveWindowPosition,
 	"/runtime/status":                   handleRuntimeStatus,
+	"/runtime/restart":                  handleRuntimeRestart,
 
 	// events
 	"/on/focus/lost":     handleOnFocusLost,
@@ -974,11 +974,18 @@ func handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		sort.Strings(pluginNames)
+		runtimeStatus := runtimeHost.RuntimeStatus(ctx)
 
 		statuses = append(statuses, dto.RuntimeStatusDto{
 			Runtime:           runtime,
 			IsStarted:         runtimeHost.IsStarted(ctx),
-			HostVersion:       getRuntimeHostVersion(ctx, runtime),
+			HostVersion:       getRuntimeHostVersion(ctx, runtime, runtimeStatus.ExecutablePath),
+			StatusCode:        string(runtimeStatus.StatusCode),
+			StatusMessage:     localizeRuntimeStatusMessage(ctx, runtime, runtimeStatus),
+			ExecutablePath:    runtimeStatus.ExecutablePath,
+			LastStartError:    runtimeStatus.LastStartError,
+			CanRestart:        runtimeStatus.CanRestart,
+			InstallUrl:        runtimeStatus.InstallUrl,
 			LoadedPluginCount: len(pluginNames),
 			LoadedPluginNames: pluginNames,
 		})
@@ -991,20 +998,52 @@ func handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
 	writeSuccessResponse(w, statuses)
 }
 
-func getRuntimeHostVersion(ctx context.Context, runtime string) string {
+func localizeRuntimeStatusMessage(ctx context.Context, runtime string, status plugin.RuntimeHostStatus) string {
+	runtimeName := runtime
+	switch strings.ToUpper(runtime) {
+	case string(plugin.PLUGIN_RUNTIME_NODEJS):
+		runtimeName = "Node.js"
+	case string(plugin.PLUGIN_RUNTIME_PYTHON):
+		runtimeName = "Python"
+	}
+
+	// Feature: /runtime/status returns localized user-facing status text, while
+	// LastStartError keeps raw technical details only for true host startup
+	// failures. This prevents English executable resolver messages from leaking
+	// into localized settings UI.
+	switch status.StatusCode {
+	case plugin.RuntimeHostStatusRunning:
+		return i18n.GetI18nManager().TranslateWox(ctx, "ui_runtime_status_running")
+	case plugin.RuntimeHostStatusExecutableMissing:
+		return strings.ReplaceAll(i18n.GetI18nManager().TranslateWox(ctx, "ui_runtime_status_executable_missing_detail"), "{runtime}", runtimeName)
+	case plugin.RuntimeHostStatusUnsupportedVersion:
+		return strings.ReplaceAll(i18n.GetI18nManager().TranslateWox(ctx, "ui_runtime_status_unsupported_version_detail"), "{runtime}", runtimeName)
+	case plugin.RuntimeHostStatusStartFailed:
+		return i18n.GetI18nManager().TranslateWox(ctx, "ui_runtime_status_start_failed_detail")
+	case plugin.RuntimeHostStatusStopped:
+		return i18n.GetI18nManager().TranslateWox(ctx, "ui_runtime_status_stopped")
+	default:
+		return status.StatusMessage
+	}
+}
+
+func getRuntimeHostVersion(ctx context.Context, runtime string, executablePath string) string {
+	if executablePath == "" {
+		return ""
+	}
+
 	runtimeUpper := strings.ToUpper(runtime)
 	switch runtimeUpper {
 	case string(plugin.PLUGIN_RUNTIME_NODEJS):
-		return getNodejsHostVersion(ctx)
+		return getNodejsHostVersion(ctx, executablePath)
 	case string(plugin.PLUGIN_RUNTIME_PYTHON):
-		return getPythonHostVersion(ctx)
+		return getPythonHostVersion(ctx, executablePath)
 	default:
 		return ""
 	}
 }
 
-func getNodejsHostVersion(ctx context.Context) string {
-	nodePath := host.FindNodejsPath(ctx)
+func getNodejsHostVersion(ctx context.Context, nodePath string) string {
 	versionOutput, err := shell.RunOutput(nodePath, "-v")
 	if err != nil {
 		util.GetLogger().Warn(ctx, fmt.Sprintf("failed to get nodejs host version: %s", err))
@@ -1014,8 +1053,7 @@ func getNodejsHostVersion(ctx context.Context) string {
 	return strings.TrimSpace(string(versionOutput))
 }
 
-func getPythonHostVersion(ctx context.Context) string {
-	pythonPath := host.FindPythonPath(ctx)
+func getPythonHostVersion(ctx context.Context, pythonPath string) string {
 	versionOutput, err := shell.RunOutput(pythonPath, "--version")
 	version := strings.TrimSpace(string(versionOutput))
 	if err != nil || version == "" {
@@ -1028,6 +1066,33 @@ func getPythonHostVersion(ctx context.Context) string {
 	}
 
 	return strings.TrimPrefix(version, "Python ")
+}
+
+func handleRuntimeRestart(w http.ResponseWriter, r *http.Request) {
+	ctx := getTraceContext(r)
+
+	body, _ := io.ReadAll(r.Body)
+	runtimeResult := gjson.GetBytes(body, "Runtime")
+	if !runtimeResult.Exists() {
+		writeErrorResponse(w, "Runtime is required")
+		return
+	}
+
+	runtime := plugin.ConvertToRuntime(runtimeResult.String())
+	if runtime != plugin.PLUGIN_RUNTIME_NODEJS && runtime != plugin.PLUGIN_RUNTIME_PYTHON {
+		writeErrorResponse(w, fmt.Sprintf("runtime %s does not support restart from settings", runtime))
+		return
+	}
+
+	// Feature: expose a small restart endpoint so users can recover after fixing
+	// Node.js/Python paths without restarting Wox. Reusing the plugin manager
+	// keeps loaded plugin restoration in one place.
+	if err := plugin.GetPluginManager().RestartHostForRuntime(ctx, runtime, nil, nil); err != nil {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+
+	writeSuccessResponse(w, "")
 }
 
 func handleSettingPluginUpdate(w http.ResponseWriter, r *http.Request) {

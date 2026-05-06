@@ -102,6 +102,23 @@ void _printHelp() {
   stdout.writeln('  smoke [test name]    Run the desktop smoke E2E flow');
 }
 
+List<_SmokeTemplatePluginDefinition> _templatePluginDefinitionsForSmoke(String? testName) {
+  if (testName == null) {
+    return _templatePluginDefinitions;
+  }
+
+  // Smoke coverage: runtime diagnostic tests intentionally put Node.js/Python
+  // into missing-executable states. They do not need packaged template plugins,
+  // so skip template setup and host readiness checks to let the negative runtime
+  // assertions run on machines where Node.js is actually unavailable.
+  const runtimeDiagnosticTests = ['T4-03', 'T4-04', 'T4-05'];
+  if (runtimeDiagnosticTests.any(testName.contains)) {
+    return const <_SmokeTemplatePluginDefinition>[];
+  }
+
+  return _templatePluginDefinitions;
+}
+
 Future<int> _runSmoke({String? testName}) async {
   final packageRoot = _resolvePackageRoot();
   final repoRoot = packageRoot.parent;
@@ -131,8 +148,9 @@ Future<int> _runSmoke({String? testName}) async {
   final testLog = File('${artifactsDir.path}${Platform.pathSeparator}flutter_test.log');
   final templatePluginLog = File('${artifactsDir.path}${Platform.pathSeparator}template_plugin.log');
 
+  final templateDefinitions = _templatePluginDefinitionsForSmoke(testName);
   final templatePlugins = <_SmokeTemplatePluginPackage>[];
-  for (final definition in _templatePluginDefinitions) {
+  for (final definition in templateDefinitions) {
     stdout.writeln('Preparing template ${definition.runtime} plugin package...');
     final templatePlugin = await _prepareSmokeTemplatePlugin(definition: definition, artifactsDir: artifactsDir, environment: environment, logFile: templatePluginLog);
     templatePlugins.add(templatePlugin);
@@ -158,17 +176,19 @@ Future<int> _runSmoke({String? testName}) async {
       return 1;
     }
 
-    // Bug fix: /ping only proves the core HTTP server is ready. Template plugin
-    // installation depends on the NodeJS/Python runtime hosts, which start
-    // asynchronously after core startup, so wait for those hosts explicitly.
-    final runtimeReady = await _waitForRuntimeHostsReady(
-      serverPort: serverPort,
-      runtimes: templatePlugins.map((plugin) => plugin.definition.runtime),
-      timeout: runtimeStartupTimeout,
-    );
-    if (!runtimeReady) {
-      await _printRuntimeStartupDiagnostics(woxDataDir);
-      return 1;
+    if (templatePlugins.isNotEmpty) {
+      // Bug fix: /ping only proves the core HTTP server is ready. Template plugin
+      // installation depends on the NodeJS/Python runtime hosts, which start
+      // asynchronously after core startup, so wait for those hosts explicitly.
+      final runtimeReady = await _waitForRuntimeHostsReady(
+        serverPort: serverPort,
+        runtimes: templatePlugins.map((plugin) => plugin.definition.runtime),
+        timeout: runtimeStartupTimeout,
+      );
+      if (!runtimeReady) {
+        await _printRuntimeStartupDiagnostics(woxDataDir);
+        return 1;
+      }
     }
 
     for (final templatePlugin in templatePlugins) {
@@ -434,10 +454,13 @@ Future<bool> _isPingReady(int serverPort) async {
 }
 
 class _RuntimeHostStatus {
-  const _RuntimeHostStatus({required this.runtime, required this.isStarted});
+  const _RuntimeHostStatus({required this.runtime, required this.isStarted, required this.statusCode, required this.executablePath, required this.lastStartError});
 
   final String runtime;
   final bool isStarted;
+  final String statusCode;
+  final String executablePath;
+  final String lastStartError;
 }
 
 Future<bool> _waitForRuntimeHostsReady({required int serverPort, required Iterable<String> runtimes, required Duration timeout}) async {
@@ -490,7 +513,13 @@ Future<List<_RuntimeHostStatus>?> _fetchRuntimeStatuses(int serverPort) async {
     return data
         .whereType<Map<String, dynamic>>()
         .map((item) {
-          return _RuntimeHostStatus(runtime: item['Runtime']?.toString() ?? '', isStarted: item['IsStarted'] == true);
+          return _RuntimeHostStatus(
+            runtime: item['Runtime']?.toString() ?? '',
+            isStarted: item['IsStarted'] == true,
+            statusCode: item['StatusCode']?.toString() ?? '',
+            executablePath: item['ExecutablePath']?.toString() ?? '',
+            lastStartError: item['LastStartError']?.toString() ?? '',
+          );
         })
         .where((status) => status.runtime.isNotEmpty)
         .toList();
@@ -506,7 +535,24 @@ String _formatRuntimeStatusSummary(List<_RuntimeHostStatus> statuses) {
     return 'no runtime statuses returned';
   }
 
-  return statuses.map((status) => '${status.runtime}=${status.isStarted ? 'started' : 'stopped'}').join(', ');
+  // Runtime startup diagnostics now include the structured status fields added
+  // for user-facing errors, so CI can distinguish a missing interpreter from a
+  // host process that failed after launch.
+  return statuses
+      .map((status) {
+        final parts = <String>['${status.runtime}=${status.isStarted ? 'started' : 'stopped'}'];
+        if (status.statusCode.isNotEmpty) {
+          parts.add('status=${status.statusCode}');
+        }
+        if (status.executablePath.isNotEmpty) {
+          parts.add('path=${status.executablePath}');
+        }
+        if (status.lastStartError.isNotEmpty) {
+          parts.add('error=${status.lastStartError}');
+        }
+        return parts.join(' ');
+      })
+      .join(', ');
 }
 
 Future<void> _printRuntimeStartupDiagnostics(Directory woxDataDir) async {

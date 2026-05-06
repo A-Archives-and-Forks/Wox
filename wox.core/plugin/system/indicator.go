@@ -261,7 +261,7 @@ func (i *IndicatorPlugin) createIndicatorUpgradeAction(storePlugin plugin.StoreP
 					i.api.Notify(ctx, fmt.Sprintf(
 						i.api.GetTranslation(ctx, "i18n:plugin_installer_action_failed"),
 						i.api.GetTranslation(ctx, "i18n:plugin_installer_upgrade"),
-						fmt.Sprintf("%s(%s): %s", pluginName, storePlugin.Version, installErr.Error()),
+						formatPluginInstallError(ctx, i.api, storePlugin.Runtime, pluginName, storePlugin.Version, installErr),
 					))
 					return
 				}
