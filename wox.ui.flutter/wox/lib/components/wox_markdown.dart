@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -6,8 +7,13 @@ import 'package:gpt_markdown/custom_widgets/markdown_config.dart';
 import 'package:gpt_markdown/custom_widgets/unordered_ordered_list.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/v4.dart';
+import 'package:wox/api/wox_api.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
+import 'package:wox/entity/wox_image.dart';
+import 'package:wox/enums/wox_image_type_enum.dart';
 import 'package:wox/utils/colors.dart';
+import 'package:wox/utils/log.dart';
 
 class WoxMarkdownView extends StatelessWidget {
   final String data;
@@ -16,8 +22,18 @@ class WoxMarkdownView extends StatelessWidget {
   final Color? linkColor;
   final Color? linkHoverColor;
   final bool selectable;
+  final bool enableImageOverlay;
 
-  const WoxMarkdownView({super.key, required this.fontColor, required this.data, this.fontSize = 14, this.linkColor, this.linkHoverColor, this.selectable = true});
+  const WoxMarkdownView({
+    super.key,
+    required this.fontColor,
+    required this.data,
+    this.fontSize = 14,
+    this.linkColor,
+    this.linkHoverColor,
+    this.selectable = true,
+    this.enableImageOverlay = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -130,7 +146,10 @@ class WoxMarkdownView extends StatelessWidget {
   Widget buildImage(BuildContext context, String url) {
     final trimmed = url.trim();
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      return Image.network(trimmed, fit: BoxFit.fill, errorBuilder: (context, error, stackTrace) => Text(error.toString(), style: const TextStyle(color: Colors.red)));
+      return buildImageOverlayTrigger(
+        Image.network(trimmed, fit: BoxFit.fill, errorBuilder: (context, error, stackTrace) => Text(error.toString(), style: const TextStyle(color: Colors.red))),
+        WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_URL.code, imageData: trimmed),
+      );
     }
 
     final resolvedPath = resolveLocalImagePath(trimmed);
@@ -138,7 +157,40 @@ class WoxMarkdownView extends StatelessWidget {
       return Text(url);
     }
     final file = File(resolvedPath);
-    return Image.file(file, fit: BoxFit.fill, errorBuilder: (context, error, stackTrace) => Text(error.toString()));
+    return buildImageOverlayTrigger(
+      Image.file(file, fit: BoxFit.fill, errorBuilder: (context, error, stackTrace) => Text(error.toString())),
+      WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_ABSOLUTE_PATH.code, imageData: resolvedPath),
+    );
+  }
+
+  Widget buildImageOverlayTrigger(Widget image, WoxImage overlayImage) {
+    if (!enableImageOverlay) {
+      return image;
+    }
+
+    // Markdown preview images used to be static inline content even when the same preview surface
+    // could open a native overlay. This opt-in wrapper keeps settings and release-note markdown
+    // unchanged while giving preview markdown the same enlarged-image affordance as image previews.
+    return SelectionContainer.disabled(
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => unawaited(openMarkdownImageOverlay(overlayImage)), child: image),
+      ),
+    );
+  }
+
+  Future<void> openMarkdownImageOverlay(WoxImage image) async {
+    final traceId = const UuidV4().generate();
+    final start = DateTime.now();
+    try {
+      // Diagnostic logging: markdown images can be remote URLs, so keep the click boundary visible
+      // while core logs the download/decode/native overlay stages for the same trace id.
+      Logger.instance.info(traceId, "markdown image overlay click start: type=${image.imageType}, dataLength=${image.imageData.length}");
+      await WoxApi.instance.showPreviewImageOverlay(traceId, image);
+      Logger.instance.info(traceId, "markdown image overlay click finished, cost ${DateTime.now().difference(start).inMilliseconds} ms");
+    } catch (e) {
+      Logger.instance.error(traceId, "Failed to open markdown image overlay: $e");
+    }
   }
 
   String resolveLocalImagePath(String url) {

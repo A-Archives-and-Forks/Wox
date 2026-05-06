@@ -23,6 +23,8 @@
   "ui_hotkey_ignore_apps_app": "Приложение",
   "ui_hotkey_ignore_apps_app_placeholder": "Приложение не выбрано",
   "ui_hotkey_ignore_apps_loading": "Загрузка...",
+  "ui_preview_image_loading": "Загрузка изображения",
+  "ui_preview_image_load_failed": "Не удалось загрузить изображение",
   "ui_use_pinyin": "Использовать Pinyin",
   "ui_use_pinyin_tips": "При выборе Wox будет преобразовывать Китайский в Pinyin",
   "ui_launch_mode": "Режим запуска",

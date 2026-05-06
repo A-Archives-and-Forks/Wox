@@ -23,6 +23,8 @@
   "ui_hotkey_ignore_apps_app": "App",
   "ui_hotkey_ignore_apps_app_placeholder": "Nenhum app selecionado",
   "ui_hotkey_ignore_apps_loading": "Carregando...",
+  "ui_preview_image_loading": "Carregando imagem",
+  "ui_preview_image_load_failed": "Falha ao carregar imagem",
   "ui_use_pinyin": "Use Pinyin",
   "ui_use_pinyin_tips": "Quando selecionado, o Wox vai converter Chinês em Pinyin",
   "ui_launch_mode": "Modo de Inicialização",

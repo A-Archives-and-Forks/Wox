@@ -13,6 +13,7 @@ import 'package:wox/entity/wox_setting.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/entity/wox_usage_stats.dart';
 import 'package:wox/models/doctor_check_result.dart';
+import 'package:wox/utils/log.dart';
 import 'package:wox/utils/wox_http_util.dart';
 
 class WoxApi {
@@ -231,7 +232,22 @@ class WoxApi {
   }
 
   Future<void> showPreviewImageOverlay(String traceId, WoxImage image) async {
+    final start = DateTime.now();
+    // Diagnostic logging: keep the Flutter-to-core boundary visible while investigating slow
+    // image overlays without dumping full base64 payloads into ui.log.
+    Logger.instance.info(traceId, "show preview image overlay api start: type=${image.imageType}, dataLength=${image.imageData.length}, data=${previewImageOverlayLogData(image)}");
     await WoxHttpUtil.instance.postData(traceId, "/preview/image/overlay", {"Image": image.toJson()});
+    Logger.instance.info(traceId, "show preview image overlay api finished, cost ${DateTime.now().difference(start).inMilliseconds} ms");
+  }
+
+  String previewImageOverlayLogData(WoxImage image) {
+    if (image.imageType == "base64" && image.imageData.length > 120) {
+      return "${image.imageData.substring(0, 120)}...<truncated base64>";
+    }
+    if (image.imageData.length > 300) {
+      return "${image.imageData.substring(0, 300)}...<truncated>";
+    }
+    return image.imageData;
   }
 
   Future<String> getWoxVersion(String traceId) async {

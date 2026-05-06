@@ -24,6 +24,7 @@ typedef struct {
     float iconHeight;
     bool closable;
     bool closeOnEscape;
+    bool loading;
     bool topmost;
     int stickyWindowPid; // 0 = Screen, >0 = Window
     int anchor;          // 0-8: TL,TC,TR, LC,C,RC, BL,BC,BR
@@ -73,6 +74,7 @@ static void OverlayDebugLog(NSString *message) {
 @property(nonatomic, strong) NSString *name; // Store the ID
 @property(nonatomic, strong) NSTimer *closeTimer;
 @property(nonatomic, strong) NSImageView *iconView;
+@property(nonatomic, strong) NSProgressIndicator *loadingIndicator;
 @property(nonatomic, strong) NSImageView *tooltipIconView;
 @property(nonatomic, strong) NSTextField *messageLabel;
 // Simplified text view for now, or use full NSTextView from notifier if needed for multiline.
@@ -372,6 +374,22 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
         self.iconView.imageScaling = NSImageScaleProportionallyUpOrDown;
         self.iconView.hidden = YES;
         [self.contentView addSubview:self.iconView];
+
+        // Loading indicator - used by overlays that should acknowledge a long-running operation
+        // without repeatedly mutating the message text from Go.
+        self.loadingIndicator = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(12, 0, kDefaultIconSize, kDefaultIconSize)];
+        self.loadingIndicator.style = NSProgressIndicatorStyleSpinning;
+        self.loadingIndicator.controlSize = NSControlSizeRegular;
+        self.loadingIndicator.indeterminate = YES;
+        self.loadingIndicator.displayedWhenStopped = NO;
+        if (@available(macOS 10.14, *)) {
+            // Bug fix: the default inherited appearance can make the system spinner too dark on
+            // our dark HUD material. DarkAqua lets AppKit render the native indicator with the
+            // light variant while preserving the system animation and accessibility behavior.
+            self.loadingIndicator.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        }
+        self.loadingIndicator.hidden = YES;
+        [self.contentView addSubview:self.loadingIndicator];
 
         // Tooltip Icon - use PassthroughImageView for drag support
         self.tooltipIconView = [[PassthroughImageView alloc] initWithFrame:NSMakeRect(0, 0, kDefaultIconSize, kDefaultIconSize)];
@@ -752,6 +770,12 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 
     self.iconView.image = icon;
     self.iconView.hidden = (icon == nil);
+    self.loadingIndicator.hidden = !opts.loading;
+    if (opts.loading) {
+        [self.loadingIndicator startAnimation:nil];
+    } else {
+        [self.loadingIndicator stopAnimation:nil];
+    }
     
     self.closeButton.hidden = !opts.closable;
     self.closeOnEscape = opts.closeOnEscape;
@@ -795,6 +819,8 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
         self.messageView.hidden = YES;
         self.closeButton.hidden = YES;
         self.tooltipIconView.hidden = YES;
+        self.loadingIndicator.hidden = YES;
+        [self.loadingIndicator stopAnimation:nil];
         self.tooltipIconRect = NSZeroRect;
         [self updateTooltipTrackingAreaWithRect:NSZeroRect enabled:NO];
 
@@ -817,7 +843,9 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
         CGFloat tooltipIconSize = (opts.tooltipIconSize > 0) ? opts.tooltipIconSize : kDefaultIconSize;
         CGFloat tooltipIconGap = self.tooltipIconView.hidden ? 0 : kTooltipIconGap;
 
-        if (!self.iconView.hidden) padLeft += iconSize + 8;
+        BOOL hasLeadingIndicator = !self.loadingIndicator.hidden;
+        BOOL hasLeadingIcon = hasLeadingIndicator || !self.iconView.hidden;
+        if (hasLeadingIcon) padLeft += iconSize + 8;
         if (!self.closeButton.hidden) padRight += kCloseSize + 4;
         if (!self.tooltipIconView.hidden) padRight += tooltipIconSize + tooltipIconGap;
 
@@ -849,7 +877,10 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 
         self.messageView.frame = NSMakeRect(padLeft, currentY, contentWidth, textHeight);
         
-        if (!self.iconView.hidden) {
+        if (hasLeadingIndicator) {
+            self.loadingIndicator.frame = NSMakeRect(12, (windowHeight - iconSize)/2, iconSize, iconSize);
+            self.iconView.hidden = YES;
+        } else if (!self.iconView.hidden) {
             self.iconView.frame = NSMakeRect(12, (windowHeight - iconSize)/2, iconSize, iconSize);
         }
         if (!self.tooltipIconView.hidden) {

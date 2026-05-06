@@ -3,8 +3,6 @@ package system
 import (
 	"context"
 	"fmt"
-	"image"
-	_ "image/png" // Register PNG header decoding for file-backed pinned screenshots.
 	"os"
 	"path/filepath"
 	"sort"
@@ -403,36 +401,7 @@ func (p *ScreenshotPlugin) formatFileSize(size int64) string {
 	return fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
 }
 
-func (p *ScreenshotPlugin) readScreenshotImageSize(screenshotPath string) (int, int, error) {
-	// DecodeConfig reads only the PNG header. It is used only when Flutter did not return a logical
-	// selection size, so the file-backed pin path still avoids full image decoding on the common path.
-	file, err := os.Open(screenshotPath)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to open pinned screenshot image: %w", err)
-	}
-	defer file.Close()
-
-	config, _, err := image.DecodeConfig(file)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to read pinned screenshot image size: %w", err)
-	}
-	return config.Width, config.Height, nil
-}
-
 func (p *ScreenshotPlugin) pinScreenshotToScreen(ctx context.Context, screenshotPath string, selectionRect *common.ScreenshotRect) error {
-	// File-backed overlays depend on the PNG remaining readable after Flutter writes it. Validate the
-	// path cheaply here so native decode failures do not become silent missing pinned windows.
-	info, err := os.Stat(screenshotPath)
-	if err != nil {
-		return fmt.Errorf("failed to read pinned screenshot file info: %w", err)
-	}
-	if info.IsDir() {
-		return fmt.Errorf("pinned screenshot path is a directory")
-	}
-	if info.Size() == 0 {
-		return fmt.Errorf("pinned screenshot file is empty")
-	}
-
 	width := 0.0
 	height := 0.0
 	offsetX := 0.0
@@ -450,37 +419,26 @@ func (p *ScreenshotPlugin) pinScreenshotToScreen(ctx context.Context, screenshot
 		offsetX = selectionRect.X
 		offsetY = selectionRect.Y
 	}
-	// File-backed overlays usually get logical size from Flutter, but this header-only fallback keeps
-	// older or incomplete capture results usable without returning to the full image decode path.
-	if width < 1 || height < 1 {
-		pixelWidth, pixelHeight, err := p.readScreenshotImageSize(screenshotPath)
-		if err != nil {
-			return err
-		}
-		if width < 1 {
-			width = float64(pixelWidth)
-		}
-		if height < 1 {
-			height = float64(pixelHeight)
-		}
-	}
 
 	name := screenshotPinnedOverlayPrefix + util.Md5([]byte(fmt.Sprintf("%s:%d", screenshotPath, time.Now().UnixNano())))
-	overlay.Show(overlay.OverlayOptions{
+	// Refactor: pinned screenshots now use the same file-backed image overlay helper as preview
+	// overlays. The helper validates the file and reads header dimensions when Flutter does not
+	// provide a logical selection size, keeping screenshot pinning and image preview on one path.
+	err := overlay.ShowImageOverlay(ctx, overlay.ImageOverlayOptions{
 		Name:          name,
 		Title:         "Wox pinned screenshot",
-		Icon:          overlay.NewFileIcon(screenshotPath),
-		Transparent:   true,
+		Image:         common.NewWoxImageAbsolutePath(screenshotPath),
+		Width:         width,
+		Height:        height,
 		Movable:       true,
 		CloseOnEscape: true,
 		Anchor:        overlay.AnchorTopLeft,
 		OffsetX:       offsetX,
 		OffsetY:       offsetY,
-		Width:         width,
-		Height:        height,
-		IconWidth:     width,
-		IconHeight:    height,
 	})
+	if err != nil {
+		return fmt.Errorf("failed to show pinned screenshot overlay: %w", err)
+	}
 	return nil
 }
 

@@ -69,7 +69,7 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
     // Markdown no longer draws its own frame because WoxPreviewScaffold owns the
     // shared scroll surface. Keeping only content padding here lets markdown,
     // text, and image previews share one outer background and scrollbar model.
-    return scrollableContent(child: Padding(padding: const EdgeInsets.all(20), child: WoxMarkdownView(data: markdownData, fontColor: textColor)));
+    return scrollableContent(child: Padding(padding: const EdgeInsets.all(20), child: WoxMarkdownView(data: markdownData, fontColor: textColor, enableImageOverlay: true)));
   }
 
   Widget buildText(String txtData) {
@@ -189,8 +189,13 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
 
   Future<void> openPreviewImageOverlay(WoxImage image) async {
     final traceId = const UuidV4().generate();
+    final start = DateTime.now();
     try {
+      // Diagnostic logging: preview-image clicks usually use local files, so this marks the UI
+      // boundary before core measures header/decode/native overlay costs.
+      Logger.instance.info(traceId, "preview image overlay click start: type=${image.imageType}, dataLength=${image.imageData.length}");
       await WoxApi.instance.showPreviewImageOverlay(traceId, image);
+      Logger.instance.info(traceId, "preview image overlay click finished, cost ${DateTime.now().difference(start).inMilliseconds} ms");
     } catch (e) {
       Logger.instance.error(traceId, "Failed to open preview image overlay: $e");
     }

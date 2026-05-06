@@ -61,6 +61,7 @@ typedef struct {
     float iconHeight;
     bool closable;
     bool closeOnEscape;
+    bool loading;
     bool topmost;
     int stickyWindowPid; // 0 = Screen, >0 = Window
     int anchor;          // 0-8
@@ -587,6 +588,7 @@ typedef struct OverlayWindow
     float tooltipIconSize;
     BOOL closable;
     BOOL closeOnEscape;
+    BOOL loading;
     BOOL topmost;
     BOOL movable;
     int autoCloseSeconds;
@@ -651,6 +653,7 @@ typedef struct OverlayPayload
     float tooltipIconSize;
     BOOL closable;
     BOOL closeOnEscape;
+    BOOL loading;
     BOOL topmost;
     int stickyWindowPid;
     int anchor;
@@ -1402,6 +1405,7 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
 
     ow->closable = payload->closable;
     ow->closeOnEscape = payload->closeOnEscape;
+    ow->loading = payload->loading;
     ow->topmost = payload->topmost;
     ow->transparent = payload->transparent;
     ow->hitTestIconOnly = payload->hitTestIconOnly;
@@ -2446,6 +2450,7 @@ void ShowOverlay(OverlayOptions opts)
     payload->iconHeight = opts.iconHeight;
     payload->closable = opts.closable ? TRUE : FALSE;
     payload->closeOnEscape = opts.closeOnEscape ? TRUE : FALSE;
+    payload->loading = opts.loading ? TRUE : FALSE;
     payload->topmost = opts.topmost ? TRUE : FALSE;
     payload->stickyWindowPid = opts.stickyWindowPid;
     payload->anchor = opts.anchor;

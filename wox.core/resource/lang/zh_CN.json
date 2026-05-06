@@ -23,6 +23,8 @@
   "ui_hotkey_ignore_apps_app": "应用",
   "ui_hotkey_ignore_apps_app_placeholder": "当前未选择任何应用",
   "ui_hotkey_ignore_apps_loading": "加载中...",
+  "ui_preview_image_loading": "正在加载图片",
+  "ui_preview_image_load_failed": "图片加载失败",
   "ui_use_pinyin": "使用拼音",
   "ui_use_pinyin_tips": "搜索时，把中文转换为拼音",
   "ui_launch_mode": "启动模式",

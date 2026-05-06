@@ -5,10 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	_ "image/gif"  // Register GIF header decoding for preview image overlays.
-	_ "image/jpeg" // Register JPEG header decoding for preview image overlays.
-	_ "image/png"  // Register PNG header decoding for preview image overlays.
 	"io"
 	"net/http"
 	"os"
@@ -193,8 +189,6 @@ type previewImageOverlayRequest struct {
 	Image common.WoxImage
 }
 
-const previewImageOverlayPrefix = "wox_preview_image_"
-
 func handlePreviewImageOverlay(w http.ResponseWriter, r *http.Request) {
 	ctx := getTraceContext(r)
 
@@ -214,127 +208,23 @@ func handlePreviewImageOverlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := showPreviewImageOverlay(ctx, request.Image); err != nil {
+	// Refactor: image preview routing now calls the single shared overlay entry directly. The
+	// overlay utility decides whether URL sources need loading/cache behavior, while non-URL sources
+	// are displayed immediately through the same API.
+	if err := overlay.ShowImageOverlay(ctx, overlay.ImageOverlayOptions{
+		Title:         "Wox image preview",
+		Image:         request.Image,
+		FitToScreen:   true,
+		Topmost:       true,
+		Movable:       true,
+		CloseOnEscape: true,
+		Anchor:        overlay.AnchorCenter,
+	}); err != nil {
 		writeErrorResponse(w, err.Error())
 		return
 	}
 
 	writeSuccessResponse(w, "")
-}
-
-func showPreviewImageOverlay(ctx context.Context, woxImage common.WoxImage) error {
-	overlayImage, sourceWidth, sourceHeight, err := preparePreviewOverlayImage(ctx, woxImage)
-	if err != nil {
-		return err
-	}
-
-	width, height := fitPreviewOverlaySize(sourceWidth, sourceHeight)
-	name := previewImageOverlayPrefix + woxImage.Hash()
-	// Image previews previously stopped at the inline thumbnail surface. Reusing core's native
-	// overlay here gives the enlarged image the same movable and Escape-to-close behavior as
-	// pinned screenshots without adding another Flutter window mode.
-	overlay.Show(overlay.OverlayOptions{
-		Name:          name,
-		Title:         "Wox image preview",
-		Icon:          overlayImage,
-		Transparent:   true,
-		Movable:       true,
-		CloseOnEscape: true,
-		Topmost:       true,
-		Anchor:        overlay.AnchorCenter,
-		Width:         width,
-		Height:        height,
-		IconWidth:     width,
-		IconHeight:    height,
-	})
-	return nil
-}
-
-func preparePreviewOverlayImage(ctx context.Context, woxImage common.WoxImage) (overlay.OverlayImage, float64, float64, error) {
-	if woxImage.ImageType == common.WoxImageTypeAbsolutePath && !strings.EqualFold(filepath.Ext(woxImage.ImageData), ".svg") {
-		info, err := os.Stat(woxImage.ImageData)
-		if err != nil {
-			return overlay.OverlayImage{}, 0, 0, fmt.Errorf("failed to read preview image file info: %w", err)
-		}
-		if info.IsDir() {
-			return overlay.OverlayImage{}, 0, 0, fmt.Errorf("preview image path is a directory")
-		}
-		if info.Size() == 0 {
-			return overlay.OverlayImage{}, 0, 0, fmt.Errorf("preview image file is empty")
-		}
-
-		width, height, err := readPreviewOverlayFileImageSize(woxImage.ImageData)
-		if err == nil {
-			// File-backed overlays avoid decoding and re-encoding large screenshots in Go. The old
-			// preview path only needed thumbnails, but enlarged previews should keep the native bridge
-			// on the same efficient file transport used by screenshot pinning.
-			return overlay.NewFileIcon(woxImage.ImageData), float64(width), float64(height), nil
-		}
-		util.GetLogger().Warn(ctx, fmt.Sprintf("failed to read preview image header, fallback to image decode: path=%s err=%s", woxImage.ImageData, err.Error()))
-	}
-
-	if woxImage.ImageType != common.WoxImageTypeAbsolutePath && woxImage.ImageType != common.WoxImageTypeBase64 && woxImage.ImageType != common.WoxImageTypeSvg {
-		return overlay.OverlayImage{}, 0, 0, fmt.Errorf("preview image overlay does not support image type: %s", woxImage.ImageType)
-	}
-
-	img, err := woxImage.ToImage()
-	if err != nil {
-		return overlay.OverlayImage{}, 0, 0, fmt.Errorf("failed to decode preview image: %w", err)
-	}
-	bounds := img.Bounds()
-	if bounds.Dx() <= 0 || bounds.Dy() <= 0 {
-		return overlay.OverlayImage{}, 0, 0, fmt.Errorf("preview image has invalid size")
-	}
-	return overlay.NewImageIcon(img), float64(bounds.Dx()), float64(bounds.Dy()), nil
-}
-
-func readPreviewOverlayFileImageSize(filePath string) (int, int, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer file.Close()
-
-	config, _, err := image.DecodeConfig(file)
-	if err != nil {
-		return 0, 0, err
-	}
-	return config.Width, config.Height, nil
-}
-
-func fitPreviewOverlaySize(sourceWidth, sourceHeight float64) (float64, float64) {
-	if sourceWidth < 1 || sourceHeight < 1 {
-		return 1, 1
-	}
-
-	activeScreen := screen.GetActiveScreen()
-	maxWidth := float64(activeScreen.Width) * 0.86
-	maxHeight := float64(activeScreen.Height) * 0.86
-	if maxWidth < 1 || maxHeight < 1 {
-		return sourceWidth, sourceHeight
-	}
-
-	scale := 1.0
-	if sourceWidth > maxWidth || sourceHeight > maxHeight {
-		scale = maxWidth / sourceWidth
-		heightScale := maxHeight / sourceHeight
-		if heightScale < scale {
-			scale = heightScale
-		}
-	}
-	if scale <= 0 {
-		scale = 1
-	}
-
-	width := sourceWidth * scale
-	height := sourceHeight * scale
-	if width < 1 {
-		width = 1
-	}
-	if height < 1 {
-		height = 1
-	}
-	return width, height
 }
 
 func handleTheme(w http.ResponseWriter, r *http.Request) {

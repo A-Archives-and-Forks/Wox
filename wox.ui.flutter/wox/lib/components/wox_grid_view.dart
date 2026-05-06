@@ -6,7 +6,6 @@ import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/controllers/wox_grid_controller.dart';
 import 'package:wox/entity/wox_list_item.dart';
 import 'package:wox/entity/wox_query.dart';
-import 'package:wox/enums/wox_direction_enum.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/color_util.dart';
 
@@ -21,6 +20,34 @@ class WoxGridView extends StatelessWidget {
   static const double titleHeight = 18.0;
 
   const WoxGridView({super.key, required this.controller, required this.maxHeight, this.onItemTapped, this.onItemSecondaryTapped, this.onRowHeightChanged});
+
+  void _scrollByPointerDelta(double deltaY) {
+    if (!controller.scrollController.hasClients) {
+      return;
+    }
+
+    final position = controller.scrollController.position;
+    final targetOffset = (position.pixels + deltaY).clamp(position.minScrollExtent, position.maxScrollExtent).toDouble();
+    if ((targetOffset - position.pixels).abs() < 0.01) {
+      return;
+    }
+
+    // Grid results share the same pointer-scroll contract as list results. The previous
+    // selection-step handling ignored pointer distance, so using the raw offset preserves
+    // smooth native scrolling while keyboard and click selection still drive active items.
+    controller.scrollController.jumpTo(targetOffset);
+  }
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is PointerScrollEvent) {
+      _scrollByPointerDelta(event.scrollDelta.dy);
+    }
+  }
+
+  // Handle pinch-zoom scroll events for trackpads and touchscreens. The PointerPanZoomUpdateEvent provides a panDelta that represents the scroll distance, which we can use to scroll the grid view accordingly.
+  void _handlePointerPanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    _scrollByPointerDelta(-event.panDelta.dy);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,14 +78,8 @@ class WoxGridView extends StatelessWidget {
             thumbVisibility: true,
             controller: controller.scrollController,
             child: Listener(
-              onPointerSignal: (event) {
-                if (event is PointerScrollEvent) {
-                  controller.updateActiveIndexByDirection(
-                    const UuidV4().generate(),
-                    event.scrollDelta.dy > 0 ? WoxDirectionEnum.WOX_DIRECTION_DOWN.code : WoxDirectionEnum.WOX_DIRECTION_UP.code,
-                  );
-                }
-              },
+              onPointerSignal: _handlePointerSignal,
+              onPointerPanZoomUpdate: _handlePointerPanZoomUpdate,
               child: Obx(() => _buildGridWithGroups(cellHeight, iconSize, columns, showTitle, itemPadding, itemMargin)),
             ),
           ),

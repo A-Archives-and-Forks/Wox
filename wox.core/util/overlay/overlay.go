@@ -92,6 +92,9 @@ type OverlayOptions struct {
 	// This is intentionally handled inside the overlay window instead of a global key listener so
 	// only the overlay with keyboard focus is dismissed.
 	CloseOnEscape bool
+	// Loading shows a native indeterminate spinner next to the message.
+	// Use it for short-lived progress surfaces where the caller should not keep refreshing text.
+	Loading bool
 	// Topmost puts the overlay above Wox's launcher window instead of using the default notification
 	// level. Use it for user-requested pinned/preview surfaces, not transient notifications.
 	Topmost bool

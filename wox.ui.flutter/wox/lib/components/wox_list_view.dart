@@ -35,6 +35,35 @@ class WoxListView<T> extends StatelessWidget {
     this.onFilteHotkeyPressed,
   });
 
+  void _scrollByPointerDelta(double deltaY) {
+    if (!controller.scrollController.hasClients) {
+      return;
+    }
+
+    final position = controller.scrollController.position;
+    final targetOffset = (position.pixels + deltaY).clamp(position.minScrollExtent, position.maxScrollExtent).toDouble();
+    if ((targetOffset - position.pixels).abs() < 0.01) {
+      return;
+    }
+
+    // Pointer scrolling used to reuse active-item navigation, which made pointer devices move
+    // selection one item at a time instead of scrolling the list surface. Mapping the native
+    // delta to the controller offset keeps keyboard navigation unchanged while giving wheel and
+    // trackpad gestures the continuous scrolling behavior users expect.
+    controller.scrollController.jumpTo(targetOffset);
+  }
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is PointerScrollEvent) {
+      _scrollByPointerDelta(event.scrollDelta.dy);
+    }
+  }
+
+  // PointerPanZoomUpdateEvent is fired when user scrolls with trackpad or touch screen, which provides a more natural scrolling experience on those devices compared to PointerScrollEvent. However, it is only supported on Flutter 3.7 and above, so we need to handle both events to ensure smooth scrolling across all platforms.
+  void _handlePointerPanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    _scrollByPointerDelta(-event.panDelta.dy);
+  }
+
   @override
   Widget build(BuildContext context) {
     // Fast path: when showFilter is false, we don't need LayoutBuilder
@@ -51,14 +80,8 @@ class WoxListView<T> extends StatelessWidget {
           thumbVisibility: true,
           controller: controller.scrollController,
           child: Listener(
-            onPointerSignal: (event) {
-              if (event is PointerScrollEvent) {
-                controller.updateActiveIndexByDirection(
-                  const UuidV4().generate(),
-                  event.scrollDelta.dy > 0 ? WoxDirectionEnum.WOX_DIRECTION_DOWN.code : WoxDirectionEnum.WOX_DIRECTION_UP.code,
-                );
-              }
-            },
+            onPointerSignal: _handlePointerSignal,
+            onPointerPanZoomUpdate: _handlePointerPanZoomUpdate,
             child: Obx(
               () =>
                   controller.items.isEmpty && controller.filterBoxController.text.isNotEmpty
@@ -160,14 +183,8 @@ class WoxListView<T> extends StatelessWidget {
             thumbVisibility: true,
             controller: controller.scrollController,
             child: Listener(
-              onPointerSignal: (event) {
-                if (event is PointerScrollEvent) {
-                  controller.updateActiveIndexByDirection(
-                    const UuidV4().generate(),
-                    event.scrollDelta.dy > 0 ? WoxDirectionEnum.WOX_DIRECTION_DOWN.code : WoxDirectionEnum.WOX_DIRECTION_UP.code,
-                  );
-                }
-              },
+              onPointerSignal: _handlePointerSignal,
+              onPointerPanZoomUpdate: _handlePointerPanZoomUpdate,
               child: Obx(
                 () =>
                     controller.items.isEmpty && controller.filterBoxController.text.isNotEmpty
