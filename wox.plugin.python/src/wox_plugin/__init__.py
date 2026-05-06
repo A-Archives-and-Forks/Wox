@@ -93,7 +93,8 @@ Methods for interacting with Wox:
 
 #### Preview Models (`models/preview.py`)
 - `WoxPreview`: Preview content for results
-- `WoxPreviewType`: MARKDOWN, TEXT, IMAGE, URL, FILE, REMOTE
+- `WoxPreviewFileListData`: Structured data for file_list previews
+- `WoxPreviewType`: MARKDOWN, TEXT, IMAGE, URL, FILE, FILE_LIST, REMOTE
 - `WoxPreviewScrollPosition`: Control initial scroll position
 
 #### Setting Models (`models/setting.py`)
@@ -215,7 +216,7 @@ from .models.context import Context
 from .models.image import WoxImage, WoxImageType
 from .models.log import LogLevel
 from .models.mru import MRUData, MRURestoreCallback
-from .models.preview import WoxPreview, WoxPreviewScrollPosition, WoxPreviewType
+from .models.preview import WoxPreview, WoxPreviewFileListData, WoxPreviewScrollPosition, WoxPreviewType
 from .models.query import (
     ChangeQueryParam,
     CopyParams,
@@ -277,6 +278,7 @@ __all__: List[str] = [
     "Result",
     "WoxImage",
     "WoxPreview",
+    "WoxPreviewFileListData",
     "LogLevel",
     "ResultTail",
     "ResultAction",
@@ -319,6 +321,7 @@ __all__: List[str] = [
     "WoxImageType",
     # Preview
     "WoxPreview",
+    "WoxPreviewFileListData",
     "WoxPreviewType",
     "WoxPreviewScrollPosition",
     # Result

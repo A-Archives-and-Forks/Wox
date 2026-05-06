@@ -296,7 +296,7 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
         // Core sends selection-file previews as JSON so this renderer can make
         // file paths scannable. The old markdown fallback is still handled by
         // the catch branch to keep malformed payloads debuggable.
-        contentWidget = WoxFileListPreviewView(data: WoxPreviewFileList.fromPreviewData(widget.woxPreview.previewData), woxTheme: widget.woxTheme);
+        contentWidget = WoxFileListPreviewView(data: WoxPreviewFileListData.fromPreviewData(widget.woxPreview.previewData), woxTheme: widget.woxTheme);
       } catch (e) {
         contentWidget = buildText("Invalid file list preview data: $e");
       }

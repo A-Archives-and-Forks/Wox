@@ -1,17 +1,26 @@
 import 'dart:convert';
 
-class WoxPreviewFileList {
+class WoxPreviewFileListData {
   final List<String> filePaths;
 
-  const WoxPreviewFileList({required this.filePaths});
+  const WoxPreviewFileListData({required this.filePaths});
 
-  factory WoxPreviewFileList.fromPreviewData(String previewData) {
+  factory WoxPreviewFileListData.fromJson(Map<String, dynamic> json) {
+    final rawPaths = json["filePaths"];
+
+    // The renderer consumes the same public preview contract as SDK plugins.
+    // Older code decoded this shape inline, which hid the expected field names
+    // from readers and made malformed payload handling inconsistent.
+    return WoxPreviewFileListData(filePaths: rawPaths is List ? rawPaths.map((item) => item.toString()).toList() : const []);
+  }
+
+  factory WoxPreviewFileListData.fromPreviewData(String previewData) {
     final decoded = jsonDecode(previewData);
-    final rawPaths = decoded is Map<String, dynamic> ? decoded["filePaths"] : null;
 
-    // File-list preview data is intentionally structured instead of markdown so
-    // the UI can preserve filename, directory, and type affordances. Unknown
-    // payloads degrade to an empty list instead of throwing from the renderer.
-    return WoxPreviewFileList(filePaths: rawPaths is List ? rawPaths.map((item) => item.toString()).toList() : const []);
+    return WoxPreviewFileListData.fromJson(decoded is Map<String, dynamic> ? decoded : const {});
+  }
+
+  Map<String, dynamic> toJson() {
+    return {"filePaths": filePaths};
   }
 }

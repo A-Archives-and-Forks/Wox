@@ -15,7 +15,6 @@
     "@babel/cli": "^7.22.15",
     "@babel/core": "^7.22.20",
     "@babel/preset-env": "^7.22.20",
-    "babel-plugin-transform-import-meta": "^2.2.1",
     "@types/node": "^20.4.1",
     "@types/promise-deferred": "^2.0.2",
     "@types/uuid": "^9.0.3",
@@ -23,6 +22,7 @@
     "@typescript-eslint/eslint-plugin": "^6.6.0",
     "@typescript-eslint/parser": "^6.6.0",
     "@vercel/ncc": "^0.38.0",
+    "babel-plugin-transform-import-meta": "^2.2.1",
     "browserify": "^17.0.0",
     "eslint": "^8.49.0",
     "eslint-config-prettier": "9.0.0",
@@ -30,7 +30,7 @@
     "typescript": "^5.2.2"
   },
   "dependencies": {
-    "@wox-launcher/wox-plugin": "^0.0.124",
+    "@wox-launcher/wox-plugin": "^0.0.130",
     "dayjs": "^1.11.13",
     "promise-deferred": "^2.0.4",
     "winston": "^3.17.0",

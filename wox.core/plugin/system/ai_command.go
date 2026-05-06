@@ -242,9 +242,10 @@ func (c *Plugin) buildSelectionPreview(ctx context.Context, command commandSetti
 
 	if query.Selection.Type == selection.SelectionTypeFile {
 		previewProperties["i18n:plugin_ai_command_preview_selected_files"] = fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "selection_files_count_value"), len(query.Selection.FilePaths))
-		previewJson, err := json.Marshal(struct {
-			FilePaths []string `json:"filePaths"`
-		}{FilePaths: query.Selection.FilePaths})
+		// AI commands share the same file-list preview contract as normal
+		// selection results. The earlier anonymous struct duplicated the JSON
+		// shape and made SDK docs/types easy to drift from this core payload.
+		previewJson, err := json.Marshal(plugin.WoxPreviewFileListData{FilePaths: query.Selection.FilePaths})
 		if err != nil {
 			// File selections still reuse the generic file-list preview so vision
 			// commands get the same structured path layout as other selection

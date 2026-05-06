@@ -1514,8 +1514,23 @@ export interface WoxImage {
  * - `image`: Image preview
  * - `url`: Website URL preview
  * - `file`: File preview
+ * - `file_list`: Structured file-list preview
  */
-export type WoxPreviewType = "markdown" | "text" | "image" | "url" | "file"
+export type WoxPreviewType = "markdown" | "text" | "image" | "url" | "file" | "file_list"
+
+/**
+ * Structured data for `file_list` previews.
+ *
+ * Plugins should JSON.stringify this object into WoxPreview.PreviewData. The
+ * named SDK type keeps plugin payloads aligned with the core and UI renderer
+ * instead of relying on hand-written ad-hoc JSON shapes.
+ */
+export interface WoxPreviewFileListData {
+  /**
+   * Absolute or plugin-resolved file paths to render in the file-list preview.
+   */
+  filePaths: string[]
+}
 
 /**
  * Preview panel content for a result.
@@ -1545,6 +1560,13 @@ export type WoxPreviewType = "markdown" | "text" | "image" | "url" | "file"
  *   PreviewData: "https://github.com/Wox-launcher/Wox",
  *   PreviewProperties: {}
  * }
+ *
+ * // File-list preview
+ * {
+ *   PreviewType: "file_list",
+ *   PreviewData: JSON.stringify({ filePaths: ["/path/to/a.txt", "/path/to/b.txt"] } satisfies WoxPreviewFileListData),
+ *   PreviewProperties: {}
+ * }
  * ```
  */
 export interface WoxPreview {
@@ -1563,6 +1585,7 @@ export interface WoxPreview {
    * - `image`: Image URL, path, or base64 data
    * - `url`: Website URL to preview
    * - `file`: File path to preview
+   * - `file_list`: JSON string encoded from WoxPreviewFileListData
    */
   PreviewData: string
   /**

@@ -6,7 +6,7 @@ import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/utils/color_util.dart';
 
 class WoxFileListPreviewView extends StatelessWidget {
-  final WoxPreviewFileList data;
+  final WoxPreviewFileListData data;
   final WoxTheme woxTheme;
 
   const WoxFileListPreviewView({super.key, required this.data, required this.woxTheme});

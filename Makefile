@@ -1,7 +1,13 @@
-.PHONY: build clean host _bundle_mac_app plugins help dev test test-all test-calculator test-converter test-plugin test-time test-network test-quick test-legacy only_test check_deps release appimage smoke www
+.PHONY: build clean host _bundle_mac_app plugins help dev sdk _update_sdk_versions _sync_sdk_versions test test-all test-calculator test-converter test-plugin test-time test-network test-quick test-legacy only_test check_deps release appimage smoke www
 
 SMOKE_FILTER := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 SQLITE_BUILD_TAGS ?= sqlite_fts5
+CURRENT_NODEJS_SDK_VERSION := $(shell node -p "require('./wox.plugin.nodejs/package.json').version")
+CURRENT_PYTHON_SDK_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' wox.plugin.python/pyproject.toml)
+NEXT_NODEJS_SDK_VERSION := $(shell node -e "const parts='$(CURRENT_NODEJS_SDK_VERSION)'.split('.').map(Number); if (parts.length !== 3 || parts.some(Number.isNaN)) process.exit(1); parts[2] += 1; console.log(parts.join('.'))")
+NEXT_PYTHON_SDK_VERSION := $(shell node -e "const parts='$(CURRENT_PYTHON_SDK_VERSION)'.split('.').map(Number); if (parts.length !== 3 || parts.some(Number.isNaN)) process.exit(1); parts[2] += 1; console.log(parts.join('.'))")
+SYNC_NODEJS_SDK_VERSION ?= $(NEXT_NODEJS_SDK_VERSION)
+SYNC_PYTHON_SDK_VERSION ?= $(NEXT_PYTHON_SDK_VERSION)
 
 # Determine the current platform
 ifeq ($(OS),Windows_NT)
@@ -43,6 +49,7 @@ help:
 	@echo "  test       Run tests"
 	@echo "  build      Build all components"
 	@echo "  smoke      Run the desktop smoke E2E flow"
+	@echo "  sdk        Bump SDK patch versions, publish SDKs, sync hosts, then run dev"
 	@echo "  appimage   Build Linux AppImage"
 	@echo "  plugins    Update plugin store"
 	@echo "  www        Run docs dev server"
@@ -87,6 +94,29 @@ dev: _check_deps ensure-resources
 host:
 	$(MAKE) -C wox.plugin.host.nodejs build
 	$(MAKE) -C wox.plugin.host.python build
+
+# SDK releases bump both SDK patch versions before publish because both npm and
+# PyPI reject already-published versions. The host dependency update still waits
+# until both publishes succeed so bundled hosts never point at an SDK release
+# that failed partway through the workflow.
+sdk: _update_sdk_versions
+	$(MAKE) -C wox.plugin.nodejs publish
+	$(MAKE) -C wox.plugin.python publish
+	$(MAKE) _sync_sdk_versions SYNC_NODEJS_SDK_VERSION=$(NEXT_NODEJS_SDK_VERSION) SYNC_PYTHON_SDK_VERSION=$(NEXT_PYTHON_SDK_VERSION)
+
+_update_sdk_versions:
+	@echo "Updating Node.js SDK version from $(CURRENT_NODEJS_SDK_VERSION) to $(NEXT_NODEJS_SDK_VERSION)"
+	# Use direct JSON edits here so the release flow only changes the version field instead of letting a package-manager helper normalize unrelated package.json content.
+	cd wox.plugin.nodejs && node -e "const fs=require('fs'); const p='package.json'; const data=JSON.parse(fs.readFileSync(p,'utf8')); data.version='$(NEXT_NODEJS_SDK_VERSION)'; fs.writeFileSync(p, JSON.stringify(data, null, 2) + '\n');"
+	@echo "Updating Python SDK version from $(CURRENT_PYTHON_SDK_VERSION) to $(NEXT_PYTHON_SDK_VERSION)"
+	cd wox.plugin.python && perl -0pi -e 's/^version = "[^"]+"/version = "$(NEXT_PYTHON_SDK_VERSION)"/m' pyproject.toml
+
+_sync_sdk_versions:
+	@echo "Syncing Node.js SDK version $(SYNC_NODEJS_SDK_VERSION) to Node.js host"
+	# The sync target receives the parent make's computed release version, preventing recursive make from bumping again after SDK files have already been updated.
+	cd wox.plugin.host.nodejs && node -e "const fs=require('fs'); const p='package.json'; const data=JSON.parse(fs.readFileSync(p,'utf8')); data.dependencies['@wox-launcher/wox-plugin']='^$(SYNC_NODEJS_SDK_VERSION)'; fs.writeFileSync(p, JSON.stringify(data, null, 2) + '\n');"
+	@echo "Syncing Python SDK version $(SYNC_PYTHON_SDK_VERSION) to Python host"
+	cd wox.plugin.host.python && perl -0pi -e 's/"wox-plugin==[^"]+"/"wox-plugin==$(SYNC_PYTHON_SDK_VERSION)"/' pyproject.toml
 
 # Ensure required resource directories exist with dummy files for go:embed
 ensure-resources:

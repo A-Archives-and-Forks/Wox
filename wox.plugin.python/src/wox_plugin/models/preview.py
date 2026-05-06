@@ -7,10 +7,10 @@ Previews allow plugins to show detailed information, images, files, and web
 content in a dedicated preview panel when a result is selected.
 """
 
-from typing import Dict
 from dataclasses import dataclass, field
 from enum import Enum
 import json
+from typing import Any, Dict, List
 
 
 class WoxPreviewType(str, Enum):
@@ -23,6 +23,7 @@ class WoxPreviewType(str, Enum):
     - IMAGE: Display an image (using WoxImage)
     - URL: Load and display a web page
     - FILE: Display a file (various formats supported)
+    - FILE_LIST: Display multiple file paths using WoxPreviewFileListData JSON
     - REMOTE: Load preview data from a remote URL
     """
 
@@ -106,6 +107,22 @@ class WoxPreviewType(str, Enum):
         )
     """
 
+    FILE_LIST = "file_list"
+    """
+    Display a structured list of files.
+
+    The preview_data should be WoxPreviewFileListData.to_json(). This public
+    data object keeps SDK plugins aligned with the core file-list renderer
+    instead of requiring each plugin to hand-write the JSON field names.
+
+    Example:
+        data = WoxPreviewFileListData(file_paths=["/path/to/a.txt", "/path/to/b.txt"])
+        preview = WoxPreview(
+            preview_type=WoxPreviewType.FILE_LIST,
+            preview_data=data.to_json()
+        )
+    """
+
     REMOTE = "remote"
     """
     Load preview data from a remote URL.
@@ -120,6 +137,44 @@ class WoxPreviewType(str, Enum):
             preview_data="https://api.example.com/preview/123"
         )
     """
+
+
+@dataclass
+class WoxPreviewFileListData:
+    """
+    Structured data for WoxPreviewType.FILE_LIST.
+
+    The JSON field is intentionally `filePaths` because the core and Flutter
+    renderer already use that lower-camel contract. A named SDK model prevents
+    plugins from drifting into alternate payload shapes such as raw arrays.
+    """
+
+    file_paths: List[str] = field(default_factory=list)
+    """
+    Absolute or plugin-resolved file paths to render in the file-list preview.
+    """
+
+    def to_json(self) -> str:
+        """
+        Convert to the JSON payload expected by WoxPreview.preview_data.
+        """
+        return json.dumps({"filePaths": self.file_paths})
+
+    @classmethod
+    def from_json(cls, json_data: Dict[str, Any]) -> "WoxPreviewFileListData":
+        """
+        Create file-list preview data from a decoded JSON object.
+        """
+        raw_paths = json_data.get("filePaths", [])
+        return cls(file_paths=[str(item) for item in raw_paths] if isinstance(raw_paths, list) else [])
+
+    @classmethod
+    def from_preview_data(cls, preview_data: str) -> "WoxPreviewFileListData":
+        """
+        Decode the string stored in WoxPreview.preview_data.
+        """
+        decoded = json.loads(preview_data)
+        return cls.from_json(decoded if isinstance(decoded, dict) else {})
 
 
 class WoxPreviewScrollPosition(str, Enum):
@@ -191,6 +246,7 @@ class WoxPreview:
     - IMAGE: WoxImage serialized as "type:value" string
     - URL: HTTP/HTTPS URL
     - FILE: File system path
+    - FILE_LIST: WoxPreviewFileListData JSON string
     - REMOTE: URL that returns WoxPreview JSON
     """
 

@@ -1124,12 +1124,11 @@ func (m *Manager) formatFileListPreview(ctx context.Context, filePaths []string)
 	return sb.String()
 }
 
-type fileListPreviewData struct {
-	FilePaths []string `json:"filePaths"`
-}
-
 func (m *Manager) buildFileListPreviewData(ctx context.Context, filePaths []string) string {
-	previewData, err := json.Marshal(fileListPreviewData{FilePaths: filePaths})
+	// Selection file previews now use the shared SDK data contract. The previous
+	// local struct matched only this function, which made later SDK exposure easy
+	// to drift from the payload that core already emits.
+	previewData, err := json.Marshal(WoxPreviewFileListData{FilePaths: filePaths})
 	if err != nil {
 		// File-list previews used to be markdown strings, which forced the UI to
 		// render paths as generic text. Fall back to that stable legacy format if
