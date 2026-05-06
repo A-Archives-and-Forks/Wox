@@ -292,6 +292,14 @@ func (s *Store) Install(ctx context.Context, manifest StorePluginManifest) error
 func (s *Store) InstallWithProgress(ctx context.Context, manifest StorePluginManifest, progressCallback InstallProgressCallback) error {
 	logger.Info(ctx, fmt.Sprintf("start to install plugin %s(%s)", manifest.GetName(ctx), manifest.Version))
 
+	// Store installs should reject incompatible manifests before runtime startup
+	// or download work. The previous flow kept MinWoxVersion as display metadata
+	// only, which allowed users to install plugins that this Wox build cannot run.
+	if err := ensureWoxVersionSupported(manifest.GetName(ctx), manifest.MinWoxVersion); err != nil {
+		logger.Error(ctx, fmt.Sprintf("failed to install plugin %s(%s): %s", manifest.GetName(ctx), manifest.Version, err.Error()))
+		return err
+	}
+
 	if err := GetPluginManager().EnsureHostStarted(ctx, manifest.Runtime); err != nil {
 		logger.Error(ctx, fmt.Sprintf("failed to prepare %s runtime for plugin %s(%s): %s", manifest.Runtime, manifest.GetName(ctx), manifest.Version, err.Error()))
 		return fmt.Errorf("failed to prepare %s runtime for plugin %s(%s): %w", manifest.Runtime, manifest.GetName(ctx), manifest.Version, err)
@@ -670,6 +678,11 @@ func (s *Store) ParsePluginManifestFromLocal(ctx context.Context, filePath strin
 	if pluginMetadata.Id == "" {
 		return Metadata{}, fmt.Errorf("plugin.json not found or invalid")
 	}
+	if pluginMetadata.MinWoxVersion == "" {
+		// Local packages created before MinWoxVersion was enforced should keep the
+		// historical compatibility floor instead of failing with an empty version.
+		pluginMetadata.MinWoxVersion = defaultMinWoxVersion
+	}
 
 	return pluginMetadata, nil
 }
@@ -681,6 +694,13 @@ func (s *Store) InstallFromLocal(ctx context.Context, filePath string) error {
 func (s *Store) InstallFromLocalWithProgress(ctx context.Context, filePath string, progressCallback InstallProgressCallback) error {
 	pluginMetadata, err := s.ParsePluginManifestFromLocal(ctx, filePath)
 	if err != nil {
+		return err
+	}
+
+	// Local package installs must be checked before unpacking so an incompatible
+	// archive cannot replace an existing plugin or leave a partial install behind.
+	if err := ensureWoxVersionSupported(pluginMetadata.GetName(ctx), pluginMetadata.MinWoxVersion); err != nil {
+		logger.Error(ctx, fmt.Sprintf("failed to install local plugin %s(%s): %s", pluginMetadata.GetName(ctx), pluginMetadata.Version, err.Error()))
 		return err
 	}
 

@@ -353,6 +353,13 @@ func (m *Manager) ReloadPlugin(ctx context.Context, metadata Metadata) error {
 }
 
 func (m *Manager) loadHostPlugin(ctx context.Context, host Host, metadata Metadata) error {
+	// Plugin loading is the final shared gate for startup, local installs, and dev
+	// reloads. Install-time checks can be bypassed by existing files on disk, so
+	// keep this guard here to prevent incompatible plugins from entering runtime hosts.
+	if err := ensureWoxVersionSupported(metadata.GetName(ctx), metadata.MinWoxVersion); err != nil {
+		return err
+	}
+
 	loadStartTimestamp := util.GetSystemTimestamp()
 	plugin, loadErr := host.LoadPlugin(ctx, metadata, metadata.Directory)
 	if loadErr != nil {
@@ -707,7 +714,10 @@ func (m *Manager) validateAndSetScriptMetadataDefaults(metadata Metadata) (Metad
 		metadata.Icon = "emoji:📝"
 	}
 	if metadata.MinWoxVersion == "" {
-		metadata.MinWoxVersion = "2.0.0"
+		// Script plugins can omit MinWoxVersion in their inline metadata. Use the
+		// same default as packaged plugins so the later compatibility check has a
+		// concrete semantic floor instead of treating the field as absent.
+		metadata.MinWoxVersion = defaultMinWoxVersion
 	}
 	if metadata.Version == "" {
 		metadata.Version = "1.0.0"
