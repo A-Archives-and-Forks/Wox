@@ -795,5 +795,37 @@
         "plugin_description": "截图或读取图片，使用在线 OCR 识别文字，并发送给 LuxTranslate 翻译"
       }
     }
+  },
+  {
+    "Id": "ea521bb8-4414-44be-bf42-4b2851ae32ad",
+    "Name": "i18n:plugin_name",
+    "Author": "qianlifeng",
+    "Version": "0.0.1",
+    "MinWoxVersion": "2.0.0",
+    "Runtime": "nodejs",
+    "Description": "i18n:plugin_description",
+    "IconUrl": "https://raw.githubusercontent.com/qianlifeng/Wox.Plugin.Rimage/main/images/app.svg",
+    "Website": "https://github.com/qianlifeng/Wox.Plugin.Rimage",
+    "DownloadUrl": "https://github.com/qianlifeng/Wox.Plugin.Rimage/releases/latest/download/wox.plugin.rimage.wox",
+    "ScreenshotUrls": [
+      "https://raw.githubusercontent.com/qianlifeng/Wox.Plugin.Rimage/main/screenshot.png"
+    ],
+    "SupportedOS": [
+      "Windows",
+      "Darwin",
+      "Linux"
+    ],
+    "DateCreated": "2026-05-06 19:48:30",
+    "DateUpdated": "2026-05-06 19:48:30",
+    "I18n": {
+      "en_US": {
+        "plugin_name": "RImage",
+        "plugin_description": "Compress selected images with rimage"
+      },
+      "zh_CN": {
+        "plugin_name": "RImage",
+        "plugin_description": "使用 rimage 压缩选中的图片"
+      }
+    }
   }
 ]
