@@ -581,23 +581,33 @@ class GridLayoutParams {
   late bool showTitle; // whether to show title below icon
   late double itemPadding; // padding inside each item
   late double itemMargin; // margin outside each item (all sides)
+  late double aspectRatio; // width / height for each grid visual item
   late List<String> commands; // commands to enable grid layout for, empty means all
 
-  GridLayoutParams({required this.columns, required this.showTitle, required this.itemPadding, required this.itemMargin, required this.commands});
+  GridLayoutParams({required this.columns, required this.showTitle, required this.itemPadding, required this.itemMargin, required this.aspectRatio, required this.commands});
 
   GridLayoutParams.fromJson(Map<String, dynamic> json) {
     columns = json['Columns'] ?? 8;
     showTitle = json['ShowTitle'] ?? false;
-    itemPadding = (json['ItemPadding'] ?? 12).toDouble();
+    // Behavior change: the grid active state is now an outline, so missing
+    // ItemPadding should mean no extra inner gap. The old 12px fallback was
+    // tied to filled-background selection and made media/emoji grids look
+    // padded even when plugin metadata omitted ItemPadding.
+    itemPadding = (json['ItemPadding'] ?? 0).toDouble();
     itemMargin = (json['ItemMargin'] ?? 6).toDouble();
+    aspectRatio = (json['AspectRatio'] ?? 1.0).toDouble();
+    if (aspectRatio <= 0) {
+      aspectRatio = 1.0;
+    }
     commands = json['Commands'] != null ? List<String>.from(json['Commands']) : [];
   }
 
   GridLayoutParams.empty() {
     columns = 0;
     showTitle = false;
-    itemPadding = 12;
+    itemPadding = 0;
     itemMargin = 6;
+    aspectRatio = 1.0;
     commands = [];
   }
 }

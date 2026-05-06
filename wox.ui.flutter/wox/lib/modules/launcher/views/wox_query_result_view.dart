@@ -122,8 +122,10 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
       ),
       child: Obx(() {
         if (controller.isGridLayout.value) {
+          final gridLayoutParams = controller.gridLayoutParams.value;
           return WoxGridView(
             controller: controller.resultGridViewController,
+            gridLayoutParams: gridLayoutParams,
             maxHeight: controller.getMaxResultListViewHeight(),
             onItemTapped: () {
               controller.hideActionPanel(const UuidV4().generate());

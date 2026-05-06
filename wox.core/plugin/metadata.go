@@ -141,6 +141,27 @@ func parseFeatureIntParam(value any) (int, error) {
 	}
 }
 
+func parseFeatureFloatParam(value any) (float64, error) {
+	switch v := value.(type) {
+	case int:
+		return float64(v), nil
+	case int32:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case float64:
+		return v, nil
+	case string:
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, err
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("unsupported type %T", value)
+	}
+}
+
 func (m *Metadata) GetFeatureParamsForDebounce() (MetadataFeatureParamsDebounce, error) {
 	for _, feature := range m.Features {
 		if strings.EqualFold(feature.Name, MetadataFeatureDebounce) {
@@ -398,8 +419,9 @@ type MetadataFeatureParamsResultPreviewWidthRatio struct {
 type MetadataFeatureParamsGridLayout struct {
 	Columns     int      // number of columns per row, default 8
 	ShowTitle   bool     // whether to show title below icon, default false
-	ItemPadding int      // padding inside each item, default 12
+	ItemPadding int      // padding inside each item, default 0
 	ItemMargin  int      // margin outside each item (all sides), default 6
+	AspectRatio float64  // width / height for each grid visual item, default 1.0
 	Commands    []string // commands to enable grid layout for, empty means all commands
 }
 
@@ -442,8 +464,9 @@ func (m *Metadata) GetFeatureParamsForGridLayout() (MetadataFeatureParamsGridLay
 			params := MetadataFeatureParamsGridLayout{
 				Columns:     8,
 				ShowTitle:   false,
-				ItemPadding: 12,
+				ItemPadding: 0,
 				ItemMargin:  6,
+				AspectRatio: 1.0,
 				Commands:    []string{},
 			}
 
@@ -478,6 +501,17 @@ func (m *Metadata) GetFeatureParamsForGridLayout() (MetadataFeatureParamsGridLay
 					return MetadataFeatureParamsGridLayout{}, fmt.Errorf("gridLayout feature ItemMargin param is not a valid number: %s", err.Error())
 				}
 				params.ItemMargin = margin
+			}
+
+			if v, ok := feature.Params["AspectRatio"]; ok {
+				aspectRatio, err := parseFeatureFloatParam(v)
+				if err != nil {
+					return MetadataFeatureParamsGridLayout{}, fmt.Errorf("gridLayout feature AspectRatio param is not a valid number: %s", err.Error())
+				}
+				if aspectRatio <= 0 {
+					return MetadataFeatureParamsGridLayout{}, fmt.Errorf("gridLayout feature AspectRatio param is not a valid number: must be greater than 0")
+				}
+				params.AspectRatio = aspectRatio
 			}
 
 			if v, ok := feature.Params["Commands"]; ok {

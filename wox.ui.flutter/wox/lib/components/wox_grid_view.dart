@@ -11,6 +11,7 @@ import 'package:wox/utils/color_util.dart';
 
 class WoxGridView extends StatelessWidget {
   final WoxGridController<WoxQueryResult> controller;
+  final GridLayoutParams gridLayoutParams;
   final double maxHeight;
   final VoidCallback? onItemTapped;
   final void Function(String traceId, WoxListItem<WoxQueryResult> item)? onItemSecondaryTapped;
@@ -18,8 +19,17 @@ class WoxGridView extends StatelessWidget {
 
   // Height for title text (fontSize 12 + some extra)
   static const double titleHeight = 18.0;
+  static const double focusFrameWidth = 4.0;
 
-  const WoxGridView({super.key, required this.controller, required this.maxHeight, this.onItemTapped, this.onItemSecondaryTapped, this.onRowHeightChanged});
+  const WoxGridView({
+    super.key,
+    required this.controller,
+    required this.gridLayoutParams,
+    required this.maxHeight,
+    this.onItemTapped,
+    this.onItemSecondaryTapped,
+    this.onRowHeightChanged,
+  });
 
   void _scrollByPointerDelta(double deltaY) {
     if (!controller.scrollController.hasClients) {
@@ -51,20 +61,24 @@ class WoxGridView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final columns = controller.gridLayoutParams.columns;
-    final showTitle = controller.gridLayoutParams.showTitle;
-    final itemPadding = controller.gridLayoutParams.itemPadding;
-    final itemMargin = controller.gridLayoutParams.itemMargin;
+    final columns = gridLayoutParams.columns;
+    final showTitle = gridLayoutParams.showTitle;
+    final itemPadding = gridLayoutParams.itemPadding;
+    final itemMargin = gridLayoutParams.itemMargin;
+    final aspectRatio = gridLayoutParams.aspectRatio;
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Calculate icon size based on available width, columns, and margins
-        // Use floor to avoid floating point precision overflow
+        // Feature change: grid items are no longer always square. The old
+        // icon-only math made wallpaper thumbnails float inside large square
+        // cells, so the row height now comes from the declared visual ratio
+        // while the default 1.0 ratio preserves emoji and app grids.
         final availableWidth = constraints.maxWidth;
         final cellWidth = columns > 0 ? (availableWidth / columns).floorToDouble() : 48.0;
-        final iconSize = cellWidth - (itemPadding + itemMargin) * 2;
-        // Cell height includes icon + padding/margin, and title height if showing title
-        final cellHeight = cellWidth + (showTitle ? titleHeight : 0);
+        final contentWidth = (cellWidth - (itemPadding + itemMargin) * 2).clamp(1.0, double.infinity).toDouble();
+        final contentHeight = contentWidth / aspectRatio;
+        // Cell height includes visual content + padding/margin, and title height if showing title.
+        final cellHeight = contentHeight + (itemPadding + itemMargin) * 2 + (showTitle ? titleHeight : 0);
 
         // Update controller with the calculated row height for scroll calculations
         final heightChanged = controller.updateRowHeight(cellHeight);
@@ -80,7 +94,7 @@ class WoxGridView extends StatelessWidget {
             child: Listener(
               onPointerSignal: _handlePointerSignal,
               onPointerPanZoomUpdate: _handlePointerPanZoomUpdate,
-              child: Obx(() => _buildGridWithGroups(cellHeight, iconSize, columns, showTitle, itemPadding, itemMargin)),
+              child: Obx(() => _buildGridWithGroups(cellHeight, contentWidth, contentHeight, columns, showTitle, itemPadding, itemMargin)),
             ),
           ),
         );
@@ -88,7 +102,7 @@ class WoxGridView extends StatelessWidget {
     );
   }
 
-  Widget _buildGridWithGroups(double cellSize, double iconSize, int columns, bool showTitle, double itemPadding, double itemMargin) {
+  Widget _buildGridWithGroups(double cellSize, double contentWidth, double contentHeight, int columns, bool showTitle, double itemPadding, double itemMargin) {
     final items = controller.items;
     // Always keep scrollController attached so Scrollbar never loses its ScrollPosition.
     if (items.isEmpty) return SingleChildScrollView(controller: controller.scrollController, child: const SizedBox.shrink());
@@ -113,7 +127,7 @@ class WoxGridView extends StatelessWidget {
         }
 
         // Build grid row
-        rows.add(_buildGridRow(rowIndices, cellSize, iconSize, showTitle, columns, itemPadding, itemMargin));
+        rows.add(_buildGridRow(rowIndices, cellSize, contentWidth, contentHeight, showTitle, columns, itemPadding, itemMargin));
       }
     }
 
@@ -134,19 +148,21 @@ class WoxGridView extends StatelessWidget {
     );
   }
 
-  Widget _buildGridRow(List<int> indices, double cellSize, double iconSize, bool showTitle, int columns, double itemPadding, double itemMargin) {
+  Widget _buildGridRow(List<int> indices, double cellSize, double contentWidth, double contentHeight, bool showTitle, int columns, double itemPadding, double itemMargin) {
     return Row(
       children: [
         for (int i = 0; i < columns; i++)
           Expanded(
             child:
-                i < indices.length ? SizedBox(height: cellSize, child: _buildGridItemWidget(indices[i], iconSize, showTitle, itemPadding, itemMargin)) : SizedBox(height: cellSize),
+                i < indices.length
+                    ? SizedBox(height: cellSize, child: _buildGridItemWidget(indices[i], contentWidth, contentHeight, showTitle, itemPadding, itemMargin))
+                    : SizedBox(height: cellSize),
           ),
       ],
     );
   }
 
-  Widget _buildGridItemWidget(int index, double iconSize, bool showTitle, double itemPadding, double itemMargin) {
+  Widget _buildGridItemWidget(int index, double contentWidth, double contentHeight, bool showTitle, double itemPadding, double itemMargin) {
     final item = controller.items[index];
 
     return MouseRegion(
@@ -182,31 +198,64 @@ class WoxGridView extends StatelessWidget {
           controller.onItemActive?.call(traceId, item.value);
           onItemSecondaryTapped?.call(traceId, item.value);
         },
-        child: Obx(() => _buildGridItem(item.value, index, iconSize, showTitle, itemPadding, itemMargin)),
+        child: Obx(() => _buildGridItem(item.value, index, contentWidth, contentHeight, showTitle, itemPadding, itemMargin)),
       ),
     );
   }
 
-  Widget _buildGridItem(WoxListItem<WoxQueryResult> item, int index, double iconSize, bool showTitle, double itemPadding, double itemMargin) {
+  Widget _buildGridItem(WoxListItem<WoxQueryResult> item, int index, double contentWidth, double contentHeight, bool showTitle, double itemPadding, double itemMargin) {
     final isActive = controller.activeIndex.value == index;
     final isHovered = controller.hoveredIndex.value == index;
-
+    final activeColor = safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemActiveBackgroundColor);
+    final frameColor =
+        isActive
+            ? activeColor
+            : isHovered
+            ? activeColor.withValues(alpha: 0.45)
+            : Colors.transparent;
+    const frameWidth = focusFrameWidth;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
           margin: EdgeInsets.all(itemMargin),
           padding: EdgeInsets.all(itemPadding),
-          decoration: BoxDecoration(
-            color:
-                isActive
-                    ? safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemActiveBackgroundColor)
-                    : isHovered
-                    ? safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemActiveBackgroundColor).withValues(alpha: 0.5)
-                    : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
+          // Bug fix: the focus frame is paint-only and must not be part of the
+          // item box model. The previous version reserved focusFrameWidth in
+          // layout, so ItemPadding=0 still looked padded and emoji thumbnails
+          // shrank when selection moved. Painting the frame outside the padded
+          // content keeps ItemPadding as the only content gap while preserving a
+          // stable active/hover outline.
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: WoxImageView(
+                  woxImage: item.icon,
+                  width: contentWidth,
+                  height: contentHeight,
+                  fit: (gridLayoutParams.aspectRatio - 1.0).abs() < 0.01 ? BoxFit.contain : BoxFit.cover,
+                ),
+              ),
+              Positioned(
+                left: -itemPadding,
+                top: -itemPadding,
+                right: -itemPadding,
+                bottom: -itemPadding,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: ShapeDecoration(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        side: BorderSide(color: frameColor, width: frameWidth, strokeAlign: BorderSide.strokeAlignOutside),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-          child: WoxImageView(woxImage: item.icon, width: iconSize, height: iconSize),
         ),
         if (showTitle)
           Padding(

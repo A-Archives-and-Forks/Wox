@@ -15,8 +15,13 @@ class WoxImageView extends StatelessWidget {
   final WoxImage woxImage;
   final double? width;
   final double? height;
+  // Feature change: callers such as the aspect-ratio grid need cover-style
+  // thumbnails, while existing icon surfaces must keep the previous contain
+  // behavior. Owning the fit here avoids duplicating image-type branches in
+  // every caller that renders a WoxImage.
+  final BoxFit fit;
 
-  const WoxImageView({super.key, required this.woxImage, this.width, this.height});
+  const WoxImageView({super.key, required this.woxImage, this.width, this.height, this.fit = BoxFit.contain});
 
   bool _isSvgUrl(String url) {
     final uri = Uri.tryParse(url);
@@ -55,7 +60,7 @@ class WoxImageView extends StatelessWidget {
           woxImage.imageData,
           width: width,
           height: height,
-          fit: BoxFit.contain,
+          fit: fit,
           placeholderBuilder: (context) => _buildLoadingPlaceholder(),
           errorBuilder: (context, error, stackTrace) => _buildErrorPlaceholder(error, stackTrace),
         );
@@ -64,7 +69,7 @@ class WoxImageView extends StatelessWidget {
           woxImage.imageData,
           width: width,
           height: height,
-          fit: BoxFit.contain,
+          fit: fit,
           gaplessPlayback: true,
           errorBuilder: (context, error, stackTrace) => _buildErrorPlaceholder(error, stackTrace),
           loadingBuilder: (context, child, loadingProgress) {
@@ -77,13 +82,13 @@ class WoxImageView extends StatelessWidget {
       if (woxImage.cachedFile == null) {
         content = const SizedBox(width: 24, height: 24);
       } else if (_isSvgFile(woxImage.imageData)) {
-        content = SvgPicture.file(woxImage.cachedFile!, width: width, height: height, fit: BoxFit.contain, placeholderBuilder: (context) => _buildLoadingPlaceholder());
+        content = SvgPicture.file(woxImage.cachedFile!, width: width, height: height, fit: fit, placeholderBuilder: (context) => _buildLoadingPlaceholder());
       } else {
         content = Image.file(
           woxImage.cachedFile!,
           width: width,
           height: height,
-          fit: BoxFit.contain,
+          fit: fit,
           gaplessPlayback: true,
           errorBuilder: (context, error, stackTrace) => SizedBox(width: width, height: height),
         );
@@ -93,14 +98,7 @@ class WoxImageView extends StatelessWidget {
     } else if (woxImage.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_EMOJI.code) {
       // Use FittedBox to uniformly scale the emoji to fit the container,
       // which works correctly across all platforms and display sizes.
-      content = SizedBox(
-        width: width,
-        height: height,
-        child: FittedBox(
-          fit: BoxFit.contain,
-          child: Text(woxImage.imageData, style: const TextStyle(fontSize: 100, height: 1.0)),
-        ),
-      );
+      content = SizedBox(width: width, height: height, child: FittedBox(fit: BoxFit.contain, child: Text(woxImage.imageData, style: const TextStyle(fontSize: 100, height: 1.0))));
     } else if (woxImage.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_LOTTIE.code) {
       final bytes = utf8.encode(woxImage.imageData);
       content = Lottie.memory(bytes, width: width, height: height);
@@ -111,7 +109,7 @@ class WoxImageView extends StatelessWidget {
         content = Text("Invalid image data: ${woxImage.imageData}", style: const TextStyle(color: Colors.red));
       } else {
         final imageData = woxImage.imageData.split(";base64,")[1];
-        content = Image.memory(base64Decode(imageData), width: width, height: height, fit: BoxFit.contain, gaplessPlayback: true);
+        content = Image.memory(base64Decode(imageData), width: width, height: height, fit: fit, gaplessPlayback: true);
       }
     } else {
       content = const SizedBox(width: 24, height: 24);
