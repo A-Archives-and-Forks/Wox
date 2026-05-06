@@ -30,6 +30,9 @@ typedef struct {
     int anchor;          // 0-8: TL,TC,TR, LC,C,RC, BL,BC,BR
     int autoCloseSeconds;
     bool movable;
+    bool resizable;
+    float cornerRadius;
+    float aspectRatio;
     float offsetX;
     float offsetY;
     float width;         // 0 = auto
@@ -54,6 +57,16 @@ static const CGFloat kTooltipPadding = 8;
 static const CGFloat kTooltipMaxWidth = 400;
 static const CGFloat kTooltipFontSize = 12;
 static const CGFloat kStickyPredictiveCorrectionThreshold = 48;
+static const CGFloat kResizeGripSize = 10;
+static const CGFloat kResizeMinSize = 64;
+
+typedef NS_OPTIONS(NSUInteger, OverlayResizeEdges) {
+    OverlayResizeEdgeNone = 0,
+    OverlayResizeEdgeLeft = 1 << 0,
+    OverlayResizeEdgeRight = 1 << 1,
+    OverlayResizeEdgeBottom = 1 << 2,
+    OverlayResizeEdgeTop = 1 << 3,
+};
 
 extern void overlayClickCallbackCGO(char* name);
 extern void overlayDebugLogCallbackCGO(char* message);
@@ -92,8 +105,14 @@ static void OverlayDebugLog(NSString *message) {
 @property(nonatomic, assign) BOOL isAutoClosePending;
 @property(nonatomic, assign) NSPoint initialLocation;
 @property(nonatomic, assign) BOOL isMovable;
+@property(nonatomic, assign) BOOL isResizable;
 @property(nonatomic, assign) BOOL isDragging;
+@property(nonatomic, assign) BOOL isResizing;
 @property(nonatomic, assign) NSPoint initialWindowOrigin;
+@property(nonatomic, assign) NSRect initialResizeFrame;
+@property(nonatomic, assign) NSUInteger activeResizeEdges;
+@property(nonatomic, assign) CGFloat imageCornerRadius;
+@property(nonatomic, assign) CGFloat resizeAspectRatio;
 // AXObserver for tracking window movement
 @property(nonatomic, assign) AXObserverRef axObserver;
 @property(nonatomic, assign) AXUIElementRef trackedWindow;
@@ -169,11 +188,33 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 // Passthrough ImageView - lets mouse events pass through to window for dragging
 // -----------------------------------------------------------------------------
 @interface PassthroughImageView : NSImageView
+@property(nonatomic, assign) CGFloat roundedClipRadius;
 @end
 
 @implementation PassthroughImageView
 - (NSView *)hitTest:(NSPoint)point {
     return nil; // Let mouse events pass through to window
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    if (self.roundedClipRadius > 0) {
+        // Bug fix: NSImageView can redraw through layer-backed paths that ignore or outlive the
+        // previous mask during transparent-window resizing. Draw the image ourselves: clear the
+        // whole backing area first, then paint only inside the current rounded bounds.
+        NSRect bounds = self.bounds;
+        NSRectFillUsingOperation(bounds, NSCompositingOperationClear);
+        NSImage *image = self.image;
+        if (!image) return;
+
+        [NSGraphicsContext saveGraphicsState];
+        NSBezierPath *clipPath = [NSBezierPath bezierPathWithRoundedRect:bounds xRadius:self.roundedClipRadius yRadius:self.roundedClipRadius];
+        [clipPath addClip];
+        [[NSGraphicsContext currentContext] setImageInterpolation:NSImageInterpolationHigh];
+        [image drawInRect:bounds fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0 respectFlipped:YES hints:nil];
+        [NSGraphicsContext restoreGraphicsState];
+        return;
+    }
+    [super drawRect:dirtyRect];
 }
 @end
 
@@ -193,9 +234,33 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 // Draggable Content View - accepts first mouse to enable immediate dragging
 // -----------------------------------------------------------------------------
 @interface DraggableContentView : NSView
+@property(nonatomic, strong) NSImage *roundedImage;
+@property(nonatomic, assign) CGFloat roundedImageCornerRadius;
 @end
 
 @implementation DraggableContentView
+- (BOOL)isOpaque {
+    return NO;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    if (self.roundedImage && self.roundedImageCornerRadius > 0) {
+        // Bug fix: transparent overlay images must be drawn by the root content surface. Drawing
+        // through a child NSImageView left stale rectangular pixels after resizing because AppKit
+        // could reuse layer/backing contents outside the child view's rounded mask.
+        NSRect bounds = self.bounds;
+        NSRectFillUsingOperation(bounds, NSCompositingOperationClear);
+        [NSGraphicsContext saveGraphicsState];
+        NSBezierPath *clipPath = [NSBezierPath bezierPathWithRoundedRect:bounds xRadius:self.roundedImageCornerRadius yRadius:self.roundedImageCornerRadius];
+        [clipPath addClip];
+        [[NSGraphicsContext currentContext] setImageInterpolation:NSImageInterpolationHigh];
+        [self.roundedImage drawInRect:bounds fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0 respectFlipped:YES hints:nil];
+        [NSGraphicsContext restoreGraphicsState];
+        return;
+    }
+    [super drawRect:dirtyRect];
+}
+
 - (BOOL)acceptsFirstMouse:(NSEvent *)event {
     return YES; // Accept click even when window is not key
 }
@@ -353,6 +418,7 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
         [self setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorTransient];
         // Allow first click to trigger mouseDown instead of just activating window
         [self setBecomesKeyOnlyIfNeeded:NO];
+        [self setAcceptsMouseMovedEvents:YES];
 
         // Set custom content view that accepts first mouse
         DraggableContentView *contentView = [[DraggableContentView alloc] initWithFrame:contentRect];
@@ -433,6 +499,25 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
     return self;
 }
 
+- (void)setFrame:(NSRect)frameRect display:(BOOL)flag {
+    [super setFrame:frameRect display:flag];
+    [self refreshResizableImageOverlayAfterFrameChange];
+}
+
+- (void)setFrame:(NSRect)frameRect display:(BOOL)flag animate:(BOOL)animateFlag {
+    [super setFrame:frameRect display:flag animate:animateFlag];
+    [self refreshResizableImageOverlayAfterFrameChange];
+}
+
+- (void)refreshResizableImageOverlayAfterFrameChange {
+    if (!self.isResizable || !self.transparentMode) return;
+    // Bug fix: frame changes can come from initial layout, manual edge dragging, or AppKit's
+    // internal live-resize bookkeeping. Refreshing from setFrame keeps the image frame and corner
+    // masks attached to every window-size change instead of only the mouseDragged path.
+    [self.contentView layoutSubtreeIfNeeded];
+    [self updateResizableContentFrame];
+}
+
 - (void)mouseDown:(NSEvent *)event {
     [self hideTooltipWindow];
     if (self.closeOnEscape) {
@@ -444,12 +529,29 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
     self.initialLocation = [NSEvent mouseLocation];
     self.initialWindowOrigin = self.frame.origin;
 
+    if (self.isResizable) {
+        NSUInteger resizeEdges = [self resizeEdgesForPoint:[event locationInWindow]];
+        if (resizeEdges != OverlayResizeEdgeNone) {
+            // Feature change: borderless image overlays have no system resize frame, so edge
+            // dragging is handled here while ordinary interior dragging still uses the existing
+            // movable overlay path.
+            self.isResizing = YES;
+            self.activeResizeEdges = resizeEdges;
+            self.initialResizeFrame = self.frame;
+            return;
+        }
+    }
+
     if (self.isMovable) {
         self.isDragging = YES;
     }
 }
 
 - (void)mouseDragged:(NSEvent *)event {
+    if (self.isResizing) {
+        [self resizeFromCurrentMouseLocation];
+        return;
+    }
     if (!self.isDragging) return;
     
     NSPoint currentLocation = [NSEvent mouseLocation];
@@ -461,7 +563,19 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
     [self setFrameOrigin:newOrigin];
 }
 
+- (void)mouseMoved:(NSEvent *)event {
+    [self updateResizeCursorForPoint:[event locationInWindow]];
+}
+
 - (void)mouseUp:(NSEvent *)event {
+    BOOL wasResizing = self.isResizing;
+    self.isResizing = NO;
+    self.activeResizeEdges = OverlayResizeEdgeNone;
+    if (wasResizing) {
+        [self updateResizeCursorForPoint:[event locationInWindow]];
+        return;
+    }
+
     self.isDragging = NO;
     
     NSPoint currentLocation = [NSEvent mouseLocation];
@@ -479,6 +593,213 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
     if (self.isAutoClosePending && !self.isMouseInside) {
         [self onClose];
     }
+    [self updateResizeCursorForPoint:[event locationInWindow]];
+}
+
+- (NSUInteger)resizeEdgesForPoint:(NSPoint)point {
+    if (!self.isResizable) return OverlayResizeEdgeNone;
+    NSRect bounds = self.contentView.bounds;
+    NSUInteger edges = OverlayResizeEdgeNone;
+    if (point.x <= kResizeGripSize) edges |= OverlayResizeEdgeLeft;
+    if (point.x >= NSMaxX(bounds) - kResizeGripSize) edges |= OverlayResizeEdgeRight;
+    if (point.y <= kResizeGripSize) edges |= OverlayResizeEdgeBottom;
+    if (point.y >= NSMaxY(bounds) - kResizeGripSize) edges |= OverlayResizeEdgeTop;
+    return edges;
+}
+
+- (void)resizeFromCurrentMouseLocation {
+    NSPoint currentLocation = [NSEvent mouseLocation];
+    CGFloat dx = currentLocation.x - self.initialLocation.x;
+    CGFloat dy = currentLocation.y - self.initialLocation.y;
+    NSRect frame = self.initialResizeFrame;
+
+    if (self.resizeAspectRatio <= 0) {
+        if (self.activeResizeEdges & OverlayResizeEdgeLeft) {
+            CGFloat width = MAX(kResizeMinSize, self.initialResizeFrame.size.width - dx);
+            frame.origin.x = NSMaxX(self.initialResizeFrame) - width;
+            frame.size.width = width;
+        } else if (self.activeResizeEdges & OverlayResizeEdgeRight) {
+            frame.size.width = MAX(kResizeMinSize, self.initialResizeFrame.size.width + dx);
+        }
+
+        if (self.activeResizeEdges & OverlayResizeEdgeBottom) {
+            CGFloat height = MAX(kResizeMinSize, self.initialResizeFrame.size.height - dy);
+            frame.origin.y = NSMaxY(self.initialResizeFrame) - height;
+            frame.size.height = height;
+        } else if (self.activeResizeEdges & OverlayResizeEdgeTop) {
+            frame.size.height = MAX(kResizeMinSize, self.initialResizeFrame.size.height + dy);
+        }
+
+        [self setFrame:frame display:YES];
+        [self updateResizableContentFrame];
+        return;
+    }
+
+    BOOL hasHorizontalEdge = (self.activeResizeEdges & (OverlayResizeEdgeLeft | OverlayResizeEdgeRight)) != 0;
+    BOOL hasVerticalEdge = (self.activeResizeEdges & (OverlayResizeEdgeTop | OverlayResizeEdgeBottom)) != 0;
+    CGFloat requestedWidth = self.initialResizeFrame.size.width;
+    CGFloat requestedHeight = self.initialResizeFrame.size.height;
+
+    if (self.activeResizeEdges & OverlayResizeEdgeLeft) {
+        requestedWidth = self.initialResizeFrame.size.width - dx;
+    } else if (self.activeResizeEdges & OverlayResizeEdgeRight) {
+        requestedWidth = self.initialResizeFrame.size.width + dx;
+    }
+    if (self.activeResizeEdges & OverlayResizeEdgeBottom) {
+        requestedHeight = self.initialResizeFrame.size.height - dy;
+    } else if (self.activeResizeEdges & OverlayResizeEdgeTop) {
+        requestedHeight = self.initialResizeFrame.size.height + dy;
+    }
+
+    CGFloat baseWidth = MAX(1, self.initialResizeFrame.size.width);
+    CGFloat baseHeight = MAX(1, self.initialResizeFrame.size.height);
+    CGFloat scaleFromWidth = requestedWidth / baseWidth;
+    CGFloat scaleFromHeight = requestedHeight / baseHeight;
+    CGFloat scale = 1.0;
+    if (hasHorizontalEdge && hasVerticalEdge) {
+        scale = fabs(scaleFromWidth - 1.0) >= fabs(scaleFromHeight - 1.0) ? scaleFromWidth : scaleFromHeight;
+    } else if (hasHorizontalEdge) {
+        scale = scaleFromWidth;
+    } else if (hasVerticalEdge) {
+        scale = scaleFromHeight;
+    }
+
+    CGFloat width = MAX(kResizeMinSize, self.initialResizeFrame.size.width * scale);
+    CGFloat height = width / self.resizeAspectRatio;
+    if (height < kResizeMinSize) {
+        height = kResizeMinSize;
+        width = height * self.resizeAspectRatio;
+    }
+
+    // Feature change: image overlays must resize as images, not as free-form panels. The manual
+    // borderless resize loop therefore derives the second dimension from the source aspect ratio
+    // while preserving the dragged edge as the fixed anchor.
+    frame.size.width = width;
+    frame.size.height = height;
+
+    if (hasHorizontalEdge) {
+        if (self.activeResizeEdges & OverlayResizeEdgeLeft) {
+            frame.origin.x = NSMaxX(self.initialResizeFrame) - width;
+        } else {
+            frame.origin.x = self.initialResizeFrame.origin.x;
+        }
+    } else {
+        frame.origin.x = NSMidX(self.initialResizeFrame) - width / 2;
+    }
+
+    if (hasVerticalEdge) {
+        if (self.activeResizeEdges & OverlayResizeEdgeBottom) {
+            frame.origin.y = NSMaxY(self.initialResizeFrame) - height;
+        } else {
+            frame.origin.y = self.initialResizeFrame.origin.y;
+        }
+    } else {
+        frame.origin.y = NSMidY(self.initialResizeFrame) - height / 2;
+    }
+
+    [self setFrame:frame display:YES];
+    [self updateResizableContentFrame];
+}
+
+- (NSCursor *)cursorForResizeEdges:(NSUInteger)edges {
+    if ((edges & (OverlayResizeEdgeLeft | OverlayResizeEdgeRight)) &&
+        (edges & (OverlayResizeEdgeTop | OverlayResizeEdgeBottom))) {
+        // Feature change: AppKit only exposes diagonal frame cursors on newer macOS versions.
+        // A tiny custom cursor keeps the image overlay resize affordance consistent with the
+        // hand-written borderless resize logic while preserving the 10.15 deployment target.
+        return [self diagonalResizeCursorForEdges:edges];
+    }
+    if (edges & (OverlayResizeEdgeLeft | OverlayResizeEdgeRight)) return [NSCursor resizeLeftRightCursor];
+    if (edges & (OverlayResizeEdgeTop | OverlayResizeEdgeBottom)) return [NSCursor resizeUpDownCursor];
+    return [NSCursor arrowCursor];
+}
+
+- (NSCursor *)diagonalResizeCursorForEdges:(NSUInteger)edges {
+    static NSCursor *nwseCursor = nil;
+    static NSCursor *neswCursor = nil;
+    BOOL nwse = ((edges & OverlayResizeEdgeTop) && (edges & OverlayResizeEdgeLeft)) ||
+                ((edges & OverlayResizeEdgeBottom) && (edges & OverlayResizeEdgeRight));
+    NSCursor **slot = nwse ? &nwseCursor : &neswCursor;
+    if (*slot) return *slot;
+
+    NSImage *image = [[NSImage alloc] initWithSize:NSMakeSize(18, 18)];
+    [image lockFocus];
+    [[NSColor clearColor] setFill];
+    NSRectFill(NSMakeRect(0, 0, 18, 18));
+    NSBezierPath *path = [NSBezierPath bezierPath];
+    path.lineWidth = 2;
+    path.lineCapStyle = NSLineCapStyleRound;
+    if (nwse) {
+        [path moveToPoint:NSMakePoint(4, 14)];
+        [path lineToPoint:NSMakePoint(14, 4)];
+        [path moveToPoint:NSMakePoint(4, 14)];
+        [path lineToPoint:NSMakePoint(4, 9)];
+        [path moveToPoint:NSMakePoint(4, 14)];
+        [path lineToPoint:NSMakePoint(9, 14)];
+        [path moveToPoint:NSMakePoint(14, 4)];
+        [path lineToPoint:NSMakePoint(14, 9)];
+        [path moveToPoint:NSMakePoint(14, 4)];
+        [path lineToPoint:NSMakePoint(9, 4)];
+    } else {
+        [path moveToPoint:NSMakePoint(4, 4)];
+        [path lineToPoint:NSMakePoint(14, 14)];
+        [path moveToPoint:NSMakePoint(4, 4)];
+        [path lineToPoint:NSMakePoint(4, 9)];
+        [path moveToPoint:NSMakePoint(4, 4)];
+        [path lineToPoint:NSMakePoint(9, 4)];
+        [path moveToPoint:NSMakePoint(14, 14)];
+        [path lineToPoint:NSMakePoint(14, 9)];
+        [path moveToPoint:NSMakePoint(14, 14)];
+        [path lineToPoint:NSMakePoint(9, 14)];
+    }
+    [[NSColor colorWithWhite:0 alpha:0.55] setStroke];
+    [path stroke];
+    [path setLineWidth:1];
+    [[NSColor whiteColor] setStroke];
+    [path stroke];
+    [image unlockFocus];
+
+    *slot = [[NSCursor alloc] initWithImage:image hotSpot:NSMakePoint(9, 9)];
+    return *slot;
+}
+
+- (void)updateResizeCursorForPoint:(NSPoint)point {
+    if (!self.isResizable) return;
+    if (self.isDragging || self.isResizing) return;
+    NSUInteger edges = [self resizeEdgesForPoint:point];
+    [[self cursorForResizeEdges:edges] set];
+}
+
+- (void)updateResizableContentFrame {
+    if (!self.isResizable || !self.transparentMode) return;
+    // Resizable image overlays use the root content view as the drawing surface. Keeping the hit
+    // rect on the same bounds as the painted image avoids a child-view clipping path that can go
+    // stale during transparent window resizing.
+    self.iconHitRect = [self roundedImageSurfaceHasImage] ? self.contentView.bounds : NSZeroRect;
+    [self refreshRoundedImageSurface];
+}
+
+- (BOOL)roundedImageSurfaceHasImage {
+    DraggableContentView *surface = [self.contentView isKindOfClass:[DraggableContentView class]] ? (DraggableContentView *)self.contentView : nil;
+    return surface.roundedImage != nil;
+}
+
+- (void)setRoundedImageSurfaceImage:(NSImage *)image radius:(CGFloat)radius {
+    DraggableContentView *surface = [self.contentView isKindOfClass:[DraggableContentView class]] ? (DraggableContentView *)self.contentView : nil;
+    if (!surface) return;
+    // Bug fix: image overlays now draw directly in the root transparent surface. Reset layer-backed
+    // clipping so old HUD/loading state cannot leave rectangular cached pixels behind.
+    surface.wantsLayer = NO;
+    surface.roundedImage = image;
+    surface.roundedImageCornerRadius = image ? radius : 0;
+    [surface setNeedsDisplay:YES];
+}
+
+- (void)refreshRoundedImageSurface {
+    DraggableContentView *surface = [self.contentView isKindOfClass:[DraggableContentView class]] ? (DraggableContentView *)self.contentView : nil;
+    if (!surface) return;
+    surface.roundedImageCornerRadius = surface.roundedImage ? self.imageCornerRadius : 0;
+    [surface setNeedsDisplay:YES];
 }
 
 - (void)keyDown:(NSEvent *)event {
@@ -555,6 +876,9 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
         return;
     }
     self.isMouseInside = NO;
+    if (!self.isDragging && !self.isResizing) {
+        [[NSCursor arrowCursor] set];
+    }
     // Don't auto-close while dragging
     if (self.isAutoClosePending && !self.isDragging) {
         [self onClose];
@@ -751,7 +1075,29 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 
     // 0. Reset State
     self.isMovable = opts.movable;
+    self.isResizable = opts.resizable;
+    self.imageCornerRadius = opts.cornerRadius;
+    self.resizeAspectRatio = (opts.resizable && opts.aspectRatio > 0) ? opts.aspectRatio : 0;
+    if (!opts.transparent || !opts.resizable) {
+        // Bug fix: URL overlays reuse the same native window for loading, error, and final image
+        // states. Reset the image-specific draw clip when leaving the resizable transparent surface.
+        [self setRoundedImageSurfaceImage:nil radius:0];
+        if ([self.iconView isKindOfClass:[PassthroughImageView class]]) {
+            ((PassthroughImageView *)self.iconView).roundedClipRadius = 0;
+        }
+    }
     self.isDragging = NO;
+    self.isResizing = NO;
+    self.activeResizeEdges = OverlayResizeEdgeNone;
+    NSWindowStyleMask styleMask = NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel;
+    if (opts.resizable) {
+        // Bug fix: NSWindowStyleMaskResizable lets AppKit run its own borderless resize loop, which
+        // can repaint the transparent image surface without our rounded clipping. Keep the panel
+        // borderless and use the explicit edge-drag resize path below so every size change refreshes
+        // the image frame and corner masks deterministically.
+        self.minSize = NSMakeSize(kResizeMinSize, kResizeMinSize);
+    }
+    self.styleMask = styleMask;
     [self stopAutoCloseTimer];
 
     // 1. Content Update
@@ -826,8 +1172,23 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 
         CGFloat iconX = opts.iconX;
         CGFloat iconY = windowHeight - opts.iconY - iconHeight;
+        if (opts.resizable) {
+            // Feature change: resizable image overlays use the whole transparent window as their
+            // drawable content, so manual resize and view autoresizing both keep the image filling
+            // the adjusted bounds.
+            iconX = 0;
+            iconY = 0;
+            iconWidth = windowWidth;
+            iconHeight = windowHeight;
+            [self setRoundedImageSurfaceImage:icon radius:self.imageCornerRadius];
+            self.iconView.hidden = YES;
+            self.iconView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        } else {
+            [self setRoundedImageSurfaceImage:nil radius:0];
+            self.iconView.autoresizingMask = NSViewNotSizable;
+        }
         self.iconView.frame = NSMakeRect(iconX, iconY, iconWidth, iconHeight);
-        self.iconHitRect = self.iconView.hidden ? NSZeroRect : self.iconView.frame;
+        self.iconHitRect = opts.resizable ? (icon ? self.contentView.bounds : NSZeroRect) : (self.iconView.hidden ? NSZeroRect : self.iconView.frame);
     } else {
         self.messageView.hidden = NO;
         self.iconHitRect = NSZeroRect;
@@ -1022,7 +1383,10 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 
     [self setFrame:NSMakeRect(finalX, finalY, windowWidth, windowHeight) display:YES];
     self.backgroundView.frame = self.contentView.bounds;
-    [self setCornerRadius:opts.transparent ? 0 : 10.0];
+    [self updateResizableContentFrame];
+    // Feature change: rounded image overlays draw their own clipped surface. Keep the generic
+    // content-view layer square for transparent utility overlays and only use layer radius for HUDs.
+    [self setCornerRadius:(opts.transparent ? 0 : 10.0)];
     
     // 4. Auto Close (Timer)
     [self startAutoCloseTimer:(NSTimeInterval)opts.autoCloseSeconds];

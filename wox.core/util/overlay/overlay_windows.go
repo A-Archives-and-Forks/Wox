@@ -27,6 +27,9 @@ typedef struct {
     int anchor;
     int autoCloseSeconds;
     bool movable;
+    bool resizable;
+    float cornerRadius;
+    float aspectRatio;
     float offsetX;
     float offsetY;
     float width;
@@ -125,6 +128,9 @@ func Show(opts OverlayOptions) {
 		anchor:           C.int(opts.Anchor),
 		autoCloseSeconds: C.int(opts.AutoCloseSeconds),
 		movable:          C.bool(opts.Movable),
+		resizable:        C.bool(opts.Resizable),
+		cornerRadius:     C.float(opts.CornerRadius),
+		aspectRatio:      C.float(opts.AspectRatio),
 		offsetX:          C.float(opts.OffsetX),
 		offsetY:          C.float(opts.OffsetY),
 		width:            C.float(opts.Width),

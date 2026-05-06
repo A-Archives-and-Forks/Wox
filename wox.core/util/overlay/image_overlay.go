@@ -21,6 +21,7 @@ import (
 )
 
 const imageOverlayPrefix = "wox_image_overlay_"
+const defaultImageOverlayCornerRadius = 16
 
 // ImageOverlayOptions describes a native image overlay request shared by preview and pinning
 // features. Width and height are optional; when either side is missing the helper reads image
@@ -37,6 +38,7 @@ type ImageOverlayOptions struct {
 	FitToScreen   bool
 	Topmost       bool
 	Movable       bool
+	CornerRadius  float64
 	CloseOnEscape bool
 }
 
@@ -74,11 +76,17 @@ func ShowImageOverlay(ctx context.Context, opts ImageOverlayOptions) error {
 	// utility prevents image preview, screenshot pinning, and future callers from reimplementing
 	// the same file-backed transport and sizing rules in separate modules.
 	Show(OverlayOptions{
-		Name:          opts.Name,
-		Title:         opts.Title,
-		Icon:          overlayImage,
-		Transparent:   true,
-		Movable:       opts.Movable,
+		Name:        opts.Name,
+		Title:       opts.Title,
+		Icon:        overlayImage,
+		Transparent: true,
+		Movable:     opts.Movable,
+		// Feature change: image overlays are user-managed reference surfaces. Making only this
+		// shared image path resizable keeps notification overlays fixed while preview and pinned
+		// images can be adjusted without adding another public API parameter.
+		Resizable:     true,
+		CornerRadius:  opts.CornerRadius,
+		AspectRatio:   width / height,
 		CloseOnEscape: opts.CloseOnEscape,
 		Topmost:       opts.Topmost,
 		Anchor:        opts.Anchor,
@@ -98,6 +106,12 @@ func normalizeImageOverlayOptions(opts ImageOverlayOptions) ImageOverlayOptions 
 	}
 	if opts.Title == "" {
 		opts.Title = "Wox image overlay"
+	}
+	if opts.CornerRadius <= 0 {
+		// Feature change: image overlay corner radius is now configurable, while the default is
+		// intentionally larger than the first 8pt pass so the standalone preview surface reads as
+		// rounded after scaling on high-DPI desktop screens.
+		opts.CornerRadius = defaultImageOverlayCornerRadius
 	}
 	return opts
 }

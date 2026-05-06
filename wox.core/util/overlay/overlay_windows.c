@@ -67,6 +67,9 @@ typedef struct {
     int anchor;          // 0-8
     int autoCloseSeconds;
     bool movable;
+    bool resizable;
+    float cornerRadius;
+    float aspectRatio;
     float offsetX;
     float offsetY;
     float width;         // 0 = auto
@@ -236,6 +239,8 @@ static BOOL TryEnableAcrylic(HWND hwnd)
 #define CLOSE_PAD_DIP 10
 #define TOOLTIP_GAP_DIP 6
 #define CORNER_RADIUS_DIP 10
+#define RESIZE_GRIP_DIP 10
+#define MIN_RESIZE_SIZE_DIP 64
 
 #define TIMER_AUTOCLOSE 1
 #define TIMER_TRACK 2
@@ -591,6 +596,9 @@ typedef struct OverlayWindow
     BOOL loading;
     BOOL topmost;
     BOOL movable;
+    BOOL resizable;
+    float cornerRadius;
+    float aspectRatio;
     int autoCloseSeconds;
     int stickyWindowPid;
     int anchor;
@@ -659,6 +667,9 @@ typedef struct OverlayPayload
     int anchor;
     int autoCloseSeconds;
     BOOL movable;
+    BOOL resizable;
+    float cornerRadius;
+    float aspectRatio;
     float offsetX;
     float offsetY;
     float width;
@@ -862,6 +873,33 @@ static void SetOverlayZOrder(HWND hwnd, HWND target)
         UpdateOverlayOwner(hwnd, NULL);
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
+}
+
+static LRESULT GetResizeHitTest(OverlayWindow *ow, POINT pt)
+{
+    if (!ow || !ow->resizable)
+        return HTCLIENT;
+
+    RECT client;
+    GetClientRect(ow->hwnd, &client);
+    int grip = MulDiv(RESIZE_GRIP_DIP, (int)(ow->dpi ? ow->dpi : 96), 96);
+    BOOL left = pt.x <= grip;
+    BOOL right = pt.x >= client.right - grip;
+    BOOL top = pt.y <= grip;
+    BOOL bottom = pt.y >= client.bottom - grip;
+
+    // Feature change: transparent image overlays are borderless, so Windows needs explicit
+    // non-client hit-test results to start native edge and corner resizing without interfering
+    // with the existing interior drag-to-move behavior.
+    if (top && left) return HTTOPLEFT;
+    if (top && right) return HTTOPRIGHT;
+    if (bottom && left) return HTBOTTOMLEFT;
+    if (bottom && right) return HTBOTTOMRIGHT;
+    if (left) return HTLEFT;
+    if (right) return HTRIGHT;
+    if (top) return HTTOP;
+    if (bottom) return HTBOTTOM;
+    return HTCLIENT;
 }
 
 static void StartAutoCloseTimer(OverlayWindow *ow)
@@ -1109,6 +1147,98 @@ static void ApplyCornerRadius(HWND hwnd, UINT dpi, int width, int height)
     }
 }
 
+static void ApplyTransparentImageCornerRadius(HWND hwnd, UINT dpi, int width, int height, float cornerRadius)
+{
+    if (!hwnd || width <= 0 || height <= 0)
+        return;
+
+    float radiusDip = cornerRadius > 0.0f ? cornerRadius : CORNER_RADIUS_DIP;
+    int rr = MulDiv((int)roundf(radiusDip), (int)dpi, 96);
+    HRGN rgn = CreateRoundRectRgn(0, 0, width + 1, height + 1, rr * 2, rr * 2);
+    if (rgn)
+    {
+        // Feature change: transparent image overlays paint the bitmap themselves, so the normal DWM
+        // corner preference does not reliably clip the alpha surface. A window region keeps the
+        // resized image and hit target rounded without changing fixed notification overlays.
+        SetWindowRgn(hwnd, rgn, TRUE);
+    }
+}
+
+static void ApplyAspectRatioToSizingRect(OverlayWindow *ow, WPARAM edge, RECT *rect)
+{
+    if (!ow || !rect || ow->aspectRatio <= 0.0f)
+        return;
+
+    int width = rect->right - rect->left;
+    int height = rect->bottom - rect->top;
+    if (width <= 0 || height <= 0)
+        return;
+
+    BOOL left = edge == WMSZ_LEFT || edge == WMSZ_TOPLEFT || edge == WMSZ_BOTTOMLEFT;
+    BOOL right = edge == WMSZ_RIGHT || edge == WMSZ_TOPRIGHT || edge == WMSZ_BOTTOMRIGHT;
+    BOOL top = edge == WMSZ_TOP || edge == WMSZ_TOPLEFT || edge == WMSZ_TOPRIGHT;
+    BOOL bottom = edge == WMSZ_BOTTOM || edge == WMSZ_BOTTOMLEFT || edge == WMSZ_BOTTOMRIGHT;
+    BOOL horizontal = left || right;
+    BOOL vertical = top || bottom;
+
+    int newWidth = width;
+    int newHeight = height;
+    if (horizontal)
+    {
+        newHeight = (int)roundf((float)newWidth / ow->aspectRatio);
+    }
+    else if (vertical)
+    {
+        newWidth = (int)roundf((float)newHeight * ow->aspectRatio);
+    }
+
+    UINT dpi = ow->dpi ? ow->dpi : 96;
+    int minSize = MulDiv(MIN_RESIZE_SIZE_DIP, (int)dpi, 96);
+    if (newWidth < minSize)
+    {
+        newWidth = minSize;
+        newHeight = (int)roundf((float)newWidth / ow->aspectRatio);
+    }
+    if (newHeight < minSize)
+    {
+        newHeight = minSize;
+        newWidth = (int)roundf((float)newHeight * ow->aspectRatio);
+    }
+
+    // Feature change: the native sizing rectangle is corrected before WM_SIZE so transparent image
+    // overlays scale uniformly while the existing WM_SIZE path can still refresh the bitmap bounds
+    // and rounded window region from one consistent final size.
+    if (left)
+    {
+        rect->left = rect->right - newWidth;
+    }
+    else if (right)
+    {
+        rect->right = rect->left + newWidth;
+    }
+    else
+    {
+        int cx = (rect->left + rect->right) / 2;
+        rect->left = cx - newWidth / 2;
+        rect->right = rect->left + newWidth;
+    }
+
+    if (top)
+    {
+        rect->top = rect->bottom - newHeight;
+    }
+    else if (bottom)
+    {
+        rect->bottom = rect->top + newHeight;
+    }
+    else
+    {
+        int cy = (rect->top + rect->bottom) / 2;
+        rect->top = cy - newHeight / 2;
+        rect->bottom = rect->top + newHeight;
+    }
+}
+
 static void ShowTooltipWindow(OverlayWindow *ow, HWND owner, POINT clientPt);
 static void HideTooltipWindow(OverlayWindow *ow);
 
@@ -1207,6 +1337,16 @@ static void ApplyOverlayLayout(OverlayWindow *ow)
         int drawH = ow->iconBitmap ? (int)roundf(((ow->iconDrawHeight > 0.0f) ? ow->iconDrawHeight : iconSizeDip) * (float)ow->dpi / 96.0f) : 0;
         int iconX = (int)roundf(ow->iconX * (float)ow->dpi / 96.0f);
         int iconY = (int)roundf(ow->iconY * (float)ow->dpi / 96.0f);
+        if (ow->resizable)
+        {
+            // Feature change: resizable image overlays draw into the full native window. The old
+            // fixed icon rectangle stayed at the original preview size after WM_SIZE, leaving blank
+            // transparent space instead of scaling the image with the adjusted window.
+            iconX = 0;
+            iconY = 0;
+            drawW = width;
+            drawH = height;
+        }
         RECT iconRect = {iconX, iconY, iconX + drawW, iconY + drawH};
         ow->iconRect = iconRect;
         RECT empty = {0, 0, 0, 0};
@@ -1310,7 +1450,14 @@ static void ApplyOverlayLayout(OverlayWindow *ow)
     SetWindowPos(ow->hwnd, NULL, x, y, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
     if (ow->transparent)
     {
-        SetWindowRgn(ow->hwnd, NULL, TRUE);
+        if (ow->resizable)
+        {
+            ApplyTransparentImageCornerRadius(ow->hwnd, ow->dpi, width, height, ow->cornerRadius);
+        }
+        else
+        {
+            SetWindowRgn(ow->hwnd, NULL, TRUE);
+        }
         UINT pref = DWMWCP_DONOTROUND;
         DwmSetWindowAttribute(ow->hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
     }
@@ -1417,6 +1564,9 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
     ow->anchor = payload->anchor;
     ow->autoCloseSeconds = payload->autoCloseSeconds;
     ow->movable = payload->movable;
+    ow->resizable = payload->resizable;
+    ow->cornerRadius = payload->cornerRadius;
+    ow->aspectRatio = payload->aspectRatio > 0.0f ? payload->aspectRatio : 0.0f;
     ow->offsetX = payload->offsetX;
     ow->offsetY = payload->offsetY;
     ow->width = payload->width;
@@ -1426,6 +1576,20 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
     ow->tooltipIconSize = payload->tooltipIconSize;
     ow->hasLastTargetRect = FALSE;
     ow->hiddenForMove = FALSE;
+    if (ow->hwnd)
+    {
+        LONG_PTR style = GetWindowLongPtrW(ow->hwnd, GWL_STYLE);
+        LONG_PTR updatedStyle = ow->resizable ? (style | WS_THICKFRAME) : (style & ~WS_THICKFRAME);
+        if (updatedStyle != style)
+        {
+            // Feature change: reused URL image overlay windows start as loading HUDs and later
+            // become resizable image surfaces. Refresh the native frame style at payload apply
+            // time so the final window gets edge resizing without recreating the overlay.
+            SetWindowLongPtrW(ow->hwnd, GWL_STYLE, updatedStyle);
+            SetWindowPos(ow->hwnd, NULL, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+    }
     if (!isNew && previousStickyWindowPid != ow->stickyWindowPid)
     {
         // Bug fix: predictive anchors are tied to a specific target window. When
@@ -1749,6 +1913,41 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         InvalidateRect(hwnd, NULL, TRUE);
         return 0;
     }
+    case WM_GETMINMAXINFO:
+    {
+        if (ow && ow->resizable)
+        {
+            MINMAXINFO *mmi = (MINMAXINFO *)lParam;
+            UINT dpi = ow->dpi ? ow->dpi : GetWindowDpiSafe(hwnd, 96);
+            int minSize = MulDiv(MIN_RESIZE_SIZE_DIP, (int)dpi, 96);
+            mmi->ptMinTrackSize.x = minSize;
+            mmi->ptMinTrackSize.y = minSize;
+            return 0;
+        }
+        break;
+    }
+    case WM_SIZING:
+    {
+        if (ow && ow->transparent && ow->resizable && ow->aspectRatio > 0.0f)
+        {
+            ApplyAspectRatioToSizingRect(ow, wParam, (RECT *)lParam);
+            return TRUE;
+        }
+        break;
+    }
+    case WM_SIZE:
+    {
+        if (ow && ow->transparent && ow->resizable)
+        {
+            RECT client;
+            GetClientRect(hwnd, &client);
+            ow->iconRect = client;
+            ApplyTransparentImageCornerRadius(hwnd, ow->dpi ? ow->dpi : GetWindowDpiSafe(hwnd, 96), client.right - client.left, client.bottom - client.top, ow->cornerRadius);
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        }
+        break;
+    }
     case WM_PAINT:
     {
         if (!ow)
@@ -1884,6 +2083,14 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     }
     case WM_NCHITTEST:
     {
+        if (ow && ow->resizable)
+        {
+            POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(hwnd, &pt);
+            LRESULT resizeHit = GetResizeHitTest(ow, pt);
+            if (resizeHit != HTCLIENT)
+                return resizeHit;
+        }
         if (ow && ow->transparent && ow->hitTestIconOnly)
         {
             POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
@@ -1897,6 +2104,29 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     {
         if (!ow)
             break;
+        switch (LOWORD(lParam))
+        {
+        case HTTOPLEFT:
+        case HTBOTTOMRIGHT:
+            // Feature change: resize hit testing is custom for borderless image overlays, so set
+            // the matching system cursors explicitly instead of relying on the hidden frame.
+            SetCursor(LoadCursor(NULL, IDC_SIZENWSE));
+            return TRUE;
+        case HTTOPRIGHT:
+        case HTBOTTOMLEFT:
+            SetCursor(LoadCursor(NULL, IDC_SIZENESW));
+            return TRUE;
+        case HTLEFT:
+        case HTRIGHT:
+            SetCursor(LoadCursor(NULL, IDC_SIZEWE));
+            return TRUE;
+        case HTTOP:
+        case HTBOTTOM:
+            SetCursor(LoadCursor(NULL, IDC_SIZENS));
+            return TRUE;
+        default:
+            break;
+        }
         if (LOWORD(lParam) == HTCLIENT)
         {
             POINT pt;
@@ -2260,8 +2490,16 @@ static void HandleShowCommand(OverlayPayload *payload)
         }
     }
 
+    DWORD style = WS_POPUP;
+    if (ow->resizable)
+    {
+        // Feature change: Windows needs a sizable frame style in addition to resize hit testing so
+        // borderless image overlays can enter the system resize loop from their transparent edges.
+        style |= WS_THICKFRAME;
+    }
+
     ow->hwnd = CreateWindowExW(exStyle, g_overlayClassName, ow->title ? ow->title : L"",
-                               WS_POPUP, 0, 0, 0, 0, owner, NULL, GetModuleHandleW(NULL), ow);
+                               style, 0, 0, 0, 0, owner, NULL, GetModuleHandleW(NULL), ow);
     if (!ow->hwnd)
     {
         DWORD err = GetLastError();
@@ -2271,7 +2509,7 @@ static void HandleShowCommand(OverlayPayload *payload)
             owner = NULL;
             exStyle |= WS_EX_TOPMOST;
             ow->hwnd = CreateWindowExW(exStyle, g_overlayClassName, ow->title ? ow->title : L"",
-                                       WS_POPUP, 0, 0, 0, 0, owner, NULL, GetModuleHandleW(NULL), ow);
+                                       style, 0, 0, 0, 0, owner, NULL, GetModuleHandleW(NULL), ow);
         }
     }
 
@@ -2456,6 +2694,9 @@ void ShowOverlay(OverlayOptions opts)
     payload->anchor = opts.anchor;
     payload->autoCloseSeconds = opts.autoCloseSeconds;
     payload->movable = opts.movable ? TRUE : FALSE;
+    payload->resizable = opts.resizable ? TRUE : FALSE;
+    payload->cornerRadius = opts.cornerRadius;
+    payload->aspectRatio = opts.aspectRatio;
     payload->offsetX = opts.offsetX;
     payload->offsetY = opts.offsetY;
     payload->width = opts.width;

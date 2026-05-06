@@ -118,6 +118,15 @@ type OverlayOptions struct {
 	AutoCloseSeconds int
 	// Movable determines if the overlay can be dragged by the user.
 	Movable bool
+	// Resizable lets native overlay windows be resized by dragging their edges.
+	// It is opt-in so transient notification overlays keep their compact fixed-size behavior.
+	Resizable bool
+	// CornerRadius controls the overlay window corner radius in DIP/pt.
+	// If 0, platform defaults are used by the specific overlay style.
+	CornerRadius float64
+	// AspectRatio keeps a resizable overlay at width/height while the user resizes it.
+	// If 0, resizing can change width and height independently.
+	AspectRatio float64
 	// Width of the overlay. If 0, it auto-sizes based on content/default.
 	Width float64
 	// Height of the overlay. If 0, it auto-sizes based on content.
