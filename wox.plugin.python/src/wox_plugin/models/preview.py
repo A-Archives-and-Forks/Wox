@@ -10,7 +10,9 @@ content in a dedicated preview panel when a result is selected.
 from dataclasses import dataclass, field
 from enum import Enum
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from .image import WoxImage
 
 
 class WoxPreviewType(str, Enum):
@@ -23,7 +25,7 @@ class WoxPreviewType(str, Enum):
     - IMAGE: Display an image (using WoxImage)
     - URL: Load and display a web page
     - FILE: Display a file (various formats supported)
-    - FILE_LIST: Display multiple file paths using WoxPreviewFileListData JSON
+    - LIST: Display structured rows using WoxPreviewListData JSON
     - REMOTE: Load preview data from a remote URL
     """
 
@@ -107,18 +109,25 @@ class WoxPreviewType(str, Enum):
         )
     """
 
-    FILE_LIST = "file_list"
+    LIST = "list"
     """
-    Display a structured list of files.
+    Display a structured list of preview rows.
 
-    The preview_data should be WoxPreviewFileListData.to_json(). This public
-    data object keeps SDK plugins aligned with the core file-list renderer
-    instead of requiring each plugin to hand-write the JSON field names.
+    The preview_data should be WoxPreviewListData.to_json(). This generic row
+    shape replaces the old file-only preview so plugins can show progress,
+    status, or selected files with the same visual contract.
 
     Example:
-        data = WoxPreviewFileListData(file_paths=["/path/to/a.txt", "/path/to/b.txt"])
+        data = WoxPreviewListData(items=[
+            WoxPreviewListItem(
+                icon=WoxImage.new_emoji("✓"),
+                title="photo.jpg",
+                subtitle="Saved 42 KB",
+                tails=[ResultTail(text="Done", text_category=ResultTailTextCategory.SUCCESS)]
+            )
+        ])
         preview = WoxPreview(
-            preview_type=WoxPreviewType.FILE_LIST,
+            preview_type=WoxPreviewType.LIST,
             preview_data=data.to_json()
         )
     """
@@ -140,41 +149,86 @@ class WoxPreviewType(str, Enum):
 
 
 @dataclass
-class WoxPreviewFileListData:
+class WoxPreviewListItem:
     """
-    Structured data for WoxPreviewType.FILE_LIST.
+    One row in WoxPreviewType.LIST.
 
-    The JSON field is intentionally `filePaths` because the core and Flutter
-    renderer already use that lower-camel contract. A named SDK model prevents
-    plugins from drifting into alternate payload shapes such as raw arrays.
+    Tails accept ResultTail-compatible objects. The preview model keeps this
+    loose at runtime to avoid a circular import with the result model while the
+    JSON contract still matches normal result tails.
     """
 
-    file_paths: List[str] = field(default_factory=list)
+    icon: Optional[WoxImage] = field(default=None)
+    title: str = field(default="")
+    subtitle: str = field(default="")
+    tails: List[Any] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {"title": self.title}
+        if self.icon is not None:
+            data["icon"] = self.icon.to_dict()
+        if self.subtitle:
+            data["subtitle"] = self.subtitle
+        if self.tails:
+            data["tails"] = [_tail_to_dict(tail) for tail in self.tails]
+        return data
+
+    @classmethod
+    def from_json(cls, json_data: Dict[str, Any]) -> "WoxPreviewListItem":
+        raw_icon = json_data.get("icon")
+        raw_tails = json_data.get("tails", [])
+        return cls(
+            icon=WoxImage.from_dict(raw_icon) if isinstance(raw_icon, dict) else None,
+            title=str(json_data.get("title", "")),
+            subtitle=str(json_data.get("subtitle", "")),
+            tails=list(raw_tails) if isinstance(raw_tails, list) else [],
+        )
+
+
+@dataclass
+class WoxPreviewListData:
     """
-    Absolute or plugin-resolved file paths to render in the file-list preview.
+    Structured data for WoxPreviewType.LIST.
+
+    The payload is row-based instead of file-path-based so long-running actions
+    can update progress/status previews without custom markdown formatting.
     """
+
+    items: List[WoxPreviewListItem] = field(default_factory=list)
 
     def to_json(self) -> str:
         """
         Convert to the JSON payload expected by WoxPreview.preview_data.
         """
-        return json.dumps({"filePaths": self.file_paths})
+        return json.dumps({"items": [item.to_dict() for item in self.items]})
 
     @classmethod
-    def from_json(cls, json_data: Dict[str, Any]) -> "WoxPreviewFileListData":
+    def from_json(cls, json_data: Dict[str, Any]) -> "WoxPreviewListData":
         """
-        Create file-list preview data from a decoded JSON object.
+        Create list preview data from a decoded JSON object.
         """
-        raw_paths = json_data.get("filePaths", [])
-        return cls(file_paths=[str(item) for item in raw_paths] if isinstance(raw_paths, list) else [])
+        raw_items = json_data.get("items", [])
+        return cls(
+            items=[WoxPreviewListItem.from_json(item) for item in raw_items if isinstance(item, dict)]
+            if isinstance(raw_items, list)
+            else []
+        )
 
     @classmethod
-    def from_preview_data(cls, preview_data: str) -> "WoxPreviewFileListData":
+    def from_preview_data(cls, preview_data: str) -> "WoxPreviewListData":
         """
         Decode the string stored in WoxPreview.preview_data.
         """
         decoded = json.loads(preview_data)
         return cls.from_json(decoded if isinstance(decoded, dict) else {})
+
+
+def _tail_to_dict(tail: Any) -> Dict[str, Any]:
+    if hasattr(tail, "to_json"):
+        return json.loads(tail.to_json())
+    if isinstance(tail, dict):
+        return tail
+    raise TypeError(f"Unsupported list preview tail payload: {type(tail)!r}")
 
 
 class WoxPreviewScrollPosition(str, Enum):
@@ -246,7 +300,7 @@ class WoxPreview:
     - IMAGE: WoxImage serialized as "type:value" string
     - URL: HTTP/HTTPS URL
     - FILE: File system path
-    - FILE_LIST: WoxPreviewFileListData JSON string
+    - LIST: WoxPreviewListData JSON string
     - REMOTE: URL that returns WoxPreview JSON
     """
 

@@ -1,13 +1,19 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/wox_preview.dart';
+import 'package:wox/entity/wox_preview_list.dart';
 import 'package:wox/entity/wox_query.dart';
+import 'package:wox/enums/wox_image_type_enum.dart';
 import 'package:wox/enums/wox_launch_mode_enum.dart';
 import 'package:wox/enums/wox_position_type_enum.dart';
+import 'package:wox/enums/wox_preview_type_enum.dart';
 import 'package:wox/enums/wox_query_type_enum.dart';
+import 'package:wox/enums/wox_result_tail_text_category_enum.dart';
+import 'package:wox/enums/wox_result_tail_type_enum.dart';
 import 'package:wox/enums/wox_selection_type_enum.dart';
 import 'package:wox/modules/launcher/views/wox_launcher_view.dart';
 import 'package:wox/modules/setting/views/wox_setting_view.dart';
@@ -420,6 +426,56 @@ void registerLauncherCoreSmokeTests() {
       expect(controller.queryBoxTextFieldController.text.contains('\n'), isFalse);
       expect(controller.queryBoxLineCount.value, greaterThan(1));
       expect(controller.getQueryBoxInputHeight(), greaterThan(baseInputHeight));
+    });
+
+    testWidgets('T2-20: List preview data keeps row icon title subtitle and tails', (tester) async {
+      final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      const queryId = 'list-preview-smoke-query';
+      final previewData = jsonEncode({
+        'items': [
+          {
+            'icon': {'ImageType': WoxImageTypeEnum.WOX_IMAGE_TYPE_EMOJI.code, 'ImageData': 'P'},
+            'title': 'photo.jpg',
+            'subtitle': 'Compressing image',
+            'tails': [
+              {'Type': WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_TEXT.code, 'Text': '42%', 'TextCategory': woxListItemTailTextCategoryWarning},
+            ],
+          },
+        ],
+      });
+
+      // Feature coverage: plugins now use one generic list preview contract for
+      // status-oriented rows. This smoke keeps the controller-facing payload
+      // explicit so SDK and UI changes cannot drift back to file-only fields.
+      final result = WoxQueryResult(
+        queryId: queryId,
+        id: 'list-preview-result',
+        title: 'Compress 1 image',
+        subTitle: 'Synthetic smoke result for list preview',
+        icon: WoxImage.empty(),
+        preview: WoxPreview(previewType: WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_LIST.code, previewData: previewData, previewProperties: const {}, scrollPosition: ''),
+        score: 100,
+        group: '',
+        groupScore: 0,
+        tails: const [],
+        actions: const [],
+        isGroup: false,
+      );
+
+      await controller.onReceivedQueryResults('list-preview-smoke', queryId, [result], isFinal: true);
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final activeResult = controller.activeResultViewController.activeItem.data;
+      expect(activeResult.preview.previewType, equals(WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_LIST.code));
+      final listData = WoxPreviewListData.fromPreviewData(activeResult.preview.previewData);
+
+      expect(listData.items, hasLength(1));
+      expect(listData.items.first.icon?.imageType, equals(WoxImageTypeEnum.WOX_IMAGE_TYPE_EMOJI.code));
+      expect(listData.items.first.title, equals('photo.jpg'));
+      expect(listData.items.first.subtitle, equals('Compressing image'));
+      expect(listData.items.first.tails, hasLength(1));
+      expect(listData.items.first.tails.first.text, equals('42%'));
+      expect(listData.items.first.tails.first.textCategory, equals(woxListItemTailTextCategoryWarning));
     });
   });
 }

@@ -7,7 +7,7 @@ enum WoxPreviewTypeEnum {
   WOX_PREVIEW_TYPE_IMAGE("image", "image"),
   WOX_PREVIEW_TYPE_URL("url", "url"),
   WOX_PREVIEW_TYPE_FILE("file", "file"),
-  WOX_PREVIEW_TYPE_FILE_LIST("file_list", "file_list"),
+  WOX_PREVIEW_TYPE_LIST("list", "list"),
   WOX_PREVIEW_TYPE_REMOTE("remote", "remote"),
   WOX_PREVIEW_TYPE_TERMINAL("terminal", "terminal"),
   WOX_PREVIEW_TYPE_WEBVIEW("webview", "webview"),

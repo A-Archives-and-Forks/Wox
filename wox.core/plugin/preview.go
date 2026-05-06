@@ -16,9 +16,10 @@ const (
 	WoxPreviewTypeRemote   = "remote" // when type is remote, data should be url to load WoxPreview
 	WoxPreviewTypeTerminal = "terminal"
 	WoxPreviewTypeWebView  = "webview" // when type is webview, data should be JSON string of WoxPreviewWebviewData
-	// file_list is public SDK data now, so the payload must stay as
-	// WoxPreviewFileListData JSON instead of ad-hoc structs at each call site.
-	WoxPreviewTypeFileList = "file_list"
+	// list is the generic structured preview used for status-oriented rows.
+	// It replaces the old file-only preview so plugins can reuse the same
+	// surface for progress lists, selected files, and other non-file workflows.
+	WoxPreviewTypeList = "list"
 
 	// internal use
 	WoxPreviewTypePluginDetail = "plugin_detail" // when type is plugin_detail, data should be JSON string of plugin metadata
@@ -50,11 +51,21 @@ func (p *WoxPreview) IsEmpty() bool {
 	return p.PreviewData == ""
 }
 
-// WoxPreviewFileListData is the shared JSON contract for file_list previews.
-// Keeping this shape in the SDK layer prevents core plugins and third-party
-// plugins from inventing incompatible field names for the same preview type.
-type WoxPreviewFileListData struct {
-	FilePaths []string `json:"filePaths"`
+// WoxPreviewListData is the shared JSON contract for list previews.
+// The payload is row-based instead of file-path-based so plugins can update the
+// same preview during long-running work without inventing custom markdown.
+type WoxPreviewListData struct {
+	Items []WoxPreviewListItem `json:"items"`
+}
+
+// WoxPreviewListItem mirrors the launcher result row surface inside preview.
+// Tails intentionally reuse QueryResultTail so status chips and semantic
+// colors stay consistent between result rows and preview rows.
+type WoxPreviewListItem struct {
+	Icon     *common.WoxImage  `json:"icon,omitempty"`
+	Title    string            `json:"title"`
+	Subtitle string            `json:"subtitle,omitempty"`
+	Tails    []QueryResultTail `json:"tails,omitempty"`
 }
 
 type WoxPreviewChatData struct {

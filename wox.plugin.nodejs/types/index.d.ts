@@ -1514,22 +1514,47 @@ export interface WoxImage {
  * - `image`: Image preview
  * - `url`: Website URL preview
  * - `file`: File preview
- * - `file_list`: Structured file-list preview
+ * - `list`: Structured row-list preview
  */
-export type WoxPreviewType = "markdown" | "text" | "image" | "url" | "file" | "file_list"
+export type WoxPreviewType = "markdown" | "text" | "image" | "url" | "file" | "list"
 
 /**
- * Structured data for `file_list` previews.
+ * One row in a `list` preview.
+ *
+ * Tails intentionally reuse ResultTail so progress/status chips render the
+ * same way in preview rows and normal result rows.
+ */
+export interface WoxPreviewListItem {
+  /**
+   * Optional row icon.
+   */
+  icon?: WoxImage
+
+  /**
+   * Primary row text.
+   */
+  title: string
+
+  /**
+   * Secondary row text.
+   */
+  subtitle?: string
+
+  /**
+   * Optional status chips or small images shown at the end of the row.
+   */
+  tails?: ResultTail[]
+}
+
+/**
+ * Structured data for `list` previews.
  *
  * Plugins should JSON.stringify this object into WoxPreview.PreviewData. The
- * named SDK type keeps plugin payloads aligned with the core and UI renderer
- * instead of relying on hand-written ad-hoc JSON shapes.
+ * row-based shape replaces the old file-only preview so plugins can dynamically
+ * show progress, status, selected files, or other scannable lists.
  */
-export interface WoxPreviewFileListData {
-  /**
-   * Absolute or plugin-resolved file paths to render in the file-list preview.
-   */
-  filePaths: string[]
+export interface WoxPreviewListData {
+  items: WoxPreviewListItem[]
 }
 
 /**
@@ -1561,10 +1586,19 @@ export interface WoxPreviewFileListData {
  *   PreviewProperties: {}
  * }
  *
- * // File-list preview
+ * // List preview
  * {
- *   PreviewType: "file_list",
- *   PreviewData: JSON.stringify({ filePaths: ["/path/to/a.txt", "/path/to/b.txt"] } satisfies WoxPreviewFileListData),
+ *   PreviewType: "list",
+ *   PreviewData: JSON.stringify({
+ *     items: [
+ *       {
+ *         icon: { ImageType: "emoji", ImageData: "✓" },
+ *         title: "photo.jpg",
+ *         subtitle: "Saved 42 KB",
+ *         tails: [{ Type: "text", Text: "Done", TextCategory: "success" }]
+ *       }
+ *     ]
+ *   } satisfies WoxPreviewListData),
  *   PreviewProperties: {}
  * }
  * ```
@@ -1585,7 +1619,7 @@ export interface WoxPreview {
    * - `image`: Image URL, path, or base64 data
    * - `url`: Website URL to preview
    * - `file`: File path to preview
-   * - `file_list`: JSON string encoded from WoxPreviewFileListData
+   * - `list`: JSON string encoded from WoxPreviewListData
    */
   PreviewData: string
   /**

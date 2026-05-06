@@ -1124,20 +1124,83 @@ func (m *Manager) formatFileListPreview(ctx context.Context, filePaths []string)
 	return sb.String()
 }
 
-func (m *Manager) buildFileListPreviewData(ctx context.Context, filePaths []string) string {
-	// Selection file previews now use the shared SDK data contract. The previous
-	// local struct matched only this function, which made later SDK exposure easy
-	// to drift from the payload that core already emits.
-	previewData, err := json.Marshal(WoxPreviewFileListData{FilePaths: filePaths})
+func (m *Manager) buildSelectionFileListPreviewData(ctx context.Context, filePaths []string) string {
+	items := make([]WoxPreviewListItem, 0, len(filePaths))
+	for _, filePath := range filePaths {
+		icon := common.ConvertIcon(ctx, common.NewWoxImageFileIcon(filePath), "")
+		extension := strings.TrimPrefix(filepath.Ext(filePath), ".")
+		typeLabel := strings.ToUpper(extension)
+		if typeLabel == "" {
+			typeLabel = "FILE"
+		}
+
+		items = append(items, WoxPreviewListItem{
+			Icon:     &icon,
+			Title:    filepath.Base(filePath),
+			Subtitle: filepath.Dir(filePath),
+			Tails:    []QueryResultTail{NewQueryResultTailText(typeLabel)},
+		})
+	}
+
+	// Selection file previews now use the generic list contract. The previous
+	// file-path-only payload could not express progress/status rows, so core maps
+	// file selections into normal preview rows instead of keeping a file-specific
+	// renderer alive.
+	previewData, err := json.Marshal(WoxPreviewListData{Items: items})
 	if err != nil {
-		// File-list previews used to be markdown strings, which forced the UI to
+		// Selection previews used to be markdown strings, which forced the UI to
 		// render paths as generic text. Fall back to that stable legacy format if
 		// JSON encoding ever fails so selection query preview still works.
-		util.GetLogger().Warn(ctx, fmt.Sprintf("failed to marshal file list preview data: %s", err.Error()))
+		util.GetLogger().Warn(ctx, fmt.Sprintf("failed to marshal selection list preview data: %s", err.Error()))
 		return m.formatFileListPreview(ctx, filePaths)
 	}
 
 	return string(previewData)
+}
+
+func (m *Manager) normalizeListPreviewData(ctx context.Context, pluginInstance *Instance, preview WoxPreview) WoxPreview {
+	if preview.PreviewType != WoxPreviewTypeList || preview.PreviewData == "" {
+		return preview
+	}
+
+	var data WoxPreviewListData
+	if err := json.Unmarshal([]byte(preview.PreviewData), &data); err != nil {
+		// Leave malformed payloads untouched so the UI can show its existing
+		// preview error. Core only normalizes well-formed list rows.
+		return preview
+	}
+
+	for itemIndex := range data.Items {
+		item := &data.Items[itemIndex]
+		item.Title = m.translatePlugin(ctx, pluginInstance, item.Title)
+		item.Subtitle = m.translatePlugin(ctx, pluginInstance, item.Subtitle)
+
+		if item.Icon != nil && !item.Icon.IsEmpty() {
+			convertedIcon := common.ConvertIcon(ctx, *item.Icon, pluginInstance.PluginDirectory)
+			item.Icon = &convertedIcon
+		}
+
+		for tailIndex := range item.Tails {
+			tail := &item.Tails[tailIndex]
+			if tail.Type == QueryResultTailTypeText {
+				tail.Text = m.translatePlugin(ctx, pluginInstance, tail.Text)
+			}
+			if tail.Type == QueryResultTailTypeImage {
+				tail.Image = common.ConvertIcon(ctx, tail.Image, pluginInstance.PluginDirectory)
+			}
+		}
+	}
+
+	// Re-encode after translation and icon normalization so preview rows render
+	// with the same i18n and image behavior as top-level result rows.
+	normalizedData, err := json.Marshal(data)
+	if err != nil {
+		util.GetLogger().Warn(ctx, fmt.Sprintf("failed to marshal normalized list preview data: %s", err.Error()))
+		return preview
+	}
+
+	preview.PreviewData = string(normalizedData)
+	return preview
 }
 
 func (m *Manager) calculateResultScore(ctx context.Context, pluginId, title, subTitle string, currentQuery string) int64 {
@@ -1573,16 +1636,17 @@ func (m *Manager) PolishResult(ctx context.Context, pluginInstance *Instance, qu
 		}
 		if query.Selection.Type == selection.SelectionTypeFile {
 			result.Preview = WoxPreview{
-				// Selection-file preview is structured so the UI can render a
-				// modern file list instead of treating paths as markdown text.
-				PreviewType: WoxPreviewTypeFileList,
-				PreviewData: m.buildFileListPreviewData(ctx, query.Selection.FilePaths),
+				// Selection-file preview is now expressed as generic list rows so
+				// the same preview type can serve progress/status workflows too.
+				PreviewType: WoxPreviewTypeList,
+				PreviewData: m.buildSelectionFileListPreviewData(ctx, query.Selection.FilePaths),
 				PreviewProperties: map[string]string{
 					"i18n:selection_files_count": fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "selection_files_count_value"), len(query.Selection.FilePaths)),
 				},
 			}
 		}
 	}
+	result.Preview = m.normalizeListPreviewData(ctx, pluginInstance, result.Preview)
 
 	// translate title
 	result.Title = m.translatePlugin(ctx, pluginInstance, result.Title)
@@ -1896,7 +1960,11 @@ func (m *Manager) PolishUpdatableResult(ctx context.Context, pluginInstance *Ins
 
 	// Translate preview properties if present
 	if result.Preview != nil {
-		preview := *result.Preview
+		// Updated previews must use the same list normalization as initial
+		// query results. Long-running actions commonly update list rows in place,
+		// so icon conversion and row text translation cannot live only in the
+		// first result-processing path.
+		preview := m.normalizeListPreviewData(ctx, pluginInstance, *result.Preview)
 		var previewProperties = make(map[string]string)
 		for key, value := range preview.PreviewProperties {
 			translatedKey := m.translatePlugin(ctx, pluginInstance, key)

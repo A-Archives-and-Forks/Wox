@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"wox/common"
 	"wox/i18n"
@@ -242,19 +243,34 @@ func (c *Plugin) buildSelectionPreview(ctx context.Context, command commandSetti
 
 	if query.Selection.Type == selection.SelectionTypeFile {
 		previewProperties["i18n:plugin_ai_command_preview_selected_files"] = fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "selection_files_count_value"), len(query.Selection.FilePaths))
-		// AI commands share the same file-list preview contract as normal
-		// selection results. The earlier anonymous struct duplicated the JSON
-		// shape and made SDK docs/types easy to drift from this core payload.
-		previewJson, err := json.Marshal(plugin.WoxPreviewFileListData{FilePaths: query.Selection.FilePaths})
+		items := make([]plugin.WoxPreviewListItem, 0, len(query.Selection.FilePaths))
+		for _, filePath := range query.Selection.FilePaths {
+			icon := common.NewWoxImageFileIcon(filePath)
+			extension := strings.TrimPrefix(filepath.Ext(filePath), ".")
+			typeLabel := strings.ToUpper(extension)
+			if typeLabel == "" {
+				typeLabel = "FILE"
+			}
+
+			items = append(items, plugin.WoxPreviewListItem{
+				Icon:     &icon,
+				Title:    filepath.Base(filePath),
+				Subtitle: filepath.Dir(filePath),
+				Tails:    []plugin.QueryResultTail{plugin.NewQueryResultTailText(typeLabel)},
+			})
+		}
+
+		// AI commands now share the generic list preview contract with normal
+		// selection results. The old file-only payload could not represent the
+		// progress/status rows needed by long-running plugin actions.
+		previewJson, err := json.Marshal(plugin.WoxPreviewListData{Items: items})
 		if err != nil {
-			// File selections still reuse the generic file-list preview so vision
-			// commands get the same structured path layout as other selection
-			// queries. If JSON encoding fails, keep the legacy hint rather than
-			// blocking the command from running.
+			// If JSON encoding fails, keep the legacy hint rather than blocking
+			// the command from running.
 			c.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to marshal ai command file selection preview: %s", err.Error()))
 			return plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeMarkdown, PreviewData: "i18n:plugin_ai_command_enter_to_start"}
 		}
-		return plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeFileList, PreviewData: string(previewJson), PreviewProperties: previewProperties}
+		return plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeList, PreviewData: string(previewJson), PreviewProperties: previewProperties}
 	}
 
 	return plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeMarkdown, PreviewData: "i18n:plugin_ai_command_enter_to_start", PreviewProperties: previewProperties}

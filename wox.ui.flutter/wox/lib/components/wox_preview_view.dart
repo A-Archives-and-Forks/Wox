@@ -19,7 +19,7 @@ import 'package:wox/api/wox_api.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_ai_chat_view.dart';
 import 'package:wox/components/wox_ai_stream_preview_view.dart';
-import 'package:wox/components/wox_file_list_preview_view.dart';
+import 'package:wox/components/wox_list_preview_view.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
 import 'package:wox/components/wox_markdown.dart';
 import 'package:wox/components/wox_plugin_detail_view.dart';
@@ -34,7 +34,7 @@ import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/wox_preview.dart';
 import 'package:wox/entity/wox_preview_ai_stream.dart';
-import 'package:wox/entity/wox_preview_file_list.dart';
+import 'package:wox/entity/wox_preview_list.dart';
 import 'package:wox/entity/wox_query_requirement_settings_preview.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/enums/wox_preview_scroll_position_enum.dart';
@@ -291,14 +291,14 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
           contentWidget = buildText("Unsupported file type preview: $fileExtension");
         }
       }
-    } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_FILE_LIST.code) {
+    } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_LIST.code) {
       try {
-        // Core sends selection-file previews as JSON so this renderer can make
-        // file paths scannable. The old markdown fallback is still handled by
-        // the catch branch to keep malformed payloads debuggable.
-        contentWidget = WoxFileListPreviewView(data: WoxPreviewFileListData.fromPreviewData(widget.woxPreview.previewData), woxTheme: widget.woxTheme);
+        // Plugins send generic list previews as JSON rows so long-running
+        // actions can show progress without abusing file-list or markdown data.
+        // The catch branch keeps malformed payloads debuggable.
+        contentWidget = WoxListPreviewView(data: WoxPreviewListData.fromPreviewData(widget.woxPreview.previewData), woxTheme: widget.woxTheme);
       } catch (e) {
-        contentWidget = buildText("Invalid file list preview data: $e");
+        contentWidget = buildText("Invalid list preview data: $e");
       }
     } else if (widget.woxPreview.previewType == WoxPreviewTypeEnum.WOX_PREVIEW_TYPE_IMAGE.code) {
       final parsedWoxImage = WoxImage.parse(widget.woxPreview.previewData);
