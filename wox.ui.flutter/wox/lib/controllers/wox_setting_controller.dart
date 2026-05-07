@@ -50,6 +50,7 @@ class WoxSettingController extends GetxController {
   final filterDisabledPluginsOnly = false.obs;
   final filterUpgradablePluginsOnly = false.obs;
   final filterUninstalledPluginsOnly = false.obs;
+  final filterThirdPartyPluginsOnly = false.obs;
   final filterRuntimeNodejsOnly = false.obs;
   final filterRuntimePythonOnly = false.obs;
   final filterRuntimeScriptOnly = false.obs;
@@ -651,6 +652,7 @@ class WoxSettingController extends GetxController {
     filterDisabledPluginsOnly.value = false;
     filterUpgradablePluginsOnly.value = false;
     filterUninstalledPluginsOnly.value = false;
+    filterThirdPartyPluginsOnly.value = false;
     filterRuntimeNodejsOnly.value = false;
     filterRuntimePythonOnly.value = false;
     filterRuntimeScriptOnly.value = false;
@@ -744,9 +746,13 @@ class WoxSettingController extends GetxController {
   bool get hasStoreRuntimePluginFilterApplied => filterRuntimeNodejsOnly.value || filterRuntimePythonOnly.value || filterRuntimeScriptOnly.value;
 
   bool get hasInstalledPluginFilterApplied =>
-      filterEnabledPluginsOnly.value || filterDisabledPluginsOnly.value || filterUpgradablePluginsOnly.value || hasInstalledRuntimePluginFilterApplied;
+      filterEnabledPluginsOnly.value ||
+      filterDisabledPluginsOnly.value ||
+      filterUpgradablePluginsOnly.value ||
+      filterThirdPartyPluginsOnly.value ||
+      hasInstalledRuntimePluginFilterApplied;
 
-  bool get hasStorePluginFilterApplied => filterUninstalledPluginsOnly.value || hasStoreRuntimePluginFilterApplied;
+  bool get hasStorePluginFilterApplied => filterUninstalledPluginsOnly.value || filterThirdPartyPluginsOnly.value || hasStoreRuntimePluginFilterApplied;
 
   bool get hasPluginFilterApplied => isStorePluginList.value ? hasStorePluginFilterApplied : hasInstalledPluginFilterApplied;
 
@@ -755,6 +761,7 @@ class WoxSettingController extends GetxController {
     bool? disabledOnly,
     bool? upgradableOnly,
     bool? uninstalledOnly,
+    bool? thirdPartyOnly,
     bool? runtimeNodejsOnly,
     bool? runtimePythonOnly,
     bool? runtimeScriptOnly,
@@ -772,6 +779,9 @@ class WoxSettingController extends GetxController {
     }
     if (uninstalledOnly != null) {
       filterUninstalledPluginsOnly.value = uninstalledOnly;
+    }
+    if (thirdPartyOnly != null) {
+      filterThirdPartyPluginsOnly.value = thirdPartyOnly;
     }
     if (runtimeNodejsOnly != null) {
       filterRuntimeNodejsOnly.value = runtimeNodejsOnly;
@@ -885,6 +895,7 @@ class WoxSettingController extends GetxController {
     final disabledOnly = !isStoreView && filterDisabledPluginsOnly.value;
     final upgradableOnly = !isStoreView && filterUpgradablePluginsOnly.value;
     final uninstalledOnly = isStoreView && filterUninstalledPluginsOnly.value;
+    final thirdPartyOnly = filterThirdPartyPluginsOnly.value;
     final runtimeNodejsOnly = filterRuntimeNodejsOnly.value;
     final runtimePythonOnly = filterRuntimePythonOnly.value;
     final runtimeScriptOnly = filterRuntimeScriptOnly.value;
@@ -930,6 +941,12 @@ class WoxSettingController extends GetxController {
         return false;
       }
       if (uninstalledOnly && plugin.isInstalled) {
+        return false;
+      }
+      // Feature: third-party filtering should use the existing IsSystem marker
+      // instead of inferring ownership from author text, because official plugin
+      // authors can vary while IsSystem is the stable contract from core/store data.
+      if (thirdPartyOnly && plugin.isSystem) {
         return false;
       }
 

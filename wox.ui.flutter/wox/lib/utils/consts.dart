@@ -57,3 +57,8 @@ const String NODEJS_ICON =
 
 const String SCRIPT_ICON =
     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke-width="1.5"><path fill="#d7e0ff" d="M18 22H2v-6h3V2h17v6h-4z"/><path stroke="#4147d5" d="M14.25 22h3.25H2v-6h12.25v4"/><path stroke="#4147d5" d="M13.5 22H18V4.5M8 8h7m-7 4h7"/><path stroke="#4147d5" d="M5 16V2h17v6h-4"/></g></svg>';
+
+// Plugin detail chips need the real GitHub mark so the website metadata reads
+// like a compact identity tag instead of another generic external-link action.
+const String GITHUB_ICON =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 98 96"><path fill="#24292f" fill-rule="evenodd" clip-rule="evenodd" d="M48.9 0C21.9 0 0 22 0 49.1c0 21.7 14 40.1 33.4 46.6 2.4.5 3.3-1.1 3.3-2.4 0-1.2 0-4.2-.1-8.3-13.6 3-16.4-6.6-16.4-6.6-2.2-5.7-5.4-7.2-5.4-7.2-4.4-3 .3-3 .3-3 4.9.3 7.5 5.1 7.5 5.1 4.3 7.5 11.4 5.3 14.1 4.1.4-3.2 1.7-5.3 3.1-6.5-10.8-1.2-22.2-5.4-22.2-24.2 0-5.4 1.9-9.7 5-13.2-.5-1.2-2.2-6.2.5-13 0 0 4.1-1.3 13.4 5 3.9-1.1 8-1.6 12.2-1.6s8.3.6 12.2 1.6c9.3-6.3 13.4-5 13.4-5 2.7 6.8 1 11.8.5 13 3.1 3.5 5 7.8 5 13.2 0 18.8-11.4 22.9-22.3 24.1 1.8 1.5 3.3 4.5 3.3 9.1 0 6.5-.1 11.8-.1 13.4 0 1.3.9 2.9 3.4 2.4C84 89.2 98 70.8 98 49.1 97.8 22 75.9 0 48.9 0z"/></svg>';

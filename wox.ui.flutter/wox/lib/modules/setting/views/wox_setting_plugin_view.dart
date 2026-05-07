@@ -150,7 +150,7 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
       left = left.clamp(12.0, screenSize.width - panelWidth - 12.0);
     }
 
-    final double panelHeight = 190;
+    final double panelHeight = 230;
 
     double top = buttonTopLeft.dy + button.size.height + 8;
     top = top.clamp(12.0, screenSize.height - panelHeight - 12.0);
@@ -596,6 +596,11 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_settings'), style: TextStyle(color: getThemeTextColor()))),
                             content: pluginTabSetting(context),
                           ),
+                          // Installed plugins keep the description directly after Settings so users can review plugin context before changing keywords or commands; the previous order buried this basic context behind operational tabs.
+                          _PluginTabData(
+                            title: Tab(child: Text(controller.tr('ui_plugin_tab_description'), style: TextStyle(color: getThemeTextColor()))),
+                            content: pluginTabDescription(),
+                          ),
                           _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_trigger_keywords'), style: TextStyle(color: getThemeTextColor()))),
                             content: pluginTabTriggerKeywords(),
@@ -603,10 +608,6 @@ class WoxSettingPluginView extends GetView<WoxSettingController> {
                           _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_commands'), style: TextStyle(color: getThemeTextColor()))),
                             content: pluginTabCommand(context),
-                          ),
-                          _PluginTabData(
-                            title: Tab(child: Text(controller.tr('ui_plugin_tab_description'), style: TextStyle(color: getThemeTextColor()))),
-                            content: pluginTabDescription(),
                           ),
                           _PluginTabData(
                             title: Tab(child: Text(controller.tr('ui_plugin_tab_privacy'), style: TextStyle(color: getThemeTextColor()))),
@@ -1212,6 +1213,7 @@ class _PluginFilterPanelState extends State<_PluginFilterPanel> {
       if (!isStorePluginList) widget.controller.tr('ui_plugin_filter_disabled_only'),
       if (!isStorePluginList) widget.controller.tr('ui_plugin_filter_enabled_only'),
       if (!isStorePluginList) widget.controller.tr('ui_plugin_filter_upgradable'),
+      widget.controller.tr('ui_plugin_filter_third_party_only'),
       widget.controller.tr('ui_runtime_status'),
     ];
 
@@ -1274,6 +1276,7 @@ class _PluginFilterPanelState extends State<_PluginFilterPanel> {
                     value: widget.controller.filterUninstalledPluginsOnly.value,
                     onChanged: (value) => widget.controller.updatePluginFilters(uninstalledOnly: value ?? false),
                   ),
+                if (isStorePluginList) const SizedBox(height: 10),
                 if (!isStorePluginList)
                   _buildBooleanFilterRow(
                     label: widget.controller.tr('ui_plugin_filter_disabled_only'),
@@ -1297,6 +1300,16 @@ class _PluginFilterPanelState extends State<_PluginFilterPanel> {
                     value: widget.controller.filterUpgradablePluginsOnly.value,
                     onChanged: (value) => widget.controller.updatePluginFilters(upgradableOnly: value ?? false),
                   ),
+                if (!isStorePluginList) const SizedBox(height: 10),
+                _buildBooleanFilterRow(
+                  label: widget.controller.tr('ui_plugin_filter_third_party_only'),
+                  labelWidth: labelColumnWidth,
+                  value: widget.controller.filterThirdPartyPluginsOnly.value,
+                  // Feature: third-party filtering stays in the same advanced
+                  // filter group so it can be combined with status and runtime
+                  // filters without adding a separate ownership filter model.
+                  onChanged: (value) => widget.controller.updatePluginFilters(thirdPartyOnly: value ?? false),
+                ),
                 const SizedBox(height: 10),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,

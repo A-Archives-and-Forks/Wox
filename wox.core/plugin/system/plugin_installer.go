@@ -109,20 +109,24 @@ func (i *PluginInstallerPlugin) queryForSelectionFile(ctx context.Context, fileP
 
 	// Get translated action title
 	actionTitle := i.api.GetTranslation(ctx, actionTitleKey)
+	pluginIcon := resolvePluginIcon(filePath, pluginMetadata)
 
 	// Create plugin detail JSON for preview
+	// The preview renders the plugin identity header directly, so local package
+	// previews include the resolved icon and current installed state instead of
+	// relying on the selected result row for that context.
 	pluginDetailData := map[string]interface{}{
 		"Id":          pluginMetadata.Id,
 		"Name":        pluginMetadata.GetName(ctx),
 		"Description": pluginMetadata.GetDescription(ctx),
 		"Author":      pluginMetadata.Author,
 		"Version":     pluginMetadata.Version,
+		"Icon":        pluginIcon,
 		"Website":     pluginMetadata.Website,
 		"Runtime":     pluginMetadata.Runtime,
+		"IsInstalled": isInstalled,
 	}
 	pluginDetailJSON, _ := json.Marshal(pluginDetailData)
-
-	pluginIcon := resolvePluginIcon(filePath, pluginMetadata)
 
 	// create result for plugin installation
 	results = append(results, plugin.QueryResult{
@@ -149,7 +153,9 @@ func (i *PluginInstallerPlugin) queryForSelectionFile(ctx context.Context, fileP
 
 						// update tails and actions after successful install
 						if updatable := i.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
-							newTails := []plugin.QueryResultTail{{Type: plugin.QueryResultTailTypeImage, Image: common.NewWoxImageEmoji("\u2705")}}
+							// Use the shared installed SVG instead of a platform emoji so
+							// local plugin install results match the WPM installed status.
+							newTails := []plugin.QueryResultTail{{Type: plugin.QueryResultTailTypeImage, Image: common.PluginInstalledIcon}}
 							updatable.Tails = &newTails
 
 							// create "Start Using" action if plugin has non-wildcard trigger keyword

@@ -191,6 +191,7 @@
   "ui_plugin_filter_disabled_only": "Disabled Only",
   "ui_plugin_filter_enabled_only": "Enabled Only",
   "ui_plugin_filter_upgradable": "Upgradable",
+  "ui_plugin_filter_third_party_only": "Third-party Only",
   "ui_filter_placeholder": "Filter...",
   "ui_not_installed": "Not Installed",
   "ui_disabled_tooltip": "When selected, this item is temporarily disabled without being deleted.",

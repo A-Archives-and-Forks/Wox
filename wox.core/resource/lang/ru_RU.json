@@ -185,6 +185,7 @@
   "ui_plugin_filter_disabled_only": "Только отключенные",
   "ui_plugin_filter_enabled_only": "Только включенные",
   "ui_plugin_filter_upgradable": "Доступно обновление",
+  "ui_plugin_filter_third_party_only": "Только сторонние",
   "ui_filter_placeholder": "Фильтр...",
   "ui_not_installed": "Не установлено",
   "ui_disabled_tooltip": "Если выбрано, этот пункт временно отключается без удаления.",

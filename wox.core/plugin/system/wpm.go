@@ -107,6 +107,12 @@ func (w *WPMPlugin) GetMetadata() plugin.Metadata {
 			{
 				Name: plugin.MetadataFeatureIgnoreAutoScore,
 			},
+			{
+				Name: plugin.MetadataFeatureResultPreviewWidthRatio,
+				Params: map[string]any{
+					"WidthRatio": 0.35,
+				},
+			},
 		},
 		Commands: []plugin.MetadataCommand{
 			{
@@ -521,7 +527,9 @@ func (w *WPMPlugin) createInstallAction(pluginManifest plugin.StorePluginManifes
 
 				// update tails and actions after successful install
 				if updatable := w.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
-					newTails := []plugin.QueryResultTail{{Type: plugin.QueryResultTailTypeImage, Image: common.NewWoxImageEmoji("✅")}}
+					// Use the shared installed SVG so the result tail stays visually
+					// consistent with the preview detail status across platforms.
+					newTails := []plugin.QueryResultTail{{Type: plugin.QueryResultTailTypeImage, Image: common.PluginInstalledIcon}}
 					updatable.Tails = &newTails
 
 					// create actions: uninstall + start using (if not wildcard trigger)
@@ -628,6 +636,8 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 	installed := plugin.GetPluginManager().GetPluginInstances()
 
 	for _, pluginManifest := range pluginManifests {
+		installedFlag := lo.ContainsBy(installed, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id })
+
 		// build tails to indicate installation/upgrade status
 		var tails []plugin.QueryResultTail
 		if inst, ok := lo.Find(installed, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id }); ok {
@@ -638,13 +648,12 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 				tails = append(tails, plugin.QueryResultTail{Type: plugin.QueryResultTailTypeImage, Image: common.UpgradeIcon})
 			} else {
 				// show an installed icon
-				tails = append(tails, plugin.QueryResultTail{Type: plugin.QueryResultTailTypeImage, Image: common.NewWoxImageEmoji("✅")})
+				tails = append(tails, plugin.QueryResultTail{Type: plugin.QueryResultTailTypeImage, Image: common.PluginInstalledIcon})
 			}
 		}
 
 		// decide actions based on install/upgrade status
 		var actions []plugin.QueryResultAction
-		installedFlag := lo.ContainsBy(installed, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id })
 		if installedFlag {
 			upgradeFlag := false
 			if inst, ok := lo.Find(installed, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id }); ok {
@@ -687,7 +696,9 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 
 							// update tails and actions after successful upgrade
 							if updatable := w.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
-								newTails := []plugin.QueryResultTail{{Type: plugin.QueryResultTailTypeImage, Image: common.NewWoxImageEmoji("\u2705")}}
+								// Use the shared installed SVG so the result tail stays visually
+								// consistent with the preview detail status across platforms.
+								newTails := []plugin.QueryResultTail{{Type: plugin.QueryResultTailTypeImage, Image: common.PluginInstalledIcon}}
 								updatable.Tails = &newTails
 
 								// create actions: uninstall + start using (if not wildcard trigger)
@@ -764,19 +775,9 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 		// Create plugin detail JSON for preview
 		pluginName := pluginManifest.GetName(ctx)
 		pluginDescription := pluginManifest.GetDescription(ctx)
-		pluginDetailData := map[string]interface{}{
-			"Id":             pluginManifest.Id,
-			"Name":           pluginName,
-			"Description":    pluginDescription,
-			"Author":         pluginManifest.Author,
-			"Version":        pluginManifest.Version,
-			"Website":        pluginManifest.Website,
-			"Runtime":        pluginManifest.Runtime,
-			"ScreenshotUrls": pluginManifest.ScreenshotUrls,
-		}
-		pluginDetailJSON, _ := json.Marshal(pluginDetailData)
-
-		// Support both IconUrl and IconEmoji, prefer IconEmoji if both are present
+		// The detail preview now renders the plugin identity header itself, so
+		// the preview payload must carry the same icon and install state that the
+		// result row used to own exclusively.
 		var icon common.WoxImage
 		if pluginManifest.IconEmoji != "" {
 			icon = common.NewWoxImageEmoji(pluginManifest.IconEmoji)
@@ -785,6 +786,19 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 		} else {
 			icon = wpmIcon
 		}
+		pluginDetailData := map[string]interface{}{
+			"Id":             pluginManifest.Id,
+			"Name":           pluginName,
+			"Description":    pluginDescription,
+			"Author":         pluginManifest.Author,
+			"Version":        pluginManifest.Version,
+			"Icon":           icon,
+			"Website":        pluginManifest.Website,
+			"Runtime":        pluginManifest.Runtime,
+			"ScreenshotUrls": pluginManifest.ScreenshotUrls,
+			"IsInstalled":    installedFlag,
+		}
+		pluginDetailJSON, _ := json.Marshal(pluginDetailData)
 
 		results = append(results, plugin.QueryResult{
 			Id:       uuid.NewString(),

@@ -185,6 +185,7 @@
   "ui_plugin_filter_disabled_only": "Somente desativados",
   "ui_plugin_filter_enabled_only": "Somente ativados",
   "ui_plugin_filter_upgradable": "Atualizáveis",
+  "ui_plugin_filter_third_party_only": "Somente terceiros",
   "ui_filter_placeholder": "Filtrar...",
   "ui_not_installed": "Não instalado",
   "ui_disabled_tooltip": "Quando selecionado, este item é desativado temporariamente sem ser removido.",

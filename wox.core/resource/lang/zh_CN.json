@@ -191,6 +191,7 @@
   "ui_plugin_filter_disabled_only": "仅禁用",
   "ui_plugin_filter_enabled_only": "仅启用",
   "ui_plugin_filter_upgradable": "可升级",
+  "ui_plugin_filter_third_party_only": "仅第三方",
   "ui_filter_placeholder": "筛选...",
   "ui_not_installed": "未安装",
   "ui_disabled_tooltip": "选中后将临时禁用该项，但不会删除。",
