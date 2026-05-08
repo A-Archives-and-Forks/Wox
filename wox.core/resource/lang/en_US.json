@@ -59,7 +59,7 @@
   "ui_query_hotkeys": "Query Hotkeys",
   "ui_query_hotkeys_tips": "Quickly trigger predefined queries using hotkeys. Supports variables (like selected text, browser URL, etc.) to build dynamic queries, and can be set to silent execution mode to automatically execute single results.",
   "ui_query_shortcuts": "Query Shortcuts",
-  "ui_query_shortcuts_tips": "Set short aliases for frequently used queries. Typing the shortcut will automatically expand to the full query, improving input efficiency. For example: typing 'tr' expands to 'chatgpt translate'.",
+  "ui_query_shortcuts_tips": "Set short aliases for frequently used queries. A shortcut only expands when it is the complete first word of the query, such as 'tr' or 'tr text', so it will not affect normal queries like 'translate'. For example: typing 'tr' expands to 'chatgpt translate'.",
   "ui_general": "General",
   "ui_general_description": "Configure core behavior and global preferences for Wox.",
   "ui_general_section_startup": "Startup",

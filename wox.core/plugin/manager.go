@@ -2396,7 +2396,11 @@ func (m *Manager) expandQueryShortcut(ctx context.Context, query string, querySh
 			continue
 		}
 
-		if strings.HasPrefix(query, shortcut.Shortcut) {
+		// Query shortcuts are command-style aliases for the first query token. Plain
+		// prefix matching made short aliases such as "th" rewrite normal queries like
+		// "theme xx", so the shortcut must end at the query boundary while still
+		// supporting "th args".
+		if query == shortcut.Shortcut || strings.HasPrefix(query, shortcut.Shortcut+" ") {
 			if !shortcut.HasPlaceholder() {
 				newQuery = strings.Replace(query, shortcut.Shortcut, shortcut.Query, 1)
 				break

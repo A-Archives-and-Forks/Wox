@@ -59,7 +59,7 @@
   "ui_query_hotkeys": "快捷查询",
   "ui_query_hotkeys_tips": "通过快捷键快速触发预定义的查询。支持使用变量（如选中的文本、浏览器URL等）来构建动态查询，还可以设置静默执行模式自动执行单一结果。",
   "ui_query_shortcuts": "查询缩写",
-  "ui_query_shortcuts_tips": "为常用查询设置简短的别名。输入缩写后会自动展开为完整查询，提高输入效率。例如：输入 'tr' 自动展开为 'chatgpt translate'。",
+  "ui_query_shortcuts_tips": "为常用查询设置简短的别名。只有当缩写是查询的第一个完整单词时才会展开，例如 'tr' 或 'tr 文本'，因此不会影响 'translate' 这类普通查询。例如：输入 'tr' 自动展开为 'chatgpt translate'。",
   "ui_general": "通用",
   "ui_general_description": "配置 Wox 的核心行为和全局偏好。",
   "ui_general_section_startup": "启动",

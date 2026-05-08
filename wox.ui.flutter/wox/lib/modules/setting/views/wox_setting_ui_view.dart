@@ -26,6 +26,7 @@ class WoxSettingUIView extends WoxSettingBaseView {
 
   List<WoxDropdownItem<String>> _buildGlanceItems() {
     final items = <WoxDropdownItem<String>>[];
+    final iconColor = getThemeTextColor();
     for (final plugin in controller.installedPlugins) {
       for (final glance in plugin.glances) {
         final key = GlanceRef(pluginId: plugin.id, glanceId: glance.id).key;
@@ -36,7 +37,7 @@ class WoxSettingUIView extends WoxSettingBaseView {
           WoxDropdownItem(
             value: key,
             label: glance.name,
-            leading: icon == null ? null : WoxImageView(woxImage: icon, width: 18, height: 18),
+            leading: icon == null ? null : WoxImageView(woxImage: icon, width: 18, height: 18, svgColor: iconColor),
             trailing: _buildGlancePreviewValue(previewItem),
           ),
         );
@@ -54,13 +55,7 @@ class WoxSettingUIView extends WoxSettingBaseView {
       constraints: const BoxConstraints(maxWidth: 110),
       // The settings picker previews the real Glance response so users choose
       // the item by its live output, not by metadata that can only approximate it.
-      child: Text(
-        text,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        textAlign: TextAlign.right,
-        style: TextStyle(color: color, fontSize: 13, fontWeight: isEmptyPreview ? FontWeight.w500 : FontWeight.w600),
-      ),
+      child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.right, style: TextStyle(color: color, fontSize: 13)),
     );
   }
 

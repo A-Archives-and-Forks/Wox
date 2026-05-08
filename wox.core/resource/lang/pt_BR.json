@@ -57,7 +57,7 @@
   "ui_query_hotkeys": "Teclas de atalho para consulta",
   "ui_query_hotkeys_tips": "Acione rapidamente consultas predefinidas usando teclas de atalho. Suporta variáveis (como texto selecionado, URL do navegador, etc.) para criar consultas dinâmicas e pode ser configurado para modo de execução silenciosa para executar automaticamente resultados únicos.",
   "ui_query_shortcuts": "Atalhos de consulta",
-  "ui_query_shortcuts_tips": "Defina aliases curtos para consultas usadas com frequência. Digitar o atalho expandirá automaticamente para a consulta completa, melhorando a eficiência de entrada. Por exemplo: digitar 'tr' expande para 'chatgpt translate'.",
+  "ui_query_shortcuts_tips": "Defina aliases curtos para consultas usadas com frequência. Um atalho só é expandido quando é a primeira palavra completa da consulta, como 'tr' ou 'tr texto', para não afetar consultas normais como 'translate'. Por exemplo: digitar 'tr' expande para 'chatgpt translate'.",
   "ui_general": "Geral",
   "ui_general_description": "Configure o comportamento principal e as preferências globais do Wox.",
   "ui_general_section_startup": "Inicialização",

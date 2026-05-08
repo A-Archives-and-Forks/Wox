@@ -28,6 +28,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
   static const double _glanceIconAndGapWidth = 21;
   static const double _glanceHorizontalPadding = 16;
   static const double _glanceTextMeasureSafetyWidth = 4;
+  static const double _glanceMinItemWidth = 44;
   static const double _glanceMaxItemWidth = 192;
 
   // Helper method to convert LogicalKeyboardKey to number for quick select
@@ -161,8 +162,10 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
     final textWidth = WoxTextMeasureUtil.measureTextWidth(context: context, text: item.text, style: textStyle).ceilToDouble();
     final hasIcon = controller.shouldShowGlanceIcon(item);
     final iconWidth = hasIcon ? _glanceIconAndGapWidth : 0.0;
-    final minWidth = hasIcon ? 76.0 : 44.0;
-    return (textWidth + iconWidth + _glanceHorizontalPadding + _glanceTextMeasureSafetyWidth).clamp(minWidth, _glanceMaxItemWidth).toDouble();
+    // Keep the minimum width independent from icon visibility. The measured
+    // content already includes icon space, and a larger icon-only minimum makes
+    // short values such as Windows "AC" look padded instead of compact.
+    return (textWidth + iconWidth + _glanceHorizontalPadding + _glanceTextMeasureSafetyWidth).clamp(_glanceMinItemWidth, _glanceMaxItemWidth).toDouble();
   }
 
   // Build the TextField widget
@@ -376,10 +379,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                     // same text width used by the input decoration. This keeps pasted multi-line text intact
                     // while giving long single-line queries enough vertical room for caret navigation.
                     SchedulerBinding.instance.addPostFrameCallback((_) {
-                      controller.updateQueryBoxTextWrapWidth(
-                        const UuidV4().generate(),
-                        (constraints.maxWidth - 8 - rightAccessoryWidth).clamp(0, double.infinity),
-                      );
+                      controller.updateQueryBoxTextWrapWidth(const UuidV4().generate(), (constraints.maxWidth - 8 - rightAccessoryWidth).clamp(0, double.infinity));
                     });
 
                     return Theme(
@@ -392,17 +392,13 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
             ),
           ),
           Positioned(
-            right: 10,
+            right: 6,
             height: queryBoxHeight,
             child: WoxDragMoveArea(
               onDragEnd: () {
                 controller.focusQueryBox();
               },
-              child: SizedBox(
-                width: _getQueryBoxRightAccessoryWidth(context, currentTheme),
-                height: 55,
-                child: Center(child: Padding(padding: const EdgeInsets.all(8.0), child: _buildRightAccessory(currentTheme))),
-              ),
+              child: SizedBox(width: _getQueryBoxRightAccessoryWidth(context, currentTheme), height: 55, child: Center(child: _buildRightAccessory(currentTheme))),
             ),
           ),
         ],
@@ -419,7 +415,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
       return Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          for (var index = 0; index < items.length; index++) ...[if (index > 0) const SizedBox(width: 8), _buildGlanceItem(currentTheme, items[index])],
+          for (var index = 0; index < items.length; index++) ...[_buildGlanceItem(currentTheme, items[index]), const SizedBox(width: 8)],
         ],
       );
     }
@@ -474,7 +470,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (iconVisible) ...[
-                      Opacity(opacity: textAlpha * 0.9, child: WoxImageView(woxImage: item.icon, width: 16, height: 16)),
+                      Opacity(opacity: textAlpha * 0.9, child: WoxImageView(woxImage: item.icon, width: 16, height: 16, svgColor: textColor)),
                       const SizedBox(width: 5),
                     ],
                     Flexible(child: Text(item.text, overflow: TextOverflow.ellipsis, maxLines: 1, style: textStyle)),

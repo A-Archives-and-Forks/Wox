@@ -15,13 +15,16 @@ class WoxImageView extends StatelessWidget {
   final WoxImage woxImage;
   final double? width;
   final double? height;
+  final Color? svgColor;
   // Feature change: callers such as the aspect-ratio grid need cover-style
   // thumbnails, while existing icon surfaces must keep the previous contain
   // behavior. Owning the fit here avoids duplicating image-type branches in
   // every caller that renders a WoxImage.
   final BoxFit fit;
 
-  const WoxImageView({super.key, required this.woxImage, this.width, this.height, this.fit = BoxFit.contain});
+  const WoxImageView({super.key, required this.woxImage, this.width, this.height, this.svgColor, this.fit = BoxFit.contain});
+
+  ColorFilter? get _svgColorFilter => svgColor == null ? null : ColorFilter.mode(svgColor!, BlendMode.srcIn);
 
   bool _isSvgUrl(String url) {
     final uri = Uri.tryParse(url);
@@ -61,6 +64,7 @@ class WoxImageView extends StatelessWidget {
           width: width,
           height: height,
           fit: fit,
+          colorFilter: _svgColorFilter,
           placeholderBuilder: (context) => _buildLoadingPlaceholder(),
           errorBuilder: (context, error, stackTrace) => _buildErrorPlaceholder(error, stackTrace),
         );
@@ -82,7 +86,14 @@ class WoxImageView extends StatelessWidget {
       if (woxImage.cachedFile == null) {
         content = const SizedBox(width: 24, height: 24);
       } else if (_isSvgFile(woxImage.imageData)) {
-        content = SvgPicture.file(woxImage.cachedFile!, width: width, height: height, fit: fit, placeholderBuilder: (context) => _buildLoadingPlaceholder());
+        content = SvgPicture.file(
+          woxImage.cachedFile!,
+          width: width,
+          height: height,
+          fit: fit,
+          colorFilter: _svgColorFilter,
+          placeholderBuilder: (context) => _buildLoadingPlaceholder(),
+        );
       } else {
         content = Image.file(
           woxImage.cachedFile!,
@@ -94,7 +105,7 @@ class WoxImageView extends StatelessWidget {
         );
       }
     } else if (woxImage.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_SVG.code) {
-      content = SizedBox(width: width, height: height, child: SvgPicture.string(woxImage.imageData));
+      content = SizedBox(width: width, height: height, child: SvgPicture.string(woxImage.imageData, colorFilter: _svgColorFilter));
     } else if (woxImage.imageType == WoxImageTypeEnum.WOX_IMAGE_TYPE_EMOJI.code) {
       // Use FittedBox to uniformly scale the emoji to fit the container,
       // which works correctly across all platforms and display sizes.
