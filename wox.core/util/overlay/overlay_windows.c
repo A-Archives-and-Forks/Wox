@@ -63,6 +63,7 @@ typedef struct {
     bool closeOnEscape;
     bool loading;
     bool topmost;
+    bool absolutePosition;
     int stickyWindowPid; // 0 = Screen, >0 = Window
     int anchor;          // 0-8
     int autoCloseSeconds;
@@ -241,6 +242,8 @@ static BOOL TryEnableAcrylic(HWND hwnd)
 #define CORNER_RADIUS_DIP 10
 #define RESIZE_GRIP_DIP 10
 #define MIN_RESIZE_SIZE_DIP 64
+#define IMAGE_SHADOW_PADDING_DIP 20
+#define IMAGE_SHADOW_MAX_ALPHA 96
 
 #define TIMER_AUTOCLOSE 1
 #define TIMER_TRACK 2
@@ -573,6 +576,7 @@ static void ClampWindowToWorkArea(const RECT *work, int *x, int *y, int width, i
 typedef struct OverlayWindow
 {
     HWND hwnd;
+    HWND shadowHwnd;
     WCHAR *name;
     WCHAR *title;
     WCHAR *message;
@@ -595,6 +599,7 @@ typedef struct OverlayWindow
     BOOL closeOnEscape;
     BOOL loading;
     BOOL topmost;
+    BOOL absolutePosition;
     BOOL movable;
     BOOL resizable;
     float cornerRadius;
@@ -663,6 +668,7 @@ typedef struct OverlayPayload
     BOOL closeOnEscape;
     BOOL loading;
     BOOL topmost;
+    BOOL absolutePosition;
     int stickyWindowPid;
     int anchor;
     int autoCloseSeconds;
@@ -687,6 +693,7 @@ typedef struct OverlayCommand
 
 static OverlayWindow *g_overlays = NULL;
 static const WCHAR *g_overlayClassName = L"WoxOverlayWindow";
+static const WCHAR *g_shadowClassName = L"WoxOverlayShadowWindow";
 static const WCHAR *g_controllerClassName = L"WoxOverlayController";
 static const WCHAR *g_tooltipClassName = L"WoxOverlayTooltip";
 static HANDLE g_threadReadyEvent = NULL;
@@ -700,6 +707,7 @@ static INIT_ONCE g_initOnce = INIT_ONCE_STATIC_INIT;
 // Forward Decls
 // -----------------------------------------------------------------------------
 static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK ShadowWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK OverlayControllerProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static DWORD WINAPI OverlayThreadProc(LPVOID param);
 static BOOL GetTargetContentRect(HWND target, RECT *outRect);
@@ -1147,21 +1155,140 @@ static void ApplyCornerRadius(HWND hwnd, UINT dpi, int width, int height)
     }
 }
 
-static void ApplyTransparentImageCornerRadius(HWND hwnd, UINT dpi, int width, int height, float cornerRadius)
+static int GetTransparentImageShadowPadding(UINT dpi)
 {
-    if (!hwnd || width <= 0 || height <= 0)
+    return MulDiv(IMAGE_SHADOW_PADDING_DIP, (int)(dpi ? dpi : 96), 96);
+}
+
+static void DestroyTransparentImageShadow(OverlayWindow *ow)
+{
+    if (ow && ow->shadowHwnd)
+    {
+        DestroyWindow(ow->shadowHwnd);
+        ow->shadowHwnd = NULL;
+    }
+}
+
+static BOOL EnsureTransparentImageShadowWindow(OverlayWindow *ow)
+{
+    if (!ow || !ow->hwnd)
+        return FALSE;
+    if (ow->shadowHwnd && IsWindow(ow->shadowHwnd))
+        return TRUE;
+
+    ow->shadowHwnd = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+        g_shadowClassName,
+        L"Wox image overlay shadow",
+        WS_POPUP,
+        0, 0, 0, 0,
+        NULL, NULL, GetModuleHandleW(NULL), NULL);
+
+    return ow->shadowHwnd != NULL;
+}
+
+static void UpdateTransparentImageShadow(OverlayWindow *ow)
+{
+    if (!ow || !ow->transparent || !ow->hwnd || !IsWindow(ow->hwnd))
+    {
+        DestroyTransparentImageShadow(ow);
+        return;
+    }
+
+    RECT windowRect;
+    if (!GetWindowRect(ow->hwnd, &windowRect))
         return;
 
-    float radiusDip = cornerRadius > 0.0f ? cornerRadius : CORNER_RADIUS_DIP;
-    int rr = MulDiv((int)roundf(radiusDip), (int)dpi, 96);
-    HRGN rgn = CreateRoundRectRgn(0, 0, width + 1, height + 1, rr * 2, rr * 2);
-    if (rgn)
+    int imageW = windowRect.right - windowRect.left;
+    int imageH = windowRect.bottom - windowRect.top;
+    if (imageW <= 0 || imageH <= 0)
+        return;
+
+    UINT dpi = ow->dpi ? ow->dpi : GetWindowDpiSafe(ow->hwnd, 96);
+    int pad = GetTransparentImageShadowPadding(dpi);
+    int shadowW = imageW + pad * 2;
+    int shadowH = imageH + pad * 2;
+    if (pad <= 0 || shadowW <= 0 || shadowH <= 0)
+        return;
+
+    if (!EnsureTransparentImageShadowWindow(ow))
+        return;
+
+    HDC screenDC = GetDC(NULL);
+    if (!screenDC)
+        return;
+
+    HDC memDC = CreateCompatibleDC(screenDC);
+    if (!memDC)
     {
-        // Feature change: transparent image overlays paint the bitmap themselves, so the normal DWM
-        // corner preference does not reliably clip the alpha surface. A window region keeps the
-        // resized image and hit target rounded without changing fixed notification overlays.
-        SetWindowRgn(hwnd, rgn, TRUE);
+        ReleaseDC(NULL, screenDC);
+        return;
     }
+
+    void *bits = NULL;
+    HBITMAP bitmap = Create32BitDIBSection(screenDC, shadowW, shadowH, &bits);
+    if (!bitmap || !bits)
+    {
+        if (bitmap)
+            DeleteObject(bitmap);
+        DeleteDC(memDC);
+        ReleaseDC(NULL, screenDC);
+        return;
+    }
+
+    uint32_t *pixels = (uint32_t *)bits;
+    ZeroMemory(pixels, (SIZE_T)shadowW * (SIZE_T)shadowH * sizeof(uint32_t));
+    const int left = pad;
+    const int top = pad;
+    const int right = pad + imageW;
+    const int bottom = pad + imageH;
+    const double maxAlpha = (double)IMAGE_SHADOW_MAX_ALPHA;
+
+    for (int y = 0; y < shadowH; y++)
+    {
+        for (int x = 0; x < shadowW; x++)
+        {
+            int dx = 0;
+            if (x < left)
+                dx = left - x;
+            else if (x >= right)
+                dx = x - right + 1;
+
+            int dy = 0;
+            if (y < top)
+                dy = top - y;
+            else if (y >= bottom)
+                dy = y - bottom + 1;
+
+            if (dx == 0 && dy == 0)
+                continue;
+
+            double distance = sqrt((double)(dx * dx + dy * dy));
+            if (distance > (double)pad)
+                continue;
+
+            double t = 1.0 - distance / (double)pad;
+            BYTE alpha = (BYTE)round(maxAlpha * t * t);
+            if (alpha == 0)
+                continue;
+
+            pixels[(SIZE_T)y * (SIZE_T)shadowW + (SIZE_T)x] = ((uint32_t)alpha << 24);
+        }
+    }
+
+    HGDIOBJ old = SelectObject(memDC, bitmap);
+    POINT dst = {windowRect.left - pad, windowRect.top - pad};
+    SIZE size = {shadowW, shadowH};
+    POINT src = {0, 0};
+    BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    UpdateLayeredWindow(ow->shadowHwnd, screenDC, &dst, &size, memDC, &src, 0, &blend, ULW_ALPHA);
+    SetWindowPos(ow->shadowHwnd, ow->hwnd, dst.x, dst.y, shadowW, shadowH, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+    if (old)
+        SelectObject(memDC, old);
+    DeleteObject(bitmap);
+    DeleteDC(memDC);
+    ReleaseDC(NULL, screenDC);
 }
 
 static void ApplyAspectRatioToSizingRect(OverlayWindow *ow, WPARAM edge, RECT *rect)
@@ -1330,18 +1457,15 @@ static void ApplyOverlayLayout(OverlayWindow *ow)
 
     if (ow->transparent)
     {
-        // Transparent overlays use the native window as a clear drawing surface and
-        // move only their content rectangle inside it. This keeps the default HUD
-        // path intact while giving other modules a reusable custom surface.
+        // Bug fix: transparent image overlays must keep the whole client area as the screenshot.
+        // Expanding this layered client area for an inline shadow becomes opaque black padding, so
+        // the image HWND stays pure and a separate per-pixel shadow HWND provides separation.
         int drawW = ow->iconBitmap ? (int)roundf(((ow->iconDrawWidth > 0.0f) ? ow->iconDrawWidth : iconSizeDip) * (float)ow->dpi / 96.0f) : 0;
         int drawH = ow->iconBitmap ? (int)roundf(((ow->iconDrawHeight > 0.0f) ? ow->iconDrawHeight : iconSizeDip) * (float)ow->dpi / 96.0f) : 0;
         int iconX = (int)roundf(ow->iconX * (float)ow->dpi / 96.0f);
         int iconY = (int)roundf(ow->iconY * (float)ow->dpi / 96.0f);
         if (ow->resizable)
         {
-            // Feature change: resizable image overlays draw into the full native window. The old
-            // fixed icon rectangle stayed at the original preview size after WM_SIZE, leaving blank
-            // transparent space instead of scaling the image with the adjusted window.
             iconX = 0;
             iconY = 0;
             drawW = width;
@@ -1414,7 +1538,18 @@ static void ApplyOverlayLayout(OverlayWindow *ow)
     }
     else
     {
-        SystemParametersInfo(SPI_GETWORKAREA, 0, &targetRect, 0);
+        if (ow->absolutePosition)
+        {
+            // Bug fix: pinned screenshots pass desktop-absolute selection coordinates. The old
+            // screen branch anchored those offsets to the primary work area and then clamped them,
+            // which moved pins from secondary/negative-coordinate monitors back onto the main
+            // screen. A zero-origin target lets the already-absolute offset land unchanged.
+            SetRect(&targetRect, 0, 0, 0, 0);
+        }
+        else
+        {
+            SystemParametersInfo(SPI_GETWORKAREA, 0, &targetRect, 0);
+        }
         SetOverlayZOrder(ow->hwnd, NULL);
     }
 
@@ -1432,7 +1567,10 @@ static void ApplyOverlayLayout(OverlayWindow *ow)
     }
 
     RECT workArea = GetWorkAreaForRect(&targetRect);
-    ClampWindowToWorkArea(&workArea, &x, &y, width, height);
+    if (!ow->absolutePosition)
+    {
+        ClampWindowToWorkArea(&workArea, &x, &y, width, height);
+    }
     if (preserveLiveFollowFrame)
     {
         RECT current;
@@ -1450,19 +1588,17 @@ static void ApplyOverlayLayout(OverlayWindow *ow)
     SetWindowPos(ow->hwnd, NULL, x, y, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
     if (ow->transparent)
     {
-        if (ow->resizable)
-        {
-            ApplyTransparentImageCornerRadius(ow->hwnd, ow->dpi, width, height, ow->cornerRadius);
-        }
-        else
-        {
-            SetWindowRgn(ow->hwnd, NULL, TRUE);
-        }
+        // Feature change: the screenshot surface remains a clean image-only layered window. The
+        // visible depth now comes from an independent shadow HWND, so no region or client padding
+        // is applied to the pin window itself.
+        SetWindowRgn(ow->hwnd, NULL, TRUE);
         UINT pref = DWMWCP_DONOTROUND;
         DwmSetWindowAttribute(ow->hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
+        UpdateTransparentImageShadow(ow);
     }
     else
     {
+        DestroyTransparentImageShadow(ow);
         ApplyCornerRadius(ow->hwnd, ow->dpi, width, height);
     }
 
@@ -1554,6 +1690,7 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
     ow->closeOnEscape = payload->closeOnEscape;
     ow->loading = payload->loading;
     ow->topmost = payload->topmost;
+    ow->absolutePosition = payload->absolutePosition;
     ow->transparent = payload->transparent;
     ow->hitTestIconOnly = payload->hitTestIconOnly;
     ow->iconX = payload->iconX;
@@ -1579,12 +1716,12 @@ static void ApplyPayloadToOverlay(OverlayWindow *ow, OverlayPayload *payload, BO
     if (ow->hwnd)
     {
         LONG_PTR style = GetWindowLongPtrW(ow->hwnd, GWL_STYLE);
-        LONG_PTR updatedStyle = ow->resizable ? (style | WS_THICKFRAME) : (style & ~WS_THICKFRAME);
+        LONG_PTR updatedStyle = (ow->resizable && !ow->transparent) ? (style | WS_THICKFRAME) : (style & ~WS_THICKFRAME);
         if (updatedStyle != style)
         {
-            // Feature change: reused URL image overlay windows start as loading HUDs and later
-            // become resizable image surfaces. Refresh the native frame style at payload apply
-            // time so the final window gets edge resizing without recreating the overlay.
+            // Bug fix: reused image overlay windows can switch between HUD and transparent image
+            // modes. Keep the thick frame off transparent screenshots so the pinned image is the
+            // full client surface instead of being inset behind a system-drawn border.
             SetWindowLongPtrW(ow->hwnd, GWL_STYLE, updatedStyle);
             SetWindowPos(ow->hwnd, NULL, 0, 0, 0, 0,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
@@ -1942,7 +2079,8 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             RECT client;
             GetClientRect(hwnd, &client);
             ow->iconRect = client;
-            ApplyTransparentImageCornerRadius(hwnd, ow->dpi ? ow->dpi : GetWindowDpiSafe(hwnd, 96), client.right - client.left, client.bottom - client.top, ow->cornerRadius);
+            SetWindowRgn(hwnd, NULL, TRUE);
+            UpdateTransparentImageShadow(ow);
             InvalidateRect(hwnd, NULL, TRUE);
             return 0;
         }
@@ -2185,6 +2323,10 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             int dy = screenPt.y - ow->dragStart.y;
             SetWindowPos(hwnd, NULL, ow->dragWindowOrigin.x + dx, ow->dragWindowOrigin.y + dy, 0, 0,
                          SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE);
+            // Feature change: pinned screenshots use a companion shadow HWND. Moving only the image
+            // would leave the shadow behind, so keep both native windows locked together while
+            // dragging.
+            UpdateTransparentImageShadow(ow);
         }
         return 0;
     }
@@ -2388,6 +2530,7 @@ static LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             KillTimer(hwnd, TIMER_AUTOCLOSE);
             KillTimer(hwnd, TIMER_TRACK);
             KillTimer(hwnd, TIMER_LIVE_FOLLOW);
+            DestroyTransparentImageShadow(ow);
             RemoveOverlay(ow);
             if (ow->messageFont)
                 DeleteObject(ow->messageFont);
@@ -2491,10 +2634,11 @@ static void HandleShowCommand(OverlayPayload *payload)
     }
 
     DWORD style = WS_POPUP;
-    if (ow->resizable)
+    if (ow->resizable && !ow->transparent)
     {
-        // Feature change: Windows needs a sizable frame style in addition to resize hit testing so
-        // borderless image overlays can enter the system resize loop from their transparent edges.
+        // Bug fix: transparent pinned screenshots must be exactly the image surface. Applying the
+        // system thick frame to that path created a visible non-client border and shrank the client
+        // bitmap, so only non-transparent overlays may ask Windows to draw a resize frame.
         style |= WS_THICKFRAME;
     }
 
@@ -2503,7 +2647,6 @@ static void HandleShowCommand(OverlayPayload *payload)
     if (!ow->hwnd)
     {
         DWORD err = GetLastError();
-
         if (owner && (err == 5 || err == ERROR_ACCESS_DENIED))
         {
             owner = NULL;
@@ -2529,6 +2672,14 @@ static void HandleShowCommand(OverlayPayload *payload)
             DeleteObject(ow->tooltipIconBitmap);
         free(ow);
         return;
+    }
+    if (ow->transparent)
+    {
+        // Bug fix: transparent image overlays use WS_EX_LAYERED, but the old Windows path never
+        // initialized the layered opacity. That left the native pin window successfully created and
+        // positioned while still visually absent. Use a fully opaque layered surface so WM_PAINT can
+        // display the alpha-blended screenshot without a system frame.
+        SetLayeredWindowAttributes(ow->hwnd, 0, 255, LWA_ALPHA);
     }
 
     AddOverlay(ow);
@@ -2580,6 +2731,17 @@ static LRESULT CALLBACK OverlayControllerProc(HWND hwnd, UINT uMsg, WPARAM wPara
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
+static LRESULT CALLBACK ShadowWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    if (uMsg == WM_NCHITTEST)
+    {
+        // Feature change: the shadow is only a visual depth cue for pinned screenshots. It must
+        // never steal mouse input from the image overlay or the app behind it.
+        return HTTRANSPARENT;
+    }
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
+}
+
 static DWORD WINAPI OverlayThreadProc(LPVOID param)
 {
     (void)param;
@@ -2601,6 +2763,15 @@ static DWORD WINAPI OverlayThreadProc(LPVOID param)
     wc.lpszClassName = g_overlayClassName;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassExW(&wc);
+
+    WNDCLASSEXW wcShadow;
+    ZeroMemory(&wcShadow, sizeof(wcShadow));
+    wcShadow.cbSize = sizeof(wcShadow);
+    wcShadow.lpfnWndProc = ShadowWindowProc;
+    wcShadow.hInstance = GetModuleHandleW(NULL);
+    wcShadow.lpszClassName = g_shadowClassName;
+    wcShadow.hCursor = LoadCursor(NULL, IDC_ARROW);
+    RegisterClassExW(&wcShadow);
 
     WNDCLASSEXW wc2;
     ZeroMemory(&wc2, sizeof(wc2));
@@ -2690,6 +2861,7 @@ void ShowOverlay(OverlayOptions opts)
     payload->closeOnEscape = opts.closeOnEscape ? TRUE : FALSE;
     payload->loading = opts.loading ? TRUE : FALSE;
     payload->topmost = opts.topmost ? TRUE : FALSE;
+    payload->absolutePosition = opts.absolutePosition ? TRUE : FALSE;
     payload->stickyWindowPid = opts.stickyWindowPid;
     payload->anchor = opts.anchor;
     payload->autoCloseSeconds = opts.autoCloseSeconds;

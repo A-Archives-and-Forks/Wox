@@ -27,19 +27,20 @@ const defaultImageOverlayCornerRadius = 16
 // features. Width and height are optional; when either side is missing the helper reads image
 // metadata so callers do not duplicate file-header parsing.
 type ImageOverlayOptions struct {
-	Name          string
-	Title         string
-	Image         common.WoxImage
-	Width         float64
-	Height        float64
-	OffsetX       float64
-	OffsetY       float64
-	Anchor        int
-	FitToScreen   bool
-	Topmost       bool
-	Movable       bool
-	CornerRadius  float64
-	CloseOnEscape bool
+	Name             string
+	Title            string
+	Image            common.WoxImage
+	Width            float64
+	Height           float64
+	OffsetX          float64
+	OffsetY          float64
+	Anchor           int
+	FitToScreen      bool
+	Topmost          bool
+	Movable          bool
+	AbsolutePosition bool
+	CornerRadius     float64
+	CloseOnEscape    bool
 }
 
 // ShowImageOverlay prepares the image source and displays it as a native overlay. The refactor keeps
@@ -89,13 +90,17 @@ func ShowImageOverlay(ctx context.Context, opts ImageOverlayOptions) error {
 		AspectRatio:   width / height,
 		CloseOnEscape: opts.CloseOnEscape,
 		Topmost:       opts.Topmost,
-		Anchor:        opts.Anchor,
-		OffsetX:       opts.OffsetX,
-		OffsetY:       opts.OffsetY,
-		Width:         width,
-		Height:        height,
-		IconWidth:     width,
-		IconHeight:    height,
+		// Bug fix: pinned screenshots already carry desktop-absolute coordinates from the
+		// screenshot workspace. Mark that contract explicitly so Windows does not treat the offset
+		// as a notification-style displacement from the primary work area and clamp it back there.
+		AbsolutePosition: opts.AbsolutePosition,
+		Anchor:           opts.Anchor,
+		OffsetX:          opts.OffsetX,
+		OffsetY:          opts.OffsetY,
+		Width:            width,
+		Height:           height,
+		IconWidth:        width,
+		IconHeight:       height,
 	})
 	return nil
 }

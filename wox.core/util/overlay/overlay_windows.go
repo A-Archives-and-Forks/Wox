@@ -23,6 +23,7 @@ typedef struct {
     bool closeOnEscape;
     bool loading;
     bool topmost;
+    bool absolutePosition;
     int stickyWindowPid;
     int anchor;
     int autoCloseSeconds;
@@ -124,6 +125,7 @@ func Show(opts OverlayOptions) {
 		closeOnEscape:    C.bool(opts.CloseOnEscape),
 		loading:          C.bool(opts.Loading),
 		topmost:          C.bool(opts.Topmost),
+		absolutePosition: C.bool(opts.AbsolutePosition),
 		stickyWindowPid:  C.int(opts.StickyWindowPid),
 		anchor:           C.int(opts.Anchor),
 		autoCloseSeconds: C.int(opts.AutoCloseSeconds),

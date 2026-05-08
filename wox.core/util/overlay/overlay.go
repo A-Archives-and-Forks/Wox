@@ -98,6 +98,11 @@ type OverlayOptions struct {
 	// Topmost puts the overlay above Wox's launcher window instead of using the default notification
 	// level. Use it for user-requested pinned/preview surfaces, not transient notifications.
 	Topmost bool
+	// AbsolutePosition treats OffsetX/OffsetY as desktop-absolute coordinates for AnchorTopLeft.
+	// It is used by screenshot pinning, where Flutter already converted the selected region into
+	// the screenshot workspace coordinate system and the native layer must not re-anchor to the
+	// primary work area like a notification.
+	AbsolutePosition bool
 	// StickyWindowPid determines the positioning context.
 	// If 0, the overlay is positioned relative to the screen (work area).
 	// If > 0, the overlay is positioned relative to the window owned by this PID.

@@ -432,9 +432,13 @@ func (p *ScreenshotPlugin) pinScreenshotToScreen(ctx context.Context, screenshot
 		Height:        height,
 		Movable:       true,
 		CloseOnEscape: true,
-		Anchor:        overlay.AnchorTopLeft,
-		OffsetX:       offsetX,
-		OffsetY:       offsetY,
+		// Bug fix: Windows native overlays normally position screen overlays relative to the
+		// primary work area. Screenshot selections are already desktop-absolute, so pinning must
+		// bypass that notification-style anchoring to stay on the selected monitor.
+		AbsolutePosition: true,
+		Anchor:           overlay.AnchorTopLeft,
+		OffsetX:          offsetX,
+		OffsetY:          offsetY,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to show pinned screenshot overlay: %w", err)
