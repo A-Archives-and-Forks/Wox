@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/utils/color_util.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 
 class WoxPreviewScaffold extends StatelessWidget {
   final WoxTheme woxTheme;
@@ -27,7 +28,12 @@ class WoxPreviewScaffold extends StatelessWidget {
     // and made each preview type drift visually. The top area is always the
     // preview body, while optional metadata stays in lightweight pills below it.
     return Container(
-      padding: const EdgeInsets.only(top: 12, bottom: 10, left: 14, right: 12),
+      padding: EdgeInsets.only(
+        top: WoxInterfaceSizeUtil.instance.current.scaledSpacing(12),
+        bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10),
+        left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(14),
+        right: WoxInterfaceSizeUtil.instance.current.scaledSpacing(12),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -36,7 +42,7 @@ class WoxPreviewScaffold extends StatelessWidget {
             // The framed preview body already separates content from metadata,
             // so an extra divider above the pills would add visual noise without
             // improving scanability.
-            Padding(padding: const EdgeInsets.only(top: 10), child: _PreviewPropertyPills(woxTheme: woxTheme, properties: properties)),
+            Padding(padding: EdgeInsets.only(top: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10)), child: _PreviewPropertyPills(woxTheme: woxTheme, properties: properties)),
           ],
         ],
       ),
@@ -109,11 +115,13 @@ class _PreviewPropertyPills extends StatelessWidget {
     // Only the value is shown by default to keep the metadata strip compact; the
     // title remains available in the tooltip for users who need the exact field.
     return SizedBox(
-      height: 26,
+      // Preview metadata belongs to the launcher surface, so pill height and
+      // text follow density while borders and radii remain theme-owned.
+      height: WoxInterfaceSizeUtil.instance.current.scaledSpacing(26),
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: properties.length,
-        separatorBuilder: (context, index) => const SizedBox(width: 8),
+        separatorBuilder: (context, index) => SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(8)),
         itemBuilder: (context, index) {
           final entry = properties.entries.elementAt(index);
           final value = entry.value.trim();
@@ -123,8 +131,8 @@ class _PreviewPropertyPills extends StatelessWidget {
           return WoxTooltip(
             message: label,
             child: Container(
-              constraints: const BoxConstraints(maxWidth: 220),
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              constraints: BoxConstraints(maxWidth: WoxInterfaceSizeUtil.instance.current.scaledSpacing(220)),
+              padding: EdgeInsets.symmetric(horizontal: WoxInterfaceSizeUtil.instance.current.scaledSpacing(9), vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4)),
               decoration: BoxDecoration(
                 color: fontColor.withValues(alpha: 0.035),
                 borderRadius: BorderRadius.circular(8),
@@ -134,7 +142,7 @@ class _PreviewPropertyPills extends StatelessWidget {
                 visibleText,
                 overflow: TextOverflow.ellipsis,
                 maxLines: 1,
-                style: TextStyle(color: contentColor.withValues(alpha: 0.9), fontSize: 11.5, height: 1.2, fontWeight: FontWeight.w600),
+                style: TextStyle(color: contentColor.withValues(alpha: 0.9), fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, height: 1.2, fontWeight: FontWeight.w600),
               ),
             ),
           );

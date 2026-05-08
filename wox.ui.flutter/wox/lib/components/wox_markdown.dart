@@ -41,7 +41,11 @@ class WoxMarkdownView extends StatelessWidget {
     final fontTextStyle = baseTextStyle.copyWith(color: fontColor);
     final bool isDarkFont = fontColor.computeLuminance() < 0.5;
     final codeBackgroundColor = isDarkFont ? Colors.black.withValues(alpha: 0.06) : Colors.white.withValues(alpha: 0.08);
-    final codeTextStyle = fontTextStyle.copyWith(fontSize: 13, color: fontColor);
+    // Markdown code blocks inherit the caller's density-aware font size instead
+    // of pinning preview code to the old normal-size bucket.
+    final codeFontSize = (fontSize - 1).clamp(10.0, double.infinity).toDouble();
+    final codeLabelFontSize = (fontSize - 2).clamp(9.0, double.infinity).toDouble();
+    final codeTextStyle = fontTextStyle.copyWith(fontSize: codeFontSize, color: fontColor);
     final dividerColor = getThemeDividerColor();
     final effectiveLinkColor = linkColor ?? fontColor;
     final effectiveLinkHoverColor = linkHoverColor ?? fontColor.withValues(alpha: 0.85);
@@ -114,7 +118,7 @@ class WoxMarkdownView extends StatelessWidget {
                 if (trimmedName.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    child: Text(trimmedName, style: codeTextStyle.copyWith(fontSize: 12, fontWeight: FontWeight.w600)),
+                    child: Text(trimmedName, style: codeTextStyle.copyWith(fontSize: codeLabelFontSize, fontWeight: FontWeight.w600)),
                   ),
                 if (trimmedName.isNotEmpty) Divider(height: 1, color: dividerColor.withValues(alpha: 0.4)),
                 SingleChildScrollView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.all(8), child: Text(code, style: codeTextStyle)),

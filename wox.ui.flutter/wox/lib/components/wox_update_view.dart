@@ -7,6 +7,7 @@ import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/utils/color_util.dart';
 import 'package:wox/utils/strings.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 
 class UpdatePreviewData {
@@ -55,6 +56,7 @@ class WoxUpdateView extends StatefulWidget {
 
 class _WoxUpdateViewState extends State<WoxUpdateView> {
   final releaseNotesScrollController = ScrollController();
+  WoxInterfaceSizeMetrics get _metrics => WoxInterfaceSizeUtil.instance.current;
 
   @override
   void dispose() {
@@ -66,9 +68,9 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
 
   Widget statusPill({required String text, required Color color}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: EdgeInsets.symmetric(horizontal: _metrics.scaledSpacing(10), vertical: _metrics.scaledSpacing(4)),
       decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(999), border: Border.all(color: color.withValues(alpha: 0.4))),
-      child: Center(child: Text(text, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600, height: 1.0))),
+      child: Center(child: Text(text, style: TextStyle(color: color, fontSize: _metrics.tailHotkeyFontSize, fontWeight: FontWeight.w600, height: 1.0))),
     );
   }
 
@@ -115,12 +117,12 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: TextStyle(color: titleColor, fontSize: 12)),
-        const SizedBox(width: 12),
+        Text(label, style: TextStyle(color: titleColor, fontSize: _metrics.tailHotkeyFontSize)),
+        SizedBox(width: _metrics.scaledSpacing(12)),
         Flexible(
           child: Text(
             value,
-            style: TextStyle(color: valueColor, fontSize: 12, fontWeight: FontWeight.w600),
+            style: TextStyle(color: valueColor, fontSize: _metrics.tailHotkeyFontSize, fontWeight: FontWeight.w600),
             textAlign: TextAlign.right,
             overflow: TextOverflow.ellipsis,
             maxLines: 1,
@@ -139,16 +141,16 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
     final autoUpdateText = widget.data.autoUpdateEnabled ? tr('plugin_update_auto_update_enabled') : tr('plugin_update_auto_update_disabled');
 
     return Container(
-      width: 300,
-      padding: const EdgeInsets.all(12),
+      width: _metrics.scaledSpacing(300),
+      padding: EdgeInsets.all(_metrics.scaledSpacing(12)),
       decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(12), border: Border.all(color: borderColor)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _infoRow(theme: theme, label: tr('plugin_update_current_version'), value: current),
-          const SizedBox(height: 8),
+          SizedBox(height: _metrics.scaledSpacing(8)),
           _infoRow(theme: theme, label: tr('plugin_update_latest_version'), value: latest),
-          const SizedBox(height: 8),
+          SizedBox(height: _metrics.scaledSpacing(8)),
           _infoRow(theme: theme, label: tr('plugin_update_auto_update_label'), value: autoUpdateText),
         ],
       ),
@@ -174,15 +176,15 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
     final primaryHotkey = 'enter';
 
     if (!data.autoUpdateEnabled) {
-      const iconBox = 44.0;
-      const iconGap = 14.0;
+      final iconBox = _metrics.scaledSpacing(44);
+      final iconGap = _metrics.scaledSpacing(14);
       return Container(
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.all(_metrics.scaledSpacing(20)),
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
+            constraints: BoxConstraints(maxWidth: _metrics.scaledSpacing(760)),
             child: Container(
-              padding: const EdgeInsets.all(20),
+              padding: EdgeInsets.all(_metrics.scaledSpacing(20)),
               decoration: BoxDecoration(
                 color: safeFromCssColor(theme.appBackgroundColor).withValues(alpha: 0.35),
                 borderRadius: BorderRadius.circular(14),
@@ -196,31 +198,31 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Container(
-                        width: 44,
-                        height: 44,
+                        width: iconBox,
+                        height: iconBox,
                         decoration: BoxDecoration(
                           color: Colors.orange.withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: Colors.orange.withValues(alpha: 0.35)),
                         ),
-                        child: const Icon(Icons.update, color: Colors.orange),
+                        child: Icon(Icons.update, color: Colors.orange, size: _metrics.scaledSpacing(24)),
                       ),
-                      const SizedBox(width: 14),
+                      SizedBox(width: iconGap),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(tr('plugin_update_auto_update_disabled_title'), style: TextStyle(color: fontColor, fontSize: 18, fontWeight: FontWeight.w700)),
-                            const SizedBox(height: 8),
-                            Text(tr('plugin_update_auto_update_disabled_desc'), style: TextStyle(color: fontColor.withValues(alpha: 0.8), fontSize: 13, height: 1.4)),
+                            Text(tr('plugin_update_auto_update_disabled_title'), style: TextStyle(color: fontColor, fontSize: _metrics.scaledSpacing(18), fontWeight: FontWeight.w700)),
+                            SizedBox(height: _metrics.scaledSpacing(8)),
+                            Text(tr('plugin_update_auto_update_disabled_desc'), style: TextStyle(color: fontColor.withValues(alpha: 0.8), fontSize: _metrics.resultSubtitleFontSize, height: 1.4)),
                           ],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: _metrics.scaledSpacing(16)),
                   Padding(
-                    padding: const EdgeInsets.only(left: iconBox + iconGap),
+                    padding: EdgeInsets.only(left: iconBox + iconGap),
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: ElevatedButton(
@@ -240,7 +242,9 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
     }
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      // Update preview is launcher content, so typography and major spacing
+      // follow density while theme-controlled borders/radii/colors remain fixed.
+      padding: EdgeInsets.all(_metrics.scaledSpacing(20)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -251,30 +255,30 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(titleText, style: TextStyle(color: fontColor, fontSize: 18, fontWeight: FontWeight.w700, height: 1.1), maxLines: 2, overflow: TextOverflow.ellipsis),
+                    Text(titleText, style: TextStyle(color: fontColor, fontSize: _metrics.scaledSpacing(18), fontWeight: FontWeight.w700, height: 1.1), maxLines: 2, overflow: TextOverflow.ellipsis),
                     if (data.error.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(data.error, style: const TextStyle(color: Colors.red, fontSize: 12), overflow: TextOverflow.ellipsis, maxLines: 2),
+                      SizedBox(height: _metrics.scaledSpacing(6)),
+                      Text(data.error, style: TextStyle(color: Colors.red, fontSize: _metrics.tailHotkeyFontSize), overflow: TextOverflow.ellipsis, maxLines: 2),
                     ],
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: _metrics.scaledSpacing(12)),
               statusPill(text: _statusText(), color: _statusColor()),
             ],
           ),
-          const SizedBox(height: 14),
+          SizedBox(height: _metrics.scaledSpacing(14)),
           Divider(color: safeFromCssColor(theme.previewSplitLineColor)),
-          const SizedBox(height: 12),
-          Text(tr('plugin_update_release_notes'), style: TextStyle(color: fontColor, fontSize: 14, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
+          SizedBox(height: _metrics.scaledSpacing(12)),
+          Text(tr('plugin_update_release_notes'), style: TextStyle(color: fontColor, fontSize: _metrics.resultSubtitleFontSize, fontWeight: FontWeight.w600)),
+          SizedBox(height: _metrics.scaledSpacing(8)),
           Expanded(
             child: Scrollbar(
               thumbVisibility: true,
               controller: releaseNotesScrollController,
               child: SingleChildScrollView(
                 controller: releaseNotesScrollController,
-                child: WoxMarkdownView(data: data.releaseNotes.isNotEmpty ? data.releaseNotes : tr('plugin_update_no_release_notes'), fontColor: fontColor),
+                child: WoxMarkdownView(data: data.releaseNotes.isNotEmpty ? data.releaseNotes : tr('plugin_update_no_release_notes'), fontColor: fontColor, fontSize: _metrics.resultSubtitleFontSize),
               ),
             ),
           ),

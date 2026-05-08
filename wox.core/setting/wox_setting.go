@@ -41,10 +41,15 @@ type WoxSetting struct {
 	// UI related
 	AppWidth       *WoxSettingValue[int]
 	MaxResultCount *WoxSettingValue[int]
-	ThemeId        *WoxSettingValue[string]
-	AppFontFamily  *PlatformValue[string]
-	EnableGlance   *WoxSettingValue[bool]
-	PrimaryGlance  *WoxSettingValue[GlanceRef]
+	// UiDensity keeps launcher text and control sizing in one user preference.
+	// The setting is stored as an enum instead of individual dimensions so Go
+	// window estimates and Flutter rendering can derive the same compact,
+	// normal, and comfortable sizes without expanding the settings DTO.
+	UiDensity     *WoxSettingValue[UiDensity]
+	ThemeId       *WoxSettingValue[string]
+	AppFontFamily *PlatformValue[string]
+	EnableGlance  *WoxSettingValue[bool]
+	PrimaryGlance *WoxSettingValue[GlanceRef]
 	// HideGlanceIcon is a presentation-only switch for the query-box glance.
 	// Glance providers still return icons for metadata and future surfaces, but
 	// the launcher can render a quieter text-only accessory when users prefer it.
@@ -71,6 +76,8 @@ type WoxSetting struct {
 type LaunchMode = string
 type StartPage = string
 
+type UiDensity string
+
 type PositionType string
 
 const (
@@ -87,6 +94,12 @@ const (
 const (
 	StartPageBlank StartPage = "blank" // show blank page
 	StartPageMRU   StartPage = "mru"   // show MRU (Most Recently Used) list
+)
+
+const (
+	UiDensityCompact     UiDensity = "compact"
+	UiDensityNormal      UiDensity = "normal"
+	UiDensityComfortable UiDensity = "comfortable"
 )
 
 const (
@@ -180,6 +193,26 @@ func NewResultHash(pluginId, title, subTitle string) ResultHash {
 	return ResultHash(util.Md5([]byte(fmt.Sprintf("%s%s%s", pluginId, title, subTitle))))
 }
 
+// NormalizeUiDensity converts missing or stale stored values to normal. The
+// density setting is user-editable, so normalization keeps old config files and
+// manual edits from pushing unsupported sizing states into the launcher.
+func NormalizeUiDensity(value string) UiDensity {
+	switch UiDensity(strings.ToLower(strings.TrimSpace(value))) {
+	case UiDensityCompact:
+		return UiDensityCompact
+	case UiDensityComfortable:
+		return UiDensityComfortable
+	default:
+		return UiDensityNormal
+	}
+}
+
+// IsValidUiDensity lets lazy setting loading fall back to normal when a stored
+// value is not one of the three supported scale buckets.
+func IsValidUiDensity(value UiDensity) bool {
+	return value == UiDensityCompact || value == UiDensityNormal || value == UiDensityComfortable
+}
+
 // ActionedResult stores the information of an actioned result.
 type ActionedResult struct {
 	Timestamp int64
@@ -222,6 +255,7 @@ func NewWoxSetting(store *WoxSettingStore) *WoxSetting {
 		ShowPosition:              NewWoxSettingValue(store, "ShowPosition", PositionTypeMouseScreen),
 		AppWidth:                  NewWoxSettingValue(store, "AppWidth", 800),
 		MaxResultCount:            NewWoxSettingValue(store, "MaxResultCount", 10),
+		UiDensity:                 NewWoxSettingValueWithValidator(store, "UiDensity", UiDensityNormal, IsValidUiDensity),
 		ThemeId:                   NewWoxSettingValue(store, "ThemeId", DefaultThemeId),
 		AppFontFamily:             NewPlatformValue(store, "AppFontFamily", "", "", ""),
 		EnableGlance:              NewWoxSettingValue(store, "EnableGlance", false),

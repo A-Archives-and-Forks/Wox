@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/utils/color_util.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 
 class WoxPreviewTopStatusBarAction {
   final Widget icon;
@@ -26,28 +27,30 @@ class WoxPreviewTopStatusBar extends StatelessWidget {
     final backgroundColor = safeFromCssColor(woxTheme.queryBoxBackgroundColor).withValues(alpha: 0.35);
     final fontColor = safeFromCssColor(woxTheme.previewFontColor);
 
+    // The preview status bar is part of the launcher preview surface, so its
+    // controls follow density while colors, borders, and radii stay theme-owned.
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      margin: EdgeInsets.only(bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(6)),
+      padding: EdgeInsets.symmetric(horizontal: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10), vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4)),
       decoration: BoxDecoration(color: backgroundColor, borderRadius: BorderRadius.circular(8), border: Border.all(color: borderColor, width: 1)),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          if (leading != null) ...[leading!, const SizedBox(width: 8)],
+          if (leading != null) ...[leading!, SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(8))],
           Expanded(child: title),
-          if (trailing != null) ...[trailing!, const SizedBox(width: 6)],
+          if (trailing != null) ...[trailing!, SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(6))],
           ...actions.map((action) {
             return Padding(
-              padding: const EdgeInsets.only(left: 2),
+              padding: EdgeInsets.only(left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(2)),
               child: IconButton(
                 tooltip: action.tooltip,
                 onPressed: action.onPressed,
                 icon: action.icon,
-                iconSize: 18,
+                iconSize: WoxInterfaceSizeUtil.instance.current.scaledSpacing(18),
                 color: action.color ?? fontColor,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints.tightFor(width: 28, height: 28),
-                splashRadius: 14,
+                constraints: BoxConstraints.tightFor(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(28), height: WoxInterfaceSizeUtil.instance.current.scaledSpacing(28)),
+                splashRadius: WoxInterfaceSizeUtil.instance.current.scaledSpacing(14),
                 visualDensity: VisualDensity.compact,
               ),
             );

@@ -13,6 +13,7 @@ import 'package:wox/entity/wox_list_item.dart';
 import 'package:wox/enums/wox_direction_enum.dart';
 import 'package:wox/enums/wox_list_view_type_enum.dart';
 import 'package:wox/utils/wox_theme_util.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 import 'package:wox/utils/color_util.dart';
 
 class WoxListView<T> extends StatelessWidget {
@@ -69,6 +70,7 @@ class WoxListView<T> extends StatelessWidget {
     // Fast path: when showFilter is false, we don't need LayoutBuilder
     // because we don't need to measure available space for filter
     if (!showFilter) {
+      final metrics = WoxInterfaceSizeUtil.instance.metrics.value;
       final itemHeight =
           listViewType == WoxListViewTypeEnum.WOX_LIST_VIEW_TYPE_ACTION.code || listViewType == WoxListViewTypeEnum.WOX_LIST_VIEW_TYPE_CHAT.code
               ? WoxThemeUtil.instance.getActionItemHeight()
@@ -92,7 +94,7 @@ class WoxListView<T> extends StatelessWidget {
                           child: Center(
                             child: Text(
                               Get.find<WoxSettingController>().tr('ui_no_matches'),
-                              style: TextStyle(fontSize: 14.0, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxFontColor).withValues(alpha: 0.5)),
+                              style: TextStyle(fontSize: metrics.resultTitleFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxFontColor).withValues(alpha: 0.5)),
                             ),
                           ),
                         ),
@@ -160,8 +162,9 @@ class WoxListView<T> extends StatelessWidget {
     // Slow path: with filter, need LayoutBuilder to measure available space
     return LayoutBuilder(
       builder: (context, constraints) {
-        const filterTopPadding = 6.0;
-        const filterFieldHeight = 40.0;
+        final metrics = WoxInterfaceSizeUtil.instance.metrics.value;
+        final filterTopPadding = metrics.scaledSpacing(6);
+        final filterFieldHeight = metrics.actionItemBaseHeight;
         final hasBoundedHeight = constraints.hasBoundedHeight;
         if (hasBoundedHeight && constraints.maxHeight <= 0) {
           return const SizedBox.shrink();
@@ -195,7 +198,7 @@ class WoxListView<T> extends StatelessWidget {
                             child: Center(
                               child: Text(
                                 Get.find<WoxSettingController>().tr('ui_no_matches'),
-                                style: TextStyle(fontSize: 14.0, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxFontColor).withValues(alpha: 0.5)),
+                                style: TextStyle(fontSize: metrics.resultTitleFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxFontColor).withValues(alpha: 0.5)),
                               ),
                             ),
                           ),
@@ -330,14 +333,17 @@ class WoxListView<T> extends StatelessWidget {
               }
             },
             child: Padding(
-              padding: const EdgeInsets.only(top: filterTopPadding),
+              padding: EdgeInsets.only(top: filterTopPadding),
               child: SizedBox(
                 height: filterFieldHeight,
                 child: TextField(
-                  style: TextStyle(fontSize: 14.0, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionQueryBoxFontColor)),
+                  // The action filter belongs to the launcher action surface,
+                  // so its height and font follow density while plugin/settings
+                  // forms keep their independent control sizing.
+                  style: TextStyle(fontSize: metrics.resultSubtitleFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionQueryBoxFontColor)),
                   decoration: InputDecoration(
                     isCollapsed: true,
-                    contentPadding: const EdgeInsets.only(left: 8, right: 8, top: 20, bottom: 18),
+                    contentPadding: EdgeInsets.only(left: metrics.scaledSpacing(8), right: metrics.scaledSpacing(8), top: metrics.scaledSpacing(20), bottom: metrics.scaledSpacing(18)),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(WoxThemeUtil.instance.currentTheme.value.actionQueryBoxBorderRadius.toDouble()),
                       borderSide: BorderSide.none,

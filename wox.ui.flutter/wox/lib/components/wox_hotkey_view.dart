@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:wox/entity/wox_hotkey.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 
 class WoxHotkeyView extends StatelessWidget {
   final HotkeyX hotkey;
@@ -18,8 +19,12 @@ class WoxHotkeyView extends StatelessWidget {
   });
 
   Widget buildSingleKey(String key) {
+    final metrics = WoxInterfaceSizeUtil.instance.current;
+    final keyWidth = metrics.scaledSpacing(28);
+    final keyHeight = metrics.scaledSpacing(22);
+
     return Container(
-      constraints: BoxConstraints.tight(const Size(28, 22)),
+      constraints: BoxConstraints.tight(Size(keyWidth, keyHeight)),
       decoration: BoxDecoration(
         color: backgroundColor,
         border: Border.all(color: borderColor),
@@ -37,7 +42,7 @@ class WoxHotkeyView extends StatelessWidget {
           key,
           style: TextStyle(
             fontFamily: 'SFProDisplay',
-            fontSize: 11,
+            fontSize: metrics.tailHotkeyFontSize,
             fontWeight: FontWeight.w500,
             color: textColor,
           ),
@@ -128,7 +133,10 @@ class WoxHotkeyView extends StatelessWidget {
     }
 
     return Wrap(
-      spacing: 4,
+      // Hotkey chips appear in result tails and the toolbar, so their physical
+      // key boxes follow density along with the text instead of staying locked
+      // to the previous normal-size literals.
+      spacing: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4),
       children: hotkeyWidgets,
     );
   }

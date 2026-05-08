@@ -625,6 +625,7 @@ func handleSettingWox(w http.ResponseWriter, r *http.Request) {
 
 	settingDto.AppWidth = woxSetting.AppWidth.Get()
 	settingDto.MaxResultCount = woxSetting.MaxResultCount.Get()
+	settingDto.UiDensity = woxSetting.UiDensity.Get()
 	settingDto.ThemeId = woxSetting.ThemeId.Get()
 	settingDto.AppFontFamily = woxSetting.AppFontFamily.Get()
 	settingDto.EnableGlance = woxSetting.EnableGlance.Get()
@@ -839,6 +840,17 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 		woxSetting.AppWidth.Set(int(vf))
 	case "MaxResultCount":
 		woxSetting.MaxResultCount.Set(int(vf))
+	case "UiDensity":
+		// New launcher presentation setting: store only the normalized density
+		// enum. The old fixed-size behavior maps to normal, while unsupported
+		// values fall back here before they can desync Go height estimates from
+		// Flutter's rendered metrics.
+		normalizedDensity := setting.NormalizeUiDensity(vs)
+		updatedValue = string(normalizedDensity)
+		if err := woxSetting.UiDensity.Set(normalizedDensity); err != nil {
+			writeErrorResponse(w, err.Error())
+			return
+		}
 	case "ThemeId":
 		woxSetting.ThemeId.Set(vs)
 	case "AppFontFamily":

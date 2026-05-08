@@ -133,14 +133,15 @@ func CalculateMaxWindowHeight(ctx context.Context, maxResultCount int, showQuery
 		maxResultCount = 10
 	}
 
-	const (
-		queryBoxBaseHeight   = 55
-		resultItemBaseHeight = 50
-		toolbarHeight        = 40
-	)
+	queryBoxBaseHeight := DensityQueryBoxBaseHeight(ctx)
+	resultItemBaseHeight := DensityResultItemBaseHeight(ctx)
+	toolbarHeight := DensityToolbarHeight(ctx)
 
 	queryBoxHeight := 0
 	if showQueryBox {
+		// Density scales only the shared launcher content heights. Theme
+		// padding remains unchanged so normal density preserves the old formula
+		// and custom themes keep their explicit spacing across density changes.
 		queryBoxHeight = queryBoxBaseHeight + theme.AppPaddingTop + theme.AppPaddingBottom
 	}
 

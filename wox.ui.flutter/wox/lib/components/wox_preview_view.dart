@@ -41,6 +41,7 @@ import 'package:wox/enums/wox_preview_scroll_position_enum.dart';
 import 'package:wox/enums/wox_preview_type_enum.dart';
 import 'package:wox/enums/wox_image_type_enum.dart';
 import 'package:wox/utils/log.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 import 'package:wox/utils/color_util.dart';
 import 'package:flutter_highlight/themes/monokai.dart';
 
@@ -58,6 +59,7 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
   final scrollController = ScrollController();
   final launcherController = Get.find<WoxLauncherController>();
   final allCodeLanguages = {...allLanguages, "txt": Mode(), "conf": Mode(), "js": javascript, "ts": typescript, "yml": yaml, "sh": bash, "py": python};
+  WoxInterfaceSizeMetrics get _metrics => WoxInterfaceSizeUtil.instance.current;
 
   Widget scrollableContent({required Widget child}) {
     return child;
@@ -69,15 +71,15 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
     // Markdown no longer draws its own frame because WoxPreviewScaffold owns the
     // shared scroll surface. Keeping only content padding here lets markdown,
     // text, and image previews share one outer background and scrollbar model.
-    return scrollableContent(child: Padding(padding: const EdgeInsets.all(20), child: WoxMarkdownView(data: markdownData, fontColor: textColor, enableImageOverlay: true)));
+    return scrollableContent(child: Padding(padding: EdgeInsets.all(_metrics.scaledSpacing(20)), child: WoxMarkdownView(data: markdownData, fontColor: textColor, fontSize: _metrics.resultSubtitleFontSize, enableImageOverlay: true)));
   }
 
   Widget buildText(String txtData) {
     final textColor = safeFromCssColor(widget.woxTheme.previewFontColor);
     final quoteColor = textColor.withValues(alpha: 0.16);
     final bodyColor = textColor.withValues(alpha: 0.86);
-    final quoteTextStyle = TextStyle(color: bodyColor, fontSize: 17, height: 1.45, fontWeight: FontWeight.w400, letterSpacing: 0);
-    final plainTextStyle = TextStyle(color: bodyColor, fontSize: 15, height: 1.55, fontWeight: FontWeight.w400, letterSpacing: 0);
+    final quoteTextStyle = TextStyle(color: bodyColor, fontSize: _metrics.scaledSpacing(17), height: 1.45, fontWeight: FontWeight.w400, letterSpacing: 0);
+    final plainTextStyle = TextStyle(color: bodyColor, fontSize: _metrics.scaledSpacing(15), height: 1.55, fontWeight: FontWeight.w400, letterSpacing: 0);
 
     // Text previews keep their reader typography and optional quote treatment,
     // but the frame moved to WoxPreviewScaffold so the scrollbar sits inside the
@@ -89,12 +91,12 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
         builder: (context, constraints) {
           final viewportHeight = constraints.hasBoundedHeight ? constraints.maxHeight : constraints.minHeight;
           final viewportWidth = constraints.hasBoundedWidth ? constraints.maxWidth : constraints.minWidth;
-          const quoteHorizontalPadding = 44.0;
-          const quoteTop = 12.0;
-          const quoteBottom = 4.0;
-          const quoteSize = 72.0;
-          const quoteTextTopPadding = 62.0;
-          const quoteTextBottomPadding = 62.0;
+          final quoteHorizontalPadding = _metrics.scaledSpacing(44);
+          final quoteTop = _metrics.scaledSpacing(12);
+          final quoteBottom = _metrics.scaledSpacing(4);
+          final quoteSize = _metrics.scaledSpacing(72);
+          final quoteTextTopPadding = _metrics.scaledSpacing(62);
+          final quoteTextBottomPadding = _metrics.scaledSpacing(62);
           final quoteTextMaxWidth = viewportWidth - quoteHorizontalPadding * 2;
           // The quote glyphs are decorative background marks, so the fit check
           // should use the text padding area instead of subtracting the full
@@ -112,17 +114,17 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
           return SizedBox(
             height: shouldShowQuote ? viewportHeight : null,
             child: Stack(
-              children: [
-                if (shouldShowQuote)
-                  Positioned(left: 22, top: quoteTop, child: Text("“", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
-                if (shouldShowQuote)
-                  Positioned(right: 22, bottom: quoteBottom, child: Text("”", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
+                children: [
+                  if (shouldShowQuote)
+                    Positioned(left: _metrics.scaledSpacing(22), top: quoteTop, child: Text("“", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
+                  if (shouldShowQuote)
+                    Positioned(right: _metrics.scaledSpacing(22), bottom: quoteBottom, child: Text("”", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
                 Padding(
                   padding: EdgeInsets.fromLTRB(
-                    shouldShowQuote ? quoteHorizontalPadding : 24,
-                    shouldShowQuote ? quoteTextTopPadding : 24,
-                    shouldShowQuote ? quoteHorizontalPadding : 24,
-                    shouldShowQuote ? quoteTextBottomPadding : 24,
+                    shouldShowQuote ? quoteHorizontalPadding : _metrics.scaledSpacing(24),
+                    shouldShowQuote ? quoteTextTopPadding : _metrics.scaledSpacing(24),
+                    shouldShowQuote ? quoteHorizontalPadding : _metrics.scaledSpacing(24),
+                    shouldShowQuote ? quoteTextBottomPadding : _metrics.scaledSpacing(24),
                   ),
                   child: Align(
                     alignment: shouldShowQuote ? Alignment.center : Alignment.topLeft,
@@ -166,7 +168,10 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
               child: SingleChildScrollView(
                 controller: scrollController,
                 child: CodeField(
-                  textStyle: const TextStyle(fontSize: 13),
+                  // Preview typography is part of the launcher surface, so it
+                  // follows interface density while settings controls keep
+                  // their existing fixed sizing.
+                  textStyle: TextStyle(fontSize: _metrics.resultSubtitleFontSize),
                   readOnly: true,
                   gutterStyle: GutterStyle.none,
                   controller: CodeController(text: snapshot.data, readOnly: true, language: allCodeLanguages[fileExtension]!),
@@ -207,7 +212,7 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
     // do not create a nested frame inside the unified preview surface.
     return LayoutBuilder(
       builder: (context, constraints) {
-        final content = SizedBox(width: constraints.maxWidth, height: constraints.maxHeight, child: Padding(padding: const EdgeInsets.all(12), child: Center(child: image)));
+        final content = SizedBox(width: constraints.maxWidth, height: constraints.maxHeight, child: Padding(padding: EdgeInsets.all(_metrics.scaledSpacing(12)), child: Center(child: image)));
         if (overlayImage == null || !canOpenPreviewImageOverlay(overlayImage)) {
           return content;
         }

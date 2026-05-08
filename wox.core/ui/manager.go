@@ -881,7 +881,10 @@ func (m *Manager) getTrayQueryWindowAnchorBottom(rect tray.ClickRect, screenRect
 
 func (m *Manager) getTrayQueryInitialWindowHeight(ctx context.Context, trayQuery setting.TrayQuery) int {
 	theme := m.GetCurrentTheme(ctx)
-	queryBoxHeight := 55 + theme.AppPaddingTop + theme.AppPaddingBottom
+	// Tray query popups start before Flutter has measured content, so backend
+	// positioning must use the same density-scaled base heights as the launcher
+	// render path while leaving theme padding untouched.
+	queryBoxHeight := DensityQueryBoxBaseHeight(ctx) + theme.AppPaddingTop + theme.AppPaddingBottom
 	if queryBoxHeight <= 0 {
 		queryBoxHeight = 80
 	}
@@ -890,7 +893,7 @@ func (m *Manager) getTrayQueryInitialWindowHeight(ctx context.Context, trayQuery
 		return queryBoxHeight
 	}
 
-	resultItemHeight := 50 + theme.ResultItemPaddingTop + theme.ResultItemPaddingBottom
+	resultItemHeight := DensityResultItemBaseHeight(ctx) + theme.ResultItemPaddingTop + theme.ResultItemPaddingBottom
 	if resultItemHeight <= 0 {
 		resultItemHeight = 50
 	}

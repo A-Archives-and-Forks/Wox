@@ -16,6 +16,7 @@ import 'package:wox/enums/wox_position_type_enum.dart';
 import 'package:wox/enums/wox_plugin_runtime_enum.dart';
 import 'package:wox/utils/log.dart';
 import 'package:wox/utils/wox_fuzzy_match_util.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 import 'package:wox/utils/wox_setting_util.dart';
 
 class WoxSettingController extends GetxController {
@@ -1306,9 +1307,15 @@ class WoxSettingController extends GetxController {
   Future<void> reloadSetting(String traceId) async {
     await WoxSettingUtil.instance.loadSetting(traceId);
     woxSetting.value = WoxSettingUtil.instance.currentSetting;
+    WoxInterfaceSizeUtil.instance.refreshFromDensity(woxSetting.value.uiDensity);
     Logger.instance.setLogLevel(woxSetting.value.logLevel);
     if (Get.isRegistered<WoxLauncherController>()) {
-      unawaited(Get.find<WoxLauncherController>().refreshGlance(traceId, "settingsChanged"));
+      final launcherController = Get.find<WoxLauncherController>();
+      unawaited(launcherController.refreshGlance(traceId, "settingsChanged"));
+      // Interface size changes are launcher-only; the settings view keeps its
+      // fixed sizing while the launcher recalculates dimensions from metrics as
+      // soon as settings reload.
+      unawaited(launcherController.resizeHeight(traceId: traceId, reason: "settings density changed"));
     }
     Logger.instance.info(traceId, 'Setting reloaded');
   }

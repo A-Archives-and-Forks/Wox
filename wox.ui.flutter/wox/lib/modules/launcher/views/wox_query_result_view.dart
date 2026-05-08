@@ -11,6 +11,7 @@ import 'package:wox/enums/wox_list_view_type_enum.dart';
 import 'package:wox/enums/wox_preview_type_enum.dart';
 import 'package:wox/utils/log.dart';
 import 'package:wox/utils/wox_theme_util.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 import 'package:wox/utils/color_util.dart';
 
 class WoxQueryResultView extends GetView<WoxLauncherController> {
@@ -23,8 +24,8 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
       () =>
           controller.isShowActionPanel.value
               ? Positioned(
-                right: 10,
-                bottom: 10,
+                right: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10),
+                bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10),
                 child: Container(
                   padding: EdgeInsets.only(
                     top: WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingTop.toDouble(),
@@ -38,19 +39,22 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
                     boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), spreadRadius: 2, blurRadius: 8, offset: const Offset(0, 3))],
                   ),
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 320),
+                    constraints: BoxConstraints(maxWidth: WoxInterfaceSizeUtil.instance.current.scaledSpacing(320)),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.start,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           controller.tr("ui_actions"),
-                          style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionContainerHeaderFontColor), fontSize: 16.0),
+                          style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionContainerHeaderFontColor), fontSize: WoxInterfaceSizeUtil.instance.current.actionHeaderFontSize),
                         ),
                         const Divider(),
                         WoxListView<WoxResultAction>(
                           controller: controller.actionListViewController,
-                          maxHeight: 320,
+                          // Action panel capacity follows density so compact,
+                          // normal, and comfortable modes show the same number
+                          // of action rows without reusing the old 40px math.
+                          maxHeight: WoxInterfaceSizeUtil.instance.current.actionItemBaseHeight * 8,
                           listViewType: WoxListViewTypeEnum.WOX_LIST_VIEW_TYPE_ACTION.code,
                           onFilteHotkeyPressed: (traceId, hotkey) {
                             if (controller.isActionHotkey(hotkey)) {
@@ -83,8 +87,8 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
       if (LoggerSwitch.enablePaintLog) Logger.instance.debug(const UuidV4().generate(), "repaint: action form view container");
 
       return Positioned(
-        right: 10,
-        bottom: 10,
+        right: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10),
+        bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10),
         child: Container(
           padding: EdgeInsets.only(
             top: WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingTop.toDouble(),
@@ -98,7 +102,7 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
             boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), spreadRadius: 2, blurRadius: 8, offset: const Offset(0, 3))],
           ),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360, maxHeight: 400),
+            constraints: BoxConstraints(maxWidth: WoxInterfaceSizeUtil.instance.current.scaledSpacing(360), maxHeight: WoxInterfaceSizeUtil.instance.current.scaledSpacing(400)),
             child: WoxFormActionView(
               action: action,
               initialValues: controller.formActionValues,

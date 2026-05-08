@@ -7,6 +7,7 @@ import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/modules/launcher/views/wox_query_box_view.dart';
 import 'package:wox/modules/launcher/views/wox_query_result_view.dart';
 import 'package:wox/modules/launcher/views/wox_query_toolbar_view.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 import 'package:wox/utils/color_util.dart';
 
@@ -19,6 +20,7 @@ class WoxLauncherView extends GetView<WoxLauncherController> {
       final theme = WoxThemeUtil.instance.currentTheme.value;
       final isQueryBoxVisible = controller.isQueryBoxVisible.value;
       final isToolbarShowedWithoutResults = controller.isToolbarShowedWithoutResults;
+      final interfaceMetrics = WoxInterfaceSizeUtil.instance.metrics.value;
       final queryBoxView = const WoxQueryBoxView();
       final resultView = const WoxQueryResultView();
       final topPadding = isQueryBoxVisible ? theme.appPaddingTop.toDouble() : 0.0;
@@ -87,7 +89,14 @@ class WoxLauncherView extends GetView<WoxLauncherController> {
                     ),
                   ),
                 ),
-                if (controller.isShowToolbar && !controller.isToolbarHiddenForce.value) const SizedBox(height: 40, child: WoxQueryToolbarView()),
+                if (controller.isShowToolbar && !controller.isToolbarHiddenForce.value)
+                  SizedBox(
+                    // The parent reserves toolbar height before the toolbar child paints,
+                    // so it must observe density metrics directly instead of relying on
+                    // the old fixed 40px wrapper.
+                    height: interfaceMetrics.toolbarHeight,
+                    child: const WoxQueryToolbarView(),
+                  ),
               ],
             ),
           ),

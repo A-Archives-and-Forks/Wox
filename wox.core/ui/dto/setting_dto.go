@@ -35,10 +35,14 @@ type WoxSettingDto struct {
 	// UI related
 	AppWidth       int
 	MaxResultCount int
-	ThemeId        string
-	AppFontFamily  string
-	EnableGlance   bool
-	PrimaryGlance  setting.GlanceRef
+	// UiDensity is a compact enum rather than per-control dimensions because
+	// backend window sizing and Flutter rendering both derive their local
+	// metrics from the same three scale buckets.
+	UiDensity     setting.UiDensity
+	ThemeId       string
+	AppFontFamily string
+	EnableGlance  bool
+	PrimaryGlance setting.GlanceRef
 	// HideGlanceIcon is kept beside the Glance selection because Flutter needs
 	// it with the rest of the UI settings to render the query-box accessory.
 	HideGlanceIcon bool

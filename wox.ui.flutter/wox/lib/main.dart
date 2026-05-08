@@ -21,6 +21,7 @@ import 'package:wox/utils/heartbeat_checker.dart';
 import 'package:wox/utils/log.dart';
 import 'package:wox/utils/wox_setting_util.dart';
 import 'package:wox/utils/wox_theme_util.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 import 'package:wox/utils/wox_websocket_msg_util.dart';
 
 Future<void> main(List<String> arguments) async {
@@ -63,6 +64,7 @@ Future<void> initialServices(List<String> arguments) async {
   await initArgs(arguments);
   await WoxThemeUtil.instance.loadTheme(traceId);
   await WoxSettingUtil.instance.loadSetting(traceId);
+  WoxInterfaceSizeUtil.instance.refreshFromDensity(WoxSettingUtil.instance.currentSetting.uiDensity);
   Logger.instance.setLogLevel(WoxSettingUtil.instance.currentSetting.logLevel);
 
   var launcherController = WoxLauncherController();

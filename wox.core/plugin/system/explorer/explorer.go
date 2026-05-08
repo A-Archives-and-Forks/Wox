@@ -879,7 +879,10 @@ func (c *ExplorerPlugin) startOverlayListener(ctx context.Context) {
 
 func getExplorerInitialWindowHeight(ctx context.Context) int {
 	theme := ui.GetUIManager().GetCurrentTheme(ctx)
-	queryBoxHeight := 55 + theme.AppPaddingTop + theme.AppPaddingBottom
+	// Explorer overlays position Wox before Flutter paints the query box. Using
+	// the shared density helper keeps compact and comfortable launcher sizes from
+	// appearing offset while preserving theme padding exactly as before.
+	queryBoxHeight := ui.DensityQueryBoxBaseHeight(ctx) + theme.AppPaddingTop + theme.AppPaddingBottom
 	if queryBoxHeight <= 0 {
 		queryBoxHeight = 80
 	}

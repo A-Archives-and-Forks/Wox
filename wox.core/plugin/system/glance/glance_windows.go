@@ -15,6 +15,8 @@ import (
 var (
 	kernel32                 = syscall.NewLazyDLL("kernel32.dll")
 	procGetSystemPowerStatus = kernel32.NewProc("GetSystemPowerStatus")
+	procGetSystemTimes       = kernel32.NewProc("GetSystemTimes")
+	procGlobalMemoryStatusEx = kernel32.NewProc("GlobalMemoryStatusEx")
 )
 
 type systemPowerStatus struct {
@@ -24,6 +26,23 @@ type systemPowerStatus struct {
 	SystemStatusFlag    byte
 	BatteryLifeTime     uint32
 	BatteryFullLifeTime uint32
+}
+
+type windowsFileTime struct {
+	LowDateTime  uint32
+	HighDateTime uint32
+}
+
+type windowsMemoryStatusEx struct {
+	Length               uint32
+	MemoryLoad           uint32
+	TotalPhys            uint64
+	AvailPhys            uint64
+	TotalPageFile        uint64
+	AvailPageFile        uint64
+	TotalVirtual         uint64
+	AvailVirtual         uint64
+	AvailExtendedVirtual uint64
 }
 
 const (
@@ -96,4 +115,42 @@ func windowsBatteryRemainingText(seconds uint32) string {
 		values = append(values, fmt.Sprintf("%dm", minutes))
 	}
 	return strings.Join(values, " ") + " remaining"
+}
+
+func readCPUSample(ctx context.Context) (cpuSample, bool) {
+	_ = ctx
+	var idleTime, kernelTime, userTime windowsFileTime
+	ret, _, _ := procGetSystemTimes.Call(
+		uintptr(unsafe.Pointer(&idleTime)),
+		uintptr(unsafe.Pointer(&kernelTime)),
+		uintptr(unsafe.Pointer(&userTime)),
+	)
+	if ret == 0 {
+		return cpuSample{}, false
+	}
+
+	// New feature: CPU Glance uses GetSystemTimes because it provides cumulative
+	// idle/kernel/user ticks without spawning processes, and the shared sampler
+	// can turn those ticks into the requested 3-second percentage.
+	kernelTicks := windowsFileTimeTicks(kernelTime)
+	userTicks := windowsFileTimeTicks(userTime)
+	return cpuSample{idle: windowsFileTimeTicks(idleTime), total: kernelTicks + userTicks, valid: true}, true
+}
+
+func windowsFileTimeTicks(fileTime windowsFileTime) uint64 {
+	return uint64(fileTime.HighDateTime)<<32 | uint64(fileTime.LowDateTime)
+}
+
+func readMemoryPercent(ctx context.Context) (float64, bool) {
+	_ = ctx
+	status := windowsMemoryStatusEx{Length: uint32(unsafe.Sizeof(windowsMemoryStatusEx{}))}
+	ret, _, _ := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&status)))
+	if ret == 0 {
+		return 0, false
+	}
+
+	// New feature: Memory Glance reports the system-wide committed physical
+	// memory percentage. GlobalMemoryStatusEx already returns this normalized
+	// value, so no extra rounding or unit conversion is needed here.
+	return float64(status.MemoryLoad), true
 }

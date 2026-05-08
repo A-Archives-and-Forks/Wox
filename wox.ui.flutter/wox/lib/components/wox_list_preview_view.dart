@@ -7,6 +7,7 @@ import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/enums/wox_result_tail_text_category_enum.dart';
 import 'package:wox/enums/wox_result_tail_type_enum.dart';
 import 'package:wox/utils/color_util.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 
 class WoxListPreviewView extends StatelessWidget {
   final WoxPreviewListData data;
@@ -23,11 +24,11 @@ class WoxListPreviewView extends StatelessWidget {
     // progress, or other status rows. Rendering only row data here prevents the
     // preview from leaking file-specific assumptions back into plugin payloads.
     if (data.items.isEmpty) {
-      return Center(child: Text("No items", style: TextStyle(color: fontColor.withValues(alpha: 0.62), fontSize: 14)));
+      return Center(child: Text("No items", style: TextStyle(color: fontColor.withValues(alpha: 0.62), fontSize: WoxInterfaceSizeUtil.instance.current.resultSubtitleFontSize)));
     }
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: EdgeInsets.symmetric(horizontal: WoxInterfaceSizeUtil.instance.current.scaledSpacing(12), vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10)),
       child: Column(
         children: [
           for (var index = 0; index < data.items.length; index++) ...[
@@ -46,23 +47,24 @@ class _ListPreviewRow extends StatelessWidget {
 
   const _ListPreviewRow({required this.item, required this.woxTheme});
 
-  static const double _iconSize = 34;
-  static const double _tailImageSize = 18;
-
   @override
   Widget build(BuildContext context) {
     final fontColor = safeFromCssColor(woxTheme.previewFontColor);
     final splitLineColor = safeFromCssColor(woxTheme.previewSplitLineColor);
     final propertyColor = safeFromCssColor(woxTheme.previewPropertyContentColor);
+    final metrics = WoxInterfaceSizeUtil.instance.current;
 
+    // List preview rows belong to the launcher preview surface, so text, icon,
+    // and chip sizes follow density while semantic colors and borders stay local
+    // to the preview styling.
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
+      padding: EdgeInsets.symmetric(vertical: metrics.scaledSpacing(10)),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
-            width: _iconSize,
-            height: _iconSize,
+            width: metrics.scaledSpacing(34),
+            height: metrics.scaledSpacing(34),
             decoration: BoxDecoration(
               color: propertyColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
@@ -70,7 +72,7 @@ class _ListPreviewRow extends StatelessWidget {
             ),
             child: _buildIcon(propertyColor),
           ),
-          const SizedBox(width: 12),
+          SizedBox(width: metrics.scaledSpacing(12)),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -82,18 +84,18 @@ class _ListPreviewRow extends StatelessWidget {
                     item.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: fontColor.withValues(alpha: 0.92), fontSize: 14.5, fontWeight: FontWeight.w600, height: 1.2),
+                    style: TextStyle(color: fontColor.withValues(alpha: 0.92), fontSize: metrics.resultTitleFontSize, fontWeight: FontWeight.w600, height: 1.2),
                   ),
                 ),
                 if (item.subtitle.isNotEmpty) ...[
-                  const SizedBox(height: 4),
+                  SizedBox(height: metrics.scaledSpacing(4)),
                   WoxTooltip(
                     message: item.subtitle,
                     child: Text(
                       item.subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: fontColor.withValues(alpha: 0.56), fontSize: 12.5, height: 1.2),
+                      style: TextStyle(color: fontColor.withValues(alpha: 0.56), fontSize: metrics.resultSubtitleFontSize, height: 1.2),
                     ),
                   ),
                 ],
@@ -101,9 +103,9 @@ class _ListPreviewRow extends StatelessWidget {
             ),
           ),
           if (item.tails.isNotEmpty) ...[
-            const SizedBox(width: 10),
+            SizedBox(width: metrics.scaledSpacing(10)),
             ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 150),
+              constraints: BoxConstraints(maxWidth: metrics.scaledSpacing(150)),
               child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: item.tails.map((tail) => _buildTail(tail, fontColor, splitLineColor)).toList())),
             ),
           ],
@@ -115,17 +117,17 @@ class _ListPreviewRow extends StatelessWidget {
   Widget _buildIcon(Color color) {
     final icon = item.icon;
     if (icon == null || icon.imageData.isEmpty) {
-      return Icon(Icons.list_alt_outlined, color: color.withValues(alpha: 0.88), size: 18);
+      return Icon(Icons.list_alt_outlined, color: color.withValues(alpha: 0.88), size: WoxInterfaceSizeUtil.instance.current.scaledSpacing(18));
     }
 
-    return Center(child: WoxImageView(woxImage: icon, width: 20, height: 20));
+    return Center(child: WoxImageView(woxImage: icon, width: WoxInterfaceSizeUtil.instance.current.tailImageSize, height: WoxInterfaceSizeUtil.instance.current.tailImageSize));
   }
 
   Widget _buildTail(WoxListItemTail tail, Color fontColor, Color splitLineColor) {
     if (tail.type == WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_IMAGE.code && tail.image != null && tail.image!.imageData.isNotEmpty) {
       return Padding(
-        padding: const EdgeInsets.only(left: 6),
-        child: WoxImageView(woxImage: tail.image!, width: tail.imageWidth ?? _tailImageSize, height: tail.imageHeight ?? _tailImageSize),
+        padding: EdgeInsets.only(left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(6)),
+        child: WoxImageView(woxImage: tail.image!, width: tail.imageWidth ?? WoxInterfaceSizeUtil.instance.current.tailImageSize, height: tail.imageHeight ?? WoxInterfaceSizeUtil.instance.current.tailImageSize),
       );
     }
 
@@ -135,12 +137,12 @@ class _ListPreviewRow extends StatelessWidget {
 
     final style = _tailStyle(tail.textCategory, fontColor, splitLineColor);
     return Padding(
-      padding: const EdgeInsets.only(left: 6),
+      padding: EdgeInsets.only(left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(6)),
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 92),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        constraints: BoxConstraints(maxWidth: WoxInterfaceSizeUtil.instance.current.scaledSpacing(92)),
+        padding: EdgeInsets.symmetric(horizontal: WoxInterfaceSizeUtil.instance.current.scaledSpacing(8), vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4)),
         decoration: BoxDecoration(color: style.backgroundColor, borderRadius: BorderRadius.circular(8), border: Border.all(color: style.borderColor)),
-        child: Text(tail.text!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: style.textColor, fontSize: 11, fontWeight: FontWeight.w600, height: 1.1)),
+        child: Text(tail.text!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: style.textColor, fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, fontWeight: FontWeight.w600, height: 1.1)),
       ),
     );
   }

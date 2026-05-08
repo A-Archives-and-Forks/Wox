@@ -14,6 +14,7 @@ import 'package:wox/entity/wox_preview_webview_data.dart';
 import 'package:wox/utils/windows/window_manager.dart';
 import 'package:wox/utils/webview/wox_webview_util.dart';
 import 'package:wox/utils/webview/wox_webview_session.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 
 class WoxWebViewPreview extends StatefulWidget {
   final String previewData;
@@ -27,8 +28,8 @@ class WoxWebViewPreview extends StatefulWidget {
 class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
   static const double _toolbarBottomSpacing = 60;
   static const double _toolbarHeight = 36;
-  // The toolbar now has four fixed-size controls. Keeping the width explicit preserves the centered
-  // floating shape while adding the external-browser action instead of letting Expanded handles shift it.
+  // These are normal-density base values; preview toolbar controls scale from
+  // them so the floating shape stays proportional to the active interface size.
   static const double _toolbarWidth = 208;
   static const double _toolbarTriggerWidth = 256;
   static const double _toolbarTriggerHeight = 72;
@@ -43,6 +44,10 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
   final launcherController = Get.find<WoxLauncherController>();
   Timer? _toolbarHideTimer;
   bool _isToolbarVisible = true;
+
+  WoxInterfaceSizeMetrics get _metrics => WoxInterfaceSizeUtil.instance.current;
+
+  double _scaled(double value) => _metrics.scaledSpacing(value);
 
   WoxPreviewWebviewData get webviewData {
     return WoxPreviewWebviewData.fromPreviewData(widget.previewData);
@@ -190,13 +195,13 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
     return Positioned(
       left: 0,
       right: 0,
-      bottom: _toolbarBottomSpacing - 18,
+      bottom: _scaled(_toolbarBottomSpacing - 18),
       child: Align(
         alignment: Alignment.bottomCenter,
         child: MouseRegion(
           onEnter: (_) => _showToolbarTemporarily(),
           onExit: (_) => _scheduleToolbarHide(),
-          child: const SizedBox(width: _toolbarTriggerWidth, height: _toolbarTriggerHeight),
+          child: SizedBox(width: _scaled(_toolbarTriggerWidth), height: _scaled(_toolbarTriggerHeight)),
         ),
       ),
     );
@@ -210,7 +215,7 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
     final shadowColor = Colors.black.withValues(alpha: isDark ? 0.22 : 0.12);
 
     return Positioned(
-      bottom: _toolbarBottomSpacing,
+      bottom: _scaled(_toolbarBottomSpacing),
       left: 0,
       right: 0,
       child: IgnorePointer(
@@ -225,20 +230,20 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
               curve: Curves.easeOutCubic,
               opacity: _isToolbarVisible ? 1 : 0,
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(_toolbarHeight / 2),
+                borderRadius: BorderRadius.circular(_scaled(_toolbarHeight) / 2),
                 child: BackdropFilter(
                   filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
                   child: DecoratedBox(
                     decoration: BoxDecoration(
                       color: backgroundColor,
-                      borderRadius: BorderRadius.circular(_toolbarHeight / 2),
+                      borderRadius: BorderRadius.circular(_scaled(_toolbarHeight) / 2),
                       border: Border.all(color: borderColor),
                       boxShadow: [BoxShadow(color: shadowColor, blurRadius: 20, offset: const Offset(0, 8))],
                     ),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: EdgeInsets.symmetric(horizontal: _scaled(6), vertical: _scaled(2)),
                       child: SizedBox(
-                        width: _toolbarWidth,
+                        width: _scaled(_toolbarWidth),
                         child: Row(
                           children: [
                             Expanded(child: _buildToolbarDragHandle()),
@@ -290,12 +295,12 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
       tooltip: tooltip,
       onPressed: isEnabled ? onPressed : null,
       icon: Icon(icon),
-      iconSize: 20,
+      iconSize: _scaled(20),
       color: iconColor,
       disabledColor: iconColor.withValues(alpha: 0.28),
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-      splashRadius: 16,
+      constraints: BoxConstraints.tightFor(width: _scaled(32), height: _scaled(32)),
+      splashRadius: _scaled(16),
       visualDensity: VisualDensity.compact,
     );
   }
@@ -308,7 +313,7 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
         onPanStart: (_) {
           windowManager.startDragging();
         },
-        child: const SizedBox(height: 32),
+        child: SizedBox(height: _scaled(32)),
       ),
     );
   }

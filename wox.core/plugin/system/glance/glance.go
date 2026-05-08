@@ -2,11 +2,14 @@ package glance
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"wox/common"
 	"wox/plugin"
@@ -14,6 +17,7 @@ import (
 )
 
 const systemGlancePluginId = "e3ad9f18-fbbe-4f22-8c1b-8274c751f6e6"
+const systemMetricRefreshIntervalMs = 3000
 
 const (
 	glancePluginSvg  = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="#8AB4F8"/></svg>`
@@ -21,6 +25,8 @@ const (
 	glanceDateSvg    = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><rect x="4" y="5" width="16" height="15" rx="2.5" stroke="#8AB4F8" stroke-width="2"/><path d="M8 3v4M16 3v4M4 10h16" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round"/><path d="M8 14h2M12 14h2M16 14h1M8 17h2M12 17h2" stroke="#8AB4F8" stroke-width="1.8" stroke-linecap="round"/></svg>`
 	glanceBatterySvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><rect x="3" y="7" width="16" height="10" rx="2" stroke="#8AB4F8" stroke-width="2"/><path d="M21 10v4" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round"/><rect x="6" y="10" width="8" height="4" rx="1" fill="#8AB4F8"/></svg>`
 	glancePlugSvg    = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><path d="M9 3v6M15 3v6M7 9h10v3a5 5 0 0 1-4 4.9V21h-2v-4.1A5 5 0 0 1 7 12V9Z" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+	glanceCPUSvg     = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><rect x="7" y="7" width="10" height="10" rx="2" stroke="#8AB4F8" stroke-width="2"/><path d="M4 9h3M4 15h3M17 9h3M17 15h3M9 4v3M15 4v3M9 17v3M15 17v3" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round"/><rect x="10" y="10" width="4" height="4" rx="1" fill="#8AB4F8"/></svg>`
+	glanceMemorySvg  = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><rect x="5" y="6" width="14" height="12" rx="2" stroke="#8AB4F8" stroke-width="2"/><path d="M8 10h8M8 14h5M7 3v3M12 3v3M17 3v3M7 18v3M12 18v3M17 18v3" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round"/></svg>`
 )
 
 func init() {
@@ -28,7 +34,15 @@ func init() {
 }
 
 type GlancePlugin struct {
-	api plugin.API
+	api              plugin.API
+	lastCPUSample    cpuSample
+	lastCPUSampleMux sync.Mutex
+}
+
+type cpuSample struct {
+	idle  uint64
+	total uint64
+	valid bool
 }
 
 func (p *GlancePlugin) GetMetadata() plugin.Metadata {
@@ -49,6 +63,10 @@ func (p *GlancePlugin) GetMetadata() plugin.Metadata {
 			{Id: "time", Name: "i18n:plugin_glance_time_name", Description: "i18n:plugin_glance_time_description", Icon: glanceSvgString(glanceTimeSvg), RefreshIntervalMs: 60000},
 			{Id: "date", Name: "i18n:plugin_glance_date_name", Description: "i18n:plugin_glance_date_description", Icon: glanceSvgString(glanceDateSvg), RefreshIntervalMs: 60000},
 			{Id: "battery", Name: "i18n:plugin_glance_battery_name", Description: "i18n:plugin_glance_battery_description", Icon: glanceSvgString(glanceBatterySvg), RefreshIntervalMs: 60000},
+			// New feature: CPU and memory are live system metrics, so they use a
+			// shorter 3-second interval instead of the slower static-info cadence.
+			{Id: "cpu", Name: "i18n:plugin_glance_cpu_name", Description: "i18n:plugin_glance_cpu_description", Icon: glanceSvgString(glanceCPUSvg), RefreshIntervalMs: systemMetricRefreshIntervalMs},
+			{Id: "memory", Name: "i18n:plugin_glance_memory_name", Description: "i18n:plugin_glance_memory_description", Icon: glanceSvgString(glanceMemorySvg), RefreshIntervalMs: systemMetricRefreshIntervalMs},
 		},
 	}
 }
@@ -80,6 +98,14 @@ func (p *GlancePlugin) Glance(ctx context.Context, request plugin.GlanceRequest)
 			if item, ok := p.batteryGlance(ctx); ok {
 				items = append(items, item)
 			}
+		case "cpu":
+			if item, ok := p.cpuGlance(ctx); ok {
+				items = append(items, item)
+			}
+		case "memory":
+			if item, ok := p.memoryGlance(ctx); ok {
+				items = append(items, item)
+			}
 		}
 	}
 	return plugin.GlanceResponse{Items: items}
@@ -98,6 +124,87 @@ func (p *GlancePlugin) batteryGlance(ctx context.Context) (plugin.GlanceItem, bo
 		return p.windowsBatteryGlance(ctx)
 	}
 	return plugin.GlanceItem{}, false
+}
+
+func (p *GlancePlugin) cpuGlance(ctx context.Context) (plugin.GlanceItem, bool) {
+	percent, ok := p.cpuPercent(ctx)
+	if !ok {
+		return plugin.GlanceItem{}, false
+	}
+
+	text := formatGlancePercent(percent)
+	return plugin.GlanceItem{Id: "cpu", Text: text, Icon: common.NewWoxImageSvg(glanceCPUSvg), Tooltip: "CPU " + text}, true
+}
+
+func (p *GlancePlugin) cpuPercent(ctx context.Context) (float64, bool) {
+	p.lastCPUSampleMux.Lock()
+	defer p.lastCPUSampleMux.Unlock()
+
+	current, ok := readCPUSample(ctx)
+	if !ok {
+		return 0, false
+	}
+
+	previous := p.lastCPUSample
+	if !previous.valid {
+		// New feature: CPU usage is a rate between two cumulative snapshots, so
+		// a tiny bootstrap sample keeps the first CPU Glance render useful while
+		// later 3-second refreshes use the regular UI-driven interval.
+		bootstrap, ok := readCPUSampleAfter(ctx, current, 150*time.Millisecond)
+		if !ok {
+			p.lastCPUSample = current
+			return 0, false
+		}
+		previous = current
+		current = bootstrap
+	}
+
+	p.lastCPUSample = current
+	if current.total <= previous.total || current.idle < previous.idle {
+		return 0, false
+	}
+
+	totalDelta := current.total - previous.total
+	idleDelta := current.idle - previous.idle
+	return clampPercent(100 * float64(totalDelta-idleDelta) / float64(totalDelta)), true
+}
+
+func readCPUSampleAfter(ctx context.Context, current cpuSample, delay time.Duration) (cpuSample, bool) {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return cpuSample{}, false
+	case <-timer.C:
+	}
+
+	next, ok := readCPUSample(ctx)
+	if !ok || next.total <= current.total {
+		return cpuSample{}, false
+	}
+	return next, true
+}
+
+func (p *GlancePlugin) memoryGlance(ctx context.Context) (plugin.GlanceItem, bool) {
+	percent, ok := readMemoryPercent(ctx)
+	if !ok {
+		return plugin.GlanceItem{}, false
+	}
+
+	text := formatGlancePercent(percent)
+	return plugin.GlanceItem{Id: "memory", Text: text, Icon: common.NewWoxImageSvg(glanceMemorySvg), Tooltip: "Memory " + text}, true
+}
+
+func formatGlancePercent(percent float64) string {
+	return fmt.Sprintf("%.0f%%", clampPercent(percent))
+}
+
+func clampPercent(percent float64) float64 {
+	if math.IsNaN(percent) || math.IsInf(percent, 0) {
+		return 0
+	}
+	return math.Max(0, math.Min(100, percent))
 }
 
 func (p *GlancePlugin) macOSBatteryGlance(ctx context.Context) (plugin.GlanceItem, bool) {

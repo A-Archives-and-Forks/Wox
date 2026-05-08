@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:wox/entity/wox_preview_ai_stream.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/utils/color_util.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 
 class WoxAIStreamPreviewView extends StatefulWidget {
   final WoxPreviewAIStream data;
@@ -65,7 +66,7 @@ class _WoxAIStreamPreviewViewState extends State<WoxAIStreamPreviewView> {
     // remains an inner low-priority section because it is contextual detail, not
     // a separate preview surface.
     return Padding(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(WoxInterfaceSizeUtil.instance.current.scaledSpacing(20)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -82,15 +83,15 @@ class _WoxAIStreamPreviewViewState extends State<WoxAIStreamPreviewView> {
                 });
               },
             ),
-            Padding(padding: const EdgeInsets.symmetric(vertical: 18), child: Divider(height: 1, color: splitLineColor.withValues(alpha: 0.28))),
+            Padding(padding: EdgeInsets.symmetric(vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(18)), child: Divider(height: 1, color: splitLineColor.withValues(alpha: 0.28))),
           ],
           if (widget.data.answerTitle.isNotEmpty && reasoningText.isNotEmpty) ...[
-            Text(widget.data.answerTitle, style: TextStyle(color: propertyColor.withValues(alpha: 0.72), fontSize: 12, height: 1.2, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 10),
+            Text(widget.data.answerTitle, style: TextStyle(color: propertyColor.withValues(alpha: 0.72), fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, height: 1.2, fontWeight: FontWeight.w700)),
+            SizedBox(height: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10)),
           ],
           answerText.isEmpty
               ? _WaitingForAnswer(statusLabel: widget.data.statusLabel, woxTheme: widget.woxTheme)
-              : SelectableText(answerText, style: TextStyle(color: bodyColor, fontSize: 16, height: 1.52, fontWeight: FontWeight.w400, letterSpacing: 0)),
+              : SelectableText(answerText, style: TextStyle(color: bodyColor, fontSize: WoxInterfaceSizeUtil.instance.current.resultTitleFontSize, height: 1.52, fontWeight: FontWeight.w400, letterSpacing: 0)),
         ],
       ),
     );
@@ -123,10 +124,17 @@ class _ReasoningSection extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(width: 3, decoration: BoxDecoration(color: propertyColor.withValues(alpha: 0.52), borderRadius: const BorderRadius.horizontal(left: Radius.circular(8)))),
+            Container(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(3), decoration: BoxDecoration(color: propertyColor.withValues(alpha: 0.52), borderRadius: const BorderRadius.horizontal(left: Radius.circular(8)))),
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                // AI stream reasoning is launcher preview content, so spacing
+                // and typography follow density while borders/radii stay fixed.
+                padding: EdgeInsets.fromLTRB(
+                  WoxInterfaceSizeUtil.instance.current.scaledSpacing(12),
+                  WoxInterfaceSizeUtil.instance.current.scaledSpacing(10),
+                  WoxInterfaceSizeUtil.instance.current.scaledSpacing(12),
+                  WoxInterfaceSizeUtil.instance.current.scaledSpacing(12),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -134,17 +142,17 @@ class _ReasoningSection extends StatelessWidget {
                       onTap: onToggle,
                       borderRadius: BorderRadius.circular(6),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        padding: EdgeInsets.symmetric(vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(2)),
                         child: Row(
                           children: [
-                            Icon(isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, color: fontColor.withValues(alpha: 0.52), size: 18),
-                            const SizedBox(width: 4),
+                            Icon(isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, color: fontColor.withValues(alpha: 0.52), size: WoxInterfaceSizeUtil.instance.current.scaledSpacing(18)),
+                            SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4)),
                             Expanded(
                               child: Text(
                                 title,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(color: fontColor.withValues(alpha: 0.68), fontSize: 12.5, height: 1.2, fontWeight: FontWeight.w700),
+                                style: TextStyle(color: fontColor.withValues(alpha: 0.68), fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, height: 1.2, fontWeight: FontWeight.w700),
                               ),
                             ),
                             if (statusLabel.isNotEmpty) _StatusPill(label: statusLabel, woxTheme: woxTheme),
@@ -152,11 +160,11 @@ class _ReasoningSection extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    SizedBox(height: WoxInterfaceSizeUtil.instance.current.scaledSpacing(8)),
                     SelectableText(
                       reasoning,
                       maxLines: isExpanded ? null : 2,
-                      style: TextStyle(color: fontColor.withValues(alpha: 0.58), fontSize: 13, height: 1.42, fontWeight: FontWeight.w400, letterSpacing: 0),
+                      style: TextStyle(color: fontColor.withValues(alpha: 0.58), fontSize: WoxInterfaceSizeUtil.instance.current.resultSubtitleFontSize, height: 1.42, fontWeight: FontWeight.w400, letterSpacing: 0),
                     ),
                   ],
                 ),
@@ -181,7 +189,7 @@ class _StatusPill extends StatelessWidget {
     final splitLineColor = safeFromCssColor(woxTheme.previewSplitLineColor);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: EdgeInsets.symmetric(horizontal: WoxInterfaceSizeUtil.instance.current.scaledSpacing(8), vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(3)),
       decoration: BoxDecoration(
         color: fontColor.withValues(alpha: 0.035),
         borderRadius: BorderRadius.circular(8),
@@ -191,7 +199,7 @@ class _StatusPill extends StatelessWidget {
         label,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: fontColor.withValues(alpha: 0.58), fontSize: 11, height: 1.1, fontWeight: FontWeight.w700),
+        style: TextStyle(color: fontColor.withValues(alpha: 0.58), fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, height: 1.1, fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -210,14 +218,14 @@ class _WaitingForAnswer extends StatelessWidget {
     return Row(
       children: [
         SizedBox(
-          width: 20,
+          width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(20),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [_Dot(color: fontColor.withValues(alpha: 0.32)), _Dot(color: fontColor.withValues(alpha: 0.24)), _Dot(color: fontColor.withValues(alpha: 0.16))],
           ),
         ),
-        const SizedBox(width: 9),
-        Flexible(child: Text(statusLabel, style: TextStyle(color: fontColor.withValues(alpha: 0.54), fontSize: 14, height: 1.3, fontWeight: FontWeight.w500))),
+        SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(9)),
+        Flexible(child: Text(statusLabel, style: TextStyle(color: fontColor.withValues(alpha: 0.54), fontSize: WoxInterfaceSizeUtil.instance.current.resultSubtitleFontSize, height: 1.3, fontWeight: FontWeight.w500))),
       ],
     );
   }
@@ -230,6 +238,6 @@ class _Dot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(width: 4, height: 4, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(999)));
+    return Container(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4), height: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4), decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(999)));
   }
 }

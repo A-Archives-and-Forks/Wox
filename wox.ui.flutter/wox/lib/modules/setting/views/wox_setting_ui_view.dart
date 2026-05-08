@@ -24,6 +24,14 @@ class WoxSettingUIView extends WoxSettingBaseView {
     return values.map((width) => WoxDropdownItem<int>(value: width, label: width.toString())).toList();
   }
 
+  List<WoxDropdownItem<String>> _buildInterfaceSizeItems() {
+    return [
+      WoxDropdownItem(value: "compact", label: controller.tr("ui_interface_size_compact")),
+      WoxDropdownItem(value: "normal", label: controller.tr("ui_interface_size_normal")),
+      WoxDropdownItem(value: "comfortable", label: controller.tr("ui_interface_size_comfortable")),
+    ];
+  }
+
   List<WoxDropdownItem<String>> _buildGlanceItems() {
     final items = <WoxDropdownItem<String>>[];
     final iconColor = getThemeTextColor();
@@ -132,6 +140,29 @@ class WoxSettingUIView extends WoxSettingBaseView {
                     onChanged: (value) {
                       if (value != null) {
                         controller.updateConfig("AppWidth", value.toString());
+                      }
+                    },
+                    isExpanded: true,
+                  );
+                }),
+              ),
+              formField(
+                label: controller.tr("ui_interface_size"),
+                tips: controller.tr("ui_interface_size_tips"),
+                child: Obx(() {
+                  final items = _buildInterfaceSizeItems();
+                  final currentDensity = controller.woxSetting.value.uiDensity;
+                  final selectedDensity = items.any((item) => item.value == currentDensity) ? currentDensity : "normal";
+
+                  return WoxDropdownButton<String>(
+                    // Interface size only writes the density key; the settings page
+                    // itself keeps its fixed layout while the launcher observes the
+                    // reloaded setting and recomputes density metrics.
+                    value: selectedDensity,
+                    items: items,
+                    onChanged: (value) {
+                      if (value != null) {
+                        controller.updateConfig("UiDensity", value);
                       }
                     },
                     isExpanded: true,

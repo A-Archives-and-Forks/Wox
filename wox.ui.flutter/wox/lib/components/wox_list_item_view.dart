@@ -9,6 +9,7 @@ import 'package:wox/enums/wox_list_view_type_enum.dart';
 import 'package:wox/enums/wox_result_tail_text_category_enum.dart';
 import 'package:wox/enums/wox_result_tail_type_enum.dart';
 import 'package:wox/utils/log.dart';
+import 'package:wox/utils/wox_interface_size_util.dart';
 import 'package:wox/utils/wox_setting_util.dart';
 
 import 'wox_hotkey_view.dart';
@@ -20,17 +21,7 @@ class WoxListItemView extends StatelessWidget {
   final bool isHovered;
   final WoxListViewType listViewType;
 
-  // Static const values for performance
-  static const _tailPadding = EdgeInsets.only(left: 10.0, right: 5.0);
-  static const _tailItemPadding = EdgeInsets.only(left: 10.0);
-  static const _iconPadding = EdgeInsets.only(left: 5.0, right: 10.0);
-  static const _subtitlePadding = EdgeInsets.only(top: 2.0);
-  static const _quickSelectPadding = EdgeInsets.only(left: 10.0, right: 5.0);
   static const _quickSelectBorderRadius = BorderRadius.all(Radius.circular(4));
-  static const _iconSize = 30.0;
-  static const _quickSelectSize = 24.0;
-  static const _tailImageSize = 20.0;
-  static const _textTailPadding = EdgeInsets.symmetric(horizontal: 8.0, vertical: 3.0);
   static const _textTailBorderRadius = BorderRadius.all(Radius.circular(999));
   static const _dangerTailColor = Color(0xFFD92D20);
   static const _warningTailColor = Color(0xFFF79009);
@@ -38,22 +29,32 @@ class WoxListItemView extends StatelessWidget {
 
   const WoxListItemView({super.key, required this.item, required this.woxTheme, required this.isActive, required this.isHovered, required this.listViewType});
 
+  WoxInterfaceSizeMetrics get _metrics => WoxInterfaceSizeUtil.instance.current;
+  EdgeInsets get _tailPadding => EdgeInsets.only(left: _metrics.scaledSpacing(10), right: _metrics.scaledSpacing(5));
+  EdgeInsets get _tailItemPadding => EdgeInsets.only(left: _metrics.scaledSpacing(10));
+  EdgeInsets get _iconPadding => EdgeInsets.only(left: _metrics.scaledSpacing(5), right: _metrics.scaledSpacing(10));
+  EdgeInsets get _subtitlePadding => EdgeInsets.only(top: _metrics.scaledSpacing(2));
+  EdgeInsets get _quickSelectPadding => EdgeInsets.only(left: _metrics.scaledSpacing(10), right: _metrics.scaledSpacing(5));
+  EdgeInsets get _textTailPadding => EdgeInsets.symmetric(horizontal: _metrics.scaledSpacing(8), vertical: _metrics.scaledSpacing(3));
+
   Widget buildQuickSelectNumber() {
+    final metrics = _metrics;
     final tailColor = isActive ? woxTheme.resultItemActiveTailTextColorParsed : woxTheme.resultItemTailTextColorParsed;
     final bgColor = isActive ? woxTheme.resultItemActiveBackgroundColorParsed : woxTheme.appBackgroundColorParsed;
 
     return Padding(
       padding: _quickSelectPadding,
       child: Container(
-        width: _quickSelectSize,
-        height: _quickSelectSize,
+        width: metrics.quickSelectSize,
+        height: metrics.quickSelectSize,
         decoration: BoxDecoration(color: tailColor, borderRadius: _quickSelectBorderRadius, border: Border.all(color: tailColor.withValues(alpha: 0.3), width: 1)),
-        child: Center(child: Text(item.quickSelectNumber, style: TextStyle(color: bgColor, fontSize: 12, fontWeight: FontWeight.bold))),
+        child: Center(child: Text(item.quickSelectNumber, style: TextStyle(color: bgColor, fontSize: metrics.tailHotkeyFontSize, fontWeight: FontWeight.bold))),
       ),
     );
   }
 
   Widget buildTails() {
+    final metrics = _metrics;
     final tailTextColor = isActive ? woxTheme.resultItemActiveTailTextColorParsed : woxTheme.resultItemTailTextColorParsed;
     final activeBgColor = woxTheme.resultItemActiveBackgroundColorParsed;
     final actionBgColor = woxTheme.actionContainerBackgroundColorParsed;
@@ -79,7 +80,7 @@ class WoxListItemView extends StatelessWidget {
                 else if (tail.type == WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_IMAGE.code && tail.image != null && tail.image!.imageData.isNotEmpty)
                   Padding(
                     padding: _tailItemPadding,
-                    child: WoxImageView(woxImage: tail.image!, width: tail.imageWidth ?? _tailImageSize, height: tail.imageHeight ?? _tailImageSize),
+                    child: WoxImageView(woxImage: tail.image!, width: tail.imageWidth ?? metrics.tailImageSize, height: tail.imageHeight ?? metrics.tailImageSize),
                   ),
             ],
           ),
@@ -127,7 +128,7 @@ class WoxListItemView extends StatelessWidget {
           child: Center(
             widthFactor: 1,
             heightFactor: 1,
-            child: Text(text, style: TextStyle(color: tailStyle.textColor, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+            child: Text(text, style: TextStyle(color: tailStyle.textColor, fontSize: _metrics.tailHotkeyFontSize), maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
         ),
       ),
@@ -171,10 +172,15 @@ class WoxListItemView extends StatelessWidget {
     final Color subtitleColor = isActive ? woxTheme.resultItemActiveSubTitleColorParsed : woxTheme.resultItemSubTitleColorParsed;
 
     // Build icon widget
+    final metrics = _metrics;
+
+    // Result rows previously used normal-size literals. Density now owns the
+    // row content metrics while theme padding and borders stay unchanged, so
+    // title/icon/tail sizes move together without changing theme semantics.
     final Widget iconWidget =
         item.isGroup
             ? const SizedBox()
-            : Padding(padding: _iconPadding, child: SizedBox(width: _iconSize, height: _iconSize, child: WoxImageView(woxImage: item.icon, width: _iconSize, height: _iconSize)));
+            : Padding(padding: _iconPadding, child: SizedBox(width: metrics.resultIconSize, height: metrics.resultIconSize, child: WoxImageView(woxImage: item.icon, width: metrics.resultIconSize, height: metrics.resultIconSize)));
 
     // Build title/subtitle widget
     final Widget textWidget = Expanded(
@@ -182,9 +188,9 @@ class WoxListItemView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(item.title, style: TextStyle(fontSize: 16, color: titleColor), maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(item.title, style: TextStyle(fontSize: metrics.resultTitleFontSize, color: titleColor), maxLines: 1, overflow: TextOverflow.ellipsis),
           if (item.subTitle.isNotEmpty)
-            Padding(padding: _subtitlePadding, child: Text(item.subTitle, style: TextStyle(color: subtitleColor, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis)),
+            Padding(padding: _subtitlePadding, child: Text(item.subTitle, style: TextStyle(color: subtitleColor, fontSize: metrics.resultSubtitleFontSize), maxLines: 1, overflow: TextOverflow.ellipsis)),
         ],
       ),
     );

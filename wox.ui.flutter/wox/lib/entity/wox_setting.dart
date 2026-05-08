@@ -22,6 +22,9 @@ class WoxSetting {
   late List<AIProvider> aiProviders;
   late int appWidth;
   late int maxResultCount;
+  // UiDensity is stored as a small enum so Flutter derives visual metrics
+  // locally while staying aligned with backend window-height estimates.
+  late String uiDensity;
   late String themeId;
   late String appFontFamily;
   late bool enableGlance;
@@ -58,6 +61,7 @@ class WoxSetting {
     required this.aiProviders,
     required this.appWidth,
     required this.maxResultCount,
+    required this.uiDensity,
     required this.themeId,
     required this.appFontFamily,
     required this.enableGlance,
@@ -135,6 +139,7 @@ class WoxSetting {
 
     appWidth = json['AppWidth'];
     maxResultCount = json['MaxResultCount'];
+    uiDensity = json['UiDensity'] ?? 'normal';
     themeId = json['ThemeId'];
     appFontFamily = json['AppFontFamily'] ?? '';
     enableGlance = json['EnableGlance'] ?? true;
@@ -173,6 +178,7 @@ class WoxSetting {
     data['AIProviders'] = aiProviders;
     data['AppWidth'] = appWidth;
     data['MaxResultCount'] = maxResultCount;
+    data['UiDensity'] = uiDensity;
     data['ThemeId'] = themeId;
     data['AppFontFamily'] = appFontFamily;
     data['EnableGlance'] = enableGlance;
