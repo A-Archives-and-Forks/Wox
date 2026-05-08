@@ -9,6 +9,13 @@ abstract class ScreenshotPlatformBridge {
 
   static ScreenshotPlatformBridge get instance => _instance;
 
+  static void emitScrollingCaptureWheelEventForPlatform() {
+    final bridge = _instance;
+    if (bridge is MethodChannelScreenshotPlatformBridge) {
+      bridge._emitScrollingCaptureWheelEvent();
+    }
+  }
+
   static void setInstanceForTest(ScreenshotPlatformBridge bridge) {
     _instance = bridge;
   }
@@ -199,6 +206,10 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
   @override
   Stream<void> scrollingCaptureWheelEvents() => _scrollingCaptureWheelController.stream;
 
+  void _emitScrollingCaptureWheelEvent() {
+    _scrollingCaptureWheelController.add(null);
+  }
+
   @override
   Future<void> dismissCaptureWorkspacePresentation() async {
     try {
@@ -252,8 +263,6 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
     String? traceId,
   }) async {
     try {
-      // Native overlay/show timing happens after this boundary, so include the active trace in the
-      // channel payload instead of letting the window-manager log bridge assign a fresh UUID.
       await _channel.invokeMethod<void>('beginScrollingCaptureOverlay', {
         'workspaceBounds': workspaceBounds.toJson(),
         'selection': selection.toJson(),
@@ -280,7 +289,7 @@ class MethodChannelScreenshotPlatformBridge implements ScreenshotPlatformBridge 
 
   Future<void> _handleMacOSScreenshotEvent(MethodCall call) async {
     if (call.method == 'onScrollingCaptureWheel') {
-      _scrollingCaptureWheelController.add(null);
+      _emitScrollingCaptureWheelEvent();
       return;
     }
 

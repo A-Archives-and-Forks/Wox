@@ -513,36 +513,26 @@ class WoxScreenshotController extends GetxController {
     _disposeScrollingCaptureFrames();
     _scrollingCaptureTraceId = traceId;
     try {
-      await WidgetsBinding.instance.endOfFrame;
+      if (Platform.isWindows) {
+        // Windows BitBlt/CAPTUREBLT includes this top-level Flutter screenshot window when it still
+        // covers the selected rectangle. Move the window into the compact native overlay before the
+        // first scrolling frame so the preview stores page pixels instead of our gray mask and green
+        // selection handles.
+        await _beginNativeScrollingCaptureOverlay(traceId, currentSelection);
+        await WidgetsBinding.instance.endOfFrame;
+        // DWM can present the old fullscreen window for one compositor tick after SetWindowPos. A
+        // short Windows-only settle keeps the first BitBlt frame aligned with the compact overlay
+        // geometry without slowing down the normal macOS capture path.
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      } else {
+        await WidgetsBinding.instance.endOfFrame;
+      }
+
       final firstFrameWatch = Stopwatch()..start();
       await _appendScrollingCaptureFrame(traceId, currentSelection);
       _logScrollingCaptureTiming(traceId, 'start_initial_frame_done', {'elapsedMs': firstFrameWatch.elapsedMilliseconds, 'frameCount': scrollingCaptureFrames.length});
       if (Platform.isMacOS && scrollingCaptureFrames.isNotEmpty) {
-        final controlsBounds = _calculateScrollingControlsBounds(currentSelection);
-        _scrollingCaptureControlsBounds = controlsBounds;
-        final overlayWatch = Stopwatch()..start();
-        await ScreenshotPlatformBridge.instance.beginScrollingCaptureOverlay(
-          workspaceBounds: ScreenshotRect.fromRect(virtualBoundsRect),
-          selection: ScreenshotRect.fromRect(currentSelection),
-          controlsBounds: ScreenshotRect.fromRect(controlsBounds),
-          traceId: traceId,
-        );
-        _logScrollingCaptureTiming(traceId, 'start_native_overlay_done', {
-          'elapsedMs': overlayWatch.elapsedMilliseconds,
-          'controls': controlsBounds,
-          'frameCount': scrollingCaptureFrames.length,
-        });
-        isNativeScrollingCaptureOverlay.value = true;
-        _scrollingCaptureWheelSubscription?.cancel();
-        _scrollingCaptureWheelSubscription = ScreenshotPlatformBridge.instance.scrollingCaptureWheelEvents().listen((_) {
-          final selectionForRefresh = selectionRect;
-          if (selectionForRefresh != null) {
-            _scheduleScrollingCaptureFrame(traceId, selectionForRefresh);
-          }
-        });
-        // Do not poll screenshots while idle. Polling appended frames before the user scrolled and
-        // made the preview grow on its own; scrolling capture should advance only after real wheel
-        // input because that is the only signal that the underlying page may have moved.
+        await _beginNativeScrollingCaptureOverlay(traceId, currentSelection);
       }
       _logScrollingCaptureTiming(traceId, 'start_done', {'elapsedMs': sessionWatch.elapsedMilliseconds, 'frameCount': scrollingCaptureFrames.length});
     } catch (e) {
@@ -550,6 +540,32 @@ class WoxScreenshotController extends GetxController {
       Logger.instance.error(traceId, 'Failed to start scrolling screenshot: $e');
       await failSession(traceId, errorCode: 'scrolling_start_failed', errorMessage: e.toString());
     }
+  }
+
+  Future<void> _beginNativeScrollingCaptureOverlay(String traceId, Rect selection) async {
+    final controlsBounds = _calculateScrollingControlsBounds(selection);
+    _scrollingCaptureControlsBounds = controlsBounds;
+    await ScreenshotPlatformBridge.instance.beginScrollingCaptureOverlay(
+      workspaceBounds: ScreenshotRect.fromRect(virtualBoundsRect),
+      selection: ScreenshotRect.fromRect(selection),
+      controlsBounds: ScreenshotRect.fromRect(controlsBounds),
+      traceId: traceId,
+    );
+    isNativeScrollingCaptureOverlay.value = true;
+    _listenForNativeScrollingCaptureWheelEvents(traceId);
+  }
+
+  void _listenForNativeScrollingCaptureWheelEvents(String traceId) {
+    _scrollingCaptureWheelSubscription?.cancel();
+    _scrollingCaptureWheelSubscription = ScreenshotPlatformBridge.instance.scrollingCaptureWheelEvents().listen((_) {
+      final selectionForRefresh = selectionRect;
+      if (selectionForRefresh != null) {
+        _scheduleScrollingCaptureFrame(traceId, selectionForRefresh);
+      }
+    });
+    // Native scrolling capture should append frames only after real wheel input. Polling while idle
+    // made the preview grow without user movement, while this shared listener keeps the Windows
+    // pre-capture overlay path and the macOS overlay path on the same event-driven update model.
   }
 
   Future<void> handleScrollingCaptureWheel(String traceId, double scrollDeltaY) async {
@@ -685,7 +701,7 @@ class WoxScreenshotController extends GetxController {
   }
 
   Future<void> _syncNativeScrollingControlsBounds(String traceId, Rect selection) async {
-    if (!Platform.isMacOS || !isNativeScrollingCaptureOverlay.value) {
+    if (!(Platform.isMacOS || Platform.isWindows) || !isNativeScrollingCaptureOverlay.value) {
       return;
     }
 

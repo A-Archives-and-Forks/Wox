@@ -74,6 +74,14 @@ private:
     RECT native_workspace_bounds{0, 0, 0, 0};
   } screenshot_presentation_state_;
 
+  struct ScrollingCaptureOverlayState
+  {
+    bool active = false;
+    HWND overlay_window = nullptr;
+    HHOOK mouse_hook = nullptr;
+    RECT selection_bounds{0, 0, 0, 0};
+  } scrolling_capture_overlay_state_;
+
   struct CachedDisplayCapture
   {
     std::wstring display_id;
@@ -110,6 +118,16 @@ private:
   void PrepareCaptureWorkspace(HWND hwnd, const RECT &native_workspace_bounds);
   void RevealPreparedCaptureWorkspace(HWND hwnd);
   flutter::EncodableMap BuildCaptureWorkspaceResponse(const RECT &native_workspace_bounds) const;
+  void BeginScrollingCaptureOverlay(HWND hwnd, const RECT &workspace_bounds, const RECT &selection_bounds, const RECT &controls_bounds);
+  void DismissScrollingCaptureOverlay();
+  void MoveScrollingCaptureControlsWindow(HWND hwnd, const RECT &controls_bounds);
+  void SetScrollingCaptureControlsBackdrop(HWND hwnd, bool compact);
+  HRGN CreateScrollingCaptureControlsRegion(int width, int height) const;
+  void ApplyScrollingCaptureControlsRegion(HWND hwnd);
+  void ClearScrollingCaptureControlsRegion();
+  void PaintScrollingCaptureOverlay(HWND hwnd);
+  void EmitScrollingCaptureWheelEvent();
+  bool IsPointInScrollingCaptureSelection(POINT point) const;
 
   // Send window event to Flutter
   void SendWindowEvent(const std::string &eventName);
@@ -128,6 +146,12 @@ private:
 
   // Static child window procedure for observing the Flutter view hwnd.
   static LRESULT CALLBACK ChildWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+
+  // Static overlay procedure for the passive scrolling screenshot mask.
+  static LRESULT CALLBACK ScrollingCaptureOverlayWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+
+  // Static low-level mouse hook for native scrolling screenshot wheel observation.
+  static LRESULT CALLBACK ScrollingCaptureMouseHookProc(int code, WPARAM wparam, LPARAM lparam);
 
   // Track non-repeat keydowns that reached the Flutter child window. If the
   // matching keyup later lands on the root window and Flutter ignores it, we

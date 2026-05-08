@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/utils/log.dart';
+import 'package:wox/utils/screenshot/screenshot_platform_bridge.dart';
 import 'package:wox/utils/windows/base_window_manager.dart';
 
 /// Modifier key states from Windows
@@ -76,6 +77,12 @@ class WindowsWindowManager extends BaseWindowManager {
         for (final listener in _keyboardEventListeners) {
           listener(eventType, keyCode, scanCode, _currentModifierStates);
         }
+        break;
+      case 'onScrollingCaptureWheel':
+        // Windows scrolling capture follows the macOS model: once Flutter is reduced to the
+        // compact preview window, native code observes wheel input over the selected desktop region
+        // and notifies the screenshot bridge to refresh the stitched frame.
+        ScreenshotPlatformBridge.emitScrollingCaptureWheelEventForPlatform();
         break;
       default:
         Logger.instance.warn(const UuidV4().generate(), "Unhandled method call: ${call.method}");

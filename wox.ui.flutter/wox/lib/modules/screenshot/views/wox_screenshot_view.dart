@@ -34,6 +34,7 @@ const double _annotationHandleSize = 12;
 const double _selectionEdgeTolerance = 7;
 const double _textDraftMaxWidth = 480;
 const double _scrollingPreviewMaxWidth = 320;
+const double _scrollingNativeToolbarSlotHeight = 72;
 const MethodChannel _macOSWindowManagerChannel = MethodChannel('com.wox.macos_window_manager');
 const MouseCursor _macOSResizeUpLeftDownRightCursor = _MacOSDiagonalResizeCursor('resizeUpLeftDownRight');
 const MouseCursor _macOSResizeUpRightDownLeftCursor = _MacOSDiagonalResizeCursor('resizeUpRightDownLeft');
@@ -452,7 +453,11 @@ class _WoxScreenshotViewState extends State<WoxScreenshotView> {
             frames: frames,
             totalHeight: totalHeight,
             maxWidth: constraints.maxWidth,
-            maxHeight: math.max(1.0, constraints.maxHeight - 64),
+            // Bug fix: Windows clips the compact scrolling panel to the preview plus toolbar areas
+            // to match macOS' transparent controls window. Keep the Flutter preview height aligned
+            // with the controller/native reserved toolbar slot so the clipped region does not expose
+            // an unpainted backing area below the image.
+            maxHeight: math.max(1.0, constraints.maxHeight - _scrollingNativeToolbarSlotHeight),
           );
 
           return Stack(

@@ -1,5 +1,6 @@
 #include "flutter_window.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cctype>
 #include <cstdint>
@@ -25,11 +26,29 @@
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
 
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+
+#ifndef DWMWA_SYSTEMBACKDROP_TYPE
+#define DWMWA_SYSTEMBACKDROP_TYPE 38
+#endif
+
 // After SW_HIDE, Windows may activate another window asynchronously.
 // Retry restoring the previous foreground window shortly after hide.
 static constexpr UINT_PTR kRestoreForegroundTimerId1 = 0xA11;
 static constexpr UINT_PTR kRestoreForegroundTimerId2 = 0xA12;
 static constexpr ULONGLONG kPostShowBlurGraceMs = 300;
+static constexpr int kDwmSystemBackdropNone = 0;
+static constexpr int kDwmSystemBackdropTabbed = 3;
+static constexpr int kDwmCornerDoNotRound = 1;
+static constexpr int kDwmCornerRound = 2;
+static constexpr UINT kScrollingCaptureWheelMessage = WM_APP + 0x51;
+static constexpr wchar_t kScrollingCaptureOverlayWindowClassName[] = L"WoxScrollingCaptureOverlayWindow";
+static constexpr double kScrollingCaptureToolbarSlotHeightDip = 72.0;
+static constexpr double kScrollingCaptureToolbarHeightDip = 56.0;
+static constexpr double kScrollingCaptureToolbarWidthDip = 124.0;
+static constexpr double kScrollingCaptureToolbarCornerRadiusDip = 18.0;
 
 // Store window instance for window procedure
 FlutterWindow *g_window_instance = nullptr;
@@ -545,7 +564,7 @@ static bool TryReadEncodableDouble(const flutter::EncodableMap &map, const char 
   return false;
 }
 
-static bool TryParseLogicalSelectionArgument(const flutter::EncodableValue *arguments, std::optional<RECT> *selection_out, std::string *error_out)
+static bool TryParseLogicalSelectionArgument(const flutter::EncodableValue *arguments, double workspace_scale, std::optional<RECT> *selection_out, std::string *error_out)
 {
   selection_out->reset();
   if (arguments == nullptr)
@@ -600,14 +619,17 @@ static bool TryParseLogicalSelectionArgument(const flutter::EncodableValue *argu
     return false;
   }
 
-  // Region capture expands fractional Flutter coordinates to the nearest containing native pixels.
-  // The old Windows path only accepted full-monitor captures, so rounding both edges inward could
-  // drop a one-pixel strip and make the preview disagree with the exported stitched image.
+  // Bug fix: Dart sends the scrolling selection in screenshot workspace logical coordinates. The
+  // previous Windows region capture treated those values as native pixels, so high-DPI workspaces
+  // captured a scaled-down area and Dart normalized it again until it no longer intersected the
+  // user's selection. Convert with the same workspace scale used by the native overlay, while still
+  // expanding fractional edges outward so preview and export are sourced from the full selection.
+  const double safe_scale = workspace_scale <= 0 ? 1.0 : workspace_scale;
   RECT selection{};
-  selection.left = static_cast<LONG>(std::floor(x));
-  selection.top = static_cast<LONG>(std::floor(y));
-  selection.right = static_cast<LONG>(std::ceil(x + width));
-  selection.bottom = static_cast<LONG>(std::ceil(y + height));
+  selection.left = static_cast<LONG>(std::floor(x * safe_scale));
+  selection.top = static_cast<LONG>(std::floor(y * safe_scale));
+  selection.right = static_cast<LONG>(std::ceil((x + width) * safe_scale));
+  selection.bottom = static_cast<LONG>(std::ceil((y + height) * safe_scale));
   if (selection.right <= selection.left || selection.bottom <= selection.top)
   {
     if (error_out != nullptr)
@@ -619,6 +641,58 @@ static bool TryParseLogicalSelectionArgument(const flutter::EncodableValue *argu
 
   *selection_out = selection;
   return true;
+}
+
+static bool TryReadNestedRectArgument(const flutter::EncodableMap &arguments, const char *key, double scale, RECT *rect_out, std::string *error_out)
+{
+  const auto rect_it = arguments.find(flutter::EncodableValue(key));
+  if (rect_it == arguments.end())
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = std::string("Missing ") + key + " for beginScrollingCaptureOverlay";
+    }
+    return false;
+  }
+
+  const auto *rect_map = std::get_if<flutter::EncodableMap>(&rect_it->second);
+  if (rect_map == nullptr)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = std::string(key) + " must be a map";
+    }
+    return false;
+  }
+
+  double x = 0;
+  double y = 0;
+  double width = 0;
+  double height = 0;
+  if (!TryReadEncodableDouble(*rect_map, "x", &x, error_out) ||
+      !TryReadEncodableDouble(*rect_map, "y", &y, error_out) ||
+      !TryReadEncodableDouble(*rect_map, "width", &width, error_out) ||
+      !TryReadEncodableDouble(*rect_map, "height", &height, error_out))
+  {
+    return false;
+  }
+
+  if (width <= 0 || height <= 0)
+  {
+    if (error_out != nullptr)
+    {
+      *error_out = std::string(key) + " must have positive width and height";
+    }
+    return false;
+  }
+
+  const double safe_scale = scale <= 0 ? 1.0 : scale;
+  *rect_out = RECT{
+      static_cast<LONG>(std::lround(x * safe_scale)),
+      static_cast<LONG>(std::lround(y * safe_scale)),
+      static_cast<LONG>(std::lround((x + width) * safe_scale)),
+      static_cast<LONG>(std::lround((y + height) * safe_scale))};
+  return rect_out->right > rect_out->left && rect_out->bottom > rect_out->top;
 }
 
 static bool TryIntersectRects(const RECT &first, const RECT &second, RECT *intersection_out)
@@ -790,6 +864,11 @@ static bool SendWindowsMouseWheelInput(int wheel_delta)
 
 static void SetWindowsMousePassthrough(HWND hwnd, bool enabled)
 {
+  if (hwnd == nullptr || !IsWindow(hwnd))
+  {
+    return;
+  }
+
   LONG_PTR ex_style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
   if (enabled)
   {
@@ -800,6 +879,16 @@ static void SetWindowsMousePassthrough(HWND hwnd, bool enabled)
     ex_style &= ~WS_EX_TRANSPARENT;
   }
   SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex_style);
+}
+
+static void SetWindowsScreenshotMousePassthrough(HWND root_hwnd, HWND child_hwnd, bool enabled)
+{
+  // Scrolling capture renders Flutter inside a child HWND on Windows. Making only the root
+  // screenshot shell transparent was not enough: SendInput still hit the child Flutter view, so the
+  // forwarded wheel event never reached the app under the selected region. Apply the same temporary
+  // pass-through style to both windows so the synthetic wheel follows the real desktop target.
+  SetWindowsMousePassthrough(root_hwnd, enabled);
+  SetWindowsMousePassthrough(child_hwnd, enabled);
 }
 
 FlutterWindow::FlutterWindow(const flutter::DartProject &project)
@@ -1630,6 +1719,276 @@ flutter::EncodableMap FlutterWindow::BuildCaptureWorkspaceResponse(const RECT &n
   return response;
 }
 
+void FlutterWindow::BeginScrollingCaptureOverlay(HWND hwnd, const RECT &workspace_bounds, const RECT &selection_bounds, const RECT &controls_bounds)
+{
+  DismissScrollingCaptureOverlay();
+
+  static bool overlay_class_registered = false;
+  if (!overlay_class_registered)
+  {
+    WNDCLASS window_class{};
+    window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    window_class.lpszClassName = kScrollingCaptureOverlayWindowClassName;
+    window_class.hInstance = GetModuleHandle(nullptr);
+    window_class.hbrBackground = nullptr;
+    window_class.lpfnWndProc = FlutterWindow::ScrollingCaptureOverlayWindowProc;
+    RegisterClass(&window_class);
+    overlay_class_registered = true;
+  }
+
+  scrolling_capture_overlay_state_.active = true;
+  scrolling_capture_overlay_state_.selection_bounds = selection_bounds;
+
+  const int workspace_width = workspace_bounds.right - workspace_bounds.left;
+  const int workspace_height = workspace_bounds.bottom - workspace_bounds.top;
+  HWND overlay_window = CreateWindowEx(
+      WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+      kScrollingCaptureOverlayWindowClassName,
+      L"Wox scrolling capture overlay",
+      WS_POPUP,
+      workspace_bounds.left,
+      workspace_bounds.top,
+      workspace_width,
+      workspace_height,
+      nullptr,
+      nullptr,
+      GetModuleHandle(nullptr),
+      nullptr);
+  scrolling_capture_overlay_state_.overlay_window = overlay_window;
+  if (overlay_window != nullptr)
+  {
+    const RECT local_selection{
+        selection_bounds.left - workspace_bounds.left,
+        selection_bounds.top - workspace_bounds.top,
+        selection_bounds.right - workspace_bounds.left,
+        selection_bounds.bottom - workspace_bounds.top};
+    HRGN full_region = CreateRectRgn(0, 0, workspace_width, workspace_height);
+    HRGN selection_region = CreateRectRgn(local_selection.left, local_selection.top, local_selection.right, local_selection.bottom);
+    CombineRgn(full_region, full_region, selection_region, RGN_DIFF);
+    SetWindowRgn(overlay_window, full_region, TRUE);
+    DeleteObject(selection_region);
+
+    // Match the macOS scrolling mask behavior with a passive topmost overlay. The selected region is
+    // physically cut out of the HWND region, so mouse wheel input and BitBlt selection captures both
+    // see the native app underneath instead of the Wox screenshot shell.
+    SetLayeredWindowAttributes(overlay_window, 0, 118, LWA_ALPHA);
+    SetWindowPos(overlay_window, HWND_TOPMOST, workspace_bounds.left, workspace_bounds.top, workspace_width, workspace_height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    InvalidateRect(overlay_window, nullptr, TRUE);
+  }
+
+  SetScrollingCaptureControlsBackdrop(hwnd, true);
+  MoveScrollingCaptureControlsWindow(hwnd, controls_bounds);
+  scrolling_capture_overlay_state_.mouse_hook = SetWindowsHookEx(WH_MOUSE_LL, FlutterWindow::ScrollingCaptureMouseHookProc, GetModuleHandle(nullptr), 0);
+}
+
+void FlutterWindow::DismissScrollingCaptureOverlay()
+{
+  const bool was_active = scrolling_capture_overlay_state_.active;
+
+  ClearScrollingCaptureControlsRegion();
+  if (was_active)
+  {
+    SetScrollingCaptureControlsBackdrop(GetHandle(), false);
+  }
+
+  if (scrolling_capture_overlay_state_.mouse_hook != nullptr)
+  {
+    UnhookWindowsHookEx(scrolling_capture_overlay_state_.mouse_hook);
+    scrolling_capture_overlay_state_.mouse_hook = nullptr;
+  }
+
+  if (scrolling_capture_overlay_state_.overlay_window != nullptr)
+  {
+    DestroyWindow(scrolling_capture_overlay_state_.overlay_window);
+    scrolling_capture_overlay_state_.overlay_window = nullptr;
+  }
+
+  scrolling_capture_overlay_state_.active = false;
+  scrolling_capture_overlay_state_.selection_bounds = {0, 0, 0, 0};
+}
+
+void FlutterWindow::MoveScrollingCaptureControlsWindow(HWND hwnd, const RECT &controls_bounds)
+{
+  SetWindowPos(
+      hwnd,
+      HWND_TOPMOST,
+      controls_bounds.left,
+      controls_bounds.top,
+      controls_bounds.right - controls_bounds.left,
+      controls_bounds.bottom - controls_bounds.top,
+      SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+  SyncFlutterChildWindowToClientArea(hwnd, "beginScrollingCaptureOverlay", false);
+  ApplyScrollingCaptureControlsRegion(hwnd);
+  if (flutter_controller_)
+  {
+    flutter_controller_->ForceRedraw();
+  }
+  FocusFlutterViewOrRoot(hwnd);
+}
+
+void FlutterWindow::SetScrollingCaptureControlsBackdrop(HWND hwnd, bool compact)
+{
+  if (hwnd == nullptr || !IsWindow(hwnd))
+  {
+    return;
+  }
+
+  if (compact)
+  {
+    // Bug fix: the normal Wox window uses an acrylic/Mica DWM backdrop. During scrolling capture the
+    // compact Flutter view intentionally leaves pixels transparent around the confirm/cancel capsule,
+    // but DWM filled those pixels with the window material instead of revealing the native dimming
+    // overlay. Disable the backdrop while the compact controls are active so SetWindowRgn is the only
+    // shape that contributes visible pixels.
+    MARGINS margins = {0, 0, 0, 0};
+    DwmExtendFrameIntoClientArea(hwnd, &margins);
+    int backdrop_type = kDwmSystemBackdropNone;
+    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_type, sizeof(backdrop_type));
+    int corner_preference = kDwmCornerDoNotRound;
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner_preference, sizeof(corner_preference));
+  }
+  else
+  {
+    // Restore the same window material used by the normal launcher window after scrolling capture
+    // dismisses. Keeping the restore local to the overlay lifecycle avoids changing regular Wox
+    // chrome while still removing the compact toolbar backing panel.
+    MARGINS margins = {-1};
+    DwmExtendFrameIntoClientArea(hwnd, &margins);
+    int backdrop_type = kDwmSystemBackdropTabbed;
+    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_type, sizeof(backdrop_type));
+    int corner_preference = kDwmCornerRound;
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner_preference, sizeof(corner_preference));
+  }
+}
+
+HRGN FlutterWindow::CreateScrollingCaptureControlsRegion(int width, int height) const
+{
+  if (width <= 0 || height <= 0)
+  {
+    return nullptr;
+  }
+
+  const double scale = screenshot_presentation_state_.workspace_scale <= 0 ? 1.0 : screenshot_presentation_state_.workspace_scale;
+  const int toolbar_slot_height = std::max(1, static_cast<int>(std::lround(kScrollingCaptureToolbarSlotHeightDip * scale)));
+  const int toolbar_height = std::max(1, static_cast<int>(std::lround(kScrollingCaptureToolbarHeightDip * scale)));
+  const int toolbar_width = std::max(1, static_cast<int>(std::lround(kScrollingCaptureToolbarWidthDip * scale)));
+  const int toolbar_radius = std::max(1, static_cast<int>(std::lround(kScrollingCaptureToolbarCornerRadiusDip * scale)));
+
+  HRGN combined_region = CreateRectRgn(0, 0, 0, 0);
+  if (combined_region == nullptr)
+  {
+    return nullptr;
+  }
+
+  const int preview_height = std::max(0, height - toolbar_slot_height);
+  if (preview_height > 0)
+  {
+    HRGN preview_region = CreateRectRgn(0, 0, width, preview_height);
+    if (preview_region != nullptr)
+    {
+      CombineRgn(combined_region, combined_region, preview_region, RGN_OR);
+      DeleteObject(preview_region);
+    }
+  }
+
+  const int toolbar_left = std::max(0, (width - toolbar_width) / 2);
+  const int toolbar_top = std::max(0, height - toolbar_height);
+  const int toolbar_right = std::min(width, toolbar_left + toolbar_width);
+  const int toolbar_bottom = height;
+  HRGN toolbar_region = CreateRoundRectRgn(toolbar_left, toolbar_top, toolbar_right + 1, toolbar_bottom + 1, toolbar_radius * 2, toolbar_radius * 2);
+  if (toolbar_region != nullptr)
+  {
+    CombineRgn(combined_region, combined_region, toolbar_region, RGN_OR);
+    DeleteObject(toolbar_region);
+  }
+
+  return combined_region;
+}
+
+void FlutterWindow::ApplyScrollingCaptureControlsRegion(HWND hwnd)
+{
+  if (hwnd == nullptr || !IsWindow(hwnd))
+  {
+    return;
+  }
+
+  RECT client_rect{};
+  GetClientRect(hwnd, &client_rect);
+  const int width = client_rect.right - client_rect.left;
+  const int height = client_rect.bottom - client_rect.top;
+
+  // Bug fix: Windows keeps the reused Flutter screenshot window backed by its normal acrylic/Mica
+  // surface, unlike macOS where AppKit can make unpainted preview pixels fully transparent. Clip the
+  // native window to the painted preview and toolbar regions so the compact scrolling controls do
+  // not show a gray rectangular backing panel.
+  HRGN root_region = CreateScrollingCaptureControlsRegion(width, height);
+  if (root_region != nullptr)
+  {
+    SetWindowRgn(hwnd, root_region, TRUE);
+  }
+
+  if (child_window_ != nullptr && IsWindow(child_window_))
+  {
+    HRGN child_region = CreateScrollingCaptureControlsRegion(width, height);
+    if (child_region != nullptr)
+    {
+      SetWindowRgn(child_window_, child_region, TRUE);
+    }
+  }
+}
+
+void FlutterWindow::ClearScrollingCaptureControlsRegion()
+{
+  HWND hwnd = GetHandle();
+  if (hwnd != nullptr && IsWindow(hwnd))
+  {
+    SetWindowRgn(hwnd, nullptr, TRUE);
+  }
+  if (child_window_ != nullptr && IsWindow(child_window_))
+  {
+    SetWindowRgn(child_window_, nullptr, TRUE);
+  }
+}
+
+void FlutterWindow::PaintScrollingCaptureOverlay(HWND hwnd)
+{
+  PAINTSTRUCT paint{};
+  HDC hdc = BeginPaint(hwnd, &paint);
+  if (hdc == nullptr)
+  {
+    return;
+  }
+
+  RECT client_rect{};
+  GetClientRect(hwnd, &client_rect);
+  HBRUSH overlay_brush = CreateSolidBrush(RGB(0, 0, 0));
+  FillRect(hdc, &client_rect, overlay_brush);
+  DeleteObject(overlay_brush);
+  // Bug fix: do not draw the green selection border on Windows. BitBlt-based scrolling frames can
+  // capture native overlay pixels at the selection edge, unlike the macOS capture path, so the
+  // border polluted the stitched preview image.
+
+  EndPaint(hwnd, &paint);
+}
+
+void FlutterWindow::EmitScrollingCaptureWheelEvent()
+{
+  if (window_manager_channel_)
+  {
+    window_manager_channel_->InvokeMethod("onScrollingCaptureWheel", std::make_unique<flutter::EncodableValue>(flutter::EncodableMap()));
+  }
+}
+
+bool FlutterWindow::IsPointInScrollingCaptureSelection(POINT point) const
+{
+  const RECT &selection = scrolling_capture_overlay_state_.selection_bounds;
+  return scrolling_capture_overlay_state_.active &&
+         point.x >= selection.left &&
+         point.x < selection.right &&
+         point.y >= selection.top &&
+         point.y < selection.bottom;
+}
+
 bool FlutterWindow::OnCreate()
 {
   if (!Win32Window::OnCreate())
@@ -1694,6 +2053,7 @@ bool FlutterWindow::OnCreate()
 
 void FlutterWindow::OnDestroy()
 {
+  DismissScrollingCaptureOverlay();
   pending_child_keydowns_.clear();
   ClearCachedDisplayCaptures();
 
@@ -1722,6 +2082,12 @@ void FlutterWindow::OnDestroy()
 LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message, WPARAM const wparam, LPARAM const lparam) noexcept
 {
+  if (message == kScrollingCaptureWheelMessage)
+  {
+    EmitScrollingCaptureWheelEvent();
+    return 0;
+  }
+
   if (message == WM_SIZE)
   {
     std::optional<LRESULT> top_level_result;
@@ -1741,6 +2107,13 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message, WPARAM const wparam
     // Keep the hosted Flutter child window in sync even when the engine
     // handles WM_SIZE before the base runner processes it.
     SyncFlutterChildWindowToClientArea(hwnd, "WM_SIZE", top_level_result.has_value());
+    if (scrolling_capture_overlay_state_.active)
+    {
+      // Bug fix: the compact scrolling panel can resize after each accepted frame as the stitched
+      // preview aspect ratio changes. Refresh the clipping region with the new client size so the
+      // Windows backing panel does not reappear after native preview resize.
+      ApplyScrollingCaptureControlsRegion(hwnd);
+    }
 
     if (top_level_result)
     {
@@ -1868,6 +2241,44 @@ LRESULT CALLBACK FlutterWindow::ChildWindowProc(HWND hwnd, UINT message, WPARAM 
   const LRESULT result = CallWindowProc(g_window_instance->original_child_window_proc_, hwnd, message, wparam, lparam);
 
   return result;
+}
+
+LRESULT CALLBACK FlutterWindow::ScrollingCaptureOverlayWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+{
+  if (g_window_instance == nullptr)
+  {
+    return DefWindowProc(hwnd, message, wparam, lparam);
+  }
+
+  switch (message)
+  {
+  case WM_NCHITTEST:
+    return HTTRANSPARENT;
+  case WM_ERASEBKGND:
+    return 1;
+  case WM_PAINT:
+    g_window_instance->PaintScrollingCaptureOverlay(hwnd);
+    return 0;
+  default:
+    return DefWindowProc(hwnd, message, wparam, lparam);
+  }
+}
+
+LRESULT CALLBACK FlutterWindow::ScrollingCaptureMouseHookProc(int code, WPARAM wparam, LPARAM lparam)
+{
+  if (code == HC_ACTION && g_window_instance != nullptr && wparam == WM_MOUSEWHEEL)
+  {
+    const auto *mouse = reinterpret_cast<MSLLHOOKSTRUCT *>(lparam);
+    if (mouse != nullptr && g_window_instance->IsPointInScrollingCaptureSelection(mouse->pt))
+    {
+      // The native mask is mouse-transparent, so the wheel already scrolls the app underneath. This
+      // hook mirrors macOS' global scroll monitor by telling Dart only that a new frame should be
+      // captured after the target app has moved.
+      PostMessage(g_window_instance->GetHandle(), kScrollingCaptureWheelMessage, 0, 0);
+    }
+  }
+
+  return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
 void FlutterWindow::HandleWindowManagerMethodCall(
@@ -2018,10 +2429,10 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       // The scrolling screenshot overlay receives the Flutter wheel event first for preview
       // bookkeeping. Briefly marking Wox as transparent lets the forwarded wheel input hit the
       // window underneath the selected rectangle instead of the topmost capture shell.
-      SetWindowsMousePassthrough(hwnd, true);
+      SetWindowsScreenshotMousePassthrough(hwnd, child_window_, true);
       const bool sent = SendWindowsMouseWheelInput(wheel_delta);
       Sleep(50);
-      SetWindowsMousePassthrough(hwnd, false);
+      SetWindowsScreenshotMousePassthrough(hwnd, child_window_, false);
 
       if (!sent)
       {
@@ -2036,7 +2447,8 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       std::optional<RECT> logical_selection;
       std::vector<CachedDisplayCapture> captures;
       std::string capture_error;
-      if (!TryParseLogicalSelectionArgument(method_call.arguments(), &logical_selection, &capture_error))
+      const double selection_workspace_scale = screenshot_presentation_state_.workspace_scale <= 0 ? static_cast<double>(GetDpiScale(hwnd)) : screenshot_presentation_state_.workspace_scale;
+      if (!TryParseLogicalSelectionArgument(method_call.arguments(), selection_workspace_scale, &logical_selection, &capture_error))
       {
         result->Error("INVALID_ARGUMENTS", capture_error);
         return;
@@ -2273,8 +2685,37 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       RevealPreparedCaptureWorkspace(hwnd);
       result->Success();
     }
+    else if (method_name == "beginScrollingCaptureOverlay")
+    {
+      const auto *arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
+      if (arguments == nullptr)
+      {
+        result->Error("INVALID_ARGUMENTS", "Invalid arguments for beginScrollingCaptureOverlay");
+        return;
+      }
+
+      const double scale = screenshot_presentation_state_.workspace_scale <= 0 ? static_cast<double>(GetDpiScale(hwnd)) : screenshot_presentation_state_.workspace_scale;
+      RECT workspace_bounds{};
+      RECT selection_bounds{};
+      RECT controls_bounds{};
+      std::string parse_error;
+      if (!TryReadNestedRectArgument(*arguments, "workspaceBounds", scale, &workspace_bounds, &parse_error) ||
+          !TryReadNestedRectArgument(*arguments, "selection", scale, &selection_bounds, &parse_error) ||
+          !TryReadNestedRectArgument(*arguments, "controlsBounds", scale, &controls_bounds, &parse_error))
+      {
+        result->Error("INVALID_ARGUMENTS", parse_error);
+        return;
+      }
+
+      // Windows now follows the macOS scrolling-capture handoff: the fullscreen capture shell is
+      // replaced by a passive native mask, while the reused Flutter window becomes the compact
+      // preview/toolbox. Keeping this state native lets wheel input reach the selected app directly.
+      BeginScrollingCaptureOverlay(hwnd, workspace_bounds, selection_bounds, controls_bounds);
+      result->Success();
+    }
     else if (method_name == "dismissCaptureWorkspacePresentation")
     {
+      DismissScrollingCaptureOverlay();
       screenshot_presentation_state_.active = false;
       screenshot_presentation_state_.prepared = false;
       screenshot_presentation_state_.workspace_scale = 1.0;
