@@ -42,9 +42,13 @@ class WoxInterfaceSizeMetrics {
 
   factory WoxInterfaceSizeMetrics.fromDensity(String value) {
     final density = WoxInterfaceSizeUtil.normalizeDensity(value);
+    // Keep these scale values in sync with Go's scaledDensityHeight in
+    // wox.core/ui/density.go. Flutter renders the launcher with these metrics,
+    // while Go estimates window height before Flutter paints; if only one side
+    // changes, compact/comfortable windows can be mispositioned or clipped.
     final scale = switch (density) {
-      WoxInterfaceSizeUtil.compact => 0.875,
-      WoxInterfaceSizeUtil.comfortable => 1.125,
+      WoxInterfaceSizeUtil.compact => 0.9,
+      WoxInterfaceSizeUtil.comfortable => 1.1,
       _ => 1.0,
     };
 

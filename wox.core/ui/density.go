@@ -19,11 +19,16 @@ func currentUiDensity(ctx context.Context) setting.UiDensity {
 
 func scaledDensityHeight(baseHeight int, density setting.UiDensity) int {
 	scale := 1.0
+	// Keep these scale values in sync with Flutter's
+	// WoxInterfaceSizeMetrics.fromDensity. Go uses them for backend window
+	// estimates, while Flutter uses them for the rendered launcher metrics; if
+	// only one side changes, compact/comfortable windows can be mispositioned or
+	// clipped.
 	switch setting.NormalizeUiDensity(string(density)) {
 	case setting.UiDensityCompact:
-		scale = 0.875
+		scale = 0.9
 	case setting.UiDensityComfortable:
-		scale = 1.125
+		scale = 1.1
 	}
 
 	return int(math.Round(float64(baseHeight) * scale))
