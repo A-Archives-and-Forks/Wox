@@ -50,6 +50,8 @@ import (
 	_ "wox/plugin/system/browser_bookmark"
 
 	_ "wox/plugin/system/file_search"
+
+	_ "wox/plugin/system/glance"
 )
 
 func main() {

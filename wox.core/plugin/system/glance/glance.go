@@ -1,4 +1,4 @@
-package system
+package glance
 
 import (
 	"context"
@@ -14,6 +14,14 @@ import (
 )
 
 const systemGlancePluginId = "e3ad9f18-fbbe-4f22-8c1b-8274c751f6e6"
+
+const (
+	glancePluginSvg  = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="#8AB4F8"/></svg>`
+	glanceTimeSvg    = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="#8AB4F8" stroke-width="2"/><path d="M12 7v5l3 2" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+	glanceDateSvg    = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><rect x="4" y="5" width="16" height="15" rx="2.5" stroke="#8AB4F8" stroke-width="2"/><path d="M8 3v4M16 3v4M4 10h16" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round"/><path d="M8 14h2M12 14h2M16 14h1M8 17h2M12 17h2" stroke="#8AB4F8" stroke-width="1.8" stroke-linecap="round"/></svg>`
+	glanceBatterySvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><rect x="3" y="7" width="16" height="10" rx="2" stroke="#8AB4F8" stroke-width="2"/><path d="M21 10v4" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round"/><rect x="6" y="10" width="8" height="4" rx="1" fill="#8AB4F8"/></svg>`
+	glancePlugSvg    = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><path d="M9 3v6M15 3v6M7 9h10v3a5 5 0 0 1-4 4.9V21h-2v-4.1A5 5 0 0 1 7 12V9Z" stroke="#8AB4F8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+)
 
 func init() {
 	plugin.AllSystemPlugin = append(plugin.AllSystemPlugin, &GlancePlugin{})
@@ -33,20 +41,22 @@ func (p *GlancePlugin) GetMetadata() plugin.Metadata {
 		MinWoxVersion:   "2.0.0",
 		Runtime:         "Go",
 		Description:     "i18n:plugin_glance_plugin_description",
-		Icon:            glanceImageString("👀"),
+		Icon:            glanceSvgString(glancePluginSvg),
 		Entry:           "",
 		TriggerKeywords: []string{"glance"},
 		SupportedOS:     []string{"Windows", "Macos", "Linux"},
 		Glances: []plugin.MetadataGlance{
-			{Id: "time", Name: "i18n:plugin_glance_time_name", Description: "i18n:plugin_glance_time_description", Icon: glanceImageString("🕒"), RefreshIntervalMs: 60000},
-			{Id: "date", Name: "i18n:plugin_glance_date_name", Description: "i18n:plugin_glance_date_description", Icon: glanceImageString("📅"), RefreshIntervalMs: 60000},
-			{Id: "battery", Name: "i18n:plugin_glance_battery_name", Description: "i18n:plugin_glance_battery_description", Icon: glanceImageString("🔋"), RefreshIntervalMs: 60000},
+			{Id: "time", Name: "i18n:plugin_glance_time_name", Description: "i18n:plugin_glance_time_description", Icon: glanceSvgString(glanceTimeSvg), RefreshIntervalMs: 60000},
+			{Id: "date", Name: "i18n:plugin_glance_date_name", Description: "i18n:plugin_glance_date_description", Icon: glanceSvgString(glanceDateSvg), RefreshIntervalMs: 60000},
+			{Id: "battery", Name: "i18n:plugin_glance_battery_name", Description: "i18n:plugin_glance_battery_description", Icon: glanceSvgString(glanceBatterySvg), RefreshIntervalMs: 60000},
 		},
 	}
 }
 
-func glanceImageString(emoji string) string {
-	image := common.NewWoxImageEmoji(emoji)
+func glanceSvgString(svg string) string {
+	// Glance icons use inline SVG rather than emoji so every platform renders
+	// the same compact glyphs and avoids OS-specific emoji fallback metrics.
+	image := common.NewWoxImageSvg(svg)
 	return image.String()
 }
 
@@ -63,9 +73,9 @@ func (p *GlancePlugin) Glance(ctx context.Context, request plugin.GlanceRequest)
 	for _, id := range request.Ids {
 		switch id {
 		case "time":
-			items = append(items, plugin.GlanceItem{Id: id, Text: time.Now().Format("15:04"), Icon: common.NewWoxImageEmoji("🕒")})
+			items = append(items, plugin.GlanceItem{Id: id, Text: time.Now().Format("15:04"), Icon: common.NewWoxImageSvg(glanceTimeSvg)})
 		case "date":
-			items = append(items, plugin.GlanceItem{Id: id, Text: time.Now().Format("Mon 01/02"), Icon: common.NewWoxImageEmoji("📅")})
+			items = append(items, plugin.GlanceItem{Id: id, Text: time.Now().Format("Mon 01/02"), Icon: common.NewWoxImageSvg(glanceDateSvg)})
 		case "battery":
 			if item, ok := p.batteryGlance(ctx); ok {
 				items = append(items, item)
@@ -84,6 +94,9 @@ func (p *GlancePlugin) batteryGlance(ctx context.Context) (plugin.GlanceItem, bo
 	if util.IsLinux() {
 		return p.linuxBatteryGlance(ctx)
 	}
+	if util.IsWindows() {
+		return p.windowsBatteryGlance(ctx)
+	}
 	return plugin.GlanceItem{}, false
 }
 
@@ -98,7 +111,7 @@ func (p *GlancePlugin) macOSBatteryGlance(ctx context.Context) (plugin.GlanceIte
 	}
 	text := match[1] + "%"
 	tooltip := p.macOSBatteryTooltip(text, string(output))
-	return plugin.GlanceItem{Id: "battery", Text: text, Icon: common.NewWoxImageEmoji("🔋"), Tooltip: tooltip}, true
+	return plugin.GlanceItem{Id: "battery", Text: text, Icon: common.NewWoxImageSvg(glanceBatterySvg), Tooltip: tooltip}, true
 }
 
 func (p *GlancePlugin) macOSBatteryTooltip(text string, output string) string {
@@ -131,7 +144,7 @@ func (p *GlancePlugin) linuxBatteryGlance(ctx context.Context) (plugin.GlanceIte
 	// Linux exposes battery status as a clean field already. Include the percent
 	// so the tooltip remains useful without becoming a second verbose data dump.
 	tooltip := joinBatteryTooltipParts(text, string(status))
-	return plugin.GlanceItem{Id: "battery", Text: text, Icon: common.NewWoxImageEmoji("🔋"), Tooltip: tooltip}, true
+	return plugin.GlanceItem{Id: "battery", Text: text, Icon: common.NewWoxImageSvg(glanceBatterySvg), Tooltip: tooltip}, true
 }
 
 func joinBatteryTooltipParts(parts ...string) string {
@@ -143,5 +156,5 @@ func joinBatteryTooltipParts(parts ...string) string {
 			nonEmptyParts = append(nonEmptyParts, trimmed)
 		}
 	}
-	return strings.Join(nonEmptyParts, " · ")
+	return strings.Join(nonEmptyParts, " - ")
 }
