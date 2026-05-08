@@ -217,30 +217,6 @@ class WoxLauncherController extends GetxController {
     return setting.enableGlance && isGlobalInputQuery(currentQuery.value) && queryIcon.value.icon.imageData.isEmpty && glanceItems.isNotEmpty && !isLoading.value;
   }
 
-  double getQueryBoxRightAccessoryWidth() {
-    if (!shouldShowGlance) {
-      return 68;
-    }
-
-    final visibleItems = glanceItems.take(1).toList();
-    final itemWidth = visibleItems.fold<double>(0, (sum, item) => sum + getGlanceItemWidth(item));
-    return 16 + itemWidth + math.max(visibleItems.length - 1, 0) * 8;
-  }
-
-  double getGlanceItemWidth(GlanceItem item) {
-    // Glance text has variable length and glyphs are not evenly sized. Measuring
-    // the actual text keeps short text-only items compact without clipping them
-    // into an ellipsis when the minimum width is lower than the rendered text.
-    final textPainter = TextPainter(text: TextSpan(text: item.text, style: const TextStyle(fontSize: 15)), maxLines: 1, textDirection: TextDirection.ltr)..layout();
-    final textWidth = textPainter.width.ceilToDouble();
-    // The icon can now be hidden by user preference. Width must follow the
-    // rendered content so text-only Glance does not reserve empty icon space.
-    final hasIcon = shouldShowGlanceIcon(item);
-    final iconWidth = hasIcon ? 21.0 : 0.0;
-    final minWidth = hasIcon ? 76.0 : 44.0;
-    return (textWidth + iconWidth + 20).clamp(minWidth, 144.0);
-  }
-
   bool shouldShowGlanceIcon(GlanceItem item) {
     final setting = WoxSettingUtil.instance.currentSetting;
     // Keep the render decision in one place so layout width and widget content

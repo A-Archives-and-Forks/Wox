@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:extended_text_field/extended_text_field.dart';
 import 'package:flutter/material.dart';
@@ -16,10 +17,18 @@ import 'package:wox/entity/wox_hotkey.dart';
 import 'package:wox/utils/color_util.dart';
 import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/log.dart';
+import 'package:wox/utils/wox_text_measure_util.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 
 class WoxQueryBoxView extends GetView<WoxLauncherController> {
   const WoxQueryBoxView({super.key});
+
+  static const double _rightAccessoryFallbackWidth = 68;
+  static const double _glanceTextFontSize = 15;
+  static const double _glanceIconAndGapWidth = 21;
+  static const double _glanceHorizontalPadding = 16;
+  static const double _glanceTextMeasureSafetyWidth = 4;
+  static const double _glanceMaxItemWidth = 192;
 
   // Helper method to convert LogicalKeyboardKey to number for quick select
   int? getNumberFromKey(LogicalKeyboardKey key) {
@@ -132,13 +141,37 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
     return buildQueryBoxWordDeletionValue(oldValue, forward: forward);
   }
 
+  double _getQueryBoxRightAccessoryWidth(BuildContext context, dynamic currentTheme) {
+    if (!controller.shouldShowGlance) {
+      return _rightAccessoryFallbackWidth;
+    }
+
+    final visibleItems = controller.glanceItems.take(1).toList();
+    final baseTextColor = safeFromCssColor(currentTheme.queryBoxFontColor);
+    final textColor = baseTextColor.withValues(alpha: 0.8);
+    final textStyle = TextStyle(color: textColor, fontSize: _glanceTextFontSize);
+    final itemWidth = visibleItems.fold<double>(0, (sum, item) => sum + _getGlanceItemWidth(context, item, textStyle));
+    return 16 + itemWidth + math.max(visibleItems.length - 1, 0) * 8;
+  }
+
+  double _getGlanceItemWidth(BuildContext context, GlanceItem item, TextStyle textStyle) {
+    // Bug fix: Glance width must be measured with the same BuildContext that
+    // renders the Text widget. Windows font metrics differ enough that the old
+    // controller-side TextPainter estimate could make valid text hit ellipsis.
+    final textWidth = WoxTextMeasureUtil.measureTextWidth(context: context, text: item.text, style: textStyle).ceilToDouble();
+    final hasIcon = controller.shouldShowGlanceIcon(item);
+    final iconWidth = hasIcon ? _glanceIconAndGapWidth : 0.0;
+    final minWidth = hasIcon ? 76.0 : 44.0;
+    return (textWidth + iconWidth + _glanceHorizontalPadding + _glanceTextMeasureSafetyWidth).clamp(minWidth, _glanceMaxItemWidth).toDouble();
+  }
+
   // Build the TextField widget
-  Widget _buildTextField(dynamic currentTheme) {
+  Widget _buildTextField(dynamic currentTheme, double rightAccessoryWidth) {
     return ExtendedTextField(
       key: controller.queryBoxTextFieldKey,
       style: TextStyle(fontSize: 28.0, color: safeFromCssColor(currentTheme.queryBoxFontColor)),
       decoration: InputDecoration(
-        contentPadding: EdgeInsets.only(left: 8, right: controller.getQueryBoxRightAccessoryWidth(), top: QUERY_BOX_CONTENT_PADDING_TOP, bottom: QUERY_BOX_CONTENT_PADDING_BOTTOM),
+        contentPadding: EdgeInsets.only(left: 8, right: rightAccessoryWidth, top: QUERY_BOX_CONTENT_PADDING_TOP, bottom: QUERY_BOX_CONTENT_PADDING_BOTTOM),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(currentTheme.queryBoxBorderRadius.toDouble()), borderSide: BorderSide.none),
         filled: true,
         fillColor: safeFromCssColor(currentTheme.queryBoxBackgroundColor),
@@ -338,19 +371,20 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                 height: queryBoxHeight,
                 child: LayoutBuilder(
                   builder: (context, constraints) {
+                    final rightAccessoryWidth = _getQueryBoxRightAccessoryWidth(context, currentTheme);
                     // The query box height now follows visual wrapping, so update the controller with the
                     // same text width used by the input decoration. This keeps pasted multi-line text intact
                     // while giving long single-line queries enough vertical room for caret navigation.
                     SchedulerBinding.instance.addPostFrameCallback((_) {
                       controller.updateQueryBoxTextWrapWidth(
                         const UuidV4().generate(),
-                        (constraints.maxWidth - 8 - controller.getQueryBoxRightAccessoryWidth()).clamp(0, double.infinity),
+                        (constraints.maxWidth - 8 - rightAccessoryWidth).clamp(0, double.infinity),
                       );
                     });
 
                     return Theme(
                       data: ThemeData(textSelectionTheme: TextSelectionThemeData(selectionColor: safeFromCssColor(currentTheme.queryBoxTextSelectionBackgroundColor))),
-                      child: _buildTextField(currentTheme),
+                      child: _buildTextField(currentTheme, rightAccessoryWidth),
                     );
                   },
                 ),
@@ -365,7 +399,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                 controller.focusQueryBox();
               },
               child: SizedBox(
-                width: controller.getQueryBoxRightAccessoryWidth(),
+                width: _getQueryBoxRightAccessoryWidth(context, currentTheme),
                 height: 55,
                 child: Center(child: Padding(padding: const EdgeInsets.all(8.0), child: _buildRightAccessory(currentTheme))),
               ),
@@ -416,6 +450,10 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
       message: item.tooltip.isNotEmpty ? item.tooltip : item.text,
       child: StatefulBuilder(
         builder: (context, setHovered) {
+          final textStyle = TextStyle(color: textColor, fontSize: _glanceTextFontSize);
+          final itemWidth = _getGlanceItemWidth(context, item, textStyle);
+          final iconVisible = controller.shouldShowGlanceIcon(item);
+
           return MouseRegion(
             cursor: item.action == null ? SystemMouseCursors.basic : SystemMouseCursors.click,
             onEnter: (_) => setHovered(() => isHovered = true),
@@ -424,7 +462,7 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
               onTap: item.action == null ? null : () => controller.executeGlanceDefaultAction(const UuidV4().generate(), item),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 120),
-                width: controller.getGlanceItemWidth(item),
+                width: itemWidth,
                 height: 30,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 decoration: BoxDecoration(
@@ -435,11 +473,11 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (controller.shouldShowGlanceIcon(item)) ...[
+                    if (iconVisible) ...[
                       Opacity(opacity: textAlpha * 0.9, child: WoxImageView(woxImage: item.icon, width: 16, height: 16)),
                       const SizedBox(width: 5),
                     ],
-                    Flexible(child: Text(item.text, overflow: TextOverflow.ellipsis, maxLines: 1, style: TextStyle(color: textColor, fontSize: 15))),
+                    Flexible(child: Text(item.text, overflow: TextOverflow.ellipsis, maxLines: 1, style: textStyle)),
                   ],
                 ),
               ),
