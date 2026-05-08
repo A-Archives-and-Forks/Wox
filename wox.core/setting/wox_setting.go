@@ -253,7 +253,7 @@ func NewWoxSetting(store *WoxSettingStore) *WoxSetting {
 		LaunchMode:                NewWoxSettingValue(store, "LaunchMode", LaunchModeContinue),
 		StartPage:                 NewWoxSettingValue(store, "StartPage", StartPageMRU),
 		ShowPosition:              NewWoxSettingValue(store, "ShowPosition", PositionTypeMouseScreen),
-		AppWidth:                  NewWoxSettingValue(store, "AppWidth", 800),
+		AppWidth:                  NewWoxSettingValue(store, "AppWidth", 750),
 		MaxResultCount:            NewWoxSettingValue(store, "MaxResultCount", 10),
 		UiDensity:                 NewWoxSettingValueWithValidator(store, "UiDensity", UiDensityNormal, IsValidUiDensity),
 		ThemeId:                   NewWoxSettingValue(store, "ThemeId", DefaultThemeId),
