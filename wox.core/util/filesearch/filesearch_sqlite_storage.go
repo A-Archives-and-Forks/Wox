@@ -95,6 +95,10 @@ func (d *FileSearchDB) ensureBaseTables(ctx context.Context) error {
 		progress_current INTEGER NOT NULL DEFAULT 0,
 		progress_total INTEGER NOT NULL DEFAULT 0,
 		last_error TEXT,
+		dynamic_parent_root_id TEXT NOT NULL DEFAULT '',
+		policy_root_path TEXT NOT NULL DEFAULT '',
+		promoted_at INTEGER NOT NULL DEFAULT 0,
+		last_hot_at INTEGER NOT NULL DEFAULT 0,
 		created_at INTEGER NOT NULL,
 		updated_at INTEGER NOT NULL
 	);
@@ -121,6 +125,13 @@ func (d *FileSearchDB) ensureBaseTables(ctx context.Context) error {
 		`ALTER TABLE roots ADD COLUMN feed_state TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE roots ADD COLUMN last_reconcile_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE roots ADD COLUMN last_full_scan_at INTEGER NOT NULL DEFAULT 0`,
+		// Dynamic roots are a hidden ownership split, not a new user-visible
+		// root type. Incremental ALTERs preserve existing indexes while storing
+		// enough metadata to reapply the split and inherit parent policy on restart.
+		`ALTER TABLE roots ADD COLUMN dynamic_parent_root_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE roots ADD COLUMN policy_root_path TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE roots ADD COLUMN promoted_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE roots ADD COLUMN last_hot_at INTEGER NOT NULL DEFAULT 0`,
 	}
 
 	for _, alterSQL := range alterTableSQLs {

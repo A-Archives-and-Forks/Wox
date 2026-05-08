@@ -18,9 +18,10 @@ const estimatedPlannerEntryBytes int64 = 256
 // unstable. This planner splits the work first, counts it exactly, then seals
 // the immutable job list that later execution will consume.
 type RunPlanner struct {
-	policy     *policyState
-	budget     splitBudget
-	onProgress func(RunPlannerProgress)
+	policy         *policyState
+	budget         splitBudget
+	onProgress     func(RunPlannerProgress)
+	rootExclusions map[string][]string
 	// Tests use this hook to assert when subtree scans actually hit the
 	// filesystem, so planner optimizations can prove they removed redundant
 	// rescans without changing the sealed plan shape.
@@ -66,8 +67,9 @@ func NewRunPlanner(policy *policyState) *RunPlanner {
 		policy = newPolicyState(Policy{})
 	}
 	return &RunPlanner{
-		policy: policy,
-		budget: defaultSplitBudget(),
+		policy:         policy,
+		budget:         defaultSplitBudget(),
+		rootExclusions: map[string][]string{},
 	}
 }
 
@@ -76,6 +78,13 @@ func (p *RunPlanner) SetProgressCallback(callback func(RunPlannerProgress)) {
 		return
 	}
 	p.onProgress = callback
+}
+
+func (p *RunPlanner) SetRootExclusions(exclusions map[string][]string) {
+	if p == nil {
+		return
+	}
+	p.rootExclusions = copyRootExclusions(exclusions)
 }
 
 func (p *RunPlanner) PlanFullRun(ctx context.Context, roots []RootRecord) (RunPlan, error) {
@@ -427,6 +436,13 @@ func (p *RunPlanner) preScanSubtreeScope(ctx context.Context, root RootRecord, s
 }
 
 func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, scopePath string) (PlanTotals, []string, error) {
+	scopePath = filepath.Clean(scopePath)
+	if scopePath != filepath.Clean(root.Path) && p.isExcludedPath(root.ID, scopePath) {
+		// A promoted child root owns this scope now. The parent planner returns no
+		// work instead of counting it as skipped, because the dynamic root will
+		// produce its own progress and write units.
+		return PlanTotals{}, nil, nil
+	}
 	info, err := os.Stat(scopePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -477,6 +493,12 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 			}
 			return PlanTotals{}, nil, infoErr
 		}
+		if isDir && p.isExcludedPath(root.ID, childPath) {
+			// Dynamic child roots are sealed ownership boundaries. Do not count the
+			// child directory in the parent direct-files totals; execution will also
+			// skip writing its directory entry.
+			continue
+		}
 		if isDir {
 			if shouldSkipSystemPath(childPath, true) || !p.policy.shouldIndexPath(root, childPath, true) {
 				totals.SkippedCount++
@@ -506,6 +528,13 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 }
 
 func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scopePath string) (PlanTotals, []subtreeChildSummary, error) {
+	scopePath = filepath.Clean(scopePath)
+	if scopePath != filepath.Clean(root.Path) && p.isExcludedPath(root.ID, scopePath) {
+		// Incremental batches can be older than a promotion. If a parent batch now
+		// targets a dynamic-owned scope, planning an empty parent job preserves the
+		// ownership split and lets the dynamic root handle the real reconcile.
+		return PlanTotals{}, nil, nil
+	}
 	if p != nil && p.onSubtreeScan != nil {
 		p.onSubtreeScan(filepath.Clean(scopePath))
 	}
@@ -539,6 +568,12 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 
 		current := queue[0]
 		queue = queue[1:]
+		if current.path != scopePath && p.isExcludedPath(root.ID, current.path) {
+			// Guard against stale queued children when exclusions change during a
+			// dirty run. The scanner loop is serial, but this keeps the planner's
+			// per-root contract explicit and mirrors SnapshotBuilder's ownership skip.
+			continue
+		}
 
 		dirEntries, readErr := os.ReadDir(current.path)
 		if readErr != nil {
@@ -612,6 +647,12 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 				}
 				return PlanTotals{}, nil, infoErr
 			}
+			if isDir && p.isExcludedPath(root.ID, childPath) {
+				// Excluded dynamic roots must not appear as child scopes or totals
+				// under the parent. Counting them here would make the sealed plan
+				// disagree with execution and reopen the parent-ownership bug.
+				continue
+			}
 
 			if shouldSkipSystemPath(childPath, isDir) {
 				totals.SkippedCount++
@@ -670,6 +711,18 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 		})
 	}
 	return totals, childSummaries, nil
+}
+
+func (p *RunPlanner) isExcludedPath(rootID string, path string) bool {
+	if p == nil || len(p.rootExclusions) == 0 {
+		return false
+	}
+	for _, excludedPath := range p.rootExclusions[rootID] {
+		if pathWithinScope(excludedPath, path) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *RunPlanner) buildDraftPlan(kind RunKind, planID string, runID string) (RunPlan, error) {

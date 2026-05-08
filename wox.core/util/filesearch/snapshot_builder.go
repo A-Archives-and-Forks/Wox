@@ -14,6 +14,7 @@ import (
 type SnapshotBuilder struct {
 	policy              *policyState
 	directFileBatchSize int
+	rootExclusions      map[string][]string
 }
 
 func NewSnapshotBuilder(policy *policyState) *SnapshotBuilder {
@@ -23,6 +24,7 @@ func NewSnapshotBuilder(policy *policyState) *SnapshotBuilder {
 	return &SnapshotBuilder{
 		policy:              policy,
 		directFileBatchSize: defaultSplitBudget().DirectFileBatchSize,
+		rootExclusions:      map[string][]string{},
 	}
 }
 
@@ -31,6 +33,13 @@ func (b *SnapshotBuilder) SetDirectFileBatchSize(size int) {
 		return
 	}
 	b.directFileBatchSize = size
+}
+
+func (b *SnapshotBuilder) SetRootExclusions(exclusions map[string][]string) {
+	if b == nil {
+		return
+	}
+	b.rootExclusions = copyRootExclusions(exclusions)
 }
 
 func (b *SnapshotBuilder) BuildRootEntries(ctx context.Context, root RootRecord) ([]EntryRecord, error) {
@@ -90,6 +99,12 @@ func (b *SnapshotBuilder) BuildDirectFilesJobSnapshot(ctx context.Context, root 
 		isDir, childInfo, infoErr := strictDirEntryType(scopePath, dirEntry)
 		if infoErr != nil {
 			return batch, infoErr
+		}
+		if isDir && b.isExcludedPath(root.ID, childPath) {
+			// Dynamic child roots own their directory entry as well as descendants.
+			// Direct-files scopes therefore skip the directory itself, not only the
+			// recursive scan that a subtree builder would otherwise queue later.
+			continue
 		}
 		if shouldSkipSystemPath(childPath, isDir) {
 			continue
@@ -212,6 +227,12 @@ func (b *SnapshotBuilder) StreamDirectFilesJobBatches(ctx context.Context, root 
 		if infoErr != nil {
 			return infoErr
 		}
+		if isDir && b.isExcludedPath(root.ID, childPath) {
+			// Streaming direct-files batches share the same ownership contract as
+			// materialized snapshots: a parent root must not stage the dynamic
+			// child's directory row because that would steal the path-owned entry.
+			continue
+		}
 		if shouldSkipSystemPath(childPath, isDir) {
 			continue
 		}
@@ -294,6 +315,13 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 
 		current := queue[0]
 		queue = queue[1:]
+		if current.path != scopePath && b.isExcludedPath(root.ID, current.path) {
+			// Exclusions are a correctness boundary, not just a traversal shortcut.
+			// If this directory reached the queue from an older plan, dropping it
+			// before writing either the directory row or entry keeps ownership with
+			// the dynamic root.
+			continue
+		}
 
 		dirEntries, readErr := os.ReadDir(current.path)
 		if readErr != nil {
@@ -334,6 +362,12 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 			childPath := filepath.Join(current.path, dirEntry.Name())
 			isDir, info, infoErr := strictDirEntryType(current.path, dirEntry)
 			if infoErr != nil {
+				continue
+			}
+			if isDir && b.isExcludedPath(root.ID, childPath) {
+				// The dynamic child directory itself is excluded before entry
+				// materialization and before BFS enqueueing. Otherwise SQLite's
+				// path-unique upsert would silently move that path back to the parent.
 				continue
 			}
 
@@ -385,6 +419,13 @@ func (b *SnapshotBuilder) validateScopePath(root RootRecord, scopePath string) (
 	if !pathWithinScope(root.Path, scopePath) {
 		return nil, fmt.Errorf("scope path %q is outside root path %q", scopePath, root.Path)
 	}
+	if scopePath != filepath.Clean(root.Path) && b.isExcludedPath(root.ID, scopePath) {
+		// A stale parent-root dirty batch can still point at a path that has since
+		// been promoted. Returning an empty owned snapshot lets the DB prune only
+		// the parent-owned rows at that scope while leaving the dynamic root's rows
+		// untouched.
+		return nil, nil
+	}
 
 	info, err := os.Stat(scopePath)
 	if err != nil {
@@ -399,6 +440,18 @@ func (b *SnapshotBuilder) validateScopePath(root RootRecord, scopePath string) (
 	}
 
 	return info, nil
+}
+
+func (b *SnapshotBuilder) isExcludedPath(rootID string, path string) bool {
+	if b == nil || len(b.rootExclusions) == 0 {
+		return false
+	}
+	for _, excludedPath := range b.rootExclusions[rootID] {
+		if pathWithinScope(excludedPath, path) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *SnapshotBuilder) shouldIndexPath(root RootRecord, path string, isDir bool) bool {

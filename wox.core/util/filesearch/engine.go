@@ -129,8 +129,15 @@ func (e *Engine) AddRoot(ctx context.Context, rootPath string) error {
 	now := util.GetSystemTimestamp()
 	if existing != nil {
 		existing.Kind = RootKindUser
+		existing.DynamicParentRootID = ""
+		existing.PolicyRootPath = ""
+		existing.PromotedAt = 0
+		existing.LastHotAt = 0
 		existing.UpdatedAt = now
 		existing.Status = RootStatusPreparing
+		// A user-added path can collide with a hidden dynamic root. Clearing the
+		// lifecycle fields here makes that path a real user root instead of
+		// leaving stale parent-policy metadata attached to the reused row.
 		if err := e.db.UpsertRoot(ctx, *existing); err != nil {
 			return err
 		}
@@ -171,14 +178,22 @@ func (e *Engine) RemoveRoot(ctx context.Context, rootPath string) error {
 }
 
 func (e *Engine) ListRoots(ctx context.Context) ([]RootRecord, error) {
-	return e.db.ListRoots(ctx)
+	roots, err := e.db.ListRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return userVisibleRoots(roots), nil
 }
 
 func (e *Engine) GetStatus(ctx context.Context) (StatusSnapshot, error) {
-	roots, err := e.db.ListRoots(ctx)
+	allRoots, err := e.db.ListRoots(ctx)
 	if err != nil {
 		return StatusSnapshot{}, err
 	}
+	// Dynamic roots are internal scan ownership boundaries. Status counters keep
+	// reporting the user-configured root set while the scanner still uses all
+	// roots for execution and diagnostics.
+	roots := userVisibleRoots(allRoots)
 
 	var transientScanState TransientRootState
 	hasTransientScanState := false
@@ -327,6 +342,17 @@ func mergeTransientRootState(roots []RootRecord, transientRoot RootRecord) {
 			return
 		}
 	}
+}
+
+func userVisibleRoots(roots []RootRecord) []RootRecord {
+	visible := make([]RootRecord, 0, len(roots))
+	for _, root := range roots {
+		if root.Kind == RootKindDynamic {
+			continue
+		}
+		visible = append(visible, root)
+	}
+	return visible
 }
 
 func (e *Engine) OnStatusChanged(callback func(StatusSnapshot)) func() {

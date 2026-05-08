@@ -37,7 +37,14 @@ func (p *fileSearchIndexPolicy) shouldIndexPath(root filesearch.RootRecord, path
 		return false
 	}
 
-	return !p.shouldIgnoreByGitIgnore(filepath.Clean(root.Path), cleanPath, isDir)
+	policyRootPath := strings.TrimSpace(root.PolicyRootPath)
+	if policyRootPath == "" {
+		policyRootPath = root.Path
+	}
+	// Dynamic roots keep their own scan scope but must inherit the user's
+	// parent .gitignore chain. Using PolicyRootPath for ignore lookup preserves
+	// that policy without widening the scanner's ownership boundary.
+	return !p.shouldIgnoreByGitIgnore(filepath.Clean(policyRootPath), cleanPath, isDir)
 }
 
 func (p *fileSearchIndexPolicy) shouldProcessChange(root filesearch.RootRecord, change filesearch.ChangeSignal) bool {

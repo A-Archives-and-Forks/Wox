@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 	"wox/util"
@@ -27,6 +28,12 @@ type FileSearchDB struct {
 	// widening delete ownership or changing query-time semantics.
 	bulkSyncFullRunRoots map[string]bulkSyncFullRunRootState
 }
+
+const rootRecordSelectColumns = `
+	id, path, kind, status, feed_type, feed_cursor, feed_state, last_reconcile_at, last_full_scan_at,
+	progress_current, progress_total, last_error, dynamic_parent_root_id, policy_root_path, promoted_at,
+	last_hot_at, created_at, updated_at
+`
 
 type bulkSyncFullRunRootState struct {
 	prepared     bool
@@ -81,12 +88,21 @@ func (d *FileSearchDB) initTables(ctx context.Context) error {
 }
 
 func (d *FileSearchDB) UpsertRoot(ctx context.Context, root RootRecord) error {
+	return execRootUpsert(ctx, d.db, root)
+}
+
+type rootExecContext interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func execRootUpsert(ctx context.Context, exec rootExecContext, root RootRecord) error {
 	query := `
 	INSERT INTO roots (
 		id, path, kind, status, feed_type, feed_cursor, feed_state, last_reconcile_at, last_full_scan_at,
-		progress_current, progress_total, last_error, created_at, updated_at
+		progress_current, progress_total, last_error, dynamic_parent_root_id, policy_root_path, promoted_at,
+		last_hot_at, created_at, updated_at
 	)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(path) DO UPDATE SET
 		kind = excluded.kind,
 		status = excluded.status,
@@ -98,10 +114,18 @@ func (d *FileSearchDB) UpsertRoot(ctx context.Context, root RootRecord) error {
 		progress_current = excluded.progress_current,
 		progress_total = excluded.progress_total,
 		last_error = excluded.last_error,
+		dynamic_parent_root_id = excluded.dynamic_parent_root_id,
+		policy_root_path = excluded.policy_root_path,
+		promoted_at = excluded.promoted_at,
+		last_hot_at = excluded.last_hot_at,
 		updated_at = excluded.updated_at
 	`
 
-	_, err := d.db.ExecContext(
+	// Dynamic metadata is updated through the root upsert path because promotion
+	// can collide with an existing path row. Keeping the hidden ownership fields
+	// in the same conflict clause lets a user-added root cleanly take over a
+	// former dynamic root without carrying stale parent policy state.
+	_, err := exec.ExecContext(
 		ctx,
 		query,
 		root.ID,
@@ -116,6 +140,10 @@ func (d *FileSearchDB) UpsertRoot(ctx context.Context, root RootRecord) error {
 		root.ProgressCurrent,
 		root.ProgressTotal,
 		root.LastError,
+		root.DynamicParentRootID,
+		root.PolicyRootPath,
+		root.PromotedAt,
+		root.LastHotAt,
 		root.CreatedAt,
 		root.UpdatedAt,
 	)
@@ -126,10 +154,15 @@ func (d *FileSearchDB) UpdateRootState(ctx context.Context, root RootRecord) err
 	query := `
 	UPDATE roots
 	SET status = ?, feed_type = ?, feed_cursor = ?, feed_state = ?, last_reconcile_at = ?, last_full_scan_at = ?,
-	    progress_current = ?, progress_total = ?, last_error = ?, updated_at = ?
+	    progress_current = ?, progress_total = ?, last_error = ?, dynamic_parent_root_id = ?, policy_root_path = ?,
+	    promoted_at = ?, last_hot_at = ?, updated_at = ?
 	WHERE id = ?
 	`
 
+	// LastHotAt changes after successful dirty flushes, while the rest of the
+	// state update path is already serialized by the scanner loop. Persisting the
+	// dynamic fields here avoids a separate lifecycle-only UPDATE and keeps root
+	// state writes in one place.
 	_, err := d.db.ExecContext(
 		ctx,
 		query,
@@ -142,6 +175,10 @@ func (d *FileSearchDB) UpdateRootState(ctx context.Context, root RootRecord) err
 		root.ProgressCurrent,
 		root.ProgressTotal,
 		root.LastError,
+		root.DynamicParentRootID,
+		root.PolicyRootPath,
+		root.PromotedAt,
+		root.LastHotAt,
 		root.UpdatedAt,
 		root.ID,
 	)
@@ -150,8 +187,7 @@ func (d *FileSearchDB) UpdateRootState(ctx context.Context, root RootRecord) err
 
 func (d *FileSearchDB) ListRoots(ctx context.Context) ([]RootRecord, error) {
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT id, path, kind, status, feed_type, feed_cursor, feed_state, last_reconcile_at, last_full_scan_at,
-		       progress_current, progress_total, last_error, created_at, updated_at
+		SELECT `+rootRecordSelectColumns+`
 		FROM roots
 		ORDER BY path ASC
 	`)
@@ -215,10 +251,130 @@ func (d *FileSearchDB) DeleteRoot(ctx context.Context, rootID string) error {
 	return tx.Commit()
 }
 
+func (d *FileSearchDB) MoveScopedRowsToRoot(ctx context.Context, fromRootID string, toRootID string, scopePath string) error {
+	if strings.TrimSpace(fromRootID) == "" || strings.TrimSpace(toRootID) == "" {
+		return fmt.Errorf("move scoped rows requires both source and target root ids")
+	}
+	if strings.TrimSpace(scopePath) == "" {
+		return fmt.Errorf("move scoped rows requires a scope path")
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Promotion and demotion only change ownership facts; entry_id and derived
+	// search artifacts stay valid because query semantics are path based. Using
+	// the existing scoped SQL predicate keeps this transaction bounded to the
+	// dynamic subtree without reading every row back into Go.
+	if err := moveScopedRowsToRootTx(ctx, tx, "directories", fromRootID, toRootID, scopePath); err != nil {
+		return err
+	}
+	if err := moveScopedRowsToRootTx(ctx, tx, "entries", fromRootID, toRootID, scopePath); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (d *FileSearchDB) PromoteDynamicRoot(ctx context.Context, parentRoot RootRecord, dynamicRoot RootRecord) error {
+	if dynamicRoot.Kind != RootKindDynamic {
+		return fmt.Errorf("promote dynamic root requires kind %q, got %q", RootKindDynamic, dynamicRoot.Kind)
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Promotion must create the hidden root and move scoped ownership together.
+	// If those writes were split, a parent reconcile between them could observe
+	// duplicate ownership and use entries.path's unique upsert to take the path
+	// back before the dynamic root ever gets a clean snapshot.
+	if err := execRootUpsert(ctx, tx, dynamicRoot); err != nil {
+		return err
+	}
+	if err := moveScopedRowsToRootTx(ctx, tx, "directories", parentRoot.ID, dynamicRoot.ID, dynamicRoot.Path); err != nil {
+		return err
+	}
+	if err := moveScopedRowsToRootTx(ctx, tx, "entries", parentRoot.ID, dynamicRoot.ID, dynamicRoot.Path); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (d *FileSearchDB) DemoteDynamicRoot(ctx context.Context, parentRoot RootRecord, dynamicRoot RootRecord) error {
+	if dynamicRoot.Kind != RootKindDynamic {
+		return fmt.Errorf("demote dynamic root requires kind %q, got %q", RootKindDynamic, dynamicRoot.Kind)
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Demotion is the inverse ownership move plus a DELETE of the hidden root.
+	// Keeping it transactional avoids a stale dynamic root row that would keep
+	// excluding the path from the parent even after rows had moved back.
+	if err := moveScopedRowsToRootTx(ctx, tx, "directories", dynamicRoot.ID, parentRoot.ID, dynamicRoot.Path); err != nil {
+		return err
+	}
+	if err := moveScopedRowsToRootTx(ctx, tx, "entries", dynamicRoot.ID, parentRoot.ID, dynamicRoot.Path); err != nil {
+		return err
+	}
+
+	rows, err := selectStoredEntriesTx(ctx, tx, `
+		SELECT entry_id, path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+		       pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
+		FROM entries
+		WHERE root_id = ?
+		ORDER BY path ASC
+	`, dynamicRoot.ID)
+	if err != nil {
+		return err
+	}
+	artifactSync, err := newEntrySearchArtifactSyncTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	defer artifactSync.Close()
+	for _, row := range rows {
+		if err := deleteEntrySearchArtifactsWithSyncTx(ctx, artifactSync, row); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM directories WHERE root_id = ?`, dynamicRoot.ID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM entries WHERE root_id = ?`, dynamicRoot.ID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM roots WHERE id = ?`, dynamicRoot.ID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func moveScopedRowsToRootTx(ctx context.Context, tx *sql.Tx, table string, fromRootID string, toRootID string, scopePath string) error {
+	scopeClause, scopeArgs := buildScopedPathQuery(scopePath, "path")
+	args := append([]any{toRootID, fromRootID}, scopeArgs...)
+	_, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s
+		SET root_id = ?
+		WHERE root_id = ?
+		  AND %s
+	`, table, scopeClause), args...)
+	return err
+}
+
 func (d *FileSearchDB) FindRootByPath(ctx context.Context, rootPath string) (*RootRecord, error) {
 	row := d.db.QueryRowContext(ctx, `
-		SELECT id, path, kind, status, feed_type, feed_cursor, feed_state, last_reconcile_at, last_full_scan_at,
-		       progress_current, progress_total, last_error, created_at, updated_at
+		SELECT `+rootRecordSelectColumns+`
 		FROM roots
 		WHERE path = ?
 	`, rootPath)
@@ -701,8 +857,7 @@ func validateSubtreeSnapshotBatch(batch SubtreeSnapshotBatch) error {
 
 func (d *FileSearchDB) FindRootByID(ctx context.Context, rootID string) (*RootRecord, error) {
 	row := d.db.QueryRowContext(ctx, `
-		SELECT id, path, kind, status, feed_type, feed_cursor, feed_state, last_reconcile_at, last_full_scan_at,
-		       progress_current, progress_total, last_error, created_at, updated_at
+		SELECT `+rootRecordSelectColumns+`
 		FROM roots
 		WHERE id = ?
 	`, rootID)
@@ -737,8 +892,7 @@ func lockRootForSubtreeSnapshot(ctx context.Context, tx *sql.Tx, rootID string) 
 	}
 
 	row := tx.QueryRowContext(ctx, `
-		SELECT id, path, kind, status, feed_type, feed_cursor, feed_state, last_reconcile_at, last_full_scan_at,
-		       progress_current, progress_total, last_error, created_at, updated_at
+		SELECT `+rootRecordSelectColumns+`
 		FROM roots
 		WHERE id = ?
 	`, rootID)
@@ -926,6 +1080,10 @@ func scanRootRecord(scanner rootScanner) (RootRecord, error) {
 		&root.ProgressCurrent,
 		&root.ProgressTotal,
 		&root.LastError,
+		&root.DynamicParentRootID,
+		&root.PolicyRootPath,
+		&root.PromotedAt,
+		&root.LastHotAt,
 		&root.CreatedAt,
 		&root.UpdatedAt,
 	); err != nil {

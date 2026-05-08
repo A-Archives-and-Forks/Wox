@@ -39,6 +39,9 @@ type Scanner struct {
 	changeFeed                  ChangeFeed
 	dirtyQueue                  *DirtyQueue
 	dirtyQueueConfig            DirtyQueueConfig
+	dynamicRootConfig           DynamicRootConfig
+	dynamicHeat                 *dynamicRootHeatTracker
+	dynamicFlushGeneration      int
 	reconciler                  *Reconciler
 	reloadWorkersMu             sync.Mutex
 	reloadWorkers               map[string]*rootReloadWorker
@@ -107,6 +110,8 @@ func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
 		changeFeed:                  newPlatformChangeFeed(),
 		dirtyQueueConfig:            dirtyQueueConfig,
 		dirtyQueue:                  NewDirtyQueue(dirtyQueueConfig),
+		dynamicRootConfig:           defaultDynamicRootConfig(),
+		dynamicHeat:                 newDynamicRootHeatTracker(),
 		reconciler:                  NewReconciler(db, policy),
 		reloadWorkers:               map[string]*rootReloadWorker{},
 		loggedRootBytes:             map[string]uint64{},
@@ -250,7 +255,21 @@ func (s *Scanner) scanAllRootsWithReason(ctx context.Context, reason string) {
 
 func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason string, roots []RootRecord, batches []ReconcileBatch) error {
 	totalStartedAt := util.GetSystemTimestamp()
+	allRoots := roots
+	if s != nil && s.db != nil {
+		var err error
+		allRoots, err = s.db.ListRoots(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	// Dynamic roots are hidden but still own entries under their promoted path.
+	// The production path must inject the same per-parent exclusions into both
+	// planner and snapshot execution; otherwise a parent reconcile can generate
+	// a batch that SQLite upserts back over the dynamic root's path ownership.
+	rootExclusions := buildDynamicRootExclusions(allRoots)
 	planner := NewRunPlanner(s.policy)
+	planner.SetRootExclusions(rootExclusions)
 	if s != nil && s.plannerBudgetOverride != nil {
 		planner.budget = *s.plannerBudgetOverride
 	}
@@ -281,6 +300,7 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 	logFilesearchRunPlanner(ctx, kind, util.GetSystemTimestamp()-plannerStartedAt, len(plan.RootPlans), len(plan.Jobs), plan.TotalWorkUnits)
 
 	snapshotBuilder := NewSnapshotBuilder(s.policy)
+	snapshotBuilder.SetRootExclusions(rootExclusions)
 	if s.plannerBudgetOverride != nil && s.plannerBudgetOverride.DirectFileBatchSize > 0 {
 		// Tests and local tuning already override the direct-files batch budget.
 		// The planner now keeps one direct-files job per directory, so this value
@@ -1268,6 +1288,13 @@ func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
 			s.logRootReloadIndexSnapshot(ctx, root.ID)
 		}
 	}
+	if err := s.handleSuccessfulDirtyFlush(ctx, batches, now); err != nil {
+		// Dynamic-root lifecycle work is opportunistic after the real reconcile
+		// has succeeded. A promotion/demotion failure should not turn an already
+		// applied dirty batch into a user-visible indexing failure or force a broad
+		// retry; the next hot flush can try the lifecycle step again.
+		util.GetLogger().Warn(ctx, "filesearch dynamic root lifecycle failed: "+err.Error())
+	}
 
 	s.clearTransientSyncState("")
 	s.refreshTransientSyncPendingCounts()
@@ -1291,6 +1318,9 @@ func (s *Scanner) handleChangeSignal(ctx context.Context, signal ChangeSignal) {
 		// 	summarizeLogPath(signal.Path),
 		// ))
 		return
+	}
+	if rootFound {
+		s.recordDynamicRootHeat(root, signal)
 	}
 
 	switch signal.Kind {
@@ -2276,25 +2306,7 @@ func (s *Scanner) findRootForPath(ctx context.Context, path string) (RootRecord,
 		return RootRecord{}, false
 	}
 
-	cleanPath := filepath.Clean(path)
-	bestIndex := -1
-	bestLength := -1
-	for index, root := range roots {
-		if !pathWithinScope(root.Path, cleanPath) {
-			continue
-		}
-		if len(root.Path) <= bestLength {
-			continue
-		}
-		bestIndex = index
-		bestLength = len(root.Path)
-	}
-
-	if bestIndex < 0 {
-		return RootRecord{}, false
-	}
-
-	return roots[bestIndex], true
+	return findRootForPathInRoots(roots, path)
 }
 
 func newTransientSyncState(root RootRecord, rootIndex int, rootTotal int, batch ReconcileBatch, pendingRootCount int, pendingPathCount int) TransientSyncState {

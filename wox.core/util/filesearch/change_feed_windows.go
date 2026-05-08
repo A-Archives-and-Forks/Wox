@@ -361,17 +361,13 @@ func (u *usnWatcherSet) emitUnavailable(roots []RootRecord, reason string) {
 func (u *usnWatcherSet) emitResolvedRecords(roots []RootRecord, journal usnJournalState, records []usnResolvedRecord) {
 	now := time.Now()
 	for _, record := range records {
-		matched := false
-		for _, root := range roots {
-			if record.PathKnown && pathWithinScope(root.Path, record.Path) {
-				u.emit(translateUSNDelta(root, journal, record.Path, record.PathIsDir, record.PathKnown, record.USN, now))
-				matched = true
-			}
-		}
-		if matched {
-			continue
-		}
 		if record.PathKnown {
+			if root, ok := findRootForPathInRoots(roots, record.Path); ok {
+				// Known USN paths must be routed to the longest matching root. The
+				// previous broadcast woke both a dynamic root and its parent, which
+				// defeated the ownership split and forced unnecessary parent rescans.
+				u.emit(translateUSNDelta(root, journal, record.Path, record.PathIsDir, record.PathKnown, record.USN, now))
+			}
 			continue
 		}
 

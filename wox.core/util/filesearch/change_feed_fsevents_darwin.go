@@ -274,10 +274,11 @@ func (f *FSEventsChangeFeed) onEvents(paths []string, flags []uint64, ids []uint
 	for index := range paths {
 		eventPath := filepath.Clean(paths[index])
 		matchedRoots := make([]RootRecord, 0, len(roots))
-		for _, root := range roots {
-			if pathWithinScope(root.Path, eventPath) {
-				matchedRoots = append(matchedRoots, root)
-			}
+		if root, ok := findRootForPathInRoots(roots, eventPath); ok {
+			// FSEvents delivers a concrete path for normal events. Route that path
+			// only to the longest matching root so a promoted dynamic root does not
+			// also wake its parent and lose the intended narrow reconcile boundary.
+			matchedRoots = append(matchedRoots, root)
 		}
 		if len(matchedRoots) == 0 && fseventRequiresRootReconcile(flags[index]) {
 			matchedRoots = roots

@@ -122,6 +122,10 @@ type RootKind string
 const (
 	RootKindDefault RootKind = "default"
 	RootKindUser    RootKind = "user"
+	// RootKindDynamic is an internal ownership boundary promoted from a hot
+	// subdirectory. It stays hidden from user settings but lets the scanner
+	// reconcile that subtree without rewriting the parent root's entries.
+	RootKindDynamic RootKind = "dynamic"
 )
 
 type RootStatus string
@@ -173,20 +177,24 @@ type TransientSyncState struct {
 }
 
 type RootRecord struct {
-	ID              string
-	Path            string
-	Kind            RootKind
-	Status          RootStatus
-	FeedType        RootFeedType
-	FeedCursor      string
-	FeedState       RootFeedState
-	LastReconcileAt int64
-	LastFullScanAt  int64
-	ProgressCurrent int64
-	ProgressTotal   int64
-	LastError       *string
-	CreatedAt       int64
-	UpdatedAt       int64
+	ID                  string
+	Path                string
+	Kind                RootKind
+	Status              RootStatus
+	FeedType            RootFeedType
+	FeedCursor          string
+	FeedState           RootFeedState
+	LastReconcileAt     int64
+	LastFullScanAt      int64
+	ProgressCurrent     int64
+	ProgressTotal       int64
+	LastError           *string
+	DynamicParentRootID string
+	PolicyRootPath      string
+	PromotedAt          int64
+	LastHotAt           int64
+	CreatedAt           int64
+	UpdatedAt           int64
 }
 
 const RootProgressScale int64 = 1000
