@@ -1657,15 +1657,38 @@ func selectStoredEntryByPathTx(ctx context.Context, tx *sql.Tx, path string) (st
 
 func buildScopedPathQuery(scopePath string, column string) (string, []any) {
 	cleanScope := filepath.Clean(scopePath)
-	// Escape the scope prefix after appending the platform separator. On Windows
-	// a raw trailing "\" would escape the next LIKE token and make stale rows
-	// invisible to the SQL-side diff, which leaves deleted files behind.
-	scopePrefix := escapeLikePattern(cleanScope+string(filepath.Separator)) + "%"
-	return fmt.Sprintf("(%s = ? OR %s LIKE ? ESCAPE '\\')", column, column), []any{cleanScope, scopePrefix}
+	scopePrefix := cleanScope + string(filepath.Separator)
+	// The previous LIKE-based subtree predicate was correct but SQLite could still
+	// spend most of an incremental restore scanning a large root before comparing
+	// staged rows. Use a byte-ordered range that matches the existing
+	// (root_id, path) index so subtree diffs seek directly to the scoped prefix
+	// while the equality branch keeps the scope directory entry itself included.
+	return fmt.Sprintf("(%s = ? OR (%s >= ? AND %s < ?))", column, column, column), []any{
+		cleanScope,
+		scopePrefix,
+		nextPathPrefixUpperBound(scopePrefix),
+	}
 }
 
 func buildEntryScopeQuery(scopePath string, column string) (string, []any) {
 	return buildScopedPathQuery(scopePath, column)
+}
+
+func nextPathPrefixUpperBound(prefix string) string {
+	if prefix == "" {
+		return prefix
+	}
+
+	bytes := []byte(prefix)
+	for index := len(bytes) - 1; index >= 0; index-- {
+		if bytes[index] == 0xff {
+			continue
+		}
+		bytes[index]++
+		return string(bytes[:index+1])
+	}
+
+	return prefix + "\x00"
 }
 
 func buildEntryDifferencePredicate(existingAlias string, stagedAlias string) string {

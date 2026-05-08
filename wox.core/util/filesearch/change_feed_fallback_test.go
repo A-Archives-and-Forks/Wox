@@ -9,7 +9,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-func TestFallbackChangeFeedHandleEventEmitsDirtyRootForDirectChildCreate(t *testing.T) {
+func TestFallbackChangeFeedHandleEventEmitsDirtyPathForDirectChildCreate(t *testing.T) {
 	rootPath := filepath.Join(t.TempDir(), "root")
 	mustMkdirAll(t, rootPath)
 	filePath := filepath.Join(rootPath, "child.txt")
@@ -31,8 +31,8 @@ func TestFallbackChangeFeedHandleEventEmitsDirtyRootForDirectChildCreate(t *test
 	feed.handleEvent(fsnotify.Event{Name: filePath, Op: fsnotify.Create})
 
 	signal := mustReadChangeSignal(t, feed.Signals())
-	if signal.Kind != ChangeSignalKindDirtyRoot {
-		t.Fatalf("expected dirty root signal, got %q", signal.Kind)
+	if signal.Kind != ChangeSignalKindDirtyPath {
+		t.Fatalf("expected dirty path signal, got %q", signal.Kind)
 	}
 	if signal.RootID != root.ID {
 		t.Fatalf("expected root id %q, got %q", root.ID, signal.RootID)

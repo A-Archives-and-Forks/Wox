@@ -170,16 +170,23 @@ func (f *FallbackChangeFeed) handleEventForRoots(roots []RootRecord, event fsnot
 
 	cleanPath := filepath.Clean(event.Name)
 	cleanRootPath := filepath.Clean(root.Path)
+	pathIsDir, pathTypeKnown := statPathType(cleanPath)
+	semanticKind := classifyFallbackSemanticKind(event)
+
 	kind := ChangeSignalKindDirtyPath
-	if cleanPath == cleanRootPath || filepath.Dir(cleanPath) == cleanRootPath {
+	if cleanPath == cleanRootPath {
+		kind = ChangeSignalKindDirtyRoot
+	} else if filepath.Dir(cleanPath) == cleanRootPath && !pathTypeKnown && (semanticKind == ChangeSemanticKindRemove || semanticKind == ChangeSemanticKindRename) {
+		// Direct children used to force a root reconcile for every create/write.
+		// Keep root scope only when a removed direct child is already gone, because
+		// that is the one case where fallback fsnotify cannot tell whether stale
+		// recursive rows may live under the deleted path.
 		kind = ChangeSignalKindDirtyRoot
 	}
 
-	pathIsDir, pathTypeKnown := statPathType(cleanPath)
-
 	f.emit(ChangeSignal{
 		Kind:          kind,
-		SemanticKind:  classifyFallbackSemanticKind(event),
+		SemanticKind:  semanticKind,
 		RootID:        root.ID,
 		FeedType:      RootFeedTypeFallback,
 		Path:          cleanPath,

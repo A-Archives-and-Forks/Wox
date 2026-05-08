@@ -143,11 +143,11 @@ func TestNewScannerUsesSpecDirtyQueueDefaults(t *testing.T) {
 	if scanner.dirtyQueueConfig.SiblingMergeThreshold != 8 {
 		t.Fatalf("expected sibling merge threshold 8, got %d", scanner.dirtyQueueConfig.SiblingMergeThreshold)
 	}
-	if scanner.dirtyQueueConfig.RootEscalationPathThreshold != 512 {
-		t.Fatalf("expected root escalation path threshold 512, got %d", scanner.dirtyQueueConfig.RootEscalationPathThreshold)
+	if scanner.dirtyQueueConfig.RootEscalationPathThreshold != 0 {
+		t.Fatalf("expected root escalation path threshold 0, got %d", scanner.dirtyQueueConfig.RootEscalationPathThreshold)
 	}
-	if scanner.dirtyQueueConfig.RootEscalationDirectoryRatio != 0.10 {
-		t.Fatalf("expected root escalation directory ratio 0.10, got %f", scanner.dirtyQueueConfig.RootEscalationDirectoryRatio)
+	if scanner.dirtyQueueConfig.RootEscalationDirectoryRatio != 0 {
+		t.Fatalf("expected root escalation directory ratio 0, got %f", scanner.dirtyQueueConfig.RootEscalationDirectoryRatio)
 	}
 }
 

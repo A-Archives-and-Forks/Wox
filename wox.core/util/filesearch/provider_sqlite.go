@@ -149,14 +149,14 @@ func (p *SQLiteSearchProvider) collectGeneralCandidateIDs(ctx context.Context, q
 	}
 
 	ids := make([]int64, 0, limit)
-	nameIDs, err := p.queryFTSLikeIDs(ctx, "entries_name_fts", "normalized_name", "%"+escapeLikePattern(plan.nameTerm)+"%", limit)
+	nameIDs, err := p.queryFTSLiteralContainsIDs(ctx, "entries_name_fts", "normalized_name", plan.nameTerm, limit)
 	if err != nil {
 		return nil, err
 	}
 	ids = append(ids, nameIDs...)
 
 	if plan.asciiLettersDigits && len(plan.rawLettersDigits) >= 3 {
-		pinyinFullIDs, err := p.queryFTSLikeIDs(ctx, "entries_pinyin_full_fts", "pinyin_full", "%"+escapeLikePattern(plan.rawLettersDigits)+"%", limit)
+		pinyinFullIDs, err := p.queryFTSLiteralContainsIDs(ctx, "entries_pinyin_full_fts", "pinyin_full", plan.rawLettersDigits, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -186,29 +186,26 @@ func (p *SQLiteSearchProvider) collectWildcardCandidateIDs(ctx context.Context, 
 		return nil, nil
 	}
 
-	literal := longestLiteralFromWildcard(query.Raw)
-	if utf8LenString(literal) < 3 {
-		if plan.pathLike {
-			return p.queryPathFallbackIDs(ctx, plan.pathQuery, limit)
-		}
-		return p.queryNameFallbackIDs(ctx, plan.rawLower, limit)
-	}
-
-	pattern := normalizeIndexText(strings.ReplaceAll(query.Raw, "\\", "/"))
 	targetTable := "entries_name_fts"
 	targetColumn := "normalized_name"
+	literal := wildcardRecallLiteral(query.Raw, false)
 	if plan.pathLike {
 		targetTable = "entries_path_fts"
 		targetColumn = "normalized_path"
-		pattern = normalizePathQuery(query.Raw)
+		literal = wildcardRecallLiteral(query.Raw, true)
 	}
 
-	return p.queryIDs(ctx, fmt.Sprintf(`
-		SELECT rowid
-		FROM %s
-		WHERE %s GLOB ?
-		LIMIT ?
-	`, targetTable, targetColumn), pattern, limit)
+	if utf8LenString(literal) < 3 {
+		if plan.pathLike {
+			return p.queryPathWildcardFallbackIDs(ctx, wildcardRecallLikePattern(plan.pathQuery), limit)
+		}
+		if plan.extension != "" {
+			return p.queryIDsByExtension(ctx, plan.extension, limit)
+		}
+		return p.queryNameWildcardFallbackIDs(ctx, wildcardRecallLikePattern(plan.rawLower), limit)
+	}
+
+	return p.queryFTSLiteralContainsIDs(ctx, targetTable, targetColumn, literal, limit)
 }
 
 func (p *SQLiteSearchProvider) queryPathFTSIDs(ctx context.Context, plan *queryPlan, limit int) ([]int64, error) {
@@ -233,7 +230,7 @@ func (p *SQLiteSearchProvider) queryPathFTSIDs(ctx context.Context, plan *queryP
 		var ids []int64
 		var err error
 		if utf8LenString(segment) >= 3 {
-			ids, err = p.queryFTSLikeIDs(ctx, "entries_path_fts", "normalized_path", "%"+escapeLikePattern(segment)+"%", plan.perClauseLimit)
+			ids, err = p.queryFTSLiteralContainsIDs(ctx, "entries_path_fts", "normalized_path", segment, plan.perClauseLimit)
 		} else {
 			ids, err = p.queryPathFallbackIDs(ctx, segment, plan.perClauseLimit)
 		}
@@ -255,7 +252,7 @@ func (p *SQLiteSearchProvider) queryPathFTSIDs(ctx context.Context, plan *queryP
 	}
 
 	if len(plan.pathQuery) >= 3 {
-		fullPathIDs, err := p.queryFTSLikeIDs(ctx, "entries_path_fts", "normalized_path", "%"+escapeLikePattern(plan.pathQuery)+"%", limit)
+		fullPathIDs, err := p.queryFTSLiteralContainsIDs(ctx, "entries_path_fts", "normalized_path", plan.pathQuery, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -306,11 +303,52 @@ func (p *SQLiteSearchProvider) queryPathFallbackIDs(ctx context.Context, term st
 	`, "%"+escapeLikePattern(term)+"%", limit)
 }
 
+func (p *SQLiteSearchProvider) queryNameWildcardFallbackIDs(ctx context.Context, pattern string, limit int) ([]int64, error) {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return nil, nil
+	}
+	return p.queryIDs(ctx, `
+		SELECT entry_id
+		FROM entries
+		WHERE normalized_name LIKE ?
+		ORDER BY entry_id ASC
+		LIMIT ?
+	`, pattern, limit)
+}
+
+func (p *SQLiteSearchProvider) queryPathWildcardFallbackIDs(ctx context.Context, pattern string, limit int) ([]int64, error) {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return nil, nil
+	}
+	return p.queryIDs(ctx, `
+		SELECT entry_id
+		FROM entries
+		WHERE normalized_path LIKE ?
+		ORDER BY entry_id ASC
+		LIMIT ?
+	`, pattern, limit)
+}
+
+func (p *SQLiteSearchProvider) queryFTSLiteralContainsIDs(ctx context.Context, tableName string, columnName string, term string, limit int) ([]int64, error) {
+	term = strings.TrimSpace(term)
+	if term == "" {
+		return nil, nil
+	}
+
+	// FTS5 trigram can accelerate LIKE/GLOB contains queries, but SQLite disables
+	// that optimization when ESCAPE is present. File search only treats '*' as a
+	// wildcard at the query language layer, so other LIKE metacharacters may
+	// over-recall here and the final scorer/wildcard matcher filters the rows.
+	return p.queryFTSLikeIDs(ctx, tableName, columnName, "%"+term+"%", limit)
+}
+
 func (p *SQLiteSearchProvider) queryFTSLikeIDs(ctx context.Context, tableName string, columnName string, pattern string, limit int) ([]int64, error) {
 	return p.queryIDs(ctx, fmt.Sprintf(`
 		SELECT rowid
 		FROM %s
-		WHERE %s LIKE ? ESCAPE '\'
+		WHERE %s LIKE ?
 		LIMIT ?
 	`, tableName, columnName), pattern, limit)
 }
@@ -379,6 +417,40 @@ func (p *SQLiteSearchProvider) listEntriesByIDs(ctx context.Context, entryIDs []
 	}
 
 	return loaded, nil
+}
+
+func wildcardRecallLiteral(raw string, pathLike bool) string {
+	if !strings.Contains(raw, "*") {
+		return ""
+	}
+
+	parts := strings.Split(raw, "*")
+	longest := ""
+	for _, part := range parts {
+		if pathLike {
+			part = normalizePathQuery(part)
+		} else {
+			part = normalizeIndexText(part)
+		}
+		part = strings.TrimSpace(part)
+		if utf8LenString(part) > utf8LenString(longest) {
+			longest = part
+		}
+	}
+	return longest
+}
+
+func wildcardRecallLikePattern(term string) string {
+	term = strings.TrimSpace(term)
+	if term == "" {
+		return ""
+	}
+
+	// This is only a broad candidate-recall query for '*' wildcard searches.
+	// Do not escape other LIKE metacharacters here: the search language does not
+	// promise exact '%' or '_' handling, and the final wildcard matcher enforces
+	// the real '*' semantics before results are returned.
+	return "%" + strings.ReplaceAll(term, "*", "%") + "%"
 }
 
 func intersectInt64(left []int64, right []int64, limit int) []int64 {

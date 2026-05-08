@@ -242,9 +242,16 @@ func (p *RunPlanner) planIncrementalRoots(ctx context.Context, roots []RootRecor
 					Err:    fmt.Errorf("incremental scope path %q is outside root path %q", cleanScope, root.Path),
 				}
 			}
+			scopeKind := ScopeKindSubtree
+			if batch.Mode == ReconcileModeSubtree && cleanScope == filepath.Clean(root.Path) {
+				// DirtyQueue collapses file changes to their parent directory. When
+				// that parent is the configured root, the smallest correct retry is a
+				// direct-files job for the root directory, not a recursive root scan.
+				scopeKind = ScopeKindDirectFiles
+			}
 			draft.children = append(draft.children, &runPlannerScopeBuffer{
 				scopePath:       cleanScope,
-				scopeKind:       ScopeKindSubtree,
+				scopeKind:       scopeKind,
 				parentScopePath: filepath.Clean(root.Path),
 			})
 		}
@@ -439,6 +446,12 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 	}
 	dirEntries, err := os.ReadDir(scopePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// Incremental dirty paths can be short-lived build/temp directories.
+			// Treat a scope that disappears after the initial Stat as already
+			// reconciled instead of turning one vanished path into a root retry.
+			return PlanTotals{}, nil, nil
+		}
 		return PlanTotals{}, nil, fmt.Errorf("read direct-files scope %q: %w", scopePath, err)
 	}
 
@@ -529,6 +542,22 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 
 		dirEntries, readErr := os.ReadDir(current.path)
 		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				// A queued directory can vanish between the planner's Stat/ReadDir
+				// calls, especially under compiler temp folders. Missing paths mean
+				// there is no filesystem work left for this scope; escalating to the
+				// root would make one transient delete look like a global index.
+				if current.path == scopePath {
+					return PlanTotals{}, nil, nil
+				}
+				totals.SkippedCount++
+				if current.childScope != "" {
+					childTotals := rootChildTotals[current.childScope]
+					childTotals.SkippedCount++
+					rootChildTotals[current.childScope] = childTotals
+				}
+				continue
+			}
 			// The new run planner originally failed fast on any unreadable child
 			// directory so its pre-scan counts stayed exact. That was too strict for
 			// real Windows roots such as C:\Windows, where protected children like
@@ -565,6 +594,12 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 			childPath := filepath.Join(current.path, dirEntry.Name())
 			isDir, _, infoErr := strictDirEntryType(current.path, dirEntry)
 			if infoErr != nil {
+				if os.IsNotExist(infoErr) {
+					// Children can disappear after ReadDir returns their names. That
+					// is normal churn in temp/build trees, so skip the stale directory
+					// entry instead of failing the whole incremental plan.
+					continue
+				}
 				if shouldSkipUnreadableTraversalError(infoErr) {
 					totals.SkippedCount++
 					if current.childScope != "" {

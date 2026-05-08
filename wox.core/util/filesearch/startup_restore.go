@@ -44,6 +44,7 @@ func (s *Scanner) startupRestore(ctx context.Context) {
 		s.refreshChangeFeed(ctx)
 		return
 	}
+	roots = s.clearStartupTransientMissingPathErrors(ctx, roots)
 
 	s.refreshChangeFeed(ctx)
 	if startupNeedsInitialFullScan(roots, persistedEntryCount) {
@@ -96,6 +97,33 @@ func (s *Scanner) startupRestore(ctx context.Context) {
 	}
 }
 
+func (s *Scanner) clearStartupTransientMissingPathErrors(ctx context.Context, roots []RootRecord) []RootRecord {
+	for index := range roots {
+		root := roots[index]
+		if root.Status != RootStatusError || root.LastError == nil || !isMissingPathErrorMessage(*root.LastError) {
+			continue
+		}
+		// Older builds persisted missing temp/build paths as root errors. Once the
+		// process restarts those paths are already gone, so clear the stale banner
+		// instead of forcing a broad fallback reconcile just to remove the message.
+		root.Status = RootStatusIdle
+		root.LastError = nil
+		root.ProgressCurrent = RootProgressScale
+		root.ProgressTotal = RootProgressScale
+		if root.FeedState == RootFeedStateDegraded {
+			root.FeedState = RootFeedStateReady
+		}
+		root.UpdatedAt = util.GetSystemTimestamp()
+		if err := s.db.UpdateRootState(ctx, root); err != nil {
+			util.GetLogger().Warn(ctx, "filesearch startup restore failed to clear transient root error: "+err.Error())
+			continue
+		}
+		roots[index] = root
+		util.GetLogger().Info(ctx, fmt.Sprintf("filesearch startup restore cleared transient root error: root=%s path=%s", root.ID, root.Path))
+	}
+	return roots
+}
+
 func startupNeedsInitialFullScan(roots []RootRecord, persistedEntryCount int64) bool {
 	if persistedEntryCount > 0 {
 		return false
@@ -122,8 +150,20 @@ func startupReconcileRoots(roots []RootRecord, now time.Time) []RootRecord {
 }
 
 func rootNeedsStartupReconcile(root RootRecord, now time.Time) bool {
-	if root.LastFullScanAt <= 0 {
+	// Older fallback roots may have a successful reconcile timestamp without a
+	// full-scan timestamp because startup restore previously drove them through
+	// the incremental root path. Treat that reconcile as enough history for the
+	// feed-specific freshness check below; otherwise a migrated large root keeps
+	// rescanning on every launch despite having just completed a reconcile.
+	if root.LastFullScanAt <= 0 && root.LastReconcileAt <= 0 {
 		return true
+	}
+
+	if root.FeedType == RootFeedTypeFallback || root.FeedType == "" {
+		// Fallback degraded can be left behind by a transient dirty subtree that
+		// disappeared during reconcile. Use the freshness window for fallback
+		// roots so every debug restart does not immediately rescan the whole tree.
+		return fallbackRootNeedsStartupReconcile(root, now)
 	}
 
 	if root.FeedState == RootFeedStateDegraded || root.FeedState == RootFeedStateUnavailable {
@@ -136,9 +176,26 @@ func rootNeedsStartupReconcile(root RootRecord, now time.Time) bool {
 		return !ok || !feedCursorFresh(cursor, now, defaultFeedCursorSafeWindow)
 	case RootFeedTypeUSN:
 		return usnRootNeedsStartupReconcile(root, now)
-	case RootFeedTypeFallback, "":
-		return true
 	default:
 		return true
 	}
+}
+
+func fallbackRootNeedsStartupReconcile(root RootRecord, now time.Time) bool {
+	if root.LastReconcileAt <= 0 {
+		return true
+	}
+
+	lastReconcile := time.UnixMilli(root.LastReconcileAt)
+	if lastReconcile.After(now) {
+		return false
+	}
+
+	// Fallback feeds cannot replay offline changes, but reconciling every large
+	// root on every debug restart made startup restore run an unbounded tree scan
+	// even when the previous reconcile finished minutes ago. Reuse the same safe
+	// window as cursor-based feeds: recent fallback roots rely on the live
+	// fsnotify watcher, while stale roots still get a periodic full reconcile to
+	// repair missed offline changes.
+	return now.Sub(lastReconcile) > defaultFeedCursorSafeWindow
 }

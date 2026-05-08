@@ -27,3 +27,7 @@
 - **Preserve existing semantics**: Avoid accidental behavior changes during refactor and optimization.
 - **Prefer extensible abstractions**: Choose approaches that support future evolution with minimal rework.
 - **Document each change point**: Optimization points, bug fixes, and feature additions should carry local comments that explain the reason for the change, the behavior being introduced or corrected, and the rationale behind the chosen solution.
+
+
+## Debug
+- When troubleshooting an issue, if you cannot pinpoint the exact cause with 100% certainty, you can start by adding log statements to the relevant code and reviewing the logs to identify the problem. The log output should contain sufficient information to help understand the program’s state and behavior.

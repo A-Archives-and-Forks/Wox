@@ -69,6 +69,12 @@ func (b *SnapshotBuilder) BuildDirectFilesJobSnapshot(ctx context.Context, root 
 
 	dirEntries, err := os.ReadDir(scopePath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Dirty scopes may disappear after validation in temp/build folders.
+			// Returning the empty owned scope lets the DB prune stale rows without
+			// promoting a vanished child path into a root-wide retry.
+			return batch, nil
+		}
 		return batch, fmt.Errorf("failed to read direct-files scope %s: %w", scopePath, err)
 	}
 
@@ -146,6 +152,12 @@ func (b *SnapshotBuilder) StreamDirectFilesJobBatches(ctx context.Context, root 
 
 	dirEntries, err := os.ReadDir(scopePath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Streaming direct-files jobs still own the directory scope. If the
+			// directory vanishes after validation, an empty stream is enough for the
+			// caller to prune staged direct-file rows at the same narrow boundary.
+			return nil
+		}
 		return fmt.Errorf("failed to read direct-files scope %s: %w", scopePath, err)
 	}
 
@@ -283,6 +295,32 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 		current := queue[0]
 		queue = queue[1:]
 
+		dirEntries, readErr := os.ReadDir(current.path)
+		if readErr != nil {
+			if errors.Is(readErr, os.ErrNotExist) {
+				// The snapshot builder used to record the directory as existing
+				// before ReadDir. A temp/build directory can disappear in that tiny
+				// window, so missing scopes now produce an empty owned snapshot that
+				// prunes stale rows without retrying the whole root.
+				if current.path == scopePath {
+					return SubtreeSnapshotBatch{RootID: root.ID, ScopePath: scopePath}, nil
+				}
+				continue
+			}
+			batch.Directories = append(batch.Directories, DirectoryRecord{
+				Path:         current.path,
+				RootID:       root.ID,
+				ParentPath:   filepath.Dir(current.path),
+				LastScanTime: scanTimestamp,
+				Exists:       true,
+			})
+			batch.Entries = append(batch.Entries, newEntryRecord(root, current.path, current.info))
+			if current.path == scopePath {
+				return batch, fmt.Errorf("failed to read scope directory %s: %w", current.path, readErr)
+			}
+			util.GetLogger().Warn(ctx, "filesearch skipped unreadable directory "+current.path+": "+readErr.Error())
+			continue
+		}
 		batch.Directories = append(batch.Directories, DirectoryRecord{
 			Path:         current.path,
 			RootID:       root.ID,
@@ -291,15 +329,6 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 			Exists:       true,
 		})
 		batch.Entries = append(batch.Entries, newEntryRecord(root, current.path, current.info))
-
-		dirEntries, readErr := os.ReadDir(current.path)
-		if readErr != nil {
-			if current.path == scopePath {
-				return batch, fmt.Errorf("failed to read scope directory %s: %w", current.path, readErr)
-			}
-			util.GetLogger().Warn(ctx, "filesearch skipped unreadable directory "+current.path+": "+readErr.Error())
-			continue
-		}
 
 		for _, dirEntry := range dirEntries {
 			childPath := filepath.Join(current.path, dirEntry.Name())

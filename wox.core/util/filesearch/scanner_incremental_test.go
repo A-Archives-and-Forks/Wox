@@ -239,8 +239,8 @@ func TestScannerProcessDirtyQueueReloadsDirectChildUnderRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get status after enqueueing direct child dirty path: %v", err)
 	}
-	if status.PendingDirtyRootCount != 1 || status.PendingDirtyPathCount != 0 {
-		t.Fatalf("expected pending dirty counts root=1 path=0 after direct child enqueue, got root=%d path=%d", status.PendingDirtyRootCount, status.PendingDirtyPathCount)
+	if status.PendingDirtyRootCount != 1 || status.PendingDirtyPathCount != 1 {
+		t.Fatalf("expected pending dirty counts root=1 path=1 after direct child enqueue, got root=%d path=%d", status.PendingDirtyRootCount, status.PendingDirtyPathCount)
 	}
 
 	if err := scanner.processDirtyQueue(ctx, time.Now().Add(2*defaultDirtyDebounceWindow)); err != nil {
@@ -338,8 +338,8 @@ func TestScannerProcessDirtyQueueRequeuesRemainingBatchesAfterFailure(t *testing
 	if err != nil {
 		t.Fatalf("get status after failed dirty queue processing: %v", err)
 	}
-	if status.PendingDirtyRootCount != 2 || status.PendingDirtyPathCount != 1 {
-		t.Fatalf("expected requeued pending dirty counts root=2 path=1 after failure, got root=%d path=%d", status.PendingDirtyRootCount, status.PendingDirtyPathCount)
+	if status.PendingDirtyRootCount != 1 || status.PendingDirtyPathCount != 1 {
+		t.Fatalf("expected only unaffected dirty scope to stay queued after failure, got root=%d path=%d", status.PendingDirtyRootCount, status.PendingDirtyPathCount)
 	}
 
 	if err := scanner.processDirtyQueue(ctx, time.Now().Add(2*defaultDirtyDebounceWindow)); err != nil {
@@ -348,18 +348,18 @@ func TestScannerProcessDirtyQueueRequeuesRemainingBatchesAfterFailure(t *testing
 
 	recoveredRoot, err := db.FindRootByID(ctx, "root-a")
 	if err != nil {
-		t.Fatalf("load recovered root after retry: %v", err)
+		t.Fatalf("load failed root after scoped retry: %v", err)
 	}
-	if recoveredRoot.FeedState != RootFeedStateReady {
-		t.Fatalf("expected recovered root feed state ready, got %q", recoveredRoot.FeedState)
+	if recoveredRoot.FeedState != RootFeedStateDegraded {
+		t.Fatalf("expected failed root to stay degraded without a root-wide retry, got %q", recoveredRoot.FeedState)
 	}
 
 	results, err := localProvider.Search(context.Background(), SearchQuery{Raw: "new-a"}, 10)
 	if err != nil {
 		t.Fatalf("search local provider for root-a new file: %v", err)
 	}
-	if len(results) != 1 || results[0].Path != rootANewFilePath {
-		t.Fatalf("expected root-a new file %q after retry, got %#v", rootANewFilePath, results)
+	if len(results) != 0 {
+		t.Fatalf("expected invalid failed scope not to trigger root-a full retry for %q, got %#v", rootANewFilePath, results)
 	}
 
 	results, err = localProvider.Search(context.Background(), SearchQuery{Raw: "new-b"}, 10)
@@ -813,8 +813,8 @@ func TestScannerIncrementalRunFailsFastAndKeepsQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get status after failed incremental run: %v", err)
 	}
-	if status.PendingDirtyRootCount != 2 || status.PendingDirtyPathCount != 1 {
-		t.Fatalf("expected failed incremental run to preserve queue, got roots=%d paths=%d", status.PendingDirtyRootCount, status.PendingDirtyPathCount)
+	if status.PendingDirtyRootCount != 1 || status.PendingDirtyPathCount != 1 {
+		t.Fatalf("expected failed incremental run to keep only unaffected scopes queued, got roots=%d paths=%d", status.PendingDirtyRootCount, status.PendingDirtyPathCount)
 	}
 
 	failedRoot, err := db.FindRootByID(ctx, "root-a-fast-fail")

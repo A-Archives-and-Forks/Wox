@@ -151,8 +151,20 @@ func (p *fileSearchIndexPolicy) shouldIgnoreByGitIgnore(rootPath string, fullPat
 
 	ignored := false
 	for _, directory := range patternDirectoriesForPath(rootPath, fullPath) {
-		for _, pattern := range p.patternsForDirectory(directory) {
-			if pattern.matches(fullPath, isDir) {
+		patterns := p.patternsForDirectory(directory)
+		if len(patterns) == 0 {
+			continue
+		}
+		// CPU profiles showed incremental pre-scan spending nearly all time
+		// recalculating the same relative path once per .gitignore pattern. Compute
+		// it once for the directory's pattern set, then reuse it so ignore matching
+		// stays semantically identical while avoiding repeated filepath.Rel work.
+		relPath, ok := relativePathForGitIgnoreMatch(directory, fullPath)
+		if !ok {
+			continue
+		}
+		for _, pattern := range patterns {
+			if pattern.matchesRelPath(relPath, isDir) {
 				ignored = !pattern.negate
 			}
 		}
@@ -227,12 +239,17 @@ func pathWithinRoot(rootPath string, candidatePath string) bool {
 }
 
 type gitIgnorePattern struct {
-	baseDir  string
-	pattern  string
-	negate   bool
-	dirOnly  bool
-	rooted   bool
-	hasSlash bool
+	patternSlash string
+	negate       bool
+	dirOnly      bool
+	rooted       bool
+	hasSlash     bool
+	hasMeta      bool
+	simpleGlob   bool
+	simpleParts  []string
+	leadingStar  bool
+	trailingStar bool
+	hasQuestion  bool
 }
 
 func loadGitIgnorePatterns(directory string) []gitIgnorePattern {
@@ -250,7 +267,7 @@ func loadGitIgnorePatterns(directory string) []gitIgnorePattern {
 			continue
 		}
 
-		pattern := gitIgnorePattern{baseDir: directory}
+		pattern := gitIgnorePattern{}
 		if strings.HasPrefix(line, "!") {
 			pattern.negate = true
 			line = strings.TrimPrefix(line, "!")
@@ -263,9 +280,17 @@ func loadGitIgnorePatterns(directory string) []gitIgnorePattern {
 			pattern.dirOnly = true
 			line = strings.TrimSuffix(line, "/")
 		}
-		pattern.pattern = line
-		pattern.hasSlash = strings.Contains(line, "/")
-		if pattern.pattern != "" {
+		pattern.patternSlash = filepath.ToSlash(line)
+		pattern.hasSlash = strings.Contains(pattern.patternSlash, "/")
+		pattern.hasMeta = hasGitIgnoreGlobMeta(pattern.patternSlash)
+		pattern.simpleGlob = isSimpleGitIgnoreGlob(pattern.patternSlash)
+		if pattern.simpleGlob {
+			pattern.simpleParts = strings.Split(pattern.patternSlash, "*")
+			pattern.leadingStar = strings.HasPrefix(pattern.patternSlash, "*")
+			pattern.trailingStar = strings.HasSuffix(pattern.patternSlash, "*")
+			pattern.hasQuestion = strings.Contains(pattern.patternSlash, "?")
+		}
+		if pattern.patternSlash != "" {
 			patterns = append(patterns, pattern)
 		}
 	}
@@ -273,29 +298,175 @@ func loadGitIgnorePatterns(directory string) []gitIgnorePattern {
 	return patterns
 }
 
-func (p gitIgnorePattern) matches(fullPath string, isDir bool) bool {
+func relativePathForGitIgnoreMatch(baseDir string, fullPath string) (string, bool) {
+	relPath, err := filepath.Rel(baseDir, fullPath)
+	if err != nil || strings.HasPrefix(relPath, "..") {
+		return "", false
+	}
+	return filepath.ToSlash(relPath), true
+}
+
+func (p gitIgnorePattern) matchesRelPath(relPath string, isDir bool) bool {
 	if p.dirOnly && !isDir {
 		return false
 	}
 
-	relPath, err := filepath.Rel(p.baseDir, fullPath)
-	if err != nil || strings.HasPrefix(relPath, "..") {
-		return false
-	}
-	relPath = filepath.ToSlash(relPath)
-	pattern := filepath.ToSlash(p.pattern)
+	pattern := p.patternSlash
 
 	if p.rooted || p.hasSlash {
-		if ok, _ := filepath.Match(pattern, relPath); ok {
+		// Most ignore patterns are literals such as "target" or "coverage/". The
+		// old matcher sent those through filepath.Match for every visited file,
+		// which dominated filesearch CPU during startup restore. Literal patterns
+		// can be compared directly; glob patterns keep the previous matcher path.
+		if !p.hasMeta && relPath == pattern {
 			return true
+		}
+		if p.hasMeta {
+			if p.matchesCandidate(pattern, relPath) {
+				return true
+			}
 		}
 		return strings.HasPrefix(relPath, pattern+"/")
 	}
 
-	for _, segment := range strings.Split(relPath, "/") {
-		if ok, _ := filepath.Match(pattern, segment); ok {
+	if !p.hasMeta {
+		// For unrooted literal patterns, scan segments without strings.Split so
+		// large trees do not allocate a segment slice for every path/pattern pair.
+		return containsGitIgnorePathSegment(relPath, pattern)
+	}
+
+	return containsGitIgnoreMatchingSegment(relPath, p)
+}
+
+func (p gitIgnorePattern) matchesCandidate(pattern string, candidate string) bool {
+	if p.simpleGlob {
+		// CPU profiles showed simple patterns such as "*.ext" still dominating
+		// startup restore because filepath.Match uses a general parser for every
+		// path segment. Patterns without '?' are pre-split once at .gitignore load
+		// time so common suffix/prefix globs use string searches instead of
+		// per-candidate backtracking; anything more complex keeps the safe matcher.
+		if !p.hasQuestion {
+			return matchSimpleGitIgnoreLiteralGlob(p.simpleParts, p.leadingStar, p.trailingStar, candidate)
+		}
+		return matchSimpleGitIgnoreGlob(pattern, candidate)
+	}
+
+	ok, _ := filepath.Match(pattern, candidate)
+	return ok
+}
+
+func containsGitIgnoreMatchingSegment(relPath string, pattern gitIgnorePattern) bool {
+	for start := 0; start <= len(relPath); {
+		end := strings.IndexByte(relPath[start:], '/')
+		if end < 0 {
+			return pattern.matchesCandidate(pattern.patternSlash, relPath[start:])
+		}
+		if pattern.matchesCandidate(pattern.patternSlash, relPath[start:start+end]) {
 			return true
 		}
+		start += end + 1
+	}
+
+	return false
+}
+
+func hasGitIgnoreGlobMeta(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?[")
+}
+
+func isSimpleGitIgnoreGlob(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?") && !strings.ContainsAny(pattern, "[\\")
+}
+
+func matchSimpleGitIgnoreLiteralGlob(parts []string, leadingStar bool, trailingStar bool, candidate string) bool {
+	if len(parts) == 0 {
+		return candidate == ""
+	}
+
+	position := 0
+	firstPart := 0
+	if !leadingStar {
+		prefix := parts[0]
+		if !strings.HasPrefix(candidate, prefix) {
+			return false
+		}
+		position = len(prefix)
+		firstPart = 1
+	}
+
+	lastPart := len(parts) - 1
+	searchLimit := len(candidate)
+	if !trailingStar {
+		suffix := parts[lastPart]
+		if !strings.HasSuffix(candidate, suffix) {
+			return false
+		}
+		searchLimit = len(candidate) - len(suffix)
+		lastPart--
+	}
+
+	for index := firstPart; index <= lastPart; index++ {
+		part := parts[index]
+		if part == "" {
+			continue
+		}
+		if position > searchLimit {
+			return false
+		}
+		offset := strings.Index(candidate[position:searchLimit], part)
+		if offset < 0 {
+			return false
+		}
+		position += offset + len(part)
+	}
+
+	return position <= searchLimit
+}
+
+func matchSimpleGitIgnoreGlob(pattern string, candidate string) bool {
+	patternIndex := 0
+	candidateIndex := 0
+	starIndex := -1
+	starCandidateIndex := 0
+
+	for candidateIndex < len(candidate) {
+		if patternIndex < len(pattern) && (pattern[patternIndex] == '?' || pattern[patternIndex] == candidate[candidateIndex]) {
+			patternIndex++
+			candidateIndex++
+			continue
+		}
+		if patternIndex < len(pattern) && pattern[patternIndex] == '*' {
+			starIndex = patternIndex
+			starCandidateIndex = candidateIndex
+			patternIndex++
+			continue
+		}
+		if starIndex >= 0 {
+			patternIndex = starIndex + 1
+			starCandidateIndex++
+			candidateIndex = starCandidateIndex
+			continue
+		}
+		return false
+	}
+
+	for patternIndex < len(pattern) && pattern[patternIndex] == '*' {
+		patternIndex++
+	}
+
+	return patternIndex == len(pattern)
+}
+
+func containsGitIgnorePathSegment(relPath string, pattern string) bool {
+	for start := 0; start <= len(relPath); {
+		end := strings.IndexByte(relPath[start:], '/')
+		if end < 0 {
+			return relPath[start:] == pattern
+		}
+		if relPath[start:start+end] == pattern {
+			return true
+		}
+		start += end + 1
 	}
 
 	return false

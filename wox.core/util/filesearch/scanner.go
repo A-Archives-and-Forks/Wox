@@ -82,13 +82,17 @@ type rootReloadResult struct {
 
 func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
 	dirtyQueueConfig := DirtyQueueConfig{
-		DebounceWindow:               defaultDirtyDebounceWindow,
-		MaxDebounceWindow:            defaultMaxDirtyDebounceWindow,
-		BackpressurePathThreshold:    defaultDirtyBackpressurePathCount,
-		BackpressureRootThreshold:    defaultDirtyBackpressureRootCount,
-		SiblingMergeThreshold:        8,
-		RootEscalationPathThreshold:  512,
-		RootEscalationDirectoryRatio: 0.10,
+		DebounceWindow:            defaultDirtyDebounceWindow,
+		MaxDebounceWindow:         defaultMaxDirtyDebounceWindow,
+		BackpressurePathThreshold: defaultDirtyBackpressurePathCount,
+		BackpressureRootThreshold: defaultDirtyBackpressureRootCount,
+		SiblingMergeThreshold:     8,
+		// Dirty bursts used to promote to a configured-root reconcile after a
+		// fixed count/ratio. With scoped planning in place that made noisy but
+		// localized changes under large roots scan far more than they touched, so
+		// default escalation is disabled and only explicit root signals stay broad.
+		RootEscalationPathThreshold:  0,
+		RootEscalationDirectoryRatio: 0,
 	}
 
 	policy := newPolicyState(Policy{})
@@ -1181,16 +1185,21 @@ func (s *Scanner) enqueueDirtyForPath(ctx context.Context, path string) bool {
 
 	cleanPath := filepath.Clean(path)
 	cleanRootPath := filepath.Clean(root.Path)
-	kind := DirtySignalKindPath
-	if cleanPath == cleanRootPath || filepath.Dir(cleanPath) == cleanRootPath {
-		kind = DirtySignalKindRoot
-	}
-
 	pathIsDir := false
 	pathTypeKnown := false
 	if info, err := os.Stat(cleanPath); err == nil {
 		pathIsDir = info.IsDir()
 		pathTypeKnown = true
+	}
+
+	kind := DirtySignalKindPath
+	if cleanPath == cleanRootPath {
+		kind = DirtySignalKindRoot
+	} else if filepath.Dir(cleanPath) == cleanRootPath && !pathTypeKnown {
+		// Manual dirty-path routing has no create/remove semantic attached. If a
+		// missing direct child might have been a deleted directory, root scope is
+		// the smallest safe boundary that can prune unknown recursive rows.
+		kind = DirtySignalKindRoot
 	}
 
 	s.enqueueDirtyWithContext(ctx, DirtySignal{
@@ -1295,7 +1304,11 @@ func (s *Scanner) handleChangeSignal(ctx context.Context, signal ChangeSignal) {
 			At:            signal.At,
 		})
 	case ChangeSignalKindDirtyPath:
-		if !rootFound || root.FeedState == RootFeedStateReady {
+		if !rootFound || root.FeedState == RootFeedStateReady || root.FeedType == RootFeedTypeFallback || root.FeedType == "" {
+			// Fallback feeds cannot replay a journal, so degraded state only tells us
+			// a previous reconcile failed. Keeping later concrete dirty paths scoped
+			// avoids converting one transient temp-directory miss into repeated full
+			// root reconciles while explicit root-reconcile signals still stay broad.
 			s.enqueueDirtyWithContext(ctx, DirtySignal{
 				Kind:          DirtySignalKindPath,
 				RootID:        signal.RootID,
@@ -1375,18 +1388,71 @@ func (s *Scanner) handleDirtyQueueFailure(ctx context.Context, root RootRecord, 
 			summarizeLogPaths(batch.Paths),
 		))
 	}
+	if isIncrementalMissingPathFailure(cause) {
+		// Missing-path failures are normal churn for temp/build directories. The
+		// old recovery path marked the configured root degraded, which surfaced a
+		// "needs attention" banner even though there is no user action to take.
+		s.clearRootTransientIncrementalFailure(ctx, root.ID, cause)
+		s.requeueDirtyBatches(ctx, remaining)
+		s.refreshTransientSyncPendingCounts()
+		s.emitStateChange(ctx)
+		return
+	}
 	s.updateRootFeedState(ctx, root.ID, RootFeedStateDegraded)
+	if shouldRetryIncrementalRootFailure(cause) && !s.enqueueDirtyRetryForFailedBatch(ctx, root, batch, time.Now()) {
+		util.GetLogger().Warn(ctx, fmt.Sprintf(
+			"filesearch reconcile batch stopped retrying failed scope: root=%s mode=%s paths=%s err=%s",
+			root.ID,
+			batch.Mode,
+			summarizeLogPaths(batch.Paths),
+			cause.Error(),
+		))
+	}
+	s.requeueDirtyBatches(ctx, remaining)
+	s.refreshTransientSyncPendingCounts()
+	s.emitStateChange(ctx)
+}
+
+func (s *Scanner) enqueueDirtyRetryForFailedBatch(ctx context.Context, root RootRecord, batch ReconcileBatch, at time.Time) bool {
+	switch batch.Mode {
+	case ReconcileModeSubtree:
+		requeued := false
+		for _, path := range batch.Paths {
+			cleanPath := cleanDirtyQueuePath(path)
+			if cleanPath == "" || !pathWithinScope(root.Path, cleanPath) {
+				continue
+			}
+			// Retry the exact subtree scope that failed. The previous recovery path
+			// always enqueued the configured root, which made one bad child under a
+			// large home directory trigger another full pre-scan.
+			s.enqueueDirtyWithContext(ctx, DirtySignal{
+				Kind:          DirtySignalKindPath,
+				RootID:        batch.RootID,
+				Path:          cleanPath,
+				PathIsDir:     true,
+				PathTypeKnown: true,
+				At:            at,
+			})
+			requeued = true
+		}
+		if requeued {
+			return true
+		}
+	case ReconcileModeRoot:
+	}
+
+	if batch.Mode != ReconcileModeRoot && len(batch.Paths) > 0 {
+		return false
+	}
 	s.enqueueDirtyWithContext(ctx, DirtySignal{
 		Kind:          DirtySignalKindRoot,
 		RootID:        batch.RootID,
 		Path:          root.Path,
 		PathIsDir:     true,
 		PathTypeKnown: true,
-		At:            time.Now(),
+		At:            at,
 	})
-	s.requeueDirtyBatches(ctx, remaining)
-	s.refreshTransientSyncPendingCounts()
-	s.emitStateChange(ctx)
+	return true
 }
 
 func (s *Scanner) handleIncrementalRunFailure(ctx context.Context, roots []RootRecord, batches []ReconcileBatch, cause error) {
@@ -1398,9 +1464,9 @@ func (s *Scanner) handleIncrementalRunFailure(ctx context.Context, roots []RootR
 	))
 
 	// Incremental job boundaries are planner-owned execution metadata, not
-	// durable state. After a failure we escalate the failed root to a full-root
-	// retry, then requeue the untouched batches as-is so unaffected scopes keep
-	// their existing debounce granularity.
+	// durable state. After a failure we retry the failed batch at its original
+	// scoped paths when possible, then requeue untouched roots as-is so unrelated
+	// scopes keep their existing debounce granularity.
 	var rootErr *runRootError
 	failedRootID := ""
 	if errors.As(cause, &rootErr) && rootErr != nil {
@@ -1408,6 +1474,32 @@ func (s *Scanner) handleIncrementalRunFailure(ctx context.Context, roots []RootR
 	}
 	if failedRootID == "" && len(batches) > 0 {
 		failedRootID = batches[0].RootID
+	}
+
+	if isIncrementalMissingPathFailure(cause) {
+		for _, root := range roots {
+			if failedRootID != "" && root.ID != failedRootID {
+				continue
+			}
+			// A vanished dirty scope has already resolved itself. Clear any
+			// transient error persisted by the failed run instead of asking the
+			// user to fix a compiler/temp directory that no longer exists.
+			s.clearRootTransientIncrementalFailure(ctx, root.ID, cause)
+		}
+		remaining := make([]ReconcileBatch, 0, len(batches))
+		for _, batch := range batches {
+			if failedRootID == "" {
+				break
+			}
+			if batch.RootID == failedRootID {
+				continue
+			}
+			remaining = append(remaining, batch)
+		}
+		s.requeueDirtyBatches(ctx, remaining)
+		s.refreshTransientSyncPendingCounts()
+		s.emitStateChange(ctx)
+		return
 	}
 
 	requeuedAt := time.Now()
@@ -1418,14 +1510,23 @@ func (s *Scanner) handleIncrementalRunFailure(ctx context.Context, roots []RootR
 		s.updateRootFeedState(ctx, root.ID, RootFeedStateDegraded)
 		s.markRootIncrementalFailure(ctx, root.ID, cause)
 		if shouldRetryIncrementalRootFailure(cause) {
-			s.enqueueDirtyWithContext(ctx, DirtySignal{
-				Kind:          DirtySignalKindRoot,
-				RootID:        root.ID,
-				Path:          root.Path,
-				PathIsDir:     true,
-				PathTypeKnown: true,
-				At:            requeuedAt,
-			})
+			requeued := false
+			for _, batch := range batches {
+				if batch.RootID != root.ID {
+					continue
+				}
+				if s.enqueueDirtyRetryForFailedBatch(ctx, root, batch, requeuedAt) {
+					requeued = true
+				}
+			}
+			if !requeued {
+				util.GetLogger().Warn(ctx, fmt.Sprintf(
+					"filesearch incremental run stopped retrying failed scope: root=%s path=%s err=%s",
+					root.ID,
+					root.Path,
+					cause.Error(),
+				))
+			}
 			continue
 		}
 		util.GetLogger().Warn(ctx, fmt.Sprintf(
@@ -1473,7 +1574,57 @@ func (s *Scanner) markRootIncrementalFailure(ctx context.Context, rootID string,
 }
 
 func shouldRetryIncrementalRootFailure(cause error) bool {
-	return !isIncrementalPermissionFailure(cause)
+	return !isIncrementalPermissionFailure(cause) && !isIncrementalMissingPathFailure(cause)
+}
+
+func isIncrementalMissingPathFailure(cause error) bool {
+	if cause == nil {
+		return false
+	}
+	return errors.Is(cause, os.ErrNotExist) || isMissingPathErrorMessage(cause.Error())
+}
+
+func isMissingPathErrorMessage(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	if message == "" {
+		return false
+	}
+	return strings.Contains(message, "cannot find the file specified") ||
+		strings.Contains(message, "cannot find the path specified") ||
+		strings.Contains(message, "no such file or directory") ||
+		strings.Contains(message, "the system cannot find")
+}
+
+func (s *Scanner) clearRootTransientIncrementalFailure(ctx context.Context, rootID string, cause error) {
+	root, ok := s.findRootByID(ctx, rootID)
+	if !ok {
+		return
+	}
+	if root.Status != RootStatusError && root.FeedState != RootFeedStateDegraded && root.LastError == nil {
+		return
+	}
+	if root.Status == RootStatusError && root.LastError != nil && !isMissingPathErrorMessage(*root.LastError) {
+		return
+	}
+
+	root.Status = RootStatusIdle
+	root.ProgressCurrent = RootProgressScale
+	root.ProgressTotal = RootProgressScale
+	root.LastError = nil
+	if root.FeedState == RootFeedStateDegraded {
+		root.FeedState = RootFeedStateReady
+	}
+	root.UpdatedAt = util.GetSystemTimestamp()
+	if err := s.db.UpdateRootState(ctx, root); err != nil {
+		util.GetLogger().Warn(ctx, "filesearch failed to clear transient incremental failure: "+err.Error())
+		return
+	}
+	util.GetLogger().Info(ctx, fmt.Sprintf(
+		"filesearch ignored transient missing dirty scope: root=%s path=%s err=%s",
+		root.ID,
+		root.Path,
+		cause.Error(),
+	))
 }
 
 func isIncrementalPermissionFailure(cause error) bool {
