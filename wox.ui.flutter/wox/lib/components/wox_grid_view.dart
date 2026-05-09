@@ -78,7 +78,7 @@ class WoxGridView extends StatelessWidget {
         final contentWidth = (cellWidth - (itemPadding + itemMargin) * 2).clamp(1.0, double.infinity).toDouble();
         final contentHeight = contentWidth / aspectRatio;
         // Cell height includes visual content + padding/margin, and title height if showing title.
-        final titleHeight = metrics.scaledSpacing(18);
+        final titleHeight = metrics.gridTitleHeight;
         final cellHeight = contentHeight + (itemPadding + itemMargin) * 2 + (showTitle ? titleHeight : 0);
 
         // Update controller with the calculated row height for scroll calculations
@@ -141,10 +141,18 @@ class WoxGridView extends StatelessWidget {
 
   Widget _buildGroupHeader(WoxListItem<WoxQueryResult> item, int index) {
     return Padding(
-      padding: EdgeInsets.only(left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(8), top: WoxInterfaceSizeUtil.instance.current.scaledSpacing(12), bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4)),
+      padding: EdgeInsets.only(
+        left: WoxInterfaceSizeUtil.instance.current.gridGroupHeaderPaddingLeft,
+        top: WoxInterfaceSizeUtil.instance.current.gridGroupHeaderPaddingTop,
+        bottom: WoxInterfaceSizeUtil.instance.current.gridGroupHeaderPaddingBottom,
+      ),
       child: Text(
         item.title,
-        style: TextStyle(fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, fontWeight: FontWeight.w500, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
+        style: TextStyle(
+          fontSize: WoxInterfaceSizeUtil.instance.current.gridGroupHeaderFontSize,
+          fontWeight: FontWeight.w500,
+          color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor),
+        ),
       ),
     );
   }
@@ -266,7 +274,10 @@ class WoxGridView extends StatelessWidget {
               // Grid result captions are launcher result text, so they follow
               // the density font bucket while grid image ratios and theme frame
               // styling remain unchanged.
-              style: TextStyle(fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemTitleColor)),
+              style: TextStyle(
+                fontSize: WoxInterfaceSizeUtil.instance.current.gridItemTitleFontSize,
+                color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemTitleColor),
+              ),
               overflow: TextOverflow.ellipsis,
               maxLines: 1,
             ),

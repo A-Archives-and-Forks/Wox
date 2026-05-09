@@ -54,7 +54,6 @@ class WoxThemeIconView extends StatelessWidget {
                     color: resultItemActiveColor,
                   ),
                 ),
-                const SizedBox(height: 6),
               ],
             ),
           ],

@@ -1,43 +1,202 @@
 import 'package:get/get.dart';
 import 'package:wox/utils/consts.dart';
 
+// WoxInterfaceSizeMetrics centralises every density-scaled size, padding, and
+// spacing value used across the launcher UI. Fields are grouped by module so
+// that a single change here propagates consistently to all rendering sites.
+// Keep numeric base values in sync with Go's density.go when they affect
+// window-placement geometry (query box height, result row height, toolbar).
 class WoxInterfaceSizeMetrics {
   final String density;
   final double scale;
-  final double resultTitleFontSize;
-  final double resultSubtitleFontSize;
-  final double tailHotkeyFontSize;
-  final double resultIconSize;
-  final double tailImageSize;
-  final double quickSelectSize;
-  final double resultItemBaseHeight;
+
+  // ── Query box ─────────────────────────────────────────────────────────────
+  // queryBoxBaseHeight is shared with the Go backend (ui/density.go) for window
+  // height estimation; change both sides together to avoid misplacement.
   final double queryBoxBaseHeight;
   final double queryBoxFontSize;
   final double queryBoxIconSize;
+  // Glance pill layout. queryBoxGlanceIconAndGapWidth covers the icon image and
+  // the small gap between icon and label so only one field is needed.
+  final double queryBoxGlanceFontSize;
+  final double queryBoxGlanceHPadding;
+  final double queryBoxGlanceTextSafetyWidth;
+  final double queryBoxGlanceMinWidth;
+  final double queryBoxGlanceMaxWidth;
+  final double queryBoxGlanceIconAndGapWidth;
+  final double queryBoxGlanceItemSpacing;
+  // Width reserved for the right accessory area when no glance chip is visible.
+  final double queryBoxRightAccessoryWidth;
+
+  // ── Result item ───────────────────────────────────────────────────────────
+  // resultItemBaseHeight is the content-only height; theme padding is added on
+  // top. Keeping layout spacings here ensures icon, tail, and subtitle positions
+  // shift together with font and icon sizes when density changes.
+  final double resultItemBaseHeight;
+  final double resultTitleFontSize;
+  final double resultSubtitleFontSize;
+  final double resultIconSize;
+  final double resultItemIconPaddingLeft;
+  final double resultItemIconPaddingRight;
+  final double resultItemSubtitlePaddingTop;
+  final double resultItemTailPaddingLeft;
+  final double resultItemTailPaddingRight;
+  final double resultItemTailItemPaddingLeft;
+  final double resultItemQuickSelectPaddingLeft;
+  final double resultItemQuickSelectPaddingRight;
+  final double resultItemTextTailHPadding;
+  final double resultItemTextTailVPadding;
+
+  // ── Tail (shared by result and action rows) ────────────────────────────────
+  final double tailHotkeyFontSize;
+  final double tailImageSize;
+  final double quickSelectSize;
+
+  // ── Action item ───────────────────────────────────────────────────────────
+  // Action rows are shorter than result rows (40px vs 50px base), so their
+  // icon and title sizes are scaled down independently to fit the smaller row.
+  final double actionItemBaseHeight;
+  final double actionHeaderFontSize;
+  final double actionIconSize;
+  final double actionTitleFontSize;
+
+  // ── Action panel (floating overlay) ───────────────────────────────────────
+  // Position offsets and size constraints for the floating action/form panels
+  // that appear over the result list. Centralising them ensures density changes
+  // affect overlay geometry consistently with the surrounding launcher UI.
+  final double actionPanelOffsetRight;
+  final double actionPanelOffsetBottom;
+  final double actionPanelMaxWidth;
+  final double actionFormMaxWidth;
+  final double actionFormMaxHeight;
+
+  // ── Toolbar ───────────────────────────────────────────────────────────────
+  // Hotkey chip sizes (toolbarHotkeyKeySize / toolbarHotkeyKeySpacing) mirror
+  // WoxHotkeyView so overflow decisions in _calculateActionWidth match rendering.
   final double toolbarHeight;
   final double toolbarFontSize;
   final double toolbarIconSize;
-  final double actionItemBaseHeight;
-  final double actionHeaderFontSize;
+  final double toolbarIconSpacing;
+  final double toolbarProgressSize;
+  final double toolbarProgressStrokeWidth;
+  final double toolbarActionSpacing;
+  final double toolbarActionNameHotkeySpacing;
+  final double toolbarRightReservedWidth;
+  final double toolbarHotkeyKeySize;
+  final double toolbarHotkeyKeySpacing;
+
+  // ── Preview ───────────────────────────────────────────────────────────────
+  // The quote treatment uses its own set of paddings separate from plain-text
+  // padding so both can be adjusted independently without affecting each other.
+  final double previewMarkdownPadding;
+  final double previewTextFontSize;
+  final double previewTextQuoteFontSize;
+  final double previewTextQuoteHPadding;
+  final double previewTextQuoteTopPadding;
+  final double previewTextQuoteBottomPadding;
+  final double previewTextQuoteGlyphSize;
+  final double previewTextQuoteTextTopPadding;
+  final double previewTextQuoteTextBottomPadding;
+  final double previewTextQuoteGlyphOffset;
+  final double previewTextPadding;
+
+  // ── Grid ──────────────────────────────────────────────────────────────────
+  // Group header and cell title measurements for the grid result surface.
+  // Font sizes are independent from tailHotkeyFontSize even though the numeric
+  // base matches today; they may diverge when grid layout requirements change.
+  final double gridGroupHeaderPaddingLeft;
+  final double gridGroupHeaderPaddingTop;
+  final double gridGroupHeaderPaddingBottom;
+  final double gridTitleHeight;
+  final double gridGroupHeaderFontSize;
+  final double gridItemTitleFontSize;
+
+  // ── General ───────────────────────────────────────────────────────────────
+  // smallLabelFontSize is the shared base for any secondary/caption UI text
+  // that is not a tail hotkey, a result subtitle, or a toolbar label. Using a
+  // named field prevents UI code from borrowing tailHotkeyFontSize (which is
+  // semantically tied to hotkey chips and list-item tail text) as a catch-all
+  // 11 px value, keeping intent clear when the two sizes diverge in the future.
+  final double smallLabelFontSize;
 
   const WoxInterfaceSizeMetrics({
     required this.density,
     required this.scale,
-    required this.resultTitleFontSize,
-    required this.resultSubtitleFontSize,
-    required this.tailHotkeyFontSize,
-    required this.resultIconSize,
-    required this.tailImageSize,
-    required this.quickSelectSize,
-    required this.resultItemBaseHeight,
+    // query box
     required this.queryBoxBaseHeight,
     required this.queryBoxFontSize,
     required this.queryBoxIconSize,
+    required this.queryBoxGlanceFontSize,
+    required this.queryBoxGlanceHPadding,
+    required this.queryBoxGlanceTextSafetyWidth,
+    required this.queryBoxGlanceMinWidth,
+    required this.queryBoxGlanceMaxWidth,
+    required this.queryBoxGlanceIconAndGapWidth,
+    required this.queryBoxGlanceItemSpacing,
+    required this.queryBoxRightAccessoryWidth,
+    // result item
+    required this.resultItemBaseHeight,
+    required this.resultTitleFontSize,
+    required this.resultSubtitleFontSize,
+    required this.resultIconSize,
+    required this.resultItemIconPaddingLeft,
+    required this.resultItemIconPaddingRight,
+    required this.resultItemSubtitlePaddingTop,
+    required this.resultItemTailPaddingLeft,
+    required this.resultItemTailPaddingRight,
+    required this.resultItemTailItemPaddingLeft,
+    required this.resultItemQuickSelectPaddingLeft,
+    required this.resultItemQuickSelectPaddingRight,
+    required this.resultItemTextTailHPadding,
+    required this.resultItemTextTailVPadding,
+    // tail
+    required this.tailHotkeyFontSize,
+    required this.tailImageSize,
+    required this.quickSelectSize,
+    // action item
+    required this.actionItemBaseHeight,
+    required this.actionHeaderFontSize,
+    required this.actionIconSize,
+    required this.actionTitleFontSize,
+    // action panel
+    required this.actionPanelOffsetRight,
+    required this.actionPanelOffsetBottom,
+    required this.actionPanelMaxWidth,
+    required this.actionFormMaxWidth,
+    required this.actionFormMaxHeight,
+    // toolbar
     required this.toolbarHeight,
     required this.toolbarFontSize,
     required this.toolbarIconSize,
-    required this.actionItemBaseHeight,
-    required this.actionHeaderFontSize,
+    required this.toolbarIconSpacing,
+    required this.toolbarProgressSize,
+    required this.toolbarProgressStrokeWidth,
+    required this.toolbarActionSpacing,
+    required this.toolbarActionNameHotkeySpacing,
+    required this.toolbarRightReservedWidth,
+    required this.toolbarHotkeyKeySize,
+    required this.toolbarHotkeyKeySpacing,
+    // preview
+    required this.previewMarkdownPadding,
+    required this.previewTextFontSize,
+    required this.previewTextQuoteFontSize,
+    required this.previewTextQuoteHPadding,
+    required this.previewTextQuoteTopPadding,
+    required this.previewTextQuoteBottomPadding,
+    required this.previewTextQuoteGlyphSize,
+    required this.previewTextQuoteTextTopPadding,
+    required this.previewTextQuoteTextBottomPadding,
+    required this.previewTextQuoteGlyphOffset,
+    required this.previewTextPadding,
+    // grid
+    required this.gridGroupHeaderPaddingLeft,
+    required this.gridGroupHeaderPaddingTop,
+    required this.gridGroupHeaderPaddingBottom,
+    required this.gridTitleHeight,
+    required this.gridGroupHeaderFontSize,
+    required this.gridItemTitleFontSize,
+    // general
+    required this.smallLabelFontSize,
   });
 
   factory WoxInterfaceSizeMetrics.fromDensity(String value) {
@@ -57,21 +216,81 @@ class WoxInterfaceSizeMetrics {
     return WoxInterfaceSizeMetrics(
       density: density,
       scale: scale,
-      resultTitleFontSize: scaled(16),
-      resultSubtitleFontSize: scaled(13),
-      tailHotkeyFontSize: scaled(11),
-      resultIconSize: scaled(30),
-      tailImageSize: scaled(20),
-      quickSelectSize: scaled(24),
-      resultItemBaseHeight: scaled(RESULT_ITEM_BASE_HEIGHT),
+      // query box
       queryBoxBaseHeight: scaled(QUERY_BOX_BASE_HEIGHT),
       queryBoxFontSize: scaled(28),
       queryBoxIconSize: scaled(30),
+      queryBoxGlanceFontSize: scaled(15),
+      queryBoxGlanceHPadding: scaled(16),
+      queryBoxGlanceTextSafetyWidth: scaled(4),
+      queryBoxGlanceMinWidth: scaled(44),
+      queryBoxGlanceMaxWidth: scaled(192),
+      queryBoxGlanceIconAndGapWidth: scaled(21),
+      queryBoxGlanceItemSpacing: scaled(8),
+      queryBoxRightAccessoryWidth: scaled(68),
+      // result item
+      resultItemBaseHeight: scaled(RESULT_ITEM_BASE_HEIGHT),
+      resultTitleFontSize: scaled(15),
+      resultSubtitleFontSize: scaled(12),
+      resultIconSize: scaled(28),
+      resultItemIconPaddingLeft: scaled(5),
+      resultItemIconPaddingRight: scaled(10),
+      resultItemSubtitlePaddingTop: scaled(2),
+      resultItemTailPaddingLeft: scaled(10),
+      resultItemTailPaddingRight: scaled(5),
+      resultItemTailItemPaddingLeft: scaled(10),
+      resultItemQuickSelectPaddingLeft: scaled(10),
+      resultItemQuickSelectPaddingRight: scaled(5),
+      resultItemTextTailHPadding: scaled(8),
+      resultItemTextTailVPadding: scaled(3),
+      // tail
+      tailHotkeyFontSize: scaled(11),
+      tailImageSize: scaled(20),
+      quickSelectSize: scaled(20),
+      // action item
+      actionItemBaseHeight: scaled(ACTION_ITEM_BASE_HEIGHT),
+      actionHeaderFontSize: scaled(15),
+      actionIconSize: scaled(22),
+      actionTitleFontSize: scaled(13),
+      // action panel
+      actionPanelOffsetRight: scaled(10),
+      actionPanelOffsetBottom: scaled(10),
+      actionPanelMaxWidth: scaled(320),
+      actionFormMaxWidth: scaled(360),
+      actionFormMaxHeight: scaled(400),
+      // toolbar
       toolbarHeight: scaled(TOOLBAR_HEIGHT),
       toolbarFontSize: scaled(12),
       toolbarIconSize: scaled(24),
-      actionItemBaseHeight: scaled(ACTION_ITEM_BASE_HEIGHT),
-      actionHeaderFontSize: scaled(16),
+      toolbarIconSpacing: scaled(8),
+      toolbarProgressSize: scaled(14),
+      toolbarProgressStrokeWidth: scaled(2),
+      toolbarActionSpacing: scaled(16),
+      toolbarActionNameHotkeySpacing: scaled(8),
+      toolbarRightReservedWidth: scaled(200),
+      toolbarHotkeyKeySize: scaled(28),
+      toolbarHotkeyKeySpacing: scaled(4),
+      // preview
+      previewMarkdownPadding: scaled(20),
+      previewTextFontSize: scaled(15),
+      previewTextQuoteFontSize: scaled(17),
+      previewTextQuoteHPadding: scaled(44),
+      previewTextQuoteTopPadding: scaled(12),
+      previewTextQuoteBottomPadding: scaled(4),
+      previewTextQuoteGlyphSize: scaled(72),
+      previewTextQuoteTextTopPadding: scaled(62),
+      previewTextQuoteTextBottomPadding: scaled(62),
+      previewTextQuoteGlyphOffset: scaled(22),
+      previewTextPadding: scaled(24),
+      // grid
+      gridGroupHeaderPaddingLeft: scaled(8),
+      gridGroupHeaderPaddingTop: scaled(12),
+      gridGroupHeaderPaddingBottom: scaled(4),
+      gridTitleHeight: scaled(18),
+      gridGroupHeaderFontSize: scaled(13),
+      gridItemTitleFontSize: scaled(12),
+      // general
+      smallLabelFontSize: scaled(11),
     );
   }
 

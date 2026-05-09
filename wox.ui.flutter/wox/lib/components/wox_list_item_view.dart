@@ -30,12 +30,12 @@ class WoxListItemView extends StatelessWidget {
   const WoxListItemView({super.key, required this.item, required this.woxTheme, required this.isActive, required this.isHovered, required this.listViewType});
 
   WoxInterfaceSizeMetrics get _metrics => WoxInterfaceSizeUtil.instance.current;
-  EdgeInsets get _tailPadding => EdgeInsets.only(left: _metrics.scaledSpacing(10), right: _metrics.scaledSpacing(5));
-  EdgeInsets get _tailItemPadding => EdgeInsets.only(left: _metrics.scaledSpacing(10));
-  EdgeInsets get _iconPadding => EdgeInsets.only(left: _metrics.scaledSpacing(5), right: _metrics.scaledSpacing(10));
-  EdgeInsets get _subtitlePadding => EdgeInsets.only(top: _metrics.scaledSpacing(2));
-  EdgeInsets get _quickSelectPadding => EdgeInsets.only(left: _metrics.scaledSpacing(10), right: _metrics.scaledSpacing(5));
-  EdgeInsets get _textTailPadding => EdgeInsets.symmetric(horizontal: _metrics.scaledSpacing(8), vertical: _metrics.scaledSpacing(3));
+  EdgeInsets get _tailPadding => EdgeInsets.only(left: _metrics.resultItemTailPaddingLeft, right: _metrics.resultItemTailPaddingRight);
+  EdgeInsets get _tailItemPadding => EdgeInsets.only(left: _metrics.resultItemTailItemPaddingLeft);
+  EdgeInsets get _iconPadding => EdgeInsets.only(left: _metrics.resultItemIconPaddingLeft, right: _metrics.resultItemIconPaddingRight);
+  EdgeInsets get _subtitlePadding => EdgeInsets.only(top: _metrics.resultItemSubtitlePaddingTop);
+  EdgeInsets get _quickSelectPadding => EdgeInsets.only(left: _metrics.resultItemQuickSelectPaddingLeft, right: _metrics.resultItemQuickSelectPaddingRight);
+  EdgeInsets get _textTailPadding => EdgeInsets.symmetric(horizontal: _metrics.resultItemTextTailHPadding, vertical: _metrics.resultItemTextTailVPadding);
 
   Widget buildQuickSelectNumber() {
     final metrics = _metrics;
@@ -174,13 +174,16 @@ class WoxListItemView extends StatelessWidget {
     // Build icon widget
     final metrics = _metrics;
 
-    // Result rows previously used normal-size literals. Density now owns the
-    // row content metrics while theme padding and borders stay unchanged, so
-    // title/icon/tail sizes move together without changing theme semantics.
+    // Action and result rows have different base heights (40px vs 50px), so
+    // icon and title sizes are sourced from type-specific metric fields to keep
+    // content proportional to the row without hard-coding per-list values here.
+    final double iconSize = isActionList ? metrics.actionIconSize : metrics.resultIconSize;
+    final double titleFontSize = isActionList ? metrics.actionTitleFontSize : metrics.resultTitleFontSize;
+
     final Widget iconWidget =
         item.isGroup
             ? const SizedBox()
-            : Padding(padding: _iconPadding, child: SizedBox(width: metrics.resultIconSize, height: metrics.resultIconSize, child: WoxImageView(woxImage: item.icon, width: metrics.resultIconSize, height: metrics.resultIconSize)));
+            : Padding(padding: _iconPadding, child: SizedBox(width: iconSize, height: iconSize, child: WoxImageView(woxImage: item.icon, width: iconSize, height: iconSize)));
 
     // Build title/subtitle widget
     final Widget textWidget = Expanded(
@@ -188,9 +191,12 @@ class WoxListItemView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(item.title, style: TextStyle(fontSize: metrics.resultTitleFontSize, color: titleColor), maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(item.title, style: TextStyle(fontSize: titleFontSize, color: titleColor), maxLines: 1, overflow: TextOverflow.ellipsis),
           if (item.subTitle.isNotEmpty)
-            Padding(padding: _subtitlePadding, child: Text(item.subTitle, style: TextStyle(color: subtitleColor, fontSize: metrics.resultSubtitleFontSize), maxLines: 1, overflow: TextOverflow.ellipsis)),
+            Padding(
+              padding: _subtitlePadding,
+              child: Text(item.subTitle, style: TextStyle(color: subtitleColor, fontSize: metrics.resultSubtitleFontSize), maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
         ],
       ),
     );
@@ -206,12 +212,12 @@ class WoxListItemView extends StatelessWidget {
       padding:
           isResultList
               ? EdgeInsets.only(
-                top: woxTheme.resultItemPaddingTop.toDouble(),
-                right: woxTheme.resultItemPaddingRight.toDouble(),
-                bottom: woxTheme.resultItemPaddingBottom.toDouble(),
-                left: woxTheme.resultItemPaddingLeft.toDouble() + maxBorderWidth,
+                top: WoxInterfaceSizeUtil.instance.current.scaledSpacing(woxTheme.resultItemPaddingTop.toDouble()),
+                right: WoxInterfaceSizeUtil.instance.current.scaledSpacing(woxTheme.resultItemPaddingRight.toDouble()),
+                bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(woxTheme.resultItemPaddingBottom.toDouble()),
+                left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(woxTheme.resultItemPaddingLeft.toDouble() + maxBorderWidth),
               )
-              : EdgeInsets.only(left: maxBorderWidth),
+              : EdgeInsets.only(left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(maxBorderWidth)),
       child: Row(children: [iconWidget, textWidget, if (tailsWidget != null) tailsWidget, if (quickSelectWidget != null) quickSelectWidget]),
     );
 

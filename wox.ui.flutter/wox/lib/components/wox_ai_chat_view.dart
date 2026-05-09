@@ -43,7 +43,12 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
 
       return WoxPreviewTopStatusBar(
         woxTheme: woxTheme,
-        title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: fontColor, fontSize: _metrics.actionHeaderFontSize, fontWeight: FontWeight.w600, height: 1.1)),
+        title: Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: fontColor, fontSize: _metrics.actionHeaderFontSize, fontWeight: FontWeight.w600, height: 1.1),
+        ),
         actions: [
           WoxPreviewTopStatusBarAction(
             tooltip: controller.launcherController.previewFullscreenHotkeyLabel,
@@ -154,7 +159,11 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
                                 Obx(
                                   () => IconButton(
                                     tooltip: tr('ui_ai_chat_configure_tools'),
-                                    icon: Icon(Icons.build, size: _metrics.scaledSpacing(18), color: controller.selectedTools.isNotEmpty ? getThemeTextColor() : getThemeTextColor().withAlpha(128)),
+                                    icon: Icon(
+                                      Icons.build,
+                                      size: _metrics.scaledSpacing(18),
+                                      color: controller.selectedTools.isNotEmpty ? getThemeTextColor() : getThemeTextColor().withAlpha(128),
+                                    ),
                                     color: safeFromCssColor(woxTheme.actionItemActiveBackgroundColor),
                                     onPressed: () {
                                       controller.showToolsPanel();
@@ -204,7 +213,7 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
                                 Obx(
                                   () => Text(
                                     controller.aiChatData.value.model.value.name.isEmpty ? tr("ui_ai_chat_select_model") : controller.aiChatData.value.model.value.name,
-                                    style: TextStyle(color: getThemeTextColor(), fontSize: _metrics.tailHotkeyFontSize),
+                                    style: TextStyle(color: getThemeTextColor(), fontSize: _metrics.smallLabelFontSize),
                                   ),
                                 ),
 
@@ -220,7 +229,10 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
                                       children: [
                                         Icon(Icons.keyboard_return, size: _metrics.scaledSpacing(14), color: safeFromCssColor(woxTheme.actionItemActiveFontColor)),
                                         SizedBox(width: _metrics.scaledSpacing(4)),
-                                        Text(tr('ui_ai_chat_send'), style: TextStyle(fontSize: _metrics.tailHotkeyFontSize, color: safeFromCssColor(woxTheme.actionItemActiveFontColor))),
+                                        Text(
+                                          tr('ui_ai_chat_send'),
+                                          style: TextStyle(fontSize: _metrics.smallLabelFontSize, color: safeFromCssColor(woxTheme.actionItemActiveFontColor)),
+                                        ),
                                       ],
                                     ),
                                   ),
@@ -345,10 +357,7 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
                                   .map(
                                     (image) => ClipRRect(
                                       borderRadius: BorderRadius.circular(8),
-                                      child: SizedBox(
-                                        width: _metrics.scaledSpacing(200),
-                                        child: WoxImageView(woxImage: image),
-                                      ),
+                                      child: SizedBox(width: _metrics.scaledSpacing(200), child: WoxImageView(woxImage: image)),
                                     ),
                                   )
                                   .toList(),
@@ -365,20 +374,26 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
                       if (!isUser) ...[
                         Text(
                           controller.formatTimestamp(message.timestamp),
-                          style: TextStyle(fontSize: _metrics.tailHotkeyFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
+                          style: TextStyle(fontSize: _metrics.smallLabelFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
                         ),
                         SizedBox(width: _metrics.scaledSpacing(12)),
-                        Text("•", style: TextStyle(fontSize: _metrics.tailHotkeyFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor))),
+                        Text(
+                          "•",
+                          style: TextStyle(fontSize: _metrics.smallLabelFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
+                        ),
                         SizedBox(width: _metrics.scaledSpacing(12)),
                         _buildInlineActionButtons(message, false),
                       ] else ...[
                         _buildInlineActionButtons(message, true),
                         SizedBox(width: _metrics.scaledSpacing(12)),
-                        Text("•", style: TextStyle(fontSize: _metrics.tailHotkeyFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor))),
+                        Text(
+                          "•",
+                          style: TextStyle(fontSize: _metrics.smallLabelFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
+                        ),
                         SizedBox(width: _metrics.scaledSpacing(12)),
                         Text(
                           controller.formatTimestamp(message.timestamp),
-                          style: TextStyle(fontSize: _metrics.tailHotkeyFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
+                          style: TextStyle(fontSize: _metrics.smallLabelFontSize, color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor)),
                         ),
                       ],
                     ],
@@ -409,7 +424,12 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
               children: [
                 Icon(Icons.build, size: _metrics.scaledSpacing(14), color: safeFromCssColor(woxTheme.queryBoxFontColor)),
                 SizedBox(width: _metrics.scaledSpacing(6)),
-                Expanded(child: Text(message.toolCallInfo.name, style: TextStyle(fontSize: _metrics.tailHotkeyFontSize, color: safeFromCssColor(woxTheme.queryBoxFontColor), fontWeight: FontWeight.w500))),
+                Expanded(
+                  child: Text(
+                    message.toolCallInfo.name,
+                    style: TextStyle(fontSize: _metrics.smallLabelFontSize, color: safeFromCssColor(woxTheme.queryBoxFontColor), fontWeight: FontWeight.w500),
+                  ),
+                ),
                 SizedBox(width: _metrics.scaledSpacing(6)),
                 WoxChatToolcallDuration(
                   id: message.id,
@@ -420,7 +440,7 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
                               message.toolCallInfo.status == ToolCallStatus.running)
                           ? null
                           : message.toolCallInfo.endTimestamp,
-                  style: TextStyle(fontSize: _metrics.tailHotkeyFontSize, color: safeFromCssColor(woxTheme.queryBoxFontColor)),
+                  style: TextStyle(fontSize: _metrics.smallLabelFontSize, color: safeFromCssColor(woxTheme.queryBoxFontColor)),
                 ),
                 SizedBox(width: _metrics.scaledSpacing(6)),
                 _buildStatusIndicator(message.toolCallInfo),
@@ -505,13 +525,13 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(fontSize: _metrics.tailHotkeyFontSize, fontWeight: FontWeight.bold, color: safeFromCssColor(woxTheme.resultItemSubTitleColor))),
+          Text(label, style: TextStyle(fontSize: _metrics.smallLabelFontSize, fontWeight: FontWeight.bold, color: safeFromCssColor(woxTheme.resultItemSubTitleColor))),
           SizedBox(height: _metrics.scaledSpacing(4)),
           Container(
             width: double.infinity,
             padding: EdgeInsets.all(_metrics.scaledSpacing(6)),
             decoration: BoxDecoration(color: Colors.black.withAlpha(20), border: Border.all(color: Colors.black.withAlpha(10), width: 1.0)),
-            child: SelectableText(value, style: TextStyle(fontSize: _metrics.tailHotkeyFontSize, fontFamily: 'monospace', color: safeFromCssColor(woxTheme.resultItemTitleColor))),
+            child: SelectableText(value, style: TextStyle(fontSize: _metrics.smallLabelFontSize, fontFamily: 'monospace', color: safeFromCssColor(woxTheme.resultItemTitleColor))),
           ),
         ],
       ),
@@ -569,7 +589,10 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
 
       if (currentAgent.name.isNotEmpty && currentAgent.icon.imageData.isNotEmpty) {
         final avatarSize = _metrics.scaledSpacing(36);
-        return ClipRRect(borderRadius: BorderRadius.circular(avatarSize / 2), child: SizedBox(width: avatarSize, height: avatarSize, child: WoxImageView(woxImage: currentAgent.icon, width: avatarSize, height: avatarSize)));
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(avatarSize / 2),
+          child: SizedBox(width: avatarSize, height: avatarSize, child: WoxImageView(woxImage: currentAgent.icon, width: avatarSize, height: avatarSize)),
+        );
       }
     }
 

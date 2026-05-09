@@ -24,13 +24,6 @@ import 'package:wox/utils/wox_theme_util.dart';
 class WoxQueryBoxView extends GetView<WoxLauncherController> {
   const WoxQueryBoxView({super.key});
 
-  static const double _rightAccessoryFallbackWidth = 68;
-  static const double _glanceIconAndGapWidth = 21;
-  static const double _glanceHorizontalPadding = 16;
-  static const double _glanceTextMeasureSafetyWidth = 4;
-  static const double _glanceMinItemWidth = 44;
-  static const double _glanceMaxItemWidth = 192;
-
   // Helper method to convert LogicalKeyboardKey to number for quick select
   int? getNumberFromKey(LogicalKeyboardKey key) {
     switch (key) {
@@ -145,15 +138,15 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
   double _getQueryBoxRightAccessoryWidth(BuildContext context, dynamic currentTheme) {
     final metrics = WoxInterfaceSizeUtil.instance.current;
     if (!controller.shouldShowGlance) {
-      return metrics.scaledSpacing(_rightAccessoryFallbackWidth);
+      return metrics.queryBoxRightAccessoryWidth;
     }
 
     final visibleItems = controller.glanceItems.take(1).toList();
     final baseTextColor = safeFromCssColor(currentTheme.queryBoxFontColor);
     final textColor = baseTextColor.withValues(alpha: 0.8);
-    final textStyle = TextStyle(color: textColor, fontSize: metrics.scaledSpacing(15));
+    final textStyle = TextStyle(color: textColor, fontSize: metrics.queryBoxGlanceFontSize);
     final itemWidth = visibleItems.fold<double>(0, (sum, item) => sum + _getGlanceItemWidth(context, item, textStyle));
-    return metrics.scaledSpacing(16) + itemWidth + math.max(visibleItems.length - 1, 0) * metrics.scaledSpacing(8);
+    return metrics.queryBoxGlanceHPadding + itemWidth + math.max(visibleItems.length - 1, 0) * metrics.queryBoxGlanceItemSpacing;
   }
 
   double _getGlanceItemWidth(BuildContext context, GlanceItem item, TextStyle textStyle) {
@@ -163,12 +156,12 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
     final textWidth = WoxTextMeasureUtil.measureTextWidth(context: context, text: item.text, style: textStyle).ceilToDouble();
     final hasIcon = controller.shouldShowGlanceIcon(item);
     final metrics = WoxInterfaceSizeUtil.instance.current;
-    final iconWidth = hasIcon ? metrics.scaledSpacing(_glanceIconAndGapWidth) : 0.0;
+    final iconWidth = hasIcon ? metrics.queryBoxGlanceIconAndGapWidth : 0.0;
     // Keep the minimum width independent from icon visibility. The measured
     // content already includes icon space, and a larger icon-only minimum makes
     // short values such as Windows "AC" look padded instead of compact.
-    return (textWidth + iconWidth + metrics.scaledSpacing(_glanceHorizontalPadding) + metrics.scaledSpacing(_glanceTextMeasureSafetyWidth))
-        .clamp(metrics.scaledSpacing(_glanceMinItemWidth), metrics.scaledSpacing(_glanceMaxItemWidth))
+    return (textWidth + iconWidth + metrics.queryBoxGlanceHPadding + metrics.queryBoxGlanceTextSafetyWidth)
+        .clamp(metrics.queryBoxGlanceMinWidth, metrics.queryBoxGlanceMaxWidth)
         .toDouble();
   }
 
@@ -418,14 +411,17 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
       return WoxLoadingIndicator(size: 20, color: safeFromCssColor(currentTheme.queryBoxCursorColor));
     }
     if (controller.shouldShowGlance) {
-        final items = controller.glanceItems.take(1).toList();
-        return Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            for (var index = 0; index < items.length; index++) ...[_buildGlanceItem(currentTheme, items[index]), SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(8))],
+      final items = controller.glanceItems.take(1).toList();
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          for (var index = 0; index < items.length; index++) ...[
+            _buildGlanceItem(currentTheme, items[index]),
+            SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(8)),
           ],
-        );
-      }
+        ],
+      );
+    }
 
     return MouseRegion(
       cursor: controller.queryIcon.value.action != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
@@ -434,7 +430,11 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
           controller.queryIcon.value.action?.call();
           controller.focusQueryBox();
         },
-        child: WoxImageView(woxImage: controller.queryIcon.value.icon, width: WoxInterfaceSizeUtil.instance.current.queryBoxIconSize, height: WoxInterfaceSizeUtil.instance.current.queryBoxIconSize),
+        child: WoxImageView(
+          woxImage: controller.queryIcon.value.icon,
+          width: WoxInterfaceSizeUtil.instance.current.queryBoxIconSize,
+          height: WoxInterfaceSizeUtil.instance.current.queryBoxIconSize,
+        ),
       ),
     );
   }
@@ -478,7 +478,10 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (iconVisible) ...[
-                      Opacity(opacity: textAlpha * 0.9, child: WoxImageView(woxImage: item.icon, width: metrics.scaledSpacing(16), height: metrics.scaledSpacing(16), svgColor: textColor)),
+                      Opacity(
+                        opacity: textAlpha * 0.9,
+                        child: WoxImageView(woxImage: item.icon, width: metrics.scaledSpacing(16), height: metrics.scaledSpacing(16), svgColor: textColor),
+                      ),
                       SizedBox(width: metrics.scaledSpacing(5)),
                     ],
                     Flexible(child: Text(item.text, overflow: TextOverflow.ellipsis, maxLines: 1, style: textStyle)),

@@ -71,15 +71,20 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
     // Markdown no longer draws its own frame because WoxPreviewScaffold owns the
     // shared scroll surface. Keeping only content padding here lets markdown,
     // text, and image previews share one outer background and scrollbar model.
-    return scrollableContent(child: Padding(padding: EdgeInsets.all(_metrics.scaledSpacing(20)), child: WoxMarkdownView(data: markdownData, fontColor: textColor, fontSize: _metrics.resultSubtitleFontSize, enableImageOverlay: true)));
+    return scrollableContent(
+      child: Padding(
+        padding: EdgeInsets.all(_metrics.previewMarkdownPadding),
+        child: WoxMarkdownView(data: markdownData, fontColor: textColor, fontSize: _metrics.resultSubtitleFontSize, enableImageOverlay: true),
+      ),
+    );
   }
 
   Widget buildText(String txtData) {
     final textColor = safeFromCssColor(widget.woxTheme.previewFontColor);
     final quoteColor = textColor.withValues(alpha: 0.16);
     final bodyColor = textColor.withValues(alpha: 0.86);
-    final quoteTextStyle = TextStyle(color: bodyColor, fontSize: _metrics.scaledSpacing(17), height: 1.45, fontWeight: FontWeight.w400, letterSpacing: 0);
-    final plainTextStyle = TextStyle(color: bodyColor, fontSize: _metrics.scaledSpacing(15), height: 1.55, fontWeight: FontWeight.w400, letterSpacing: 0);
+    final quoteTextStyle = TextStyle(color: bodyColor, fontSize: _metrics.previewTextQuoteFontSize, height: 1.45, fontWeight: FontWeight.w400, letterSpacing: 0);
+    final plainTextStyle = TextStyle(color: bodyColor, fontSize: _metrics.previewTextFontSize, height: 1.55, fontWeight: FontWeight.w400, letterSpacing: 0);
 
     // Text previews keep their reader typography and optional quote treatment,
     // but the frame moved to WoxPreviewScaffold so the scrollbar sits inside the
@@ -91,12 +96,12 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
         builder: (context, constraints) {
           final viewportHeight = constraints.hasBoundedHeight ? constraints.maxHeight : constraints.minHeight;
           final viewportWidth = constraints.hasBoundedWidth ? constraints.maxWidth : constraints.minWidth;
-          final quoteHorizontalPadding = _metrics.scaledSpacing(44);
-          final quoteTop = _metrics.scaledSpacing(12);
-          final quoteBottom = _metrics.scaledSpacing(4);
-          final quoteSize = _metrics.scaledSpacing(72);
-          final quoteTextTopPadding = _metrics.scaledSpacing(62);
-          final quoteTextBottomPadding = _metrics.scaledSpacing(62);
+          final quoteHorizontalPadding = _metrics.previewTextQuoteHPadding;
+          final quoteTop = _metrics.previewTextQuoteTopPadding;
+          final quoteBottom = _metrics.previewTextQuoteBottomPadding;
+          final quoteSize = _metrics.previewTextQuoteGlyphSize;
+          final quoteTextTopPadding = _metrics.previewTextQuoteTextTopPadding;
+          final quoteTextBottomPadding = _metrics.previewTextQuoteTextBottomPadding;
           final quoteTextMaxWidth = viewportWidth - quoteHorizontalPadding * 2;
           // The quote glyphs are decorative background marks, so the fit check
           // should use the text padding area instead of subtracting the full
@@ -114,17 +119,25 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
           return SizedBox(
             height: shouldShowQuote ? viewportHeight : null,
             child: Stack(
-                children: [
-                  if (shouldShowQuote)
-                    Positioned(left: _metrics.scaledSpacing(22), top: quoteTop, child: Text("“", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
-                  if (shouldShowQuote)
-                    Positioned(right: _metrics.scaledSpacing(22), bottom: quoteBottom, child: Text("”", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700))),
+              children: [
+                if (shouldShowQuote)
+                  Positioned(
+                    left: _metrics.previewTextQuoteGlyphOffset,
+                    top: quoteTop,
+                    child: Text("“", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700)),
+                  ),
+                if (shouldShowQuote)
+                  Positioned(
+                    right: _metrics.previewTextQuoteGlyphOffset,
+                    bottom: quoteBottom,
+                    child: Text("”", style: TextStyle(color: quoteColor, fontSize: quoteSize, height: 1, fontWeight: FontWeight.w700)),
+                  ),
                 Padding(
                   padding: EdgeInsets.fromLTRB(
-                    shouldShowQuote ? quoteHorizontalPadding : _metrics.scaledSpacing(24),
-                    shouldShowQuote ? quoteTextTopPadding : _metrics.scaledSpacing(24),
-                    shouldShowQuote ? quoteHorizontalPadding : _metrics.scaledSpacing(24),
-                    shouldShowQuote ? quoteTextBottomPadding : _metrics.scaledSpacing(24),
+                    shouldShowQuote ? quoteHorizontalPadding : _metrics.previewTextPadding,
+                    shouldShowQuote ? quoteTextTopPadding : _metrics.previewTextPadding,
+                    shouldShowQuote ? quoteHorizontalPadding : _metrics.previewTextPadding,
+                    shouldShowQuote ? quoteTextBottomPadding : _metrics.previewTextPadding,
                   ),
                   child: Align(
                     alignment: shouldShowQuote ? Alignment.center : Alignment.topLeft,
@@ -212,7 +225,11 @@ class _WoxPreviewViewState extends State<WoxPreviewView> {
     // do not create a nested frame inside the unified preview surface.
     return LayoutBuilder(
       builder: (context, constraints) {
-        final content = SizedBox(width: constraints.maxWidth, height: constraints.maxHeight, child: Padding(padding: EdgeInsets.all(_metrics.scaledSpacing(12)), child: Center(child: image)));
+        final content = SizedBox(
+          width: constraints.maxWidth,
+          height: constraints.maxHeight,
+          child: Padding(padding: EdgeInsets.all(_metrics.scaledSpacing(12)), child: Center(child: image)),
+        );
         if (overlayImage == null || !canOpenPreviewImageOverlay(overlayImage)) {
           return content;
         }

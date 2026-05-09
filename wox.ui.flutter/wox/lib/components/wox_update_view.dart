@@ -70,7 +70,7 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
     return Container(
       padding: EdgeInsets.symmetric(horizontal: _metrics.scaledSpacing(10), vertical: _metrics.scaledSpacing(4)),
       decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(999), border: Border.all(color: color.withValues(alpha: 0.4))),
-      child: Center(child: Text(text, style: TextStyle(color: color, fontSize: _metrics.tailHotkeyFontSize, fontWeight: FontWeight.w600, height: 1.0))),
+      child: Center(child: Text(text, style: TextStyle(color: color, fontSize: _metrics.smallLabelFontSize, fontWeight: FontWeight.w600, height: 1.0))),
     );
   }
 
@@ -117,12 +117,12 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: TextStyle(color: titleColor, fontSize: _metrics.tailHotkeyFontSize)),
+        Text(label, style: TextStyle(color: titleColor, fontSize: _metrics.smallLabelFontSize)),
         SizedBox(width: _metrics.scaledSpacing(12)),
         Flexible(
           child: Text(
             value,
-            style: TextStyle(color: valueColor, fontSize: _metrics.tailHotkeyFontSize, fontWeight: FontWeight.w600),
+            style: TextStyle(color: valueColor, fontSize: _metrics.smallLabelFontSize, fontWeight: FontWeight.w600),
             textAlign: TextAlign.right,
             overflow: TextOverflow.ellipsis,
             maxLines: 1,
@@ -212,9 +212,15 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(tr('plugin_update_auto_update_disabled_title'), style: TextStyle(color: fontColor, fontSize: _metrics.scaledSpacing(18), fontWeight: FontWeight.w700)),
+                            Text(
+                              tr('plugin_update_auto_update_disabled_title'),
+                              style: TextStyle(color: fontColor, fontSize: _metrics.scaledSpacing(18), fontWeight: FontWeight.w700),
+                            ),
                             SizedBox(height: _metrics.scaledSpacing(8)),
-                            Text(tr('plugin_update_auto_update_disabled_desc'), style: TextStyle(color: fontColor.withValues(alpha: 0.8), fontSize: _metrics.resultSubtitleFontSize, height: 1.4)),
+                            Text(
+                              tr('plugin_update_auto_update_disabled_desc'),
+                              style: TextStyle(color: fontColor.withValues(alpha: 0.8), fontSize: _metrics.resultSubtitleFontSize, height: 1.4),
+                            ),
                           ],
                         ),
                       ),
@@ -255,10 +261,15 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(titleText, style: TextStyle(color: fontColor, fontSize: _metrics.scaledSpacing(18), fontWeight: FontWeight.w700, height: 1.1), maxLines: 2, overflow: TextOverflow.ellipsis),
+                    Text(
+                      titleText,
+                      style: TextStyle(color: fontColor, fontSize: _metrics.scaledSpacing(18), fontWeight: FontWeight.w700, height: 1.1),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     if (data.error.isNotEmpty) ...[
                       SizedBox(height: _metrics.scaledSpacing(6)),
-                      Text(data.error, style: TextStyle(color: Colors.red, fontSize: _metrics.tailHotkeyFontSize), overflow: TextOverflow.ellipsis, maxLines: 2),
+                      Text(data.error, style: TextStyle(color: Colors.red, fontSize: _metrics.smallLabelFontSize), overflow: TextOverflow.ellipsis, maxLines: 2),
                     ],
                   ],
                 ),
@@ -278,7 +289,11 @@ class _WoxUpdateViewState extends State<WoxUpdateView> {
               controller: releaseNotesScrollController,
               child: SingleChildScrollView(
                 controller: releaseNotesScrollController,
-                child: WoxMarkdownView(data: data.releaseNotes.isNotEmpty ? data.releaseNotes : tr('plugin_update_no_release_notes'), fontColor: fontColor, fontSize: _metrics.resultSubtitleFontSize),
+                child: WoxMarkdownView(
+                  data: data.releaseNotes.isNotEmpty ? data.releaseNotes : tr('plugin_update_no_release_notes'),
+                  fontColor: fontColor,
+                  fontSize: _metrics.resultSubtitleFontSize,
+                ),
               ),
             ),
           ),

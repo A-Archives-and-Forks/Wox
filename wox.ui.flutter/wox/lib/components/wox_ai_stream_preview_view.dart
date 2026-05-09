@@ -83,15 +83,35 @@ class _WoxAIStreamPreviewViewState extends State<WoxAIStreamPreviewView> {
                 });
               },
             ),
-            Padding(padding: EdgeInsets.symmetric(vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(18)), child: Divider(height: 1, color: splitLineColor.withValues(alpha: 0.28))),
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(18)),
+              child: Divider(height: 1, color: splitLineColor.withValues(alpha: 0.28)),
+            ),
           ],
           if (widget.data.answerTitle.isNotEmpty && reasoningText.isNotEmpty) ...[
-            Text(widget.data.answerTitle, style: TextStyle(color: propertyColor.withValues(alpha: 0.72), fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, height: 1.2, fontWeight: FontWeight.w700)),
+            Text(
+              widget.data.answerTitle,
+              style: TextStyle(
+                color: propertyColor.withValues(alpha: 0.72),
+                fontSize: WoxInterfaceSizeUtil.instance.current.smallLabelFontSize,
+                height: 1.2,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
             SizedBox(height: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10)),
           ],
           answerText.isEmpty
               ? _WaitingForAnswer(statusLabel: widget.data.statusLabel, woxTheme: widget.woxTheme)
-              : SelectableText(answerText, style: TextStyle(color: bodyColor, fontSize: WoxInterfaceSizeUtil.instance.current.resultTitleFontSize, height: 1.52, fontWeight: FontWeight.w400, letterSpacing: 0)),
+              : SelectableText(
+                answerText,
+                style: TextStyle(
+                  color: bodyColor,
+                  fontSize: WoxInterfaceSizeUtil.instance.current.resultTitleFontSize,
+                  height: 1.52,
+                  fontWeight: FontWeight.w400,
+                  letterSpacing: 0,
+                ),
+              ),
         ],
       ),
     );
@@ -124,7 +144,10 @@ class _ReasoningSection extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(3), decoration: BoxDecoration(color: propertyColor.withValues(alpha: 0.52), borderRadius: const BorderRadius.horizontal(left: Radius.circular(8)))),
+            Container(
+              width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(3),
+              decoration: BoxDecoration(color: propertyColor.withValues(alpha: 0.52), borderRadius: const BorderRadius.horizontal(left: Radius.circular(8))),
+            ),
             Expanded(
               child: Padding(
                 // AI stream reasoning is launcher preview content, so spacing
@@ -145,14 +168,23 @@ class _ReasoningSection extends StatelessWidget {
                         padding: EdgeInsets.symmetric(vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(2)),
                         child: Row(
                           children: [
-                            Icon(isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, color: fontColor.withValues(alpha: 0.52), size: WoxInterfaceSizeUtil.instance.current.scaledSpacing(18)),
+                            Icon(
+                              isExpanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                              color: fontColor.withValues(alpha: 0.52),
+                              size: WoxInterfaceSizeUtil.instance.current.scaledSpacing(18),
+                            ),
                             SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4)),
                             Expanded(
                               child: Text(
                                 title,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(color: fontColor.withValues(alpha: 0.68), fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, height: 1.2, fontWeight: FontWeight.w700),
+                                style: TextStyle(
+                                  color: fontColor.withValues(alpha: 0.68),
+                                  fontSize: WoxInterfaceSizeUtil.instance.current.smallLabelFontSize,
+                                  height: 1.2,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
                             ),
                             if (statusLabel.isNotEmpty) _StatusPill(label: statusLabel, woxTheme: woxTheme),
@@ -164,7 +196,13 @@ class _ReasoningSection extends StatelessWidget {
                     SelectableText(
                       reasoning,
                       maxLines: isExpanded ? null : 2,
-                      style: TextStyle(color: fontColor.withValues(alpha: 0.58), fontSize: WoxInterfaceSizeUtil.instance.current.resultSubtitleFontSize, height: 1.42, fontWeight: FontWeight.w400, letterSpacing: 0),
+                      style: TextStyle(
+                        color: fontColor.withValues(alpha: 0.58),
+                        fontSize: WoxInterfaceSizeUtil.instance.current.resultSubtitleFontSize,
+                        height: 1.42,
+                        fontWeight: FontWeight.w400,
+                        letterSpacing: 0,
+                      ),
                     ),
                   ],
                 ),
@@ -199,7 +237,7 @@ class _StatusPill extends StatelessWidget {
         label,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: fontColor.withValues(alpha: 0.58), fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, height: 1.1, fontWeight: FontWeight.w700),
+        style: TextStyle(color: fontColor.withValues(alpha: 0.58), fontSize: WoxInterfaceSizeUtil.instance.current.smallLabelFontSize, height: 1.1, fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -225,7 +263,17 @@ class _WaitingForAnswer extends StatelessWidget {
           ),
         ),
         SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(9)),
-        Flexible(child: Text(statusLabel, style: TextStyle(color: fontColor.withValues(alpha: 0.54), fontSize: WoxInterfaceSizeUtil.instance.current.resultSubtitleFontSize, height: 1.3, fontWeight: FontWeight.w500))),
+        Flexible(
+          child: Text(
+            statusLabel,
+            style: TextStyle(
+              color: fontColor.withValues(alpha: 0.54),
+              fontSize: WoxInterfaceSizeUtil.instance.current.resultSubtitleFontSize,
+              height: 1.3,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -238,6 +286,10 @@ class _Dot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4), height: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4), decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(999)));
+    return Container(
+      width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4),
+      height: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4),
+      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(999)),
+    );
   }
 }

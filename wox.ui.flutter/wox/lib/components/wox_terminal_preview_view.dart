@@ -537,7 +537,7 @@ class _WoxTerminalPreviewViewState extends State<WoxTerminalPreviewView> {
             ),
           ),
           SizedBox(width: _metrics.scaledSpacing(8)),
-          Text(countText, style: TextStyle(color: fontColor.withValues(alpha: 0.85), fontSize: _metrics.tailHotkeyFontSize, fontWeight: FontWeight.w500)),
+          Text(countText, style: TextStyle(color: fontColor.withValues(alpha: 0.85), fontSize: _metrics.smallLabelFontSize, fontWeight: FontWeight.w500)),
           IconButton(onPressed: () => searchNext(backward: true), icon: Icon(Icons.keyboard_arrow_up, size: _metrics.toolbarIconSize), color: fontColor.withValues(alpha: 0.9)),
           IconButton(onPressed: () => searchNext(backward: false), icon: Icon(Icons.keyboard_arrow_down, size: _metrics.toolbarIconSize), color: fontColor.withValues(alpha: 0.9)),
           IconButton(
@@ -547,7 +547,10 @@ class _WoxTerminalPreviewViewState extends State<WoxTerminalPreviewView> {
                 rebuildSearchMatches(preserveCurrent: false);
               });
             },
-            icon: Text("Aa", style: TextStyle(color: fontColor.withValues(alpha: 0.9), fontSize: _metrics.tailHotkeyFontSize, fontWeight: caseSensitive ? FontWeight.bold : FontWeight.normal)),
+            icon: Text(
+              "Aa",
+              style: TextStyle(color: fontColor.withValues(alpha: 0.9), fontSize: _metrics.smallLabelFontSize, fontWeight: caseSensitive ? FontWeight.bold : FontWeight.normal),
+            ),
           ),
           IconButton(onPressed: () => closeSearchBar(focusQueryBox: false), icon: Icon(Icons.close, size: _metrics.toolbarIconSize), color: fontColor.withValues(alpha: 0.9)),
         ],
@@ -565,7 +568,12 @@ class _WoxTerminalPreviewViewState extends State<WoxTerminalPreviewView> {
       return WoxPreviewTopStatusBar(
         woxTheme: widget.woxTheme,
         leading: Container(width: _metrics.scaledSpacing(8), height: _metrics.scaledSpacing(8), decoration: BoxDecoration(color: statusDotColor, shape: BoxShape.circle)),
-        title: Text(commandText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: fontColor, fontSize: _metrics.actionHeaderFontSize, fontWeight: FontWeight.w600, height: 1.1)),
+        title: Text(
+          commandText,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: fontColor, fontSize: _metrics.actionHeaderFontSize, fontWeight: FontWeight.w600, height: 1.1),
+        ),
         trailing: loadingHistory ? WoxLoadingIndicator(size: _metrics.scaledSpacing(12), color: fontColor.withValues(alpha: 0.8)) : null,
         actions: [
           WoxPreviewTopStatusBarAction(tooltip: getSearchHotkeyTooltip(), onPressed: openSearchBar, icon: const Icon(Icons.search)),

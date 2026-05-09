@@ -24,14 +24,14 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
       () =>
           controller.isShowActionPanel.value
               ? Positioned(
-                right: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10),
-                bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10),
+                right: WoxInterfaceSizeUtil.instance.current.actionPanelOffsetRight,
+                bottom: WoxInterfaceSizeUtil.instance.current.actionPanelOffsetBottom,
                 child: Container(
                   padding: EdgeInsets.only(
-                    top: WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingTop.toDouble(),
-                    bottom: WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingBottom.toDouble(),
-                    left: WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingLeft.toDouble(),
-                    right: WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingRight.toDouble(),
+                    top: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingTop.toDouble()),
+                    bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingBottom.toDouble()),
+                    left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingLeft.toDouble()),
+                    right: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingRight.toDouble()),
                   ),
                   decoration: BoxDecoration(
                     color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionContainerBackgroundColor),
@@ -39,14 +39,17 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
                     boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), spreadRadius: 2, blurRadius: 8, offset: const Offset(0, 3))],
                   ),
                   child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: WoxInterfaceSizeUtil.instance.current.scaledSpacing(320)),
+                    constraints: BoxConstraints(maxWidth: WoxInterfaceSizeUtil.instance.current.actionPanelMaxWidth),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.start,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           controller.tr("ui_actions"),
-                          style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionContainerHeaderFontColor), fontSize: WoxInterfaceSizeUtil.instance.current.actionHeaderFontSize),
+                          style: TextStyle(
+                            color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionContainerHeaderFontColor),
+                            fontSize: WoxInterfaceSizeUtil.instance.current.actionHeaderFontSize,
+                          ),
                         ),
                         const Divider(),
                         WoxListView<WoxResultAction>(
@@ -87,22 +90,24 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
       if (LoggerSwitch.enablePaintLog) Logger.instance.debug(const UuidV4().generate(), "repaint: action form view container");
 
       return Positioned(
-        right: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10),
-        bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10),
+        right: WoxInterfaceSizeUtil.instance.current.actionPanelOffsetRight,
+        bottom: WoxInterfaceSizeUtil.instance.current.actionPanelOffsetBottom,
         child: Container(
           padding: EdgeInsets.only(
-            top: WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingTop.toDouble(),
-            bottom: WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingBottom.toDouble(),
-            left: WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingLeft.toDouble(),
-            right: WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingRight.toDouble(),
+            top: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingTop.toDouble()),
+            bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingBottom.toDouble()),
+            left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingLeft.toDouble()),
+            right: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.actionContainerPaddingRight.toDouble()),
           ),
           decoration: BoxDecoration(
             color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.actionContainerBackgroundColor),
-            borderRadius: BorderRadius.circular(WoxThemeUtil.instance.currentTheme.value.actionQueryBoxBorderRadius.toDouble()),
+            borderRadius: BorderRadius.circular(
+              WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.actionQueryBoxBorderRadius.toDouble()),
+            ),
             boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), spreadRadius: 2, blurRadius: 8, offset: const Offset(0, 3))],
           ),
           child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: WoxInterfaceSizeUtil.instance.current.scaledSpacing(360), maxHeight: WoxInterfaceSizeUtil.instance.current.scaledSpacing(400)),
+            constraints: BoxConstraints(maxWidth: WoxInterfaceSizeUtil.instance.current.actionFormMaxWidth, maxHeight: WoxInterfaceSizeUtil.instance.current.actionFormMaxHeight),
             child: WoxFormActionView(
               action: action,
               initialValues: controller.formActionValues,
@@ -119,10 +124,10 @@ class WoxQueryResultView extends GetView<WoxLauncherController> {
   Widget getResultContainer() {
     return Container(
       padding: EdgeInsets.only(
-        top: WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingTop.toDouble(),
-        right: WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingRight.toDouble(),
-        bottom: WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingBottom.toDouble(),
-        left: WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingLeft.toDouble(),
+        top: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingTop.toDouble()),
+        right: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingRight.toDouble()),
+        bottom: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingBottom.toDouble()),
+        left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingLeft.toDouble()),
       ),
       child: Obx(() {
         if (controller.isGridLayout.value) {

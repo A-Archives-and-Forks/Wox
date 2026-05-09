@@ -42,7 +42,10 @@ class WoxPreviewScaffold extends StatelessWidget {
             // The framed preview body already separates content from metadata,
             // so an extra divider above the pills would add visual noise without
             // improving scanability.
-            Padding(padding: EdgeInsets.only(top: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10)), child: _PreviewPropertyPills(woxTheme: woxTheme, properties: properties)),
+            Padding(
+              padding: EdgeInsets.only(top: WoxInterfaceSizeUtil.instance.current.scaledSpacing(10)),
+              child: _PreviewPropertyPills(woxTheme: woxTheme, properties: properties),
+            ),
           ],
         ],
       ),
@@ -142,7 +145,12 @@ class _PreviewPropertyPills extends StatelessWidget {
                 visibleText,
                 overflow: TextOverflow.ellipsis,
                 maxLines: 1,
-                style: TextStyle(color: contentColor.withValues(alpha: 0.9), fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, height: 1.2, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  color: contentColor.withValues(alpha: 0.9),
+                  fontSize: WoxInterfaceSizeUtil.instance.current.smallLabelFontSize,
+                  height: 1.2,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           );
