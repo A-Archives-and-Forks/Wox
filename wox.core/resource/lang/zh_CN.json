@@ -875,6 +875,7 @@
   "plugin_wpm_create": "创建",
   "plugin_wpm_uninstall": "卸载",
   "plugin_wpm_install": "安装",
+  "plugin_wpm_installing": "安装中...",
   "plugin_wpm_upgrade": "升级",
   "plugin_wpm_visit_website": "访问网站",
   "plugin_wpm_manual_download": "手动下载",

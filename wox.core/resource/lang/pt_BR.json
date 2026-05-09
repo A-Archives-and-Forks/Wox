@@ -789,6 +789,7 @@
   "plugin_wpm_create": "Criar",
   "plugin_wpm_uninstall": "Desinstalar",
   "plugin_wpm_install": "Instalar",
+  "plugin_wpm_installing": "Instalando...",
   "plugin_wpm_upgrade": "Atualizar",
   "plugin_wpm_visit_website": "Visitar Site",
   "plugin_wpm_manual_download": "Download Manual",

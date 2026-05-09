@@ -73,6 +73,9 @@ class WoxPluginDetailView extends StatelessWidget {
     final String website = pluginData['Website'] ?? '';
     final String runtime = pluginData['Runtime'] ?? '';
     final bool isInstalled = pluginData['IsInstalled'] == true;
+    // isInstalling is set to true while a wpm install/upgrade is in progress;
+    // the preview shows a loading chip so the user knows to wait.
+    final bool isInstalling = pluginData['IsInstalling'] == true;
     final WoxImage? pluginIcon = pluginData['Icon'] is Map<String, dynamic> ? WoxImage.fromJson(pluginData['Icon']) : null;
     final List<String> screenshotUrls = (pluginData['ScreenshotUrls'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
     final RxInt currentPage = 0.obs;
@@ -99,6 +102,7 @@ class WoxPluginDetailView extends StatelessWidget {
               website: website,
               runtime: runtime,
               isInstalled: isInstalled,
+              isInstalling: isInstalling,
               pluginIcon: pluginIcon,
               panelColor: panelColor,
               outlineColor: outlineColor,
@@ -190,6 +194,7 @@ class WoxPluginDetailView extends StatelessWidget {
     required String website,
     required String runtime,
     required bool isInstalled,
+    required bool isInstalling,
     required WoxImage? pluginIcon,
     required Color panelColor,
     required Color outlineColor,
@@ -203,8 +208,8 @@ class WoxPluginDetailView extends StatelessWidget {
       children: [
         if (pluginIcon != null) ...[
           Container(
-            width: 64,
-            height: 64,
+            width: 48,
+            height: 48,
             decoration: BoxDecoration(
               // The icon block anchors the display-only preview. Keeping it in
               // the detail payload avoids borrowing the selected-list icon from
@@ -213,7 +218,7 @@ class WoxPluginDetailView extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: outlineColor),
             ),
-            child: Center(child: WoxImageView(woxImage: pluginIcon, width: 42, height: 42)),
+            child: Center(child: WoxImageView(woxImage: pluginIcon, width: 32, height: 32)),
           ),
           const SizedBox(width: 18),
         ],
@@ -224,8 +229,11 @@ class WoxPluginDetailView extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: textColor, fontSize: 24, fontWeight: FontWeight.w600))),
-                  if (isInstalled) ...[const SizedBox(width: 12), _buildInstalledChip()],
+                  Expanded(child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: textColor, fontSize: 16, fontWeight: FontWeight.w600))),
+                  // Show installing chip when an operation is in progress;
+                  // otherwise show the installed chip for already-installed plugins.
+                  if (isInstalling) ...[const SizedBox(width: 12), _buildInstallingChip()],
+                  if (isInstalled && !isInstalling) ...[const SizedBox(width: 12), _buildInstalledChip()],
                 ],
               ),
               const SizedBox(height: 8),
@@ -242,8 +250,8 @@ class WoxPluginDetailView extends StatelessWidget {
   }
 
   Widget _buildDescriptionLine({required String description, required String author, required Color textColor}) {
-    final TextStyle descriptionStyle = TextStyle(color: textColor, fontSize: 14, height: 1.4);
-    final TextStyle authorStyle = TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.4);
+    final TextStyle descriptionStyle = TextStyle(color: textColor, fontSize: 13, height: 1.4);
+    final TextStyle authorStyle = TextStyle(color: getThemeSubTextColor(), fontSize: 13, height: 1.4);
 
     return Text.rich(
       TextSpan(
@@ -316,7 +324,31 @@ class WoxPluginDetailView extends StatelessWidget {
         children: [
           const Icon(Icons.check_circle, size: 16, color: statusColor),
           const SizedBox(width: 5),
-          Text(tr('plugin_installer_verb_install_past'), style: const TextStyle(color: statusColor, fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(tr('plugin_installer_verb_install_past'), style: const TextStyle(color: statusColor, fontSize: 12, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  // _buildInstallingChip shows a spinning indicator while an install/upgrade
+  // is in progress. It replaces the installed chip so the user knows to wait
+  // instead of seeing a misleading "Installed" label during the transition.
+  Widget _buildInstallingChip() {
+    const Color statusColor = Colors.orange;
+    return Container(
+      height: 28,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: statusColor.withValues(alpha: isThemeDark() ? 0.22 : 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: statusColor.withValues(alpha: 0.40)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, valueColor: const AlwaysStoppedAnimation<Color>(statusColor))),
+          const SizedBox(width: 6),
+          Text(tr('plugin_wpm_installing'), style: const TextStyle(color: statusColor, fontSize: 12, fontWeight: FontWeight.w600)),
         ],
       ),
     );
@@ -340,7 +372,7 @@ class WoxPluginDetailView extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[WoxImageView(woxImage: icon, width: 15, height: 15), const SizedBox(width: 6)],
-          Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: getThemeTextColor(), fontSize: 13)),
+          Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: getThemeTextColor(), fontSize: 12)),
         ],
       ),
     );

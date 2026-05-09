@@ -874,6 +874,7 @@
   "plugin_wpm_create": "Create",
   "plugin_wpm_uninstall": "Uninstall",
   "plugin_wpm_install": "Install",
+  "plugin_wpm_installing": "Installing...",
   "plugin_wpm_upgrade": "Upgrade",
   "plugin_wpm_visit_website": "Visit Website",
   "plugin_wpm_manual_download": "Manual Download",

@@ -127,6 +127,12 @@ var storeOnce sync.Once
 type Store struct {
 	pluginManifests       []StorePluginManifest
 	lastManifestSignature string // to avoid notifying UI reload if no changes
+
+	// installMu serializes install and uninstall operations so that concurrent
+	// invocations (e.g. the user quickly installs two plugins in a row) cannot
+	// interleave their file-system and plugin-manager mutations, which previously
+	// caused loading-indicator flicker and potential data corruption.
+	installMu sync.Mutex
 }
 
 func GetStoreManager() *Store {
@@ -290,6 +296,14 @@ func (s *Store) Install(ctx context.Context, manifest StorePluginManifest) error
 }
 
 func (s *Store) InstallWithProgress(ctx context.Context, manifest StorePluginManifest, progressCallback InstallProgressCallback) error {
+	// Serialize all install/uninstall operations. Without this lock, a user
+	// installing two plugins in quick succession causes the operations to race:
+	// both may try to unload/reload the same runtime host, write to overlapping
+	// directories, or toggle loading state concurrently — producing the
+	// "loading number alternate abnormally" symptom reported in issue #4401.
+	s.installMu.Lock()
+	defer s.installMu.Unlock()
+
 	logger.Info(ctx, fmt.Sprintf("start to install plugin %s(%s)", manifest.GetName(ctx), manifest.Version))
 
 	// Store installs should reject incompatible manifests before runtime startup
@@ -322,7 +336,9 @@ func (s *Store) InstallWithProgress(ctx context.Context, manifest StorePluginMan
 
 		// only uninstall for non-script plugins; script plugins will be hot-swapped with rollback
 		if manifest.Runtime != PLUGIN_RUNTIME_SCRIPT {
-			uninstallErr := s.Uninstall(ctx, installedPlugin, true)
+			// Use uninstallLocked because InstallWithProgress already holds installMu.
+			// Calling Uninstall here would deadlock.
+			uninstallErr := s.uninstallLocked(ctx, installedPlugin, true, nil)
 			if uninstallErr != nil {
 				logger.Error(ctx, fmt.Sprintf("failed to uninstall plugin %s(%s): %s", installedPlugin.Metadata.GetName(ctx), installedPlugin.Metadata.Version, uninstallErr.Error()))
 				return fmt.Errorf("failed to uninstall plugin %s(%s): %s", installedPlugin.Metadata.GetName(ctx), installedPlugin.Metadata.Version, uninstallErr.Error())
@@ -692,6 +708,11 @@ func (s *Store) InstallFromLocal(ctx context.Context, filePath string) error {
 }
 
 func (s *Store) InstallFromLocalWithProgress(ctx context.Context, filePath string, progressCallback InstallProgressCallback) error {
+	// Serialize local installs with remote installs and uninstalls for the same
+	// reasons as InstallWithProgress (issue #4401).
+	s.installMu.Lock()
+	defer s.installMu.Unlock()
+
 	pluginMetadata, err := s.ParsePluginManifestFromLocal(ctx, filePath)
 	if err != nil {
 		return err
@@ -724,7 +745,7 @@ func (s *Store) InstallFromLocalWithProgress(ctx context.Context, filePath strin
 			}
 		}
 
-		uninstallErr := s.Uninstall(ctx, installedPlugin, true)
+		uninstallErr := s.uninstallLocked(ctx, installedPlugin, true, nil)
 		if uninstallErr != nil {
 			logger.Error(ctx, fmt.Sprintf("failed to uninstall plugin %s(%s): %s", installedPlugin.Metadata.GetName(ctx), installedPlugin.Metadata.Version, uninstallErr.Error()))
 			return fmt.Errorf("failed to uninstall plugin %s(%s): %s", installedPlugin.Metadata.GetName(ctx), installedPlugin.Metadata.Version, uninstallErr.Error())
@@ -782,6 +803,18 @@ func (s *Store) Uninstall(ctx context.Context, plugin *Instance, skipCleanSettin
 }
 
 func (s *Store) UninstallWithProgress(ctx context.Context, plugin *Instance, skipCleanSetting bool, progressCallback UninstallProgressCallback) error {
+	// Acquire the same lock used by InstallWithProgress so that an uninstall
+	// triggered directly from the UI cannot race with an in-progress install.
+	s.installMu.Lock()
+	defer s.installMu.Unlock()
+	return s.uninstallLocked(ctx, plugin, skipCleanSetting, progressCallback)
+}
+
+// uninstallLocked performs the actual uninstall work. It must only be called
+// while the caller already holds installMu, so it never tries to acquire the
+// lock itself. This lets InstallWithProgress call it internally without
+// deadlocking (InstallWithProgress already holds installMu).
+func (s *Store) uninstallLocked(ctx context.Context, plugin *Instance, skipCleanSetting bool, progressCallback UninstallProgressCallback) error {
 	logger.Info(ctx, fmt.Sprintf("start to uninstall plugin %s(%s)", plugin.Metadata.GetName(ctx), plugin.Metadata.Version))
 	pluginAlreadyUnloaded := false
 	reportProgress := func(key string, args ...any) {

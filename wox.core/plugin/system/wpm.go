@@ -494,29 +494,119 @@ func (w *WPMPlugin) uninstallCommand(ctx context.Context, query plugin.Query) []
 	return results
 }
 
-// createInstallAction creates an install action that updates to uninstall action after success
+// buildPluginDetailIcon returns the display icon for a store plugin manifest.
+func (w *WPMPlugin) buildPluginDetailIcon(manifest plugin.StorePluginManifest) common.WoxImage {
+	if manifest.IconEmoji != "" {
+		return common.NewWoxImageEmoji(manifest.IconEmoji)
+	}
+	if manifest.IconUrl != "" {
+		return common.NewWoxImageUrl(manifest.IconUrl)
+	}
+	return wpmIcon
+}
+
+// buildPluginDetailPreview constructs the WoxPreview shown in the preview panel
+// for a plugin listed in installCommand results.
+// isInstalled reflects whether the plugin is currently installed.
+// isInstalling reflects whether an install/upgrade is currently in progress;
+// when true the preview shows a loading chip so the user knows to wait.
+func (w *WPMPlugin) buildPluginDetailPreview(ctx context.Context, manifest plugin.StorePluginManifest, isInstalled bool, isInstalling bool) plugin.WoxPreview {
+	icon := w.buildPluginDetailIcon(manifest)
+	pluginDetailData := map[string]interface{}{
+		"Id":             manifest.Id,
+		"Name":           manifest.GetName(ctx),
+		"Description":    manifest.GetDescription(ctx),
+		"Author":         manifest.Author,
+		"Version":        manifest.Version,
+		"Icon":           icon,
+		"Website":        manifest.Website,
+		"Runtime":        manifest.Runtime,
+		"ScreenshotUrls": manifest.ScreenshotUrls,
+		"IsInstalled":    isInstalled,
+		"IsInstalling":   isInstalling,
+	}
+	pluginDetailJSON, _ := json.Marshal(pluginDetailData)
+	return plugin.WoxPreview{
+		PreviewType: plugin.WoxPreviewTypePluginDetail,
+		PreviewData: string(pluginDetailJSON),
+	}
+}
+
+// buildPostInstallActions returns the actions to show after a successful
+// install or upgrade: always includes Uninstall, and adds "Start Using" when
+// the plugin has a non-wildcard trigger keyword.
+func (w *WPMPlugin) buildPostInstallActions(ctx context.Context, pluginManifest plugin.StorePluginManifest) []plugin.QueryResultAction {
+	newActions := []plugin.QueryResultAction{w.createUninstallAction(pluginManifest)}
+
+	// Brief wait for plugin manager to register the newly-loaded plugin so its
+	// trigger keywords are already available when we build the action list.
+	time.Sleep(500 * time.Millisecond)
+	instances := plugin.GetPluginManager().GetPluginInstances()
+	if len(instances) > 0 {
+		if inst, ok := lo.Find(instances, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id }); ok {
+			if len(inst.Metadata.TriggerKeywords) > 0 {
+				kw := inst.Metadata.TriggerKeywords[0]
+				if kw != "*" && strings.TrimSpace(kw) != "" {
+					// Capture kw in a local variable for the closure so that
+					// all "Start Using" closures do not share the loop variable.
+					kwCopy := kw
+					newActions = append(newActions, plugin.QueryResultAction{
+						Name:                   "i18n:plugin_wpm_start_using",
+						Icon:                   common.NewWoxImageEmoji("▶️"),
+						PreventHideAfterAction: true,
+						IsDefault:              true,
+						Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+							w.api.ChangeQuery(ctx, common.PlainQuery{QueryType: plugin.QueryTypeInput, QueryText: kwCopy + " "})
+						},
+					})
+				}
+			}
+		}
+	}
+	return newActions
+}
+
+// createInstallAction creates an install action with immediate UI lock:
+// as soon as the user presses Enter the install action is removed and the
+// preview shows "Installing..." so they cannot trigger a second install while
+// one is already in flight. On failure the install action is restored.
 func (w *WPMPlugin) createInstallAction(pluginManifest plugin.StorePluginManifest) plugin.QueryResultAction {
 	return plugin.QueryResultAction{
 		Name:                   "i18n:plugin_wpm_install",
 		Icon:                   common.InstallIcon,
 		PreventHideAfterAction: true,
 		Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+			// Lock the UI immediately (before spawning the goroutine) so the user
+			// cannot press Enter again while the install is running.
+			if updatable := w.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
+				emptyActions := []plugin.QueryResultAction{}
+				updatable.Actions = &emptyActions
+				installingPreview := w.buildPluginDetailPreview(ctx, pluginManifest, false, true)
+				updatable.Preview = &installingPreview
+				w.api.UpdateResult(ctx, *updatable)
+			}
+
 			util.Go(ctx, "install plugin", func() {
 				pluginName := pluginManifest.GetName(ctx)
-				// notify starting
 				w.api.Notify(ctx, fmt.Sprintf(
 					w.api.GetTranslation(ctx, "i18n:plugin_installer_action_start"),
 					w.api.GetTranslation(ctx, "i18n:plugin_installer_install"),
 					pluginName,
 				))
 
-				// Install with progress callback
 				installErr := plugin.GetStoreManager().InstallWithProgress(ctx, pluginManifest, func(message string) {
-					// Show progress notification
 					w.api.Notify(ctx, fmt.Sprintf("%s: %s", pluginName, message))
 				})
 
 				if installErr != nil {
+					// Restore the install action so the user can retry after a failure.
+					if updatable := w.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
+						restoredActions := []plugin.QueryResultAction{w.createInstallAction(pluginManifest)}
+						updatable.Actions = &restoredActions
+						restoredPreview := w.buildPluginDetailPreview(ctx, pluginManifest, false, false)
+						updatable.Preview = &restoredPreview
+						w.api.UpdateResult(ctx, *updatable)
+					}
 					w.api.Notify(ctx, fmt.Sprintf(
 						w.api.GetTranslation(ctx, "i18n:plugin_installer_action_failed"),
 						w.api.GetTranslation(ctx, "i18n:plugin_installer_install"),
@@ -525,48 +615,90 @@ func (w *WPMPlugin) createInstallAction(pluginManifest plugin.StorePluginManifes
 					return
 				}
 
-				// update tails and actions after successful install
+				// Update tails, preview, and actions to the installed state.
 				if updatable := w.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
-					// Use the shared installed SVG so the result tail stays visually
-					// consistent with the preview detail status across platforms.
 					newTails := []plugin.QueryResultTail{{Type: plugin.QueryResultTailTypeImage, Image: common.PluginInstalledIcon}}
 					updatable.Tails = &newTails
-
-					// create actions: uninstall + start using (if not wildcard trigger)
-					newActions := []plugin.QueryResultAction{w.createUninstallAction(pluginManifest)}
-
-					// add "Start Using" action if plugin has non-wildcard trigger keyword
-					time.Sleep(500 * time.Millisecond)
-					instances := plugin.GetPluginManager().GetPluginInstances()
-					if len(instances) > 0 {
-						if inst, ok := lo.Find(instances, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id }); ok {
-							if len(inst.Metadata.TriggerKeywords) > 0 {
-								kw := inst.Metadata.TriggerKeywords[0]
-								if kw != "*" && strings.TrimSpace(kw) != "" {
-									// add "Start Using" action
-									newActions = append(newActions, plugin.QueryResultAction{
-										Name:                   "i18n:plugin_wpm_start_using",
-										Icon:                   common.NewWoxImageEmoji("▶️"),
-										PreventHideAfterAction: true,
-										IsDefault:              true,
-										Action: func(ctx context.Context, actionContext plugin.ActionContext) {
-											w.api.ChangeQuery(ctx, common.PlainQuery{QueryType: plugin.QueryTypeInput, QueryText: kw + " "})
-										},
-									})
-								}
-							}
-						}
-					}
-
+					successPreview := w.buildPluginDetailPreview(ctx, pluginManifest, true, false)
+					updatable.Preview = &successPreview
+					newActions := w.buildPostInstallActions(ctx, pluginManifest)
 					updatable.Actions = &newActions
 					w.api.UpdateResult(ctx, *updatable)
 				}
 
-				// success
 				w.api.Notify(ctx, fmt.Sprintf(
 					w.api.GetTranslation(ctx, "i18n:plugin_installer_action_success"),
 					pluginName,
 					w.api.GetTranslation(ctx, "i18n:plugin_installer_verb_install_past"),
+				))
+			})
+		},
+	}
+}
+
+// createUpgradeAction creates an upgrade action with the same UI-lock pattern
+// as createInstallAction: the action is immediately removed when triggered to
+// prevent double-upgrades, and restored if the upgrade fails.
+func (w *WPMPlugin) createUpgradeAction(pluginManifest plugin.StorePluginManifest) plugin.QueryResultAction {
+	return plugin.QueryResultAction{
+		Name:                   "i18n:plugin_wpm_upgrade",
+		Icon:                   common.UpdateIcon,
+		PreventHideAfterAction: true,
+		Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+			// Lock the UI immediately so the user cannot press Enter again
+			// while the upgrade is running.
+			if updatable := w.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
+				emptyActions := []plugin.QueryResultAction{}
+				updatable.Actions = &emptyActions
+				installingPreview := w.buildPluginDetailPreview(ctx, pluginManifest, true, true)
+				updatable.Preview = &installingPreview
+				w.api.UpdateResult(ctx, *updatable)
+			}
+
+			util.Go(ctx, "upgrade plugin", func() {
+				pluginName := pluginManifest.GetName(ctx)
+				w.api.Notify(ctx, fmt.Sprintf(
+					w.api.GetTranslation(ctx, "i18n:plugin_installer_action_start"),
+					w.api.GetTranslation(ctx, "i18n:plugin_installer_upgrade"),
+					pluginName,
+				))
+
+				installErr := plugin.GetStoreManager().InstallWithProgress(ctx, pluginManifest, func(message string) {
+					w.api.Notify(ctx, fmt.Sprintf("%s: %s", pluginName, message))
+				})
+
+				if installErr != nil {
+					// Restore upgrade + uninstall actions so the user can retry.
+					if updatable := w.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
+						restoredActions := []plugin.QueryResultAction{w.createUpgradeAction(pluginManifest), w.createUninstallAction(pluginManifest)}
+						updatable.Actions = &restoredActions
+						restoredPreview := w.buildPluginDetailPreview(ctx, pluginManifest, true, false)
+						updatable.Preview = &restoredPreview
+						w.api.UpdateResult(ctx, *updatable)
+					}
+					w.api.Notify(ctx, fmt.Sprintf(
+						w.api.GetTranslation(ctx, "i18n:plugin_installer_action_failed"),
+						w.api.GetTranslation(ctx, "i18n:plugin_installer_upgrade"),
+						formatPluginInstallError(ctx, w.api, pluginManifest.Runtime, pluginName, pluginManifest.Version, installErr),
+					))
+					return
+				}
+
+				// Update tails, preview, and actions to the installed state.
+				if updatable := w.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
+					newTails := []plugin.QueryResultTail{{Type: plugin.QueryResultTailTypeImage, Image: common.PluginInstalledIcon}}
+					updatable.Tails = &newTails
+					successPreview := w.buildPluginDetailPreview(ctx, pluginManifest, true, false)
+					updatable.Preview = &successPreview
+					newActions := w.buildPostInstallActions(ctx, pluginManifest)
+					updatable.Actions = &newActions
+					w.api.UpdateResult(ctx, *updatable)
+				}
+
+				w.api.Notify(ctx, fmt.Sprintf(
+					w.api.GetTranslation(ctx, "i18n:plugin_installer_action_success"),
+					pluginName,
+					w.api.GetTranslation(ctx, "i18n:plugin_installer_verb_upgrade_past"),
 				))
 			})
 		},
@@ -584,7 +716,6 @@ func (w *WPMPlugin) createUninstallAction(pluginManifest plugin.StorePluginManif
 			instances := plugin.GetPluginManager().GetPluginInstances()
 			if inst, ok := lo.Find(instances, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id }); ok {
 				util.Go(ctx, "uninstall plugin", func() {
-					// notify starting
 					w.api.Notify(ctx, fmt.Sprintf(
 						w.api.GetTranslation(ctx, "i18n:plugin_installer_action_start"),
 						w.api.GetTranslation(ctx, "i18n:plugin_installer_uninstall"),
@@ -603,16 +734,17 @@ func (w *WPMPlugin) createUninstallAction(pluginManifest plugin.StorePluginManif
 						return
 					}
 
-					// update tails and actions after uninstall
+					// Update tails, preview, and actions to the uninstalled state.
 					if updatable := w.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
 						newTails := []plugin.QueryResultTail{}
 						updatable.Tails = &newTails
+						uninstalledPreview := w.buildPluginDetailPreview(ctx, pluginManifest, false, false)
+						updatable.Preview = &uninstalledPreview
 						newActions := []plugin.QueryResultAction{w.createInstallAction(pluginManifest)}
 						updatable.Actions = &newActions
 						w.api.UpdateResult(ctx, *updatable)
 					}
 
-					// success
 					w.api.Notify(ctx, fmt.Sprintf(
 						w.api.GetTranslation(ctx, "i18n:plugin_installer_action_success"),
 						pluginName,
@@ -628,6 +760,7 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 	var results []plugin.QueryResult
 	pluginManifests := plugin.GetStoreManager().Search(ctx, query.Search)
 	// sort by name
+
 	sort.SliceStable(pluginManifests, func(i, j int) bool {
 		return pluginManifests[i].GetName(ctx) < pluginManifests[j].GetName(ctx)
 	})
@@ -660,88 +793,11 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 				upgradeFlag = plugin.IsVersionUpgradable(inst.Metadata.Version, pluginManifest.Version)
 			}
 			if upgradeFlag {
-				// show Upgrade action
-				actions = make([]plugin.QueryResultAction, 0, 2)
-
-				actions = append(actions, plugin.QueryResultAction{
-					Name:                   "i18n:plugin_wpm_upgrade",
-					Icon:                   common.UpdateIcon,
-					PreventHideAfterAction: true,
-					Action: func(ctx context.Context, actionContext plugin.ActionContext) {
-						pluginName := pluginManifest.GetName(ctx)
-						// notify starting
-						w.api.Notify(ctx, fmt.Sprintf(
-							w.api.GetTranslation(ctx, "i18n:plugin_installer_action_start"),
-							w.api.GetTranslation(ctx, "i18n:plugin_installer_upgrade"),
-							pluginName,
-						))
-
-						// Start installation in background, show progress via notifications
-						util.Go(ctx, "upgrade plugin", func() {
-							pluginName := pluginManifest.GetName(ctx)
-							// Install with progress callback
-							installErr := plugin.GetStoreManager().InstallWithProgress(ctx, pluginManifest, func(message string) {
-								// Show progress notification
-								w.api.Notify(ctx, fmt.Sprintf("%s: %s", pluginName, message))
-							})
-
-							if installErr != nil {
-								w.api.Notify(ctx, fmt.Sprintf(
-									w.api.GetTranslation(ctx, "i18n:plugin_installer_action_failed"),
-									w.api.GetTranslation(ctx, "i18n:plugin_installer_upgrade"),
-									formatPluginInstallError(ctx, w.api, pluginManifest.Runtime, pluginName, pluginManifest.Version, installErr),
-								))
-								return
-							}
-
-							// update tails and actions after successful upgrade
-							if updatable := w.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
-								// Use the shared installed SVG so the result tail stays visually
-								// consistent with the preview detail status across platforms.
-								newTails := []plugin.QueryResultTail{{Type: plugin.QueryResultTailTypeImage, Image: common.PluginInstalledIcon}}
-								updatable.Tails = &newTails
-
-								// create actions: uninstall + start using (if not wildcard trigger)
-								newActions := []plugin.QueryResultAction{w.createUninstallAction(pluginManifest)}
-
-								// add "Start Using" action if plugin has non-wildcard trigger keyword
-								time.Sleep(500 * time.Millisecond)
-								instances := plugin.GetPluginManager().GetPluginInstances()
-								if len(instances) > 0 {
-									if inst, ok := lo.Find(instances, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id }); ok {
-										if len(inst.Metadata.TriggerKeywords) > 0 {
-											kw := inst.Metadata.TriggerKeywords[0]
-											if kw != "*" && strings.TrimSpace(kw) != "" {
-												// add "Start Using" action
-												newActions = append(newActions, plugin.QueryResultAction{
-													Name:                   "i18n:plugin_wpm_start_using",
-													Icon:                   common.NewWoxImageEmoji("▶️"),
-													PreventHideAfterAction: true,
-													IsDefault:              true,
-													Action: func(ctx context.Context, actionContext plugin.ActionContext) {
-														w.api.ChangeQuery(ctx, common.PlainQuery{QueryType: plugin.QueryTypeInput, QueryText: kw + " "})
-													},
-												})
-											}
-										}
-									}
-								}
-
-								updatable.Actions = &newActions
-								w.api.UpdateResult(ctx, *updatable)
-							}
-
-							// success
-							w.api.Notify(ctx, fmt.Sprintf(
-								w.api.GetTranslation(ctx, "i18n:plugin_installer_action_success"),
-								pluginName,
-								w.api.GetTranslation(ctx, "i18n:plugin_installer_verb_upgrade_past"),
-							))
-						})
-					},
-				})
-
-				actions = append(actions, w.createUninstallAction(pluginManifest))
+				// Upgrade is available: show Upgrade + Uninstall actions.
+				actions = []plugin.QueryResultAction{
+					w.createUpgradeAction(pluginManifest),
+					w.createUninstallAction(pluginManifest),
+				}
 			} else {
 				// installed and up-to-date: provide uninstall
 				actions = []plugin.QueryResultAction{w.createUninstallAction(pluginManifest)}
@@ -772,33 +828,9 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 			})
 		}
 
-		// Create plugin detail JSON for preview
+		icon := w.buildPluginDetailIcon(pluginManifest)
 		pluginName := pluginManifest.GetName(ctx)
 		pluginDescription := pluginManifest.GetDescription(ctx)
-		// The detail preview now renders the plugin identity header itself, so
-		// the preview payload must carry the same icon and install state that the
-		// result row used to own exclusively.
-		var icon common.WoxImage
-		if pluginManifest.IconEmoji != "" {
-			icon = common.NewWoxImageEmoji(pluginManifest.IconEmoji)
-		} else if pluginManifest.IconUrl != "" {
-			icon = common.NewWoxImageUrl(pluginManifest.IconUrl)
-		} else {
-			icon = wpmIcon
-		}
-		pluginDetailData := map[string]interface{}{
-			"Id":             pluginManifest.Id,
-			"Name":           pluginName,
-			"Description":    pluginDescription,
-			"Author":         pluginManifest.Author,
-			"Version":        pluginManifest.Version,
-			"Icon":           icon,
-			"Website":        pluginManifest.Website,
-			"Runtime":        pluginManifest.Runtime,
-			"ScreenshotUrls": pluginManifest.ScreenshotUrls,
-			"IsInstalled":    installedFlag,
-		}
-		pluginDetailJSON, _ := json.Marshal(pluginDetailData)
 
 		results = append(results, plugin.QueryResult{
 			Id:       uuid.NewString(),
@@ -806,11 +838,8 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 			SubTitle: pluginDescription,
 			Icon:     icon,
 			Tails:    tails,
-			Preview: plugin.WoxPreview{
-				PreviewType: plugin.WoxPreviewTypePluginDetail,
-				PreviewData: string(pluginDetailJSON),
-			},
-			Actions: actions,
+			Preview:  w.buildPluginDetailPreview(ctx, pluginManifest, installedFlag, false),
+			Actions:  actions,
 		})
 	}
 	return results
