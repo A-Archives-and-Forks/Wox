@@ -10,6 +10,10 @@ class WoxSetting {
   late bool usePinYin;
   late bool switchInputMethodABC;
   late bool hideOnStart;
+  // OnboardingFinished is carried in the normal settings model so the guide
+  // can persist skip/finish through the same key-value update path as other
+  // first-run choices.
+  late bool onboardingFinished;
   late bool hideOnLostFocus;
   late bool showTray;
   late String langCode;
@@ -49,6 +53,7 @@ class WoxSetting {
     required this.usePinYin,
     required this.switchInputMethodABC,
     required this.hideOnStart,
+    required this.onboardingFinished,
     required this.hideOnLostFocus,
     required this.showTray,
     required this.langCode,
@@ -94,6 +99,7 @@ class WoxSetting {
     usePinYin = json['UsePinYin'] ?? false;
     switchInputMethodABC = json['SwitchInputMethodABC'] ?? false;
     hideOnStart = json['HideOnStart'] ?? false;
+    onboardingFinished = json['OnboardingFinished'] ?? false;
     hideOnLostFocus = json['HideOnLostFocus'];
     showTray = json['ShowTray'] ?? false;
     langCode = json['LangCode'];
@@ -166,6 +172,7 @@ class WoxSetting {
     data['UsePinYin'] = usePinYin;
     data['SwitchInputMethodABC'] = switchInputMethodABC;
     data['HideOnStart'] = hideOnStart;
+    data['OnboardingFinished'] = onboardingFinished;
     data['HideOnLostFocus'] = hideOnLostFocus;
     data['ShowTray'] = showTray;
     data['LangCode'] = langCode;

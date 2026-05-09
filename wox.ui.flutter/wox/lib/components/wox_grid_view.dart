@@ -192,8 +192,13 @@ class WoxGridView extends StatelessWidget {
         }
       },
       child: GestureDetector(
-        onTap: () {
+        onTapDown: (_) {
           final traceId = const UuidV4().generate();
+          // Bug fix: grid selection used to wait for onTap, which fires after
+          // Flutter accepts the full tap gesture. List rows activate on tap
+          // down, so selecting grid cells on tap down gives both layouts the
+          // same immediate active-state feedback while keeping double-click
+          // execution on the existing onDoubleTap path.
           controller.updateActiveIndex(traceId, index);
           onItemTapped?.call();
         },

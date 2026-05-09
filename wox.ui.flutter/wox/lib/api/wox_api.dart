@@ -35,6 +35,10 @@ class WoxApi {
     await WoxHttpUtil.instance.postData(traceId, "/setting/wox/update", {"Key": key, "Value": value});
   }
 
+  Future<void> show(String traceId) async {
+    await WoxHttpUtil.instance.postData(traceId, "/show", null);
+  }
+
   Future<List<IgnoredHotkeyApp>> getHotkeyAppCandidates(String traceId) async {
     return await WoxHttpUtil.instance.postData<List<IgnoredHotkeyApp>>(traceId, "/setting/hotkey/apps", null);
   }
@@ -131,6 +135,10 @@ class WoxApi {
     await WoxHttpUtil.instance.postData(traceId, "/on/setting", {"inSettingView": inSettingView});
   }
 
+  Future<void> onOnboarding(String traceId, bool inOnboardingView) async {
+    await WoxHttpUtil.instance.postData(traceId, "/on/onboarding", {"inOnboardingView": inOnboardingView});
+  }
+
   Future<WoxUsageStats> getUsageStats(String traceId, {String period = '30d'}) async {
     return await WoxHttpUtil.instance.postData<WoxUsageStats>(traceId, "/usage/stats", {"Period": period});
   }
@@ -189,6 +197,14 @@ class WoxApi {
 
   Future<List<DoctorCheckResult>> doctorCheck(String traceId) async {
     return await WoxHttpUtil.instance.postData<List<DoctorCheckResult>>(traceId, "/doctor/check", null);
+  }
+
+  Future<void> openAccessibilityPermission(String traceId) async {
+    await WoxHttpUtil.instance.postData(traceId, "/permission/accessibility/open", null);
+  }
+
+  Future<void> openPrivacyPermission(String traceId) async {
+    await WoxHttpUtil.instance.postData(traceId, "/permission/privacy/open", null);
   }
 
   Future<List<GlanceItem>> getGlanceItems(String traceId, List<GlanceRef> glances, String reason) async {

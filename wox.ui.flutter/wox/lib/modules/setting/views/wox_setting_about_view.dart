@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_button.dart';
 import 'package:wox/components/wox_image_view.dart';
+import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/modules/setting/views/wox_setting_base.dart';
 import 'package:wox/utils/colors.dart';
@@ -48,6 +51,8 @@ class WoxSettingAboutView extends WoxSettingBaseView {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
+                    _buildOnboardingButton(),
+                    const SizedBox(width: 30),
                     _buildLinkButton('ui_about_docs', 'https://wox-launcher.github.io/Wox/#/', Icons.description),
                     const SizedBox(width: 30),
                     _buildLinkButton('ui_about_github', 'https://github.com/Wox-launcher/Wox', Icons.code),
@@ -59,6 +64,19 @@ class WoxSettingAboutView extends WoxSettingBaseView {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildOnboardingButton() {
+    return WoxButton.text(
+      key: const ValueKey('about-open-onboarding-button'),
+      text: controller.tr('ui_about_onboarding'),
+      icon: Icon(Icons.auto_stories_outlined, size: 18, color: getThemeTextColor()),
+      onPressed: () {
+        // Manual reopening uses the same onboarding window path as startup so
+        // About stays a link row instead of growing a second guide surface.
+        Get.find<WoxLauncherController>().openOnboarding(const UuidV4().generate());
+      },
     );
   }
 

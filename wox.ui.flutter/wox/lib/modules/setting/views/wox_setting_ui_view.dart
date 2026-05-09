@@ -21,14 +21,28 @@ class WoxSettingUIView extends WoxSettingBaseView {
       values.sort();
     }
 
-    return values.map((width) => WoxDropdownItem<int>(value: width, label: width.toString())).toList();
+    return values
+        .map(
+          (width) =>
+              WoxDropdownItem<int>(value: width, label: width.toString()),
+        )
+        .toList();
   }
 
   List<WoxDropdownItem<String>> _buildInterfaceSizeItems() {
     return [
-      WoxDropdownItem(value: "compact", label: controller.tr("ui_interface_size_compact")),
-      WoxDropdownItem(value: "normal", label: controller.tr("ui_interface_size_normal")),
-      WoxDropdownItem(value: "comfortable", label: controller.tr("ui_interface_size_comfortable")),
+      WoxDropdownItem(
+        value: "compact",
+        label: controller.tr("ui_interface_size_compact"),
+      ),
+      WoxDropdownItem(
+        value: "normal",
+        label: controller.tr("ui_interface_size_normal"),
+      ),
+      WoxDropdownItem(
+        value: "comfortable",
+        label: controller.tr("ui_interface_size_comfortable"),
+      ),
     ];
   }
 
@@ -38,14 +52,28 @@ class WoxSettingUIView extends WoxSettingBaseView {
     for (final plugin in controller.installedPlugins) {
       for (final glance in plugin.glances) {
         final key = GlanceRef(pluginId: plugin.id, glanceId: glance.id).key;
-        final icon = WoxImage.parse(glance.icon);
         final previewItem = controller.settingGlancePreviewItems[key];
+        // Feature change: live Glance responses can expose state-specific icons
+        // that metadata cannot know yet, so the picker uses the API icon first
+        // and keeps metadata as the loading fallback.
+        final icon =
+            previewItem != null && previewItem.icon.imageData.isNotEmpty
+                ? previewItem.icon
+                : WoxImage.parse(glance.icon);
         // Glance choices are user-facing metadata, so show the actual glance first and keep the provider as supporting context instead of forcing users to parse "plugin / item" strings.
         items.add(
           WoxDropdownItem(
             value: key,
             label: glance.name,
-            leading: icon == null ? null : WoxImageView(woxImage: icon, width: 18, height: 18, svgColor: iconColor),
+            leading:
+                icon == null
+                    ? null
+                    : WoxImageView(
+                      woxImage: icon,
+                      width: 18,
+                      height: 18,
+                      svgColor: iconColor,
+                    ),
             trailing: _buildGlancePreviewValue(previewItem),
           ),
         );
@@ -55,15 +83,25 @@ class WoxSettingUIView extends WoxSettingBaseView {
   }
 
   Widget _buildGlancePreviewValue(GlanceItem? item) {
-    final text = item == null || item.text.trim().isEmpty ? "—" : item.text.trim();
+    final text =
+        item == null || item.text.trim().isEmpty ? "—" : item.text.trim();
     final isEmptyPreview = item == null || item.text.trim().isEmpty;
-    final color = isEmptyPreview ? getThemeSubTextColor().withValues(alpha: 0.65) : getThemeTextColor();
+    final color =
+        isEmptyPreview
+            ? getThemeSubTextColor().withValues(alpha: 0.65)
+            : getThemeTextColor();
 
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 110),
       // The settings picker previews the real Glance response so users choose
       // the item by its live output, not by metadata that can only approximate it.
-      child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.right, style: TextStyle(color: color, fontSize: 13)),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        textAlign: TextAlign.right,
+        style: TextStyle(color: color, fontSize: 13),
+      ),
     );
   }
 
@@ -84,7 +122,9 @@ class WoxSettingUIView extends WoxSettingBaseView {
   Widget build(BuildContext context) {
     return Obx(() {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        controller.refreshSettingGlancePreviewsForUIEntry(const UuidV4().generate());
+        controller.refreshSettingGlancePreviewsForUIEntry(
+          const UuidV4().generate(),
+        );
       });
 
       return form(
@@ -101,9 +141,18 @@ class WoxSettingUIView extends WoxSettingBaseView {
                 child: Obx(() {
                   return WoxDropdownButton<String>(
                     items: [
-                      WoxDropdownItem(value: "mouse_screen", label: controller.tr("ui_show_position_mouse_screen")),
-                      WoxDropdownItem(value: "active_screen", label: controller.tr("ui_show_position_active_screen")),
-                      WoxDropdownItem(value: "last_location", label: controller.tr("ui_show_position_last_location")),
+                      WoxDropdownItem(
+                        value: "mouse_screen",
+                        label: controller.tr("ui_show_position_mouse_screen"),
+                      ),
+                      WoxDropdownItem(
+                        value: "active_screen",
+                        label: controller.tr("ui_show_position_active_screen"),
+                      ),
+                      WoxDropdownItem(
+                        value: "last_location",
+                        label: controller.tr("ui_show_position_last_location"),
+                      ),
                     ],
                     value: controller.woxSetting.value.showPosition,
                     onChanged: (v) {
@@ -152,7 +201,10 @@ class WoxSettingUIView extends WoxSettingBaseView {
                 child: Obx(() {
                   final items = _buildInterfaceSizeItems();
                   final currentDensity = controller.woxSetting.value.uiDensity;
-                  final selectedDensity = items.any((item) => item.value == currentDensity) ? currentDensity : "normal";
+                  final selectedDensity =
+                      items.any((item) => item.value == currentDensity)
+                          ? currentDensity
+                          : "normal";
 
                   return WoxDropdownButton<String>(
                     // Interface size only writes the density key; the settings page
@@ -173,18 +225,31 @@ class WoxSettingUIView extends WoxSettingBaseView {
                 label: controller.tr("ui_app_font_family"),
                 tips: controller.tr("ui_app_font_family_tips"),
                 child: Obx(() {
-                  final currentFontFamily = controller.woxSetting.value.appFontFamily;
-                  final fontFamilies = List<String>.from(controller.systemFontFamilies);
-                  if (currentFontFamily.isNotEmpty && !fontFamilies.contains(currentFontFamily)) {
+                  final currentFontFamily =
+                      controller.woxSetting.value.appFontFamily;
+                  final fontFamilies = List<String>.from(
+                    controller.systemFontFamilies,
+                  );
+                  if (currentFontFamily.isNotEmpty &&
+                      !fontFamilies.contains(currentFontFamily)) {
                     fontFamilies.insert(0, currentFontFamily);
                   }
 
                   final items = <WoxDropdownItem<String>>[
-                    WoxDropdownItem(value: "", label: controller.tr("ui_app_font_family_system_default")),
-                    ...fontFamilies.map((family) => WoxDropdownItem<String>(value: family, label: family)),
+                    WoxDropdownItem(
+                      value: "",
+                      label: controller.tr("ui_app_font_family_system_default"),
+                    ),
+                    ...fontFamilies.map(
+                      (family) =>
+                          WoxDropdownItem<String>(value: family, label: family),
+                    ),
                   ];
 
-                  final selectedValue = items.any((item) => item.value == currentFontFamily) ? currentFontFamily : "";
+                  final selectedValue =
+                      items.any((item) => item.value == currentFontFamily)
+                          ? currentFontFamily
+                          : "";
 
                   return WoxDropdownButton<String>(
                     value: selectedValue,
@@ -212,7 +277,15 @@ class WoxSettingUIView extends WoxSettingBaseView {
                 child: Obx(() {
                   return WoxDropdownButton<int>(
                     value: controller.woxSetting.value.maxResultCount,
-                    items: List.generate(11, (index) => index + 5).map((count) => WoxDropdownItem<int>(value: count, label: count.toString())).toList(),
+                    items:
+                        List.generate(11, (index) => index + 5)
+                            .map(
+                              (count) => WoxDropdownItem<int>(
+                                value: count,
+                                label: count.toString(),
+                              ),
+                            )
+                            .toList(),
                     onChanged: (v) {
                       if (v != null) {
                         controller.updateConfig("MaxResultCount", v.toString());
@@ -248,7 +321,10 @@ class WoxSettingUIView extends WoxSettingBaseView {
                       // HideGlanceIcon is separated from EnableGlance so users
                       // can keep the same selected item and only choose whether
                       // the query-box accessory spends space on the icon.
-                      controller.updateConfig("HideGlanceIcon", value.toString());
+                      controller.updateConfig(
+                        "HideGlanceIcon",
+                        value.toString(),
+                      );
                     },
                   );
                 }),
@@ -259,7 +335,12 @@ class WoxSettingUIView extends WoxSettingBaseView {
                 child: Obx(() {
                   final setting = controller.woxSetting.value;
                   final items = _buildGlanceItems();
-                  final selected = items.any((item) => item.value == setting.primaryGlance.key) ? setting.primaryGlance.key : (items.isNotEmpty ? items.first.value : "");
+                  final selected =
+                      items.any(
+                            (item) => item.value == setting.primaryGlance.key,
+                          )
+                          ? setting.primaryGlance.key
+                          : (items.isNotEmpty ? items.first.value : "");
                   return WoxDropdownButton<String>(
                     value: selected,
                     items: items,

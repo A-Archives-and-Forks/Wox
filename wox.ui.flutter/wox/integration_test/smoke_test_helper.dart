@@ -123,12 +123,26 @@ Future<void> startSmokeAppBeforeFirstPump({required Duration timeout}) async {
   await ensureSmokeWindowReadyForFirstPump();
 }
 
-Future<WoxLauncherController> launchLauncherApp(WidgetTester tester) async {
+Future<void> seedOnboardingFinishedBeforeReady(bool finished) async {
+  // Smoke tests usually validate launcher behavior, not the first-run wizard.
+  // Seed the new onboarding flag after Env is initialized but before the first
+  // frame notifies Go via /on/ready, so existing startup tests keep measuring
+  // launcher readiness while dedicated onboarding tests opt out explicitly.
+  final traceId = const UuidV4().generate();
+  await WoxApi.instance.updateSetting(traceId, 'OnboardingFinished', finished.toString());
+  await WoxSettingUtil.instance.loadSetting(traceId);
+  if (Get.isRegistered<WoxSettingController>()) {
+    Get.find<WoxSettingController>().woxSetting.value = WoxSettingUtil.instance.currentSetting;
+  }
+}
+
+Future<WoxLauncherController> launchLauncherApp(WidgetTester tester, {bool onboardingFinished = true}) async {
   // Ensure the window is visible before any pump() call.  On macOS, a hidden
   // window stops delivering vsync signals, which causes pump() to block.
   // The previous test's tearDown hides the window for backend state cleanup.
   await resetSmokeAppState();
   await startSmokeAppBeforeFirstPump(timeout: const Duration(seconds: 30));
+  await seedOnboardingFinishedBeforeReady(onboardingFinished);
 
   final launcherFinder = find.byType(WoxLauncherView);
   await pumpUntil(tester, () => launcherFinder.evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
@@ -144,6 +158,7 @@ Future<SmokeLaunchResult> launchLauncherAppAndMeasureStartup(WidgetTester tester
 
   final stopwatch = Stopwatch()..start();
   await startSmokeAppBeforeFirstPump(timeout: timeout);
+  await seedOnboardingFinishedBeforeReady(true);
 
   final launcherFinder = find.byType(WoxLauncherView);
   await pumpUntil(tester, () => launcherFinder.evaluate().isNotEmpty, timeout: timeout);
@@ -160,6 +175,20 @@ Future<SmokeLaunchResult> launchLauncherAppAndMeasureStartup(WidgetTester tester
   final controller = Get.find<WoxLauncherController>();
   registerLauncherTestCleanup(tester, controller);
   return SmokeLaunchResult(controller: controller, elapsed: stopwatch.elapsed);
+}
+
+Future<WoxLauncherController> launchOnboardingApp(WidgetTester tester) async {
+  await resetSmokeAppState();
+  await startSmokeAppBeforeFirstPump(timeout: const Duration(seconds: 30));
+  await seedOnboardingFinishedBeforeReady(false);
+
+  final onboardingFinder = find.byKey(const ValueKey('onboarding-view'));
+  await pumpUntil(tester, () => onboardingFinder.evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
+  expect(onboardingFinder, findsOneWidget);
+
+  final controller = Get.find<WoxLauncherController>();
+  registerLauncherTestCleanup(tester, controller);
+  return controller;
 }
 
 Future<WoxLauncherController> launchAndShowLauncher(WidgetTester tester, {Size? windowSize}) async {
@@ -259,6 +288,11 @@ Future<void> triggerTestQueryHotkey(WidgetTester tester, String query, {bool isS
 
 Future<void> triggerTestOpenSetting(WidgetTester tester, {String path = '', String param = ''}) async {
   await WoxHttpUtil.instance.postData<String>(const UuidV4().generate(), '/test/trigger/open_setting', {'Path': path, 'Param': param});
+  await tester.pump(const Duration(milliseconds: 500));
+}
+
+Future<void> triggerTestOpenOnboarding(WidgetTester tester) async {
+  await WoxHttpUtil.instance.postData<String>(const UuidV4().generate(), '/test/trigger/open_onboarding', null);
   await tester.pump(const Duration(milliseconds: 500));
 }
 

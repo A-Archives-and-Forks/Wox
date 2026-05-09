@@ -27,9 +27,10 @@ import (
 const resultDebounceIntervalMs = 32
 
 type uiImpl struct {
-	requestMap      *util.HashMap[string, chan WebsocketMsg]
-	isVisible       bool // cached visibility state, updated by PostOnShow/PostOnHide
-	isInSettingView bool // cached setting-view state, updated by PostOnSetting
+	requestMap         *util.HashMap[string, chan WebsocketMsg]
+	isVisible          bool // cached visibility state, updated by PostOnShow/PostOnHide
+	isInSettingView    bool // cached setting-view state, updated by PostOnSetting
+	isInOnboardingView bool // cached onboarding state, updated by PostOnOnboarding
 }
 
 func (u *uiImpl) ChangeQuery(ctx context.Context, query common.PlainQuery) {
@@ -115,6 +116,13 @@ func (u *uiImpl) OpenSettingWindow(ctx context.Context, windowContext common.Set
 	u.invokeWebsocketMethod(ctx, "OpenSettingWindow", windowContext)
 }
 
+func (u *uiImpl) OpenOnboardingWindow(ctx context.Context) {
+	// Onboarding reuses the same UI process and WebSocket command path as the
+	// settings window. Keeping it here avoids a second desktop window lifecycle
+	// while still letting Flutter choose the dedicated onboarding view.
+	u.invokeWebsocketMethod(ctx, "OpenOnboardingWindow", nil)
+}
+
 func (u *uiImpl) GetAllThemes(ctx context.Context) []common.Theme {
 	return GetUIManager().GetAllThemes(ctx)
 }
@@ -129,7 +137,7 @@ func (u *uiImpl) Notify(ctx context.Context, msg common.NotifyMsg) {
 		logger.Info(ctx, "toolbar/system message muted by backend")
 		return
 	}
-	if u.IsVisible(ctx) && !u.IsInSettingView() && !plugin.GetPluginManager().HasVisibleToolbarMsg(ctx) {
+	if u.IsVisible(ctx) && !u.IsInManagementView() && !plugin.GetPluginManager().HasVisibleToolbarMsg(ctx) {
 		u.invokeWebsocketMethod(ctx, "ShowToolbarMsg", msg)
 	} else {
 		var icon image.Image
@@ -162,6 +170,12 @@ func (u *uiImpl) ClearToolbarMsg(ctx context.Context, toolbarMsgId string) {
 
 func (u *uiImpl) IsInSettingView() bool {
 	return u.isInSettingView
+}
+
+func (u *uiImpl) IsInManagementView() bool {
+	// Settings and onboarding both occupy the shared Wox window as management
+	// surfaces, so toolbar notifications should not overlay either of them.
+	return u.isInSettingView || u.isInOnboardingView
 }
 
 func (u *uiImpl) FocusToChatInput(ctx context.Context) {

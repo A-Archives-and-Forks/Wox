@@ -561,6 +561,13 @@ func (m *Manager) PostUIReady(ctx context.Context) {
 	m.applyAutoAppearanceThemeIfNeed(ctx)
 
 	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
+	if !woxSetting.OnboardingFinished.Get() {
+		// The first-run guide must win over HideOnStart so every user data
+		// directory gets one skippable setup pass before normal launcher startup.
+		m.ui.OpenOnboardingWindow(ctx)
+		return
+	}
+
 	if !woxSetting.HideOnStart.Get() {
 		m.ui.ShowApp(ctx, common.ShowContext{})
 	}
@@ -571,6 +578,7 @@ func (m *Manager) PostOnShow(ctx context.Context) {
 	if impl, ok := m.ui.(*uiImpl); ok {
 		impl.isVisible = true
 		impl.isInSettingView = false
+		impl.isInOnboardingView = false
 	}
 
 	analytics.TrackUIOpened(ctx)
@@ -603,12 +611,33 @@ func (m *Manager) PostOnHide(ctx context.Context) {
 	if impl, ok := m.ui.(*uiImpl); ok {
 		impl.isVisible = false
 		impl.isInSettingView = false
+		impl.isInOnboardingView = false
 	}
 }
 
 func (m *Manager) PostOnSetting(ctx context.Context, isInSettingView bool) {
 	if impl, ok := m.ui.(*uiImpl); ok {
 		impl.isInSettingView = isInSettingView
+		if isInSettingView {
+			// Settings can be opened while the launcher is hidden. Marking the
+			// shared window visible here keeps backend notification routing in
+			// sync without waiting for launcher-specific onShow.
+			impl.isVisible = true
+			impl.isInOnboardingView = false
+		}
+	}
+}
+
+func (m *Manager) PostOnOnboarding(ctx context.Context, isInOnboardingView bool) {
+	if impl, ok := m.ui.(*uiImpl); ok {
+		// Onboarding is a management surface like settings, but it needs its own
+		// state so Flutter can keep isInSettingView false while backend routing
+		// still suppresses toolbar notifications over the guide.
+		impl.isInOnboardingView = isInOnboardingView
+		if isInOnboardingView {
+			impl.isVisible = true
+			impl.isInSettingView = false
+		}
 	}
 }
 

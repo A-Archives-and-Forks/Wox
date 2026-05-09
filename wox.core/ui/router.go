@@ -28,6 +28,7 @@ import (
 	"wox/util/font"
 	"wox/util/hotkey"
 	"wox/util/overlay"
+	"wox/util/permission"
 	"wox/util/screen"
 	utilselection "wox/util/selection"
 	"wox/util/shell"
@@ -75,6 +76,7 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	"/on/querybox/focus": handleOnQueryBoxFocus,
 	"/on/hide":           handleOnHide,
 	"/on/setting":        handleOnSetting,
+	"/on/onboarding":     handleOnOnboarding,
 	"/usage/stats":       handleUsageStats,
 
 	// lang
@@ -92,7 +94,9 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	"/ai/agents":        handleAIAgents,
 
 	// doctor
-	"/doctor/check": handleDoctorCheck,
+	"/doctor/check":                  handleDoctorCheck,
+	"/permission/accessibility/open": handlePermissionAccessibilityOpen,
+	"/permission/privacy/open":       handlePermissionPrivacyOpen,
 
 	// others
 	"/":                      handleHome,
@@ -117,6 +121,7 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	// test-only triggers
 	"/test/plugin/install_local":     handleTestInstallLocalPlugin,
 	"/test/trigger/open_setting":     handleTestTriggerOpenSetting,
+	"/test/trigger/open_onboarding":  handleTestTriggerOpenOnboarding,
 	"/test/trigger/query_hotkey":     handleTestTriggerQueryHotkey,
 	"/test/trigger/screenshot":       handleTestTriggerScreenshot,
 	"/test/trigger/selection_hotkey": handleTestTriggerSelectionHotkey,
@@ -605,6 +610,7 @@ func handleSettingWox(w http.ResponseWriter, r *http.Request) {
 	settingDto.UsePinYin = woxSetting.UsePinYin.Get()
 	settingDto.SwitchInputMethodABC = woxSetting.SwitchInputMethodABC.Get()
 	settingDto.HideOnStart = woxSetting.HideOnStart.Get()
+	settingDto.OnboardingFinished = woxSetting.OnboardingFinished.Get()
 	settingDto.HideOnLostFocus = woxSetting.HideOnLostFocus.Get()
 	settingDto.ShowTray = woxSetting.ShowTray.Get()
 	settingDto.LangCode = woxSetting.LangCode.Get()
@@ -700,6 +706,10 @@ func handleSettingWoxUpdate(w http.ResponseWriter, r *http.Request) {
 		woxSetting.SwitchInputMethodABC.Set(vb)
 	case "HideOnStart":
 		woxSetting.HideOnStart.Set(vb)
+	case "OnboardingFinished":
+		// The guide writes completion through the existing settings endpoint so
+		// skip and finish share one durable state transition with no extra API.
+		woxSetting.OnboardingFinished.Set(vb)
 	case "HideOnLostFocus":
 		woxSetting.HideOnLostFocus.Set(vb)
 	case "ShowTray":
@@ -1411,6 +1421,16 @@ func handleTestTriggerOpenSetting(w http.ResponseWriter, r *http.Request) {
 	writeSuccessResponse(w, "")
 }
 
+func handleTestTriggerOpenOnboarding(w http.ResponseWriter, r *http.Request) {
+	if !ensureTestTriggerEnabled(w) {
+		return
+	}
+
+	ctx := getTraceContext(r)
+	GetUIManager().GetUI(ctx).OpenOnboardingWindow(ctx)
+	writeSuccessResponse(w, "")
+}
+
 func handleTestTriggerSelectionHotkey(w http.ResponseWriter, r *http.Request) {
 	if !ensureTestTriggerEnabled(w) {
 		return
@@ -1616,6 +1636,19 @@ func handleOnSetting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	GetUIManager().PostOnSetting(ctx, inSettingViewResult.Bool())
+	writeSuccessResponse(w, "")
+}
+
+func handleOnOnboarding(w http.ResponseWriter, r *http.Request) {
+	ctx := getTraceContext(r)
+	body, _ := io.ReadAll(r.Body)
+	inOnboardingViewResult := gjson.GetBytes(body, "inOnboardingView")
+	if !inOnboardingViewResult.Exists() {
+		writeErrorResponse(w, "inOnboardingView is required")
+		return
+	}
+
+	GetUIManager().PostOnOnboarding(ctx, inOnboardingViewResult.Bool())
 	writeSuccessResponse(w, "")
 }
 
@@ -1891,6 +1924,23 @@ func handleDoctorCheck(w http.ResponseWriter, r *http.Request) {
 	ctx := getTraceContext(r)
 	results := plugin.RunDoctorChecks(ctx)
 	writeSuccessResponse(w, results)
+}
+
+func handlePermissionAccessibilityOpen(w http.ResponseWriter, r *http.Request) {
+	ctx := getTraceContext(r)
+	// The onboarding permission page should be non-blocking: opening System
+	// Settings is a best-effort side effect and the guide remains skippable if
+	// the platform has no corresponding permission panel.
+	permission.GrantAccessibilityPermission(ctx)
+	writeSuccessResponse(w, "")
+}
+
+func handlePermissionPrivacyOpen(w http.ResponseWriter, r *http.Request) {
+	ctx := getTraceContext(r)
+	// Full Disk Access cannot be detected reliably here, so onboarding only
+	// opens the privacy page and explains the File Search impact in UI text.
+	permission.OpenPrivacySecuritySettings(ctx)
+	writeSuccessResponse(w, "")
 }
 
 func handleUserDataLocation(w http.ResponseWriter, r *http.Request) {

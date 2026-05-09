@@ -19,20 +19,24 @@ type WoxSetting struct {
 	UsePinYin            *WoxSettingValue[bool]
 	SwitchInputMethodABC *WoxSettingValue[bool]
 	HideOnStart          *WoxSettingValue[bool]
-	HideOnLostFocus      *WoxSettingValue[bool]
-	ShowTray             *WoxSettingValue[bool]
-	LangCode             *WoxSettingValue[i18n.LangCode]
-	QueryHotkeys         *PlatformValue[[]QueryHotkey]
-	QueryShortcuts       *WoxSettingValue[[]QueryShortcut]
-	TrayQueries          *WoxSettingValue[[]TrayQuery]
-	LaunchMode           *WoxSettingValue[LaunchMode]
-	StartPage            *WoxSettingValue[StartPage]
-	ShowPosition         *WoxSettingValue[PositionType]
-	AIProviders          *WoxSettingValue[[]AIProvider]
-	EnableAutoBackup     *WoxSettingValue[bool]
-	EnableAutoUpdate     *WoxSettingValue[bool]
-	CustomPythonPath     *PlatformValue[string]
-	CustomNodejsPath     *PlatformValue[string]
+	// OnboardingFinished records whether this user data directory has already
+	// seen the first-run guide. This is independent of account age because old
+	// users who never saw the guide should still get one skippable pass.
+	OnboardingFinished *WoxSettingValue[bool]
+	HideOnLostFocus    *WoxSettingValue[bool]
+	ShowTray           *WoxSettingValue[bool]
+	LangCode           *WoxSettingValue[i18n.LangCode]
+	QueryHotkeys       *PlatformValue[[]QueryHotkey]
+	QueryShortcuts     *WoxSettingValue[[]QueryShortcut]
+	TrayQueries        *WoxSettingValue[[]TrayQuery]
+	LaunchMode         *WoxSettingValue[LaunchMode]
+	StartPage          *WoxSettingValue[StartPage]
+	ShowPosition       *WoxSettingValue[PositionType]
+	AIProviders        *WoxSettingValue[[]AIProvider]
+	EnableAutoBackup   *WoxSettingValue[bool]
+	EnableAutoUpdate   *WoxSettingValue[bool]
+	CustomPythonPath   *PlatformValue[string]
+	CustomNodejsPath   *PlatformValue[string]
 
 	// HTTP proxy settings
 	HttpProxyEnabled *PlatformValue[bool]
@@ -247,6 +251,7 @@ func NewWoxSetting(store *WoxSettingStore) *WoxSetting {
 		ShowTray:             NewWoxSettingValue(store, "ShowTray", true),
 		HideOnLostFocus:      NewWoxSettingValue(store, "HideOnLostFocus", false),
 		HideOnStart:          NewWoxSettingValue(store, "HideOnStart", false),
+		OnboardingFinished:   NewWoxSettingValue(store, "OnboardingFinished", false),
 		LangCode: NewWoxSettingValueWithValidator(store, "LangCode", defaultLangCode, func(code i18n.LangCode) bool {
 			return i18n.IsSupportedLangCode(string(code))
 		}),
@@ -254,7 +259,7 @@ func NewWoxSetting(store *WoxSettingStore) *WoxSetting {
 		StartPage:                 NewWoxSettingValue(store, "StartPage", StartPageMRU),
 		ShowPosition:              NewWoxSettingValue(store, "ShowPosition", PositionTypeMouseScreen),
 		AppWidth:                  NewWoxSettingValue(store, "AppWidth", 750),
-		MaxResultCount:            NewWoxSettingValue(store, "MaxResultCount", 10),
+		MaxResultCount:            NewWoxSettingValue(store, "MaxResultCount", 8),
 		UiDensity:                 NewWoxSettingValueWithValidator(store, "UiDensity", UiDensityNormal, IsValidUiDensity),
 		ThemeId:                   NewWoxSettingValue(store, "ThemeId", DefaultThemeId),
 		AppFontFamily:             NewPlatformValue(store, "AppFontFamily", "", "", ""),

@@ -50,6 +50,7 @@ type UI interface {
 	ShowApp(ctx context.Context, showContext ShowContext)
 	ToggleApp(ctx context.Context, showContext ShowContext)
 	OpenSettingWindow(ctx context.Context, windowContext SettingWindowContext)
+	OpenOnboardingWindow(ctx context.Context)
 	PickFiles(ctx context.Context, params PickFilesParams) []string
 	CaptureScreenshot(ctx context.Context, request CaptureScreenshotRequest) (CaptureScreenshotResult, error)
 	GetActiveWindowSnapshot(ctx context.Context) ActiveWindowSnapshot
