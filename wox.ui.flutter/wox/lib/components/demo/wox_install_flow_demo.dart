@@ -131,13 +131,7 @@ class _InstallFlowDemoState extends State<_InstallFlowDemo> with SingleTickerPro
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      WoxDemoHintCard(
-                        accent: widget.accent,
-                        icon: widget.icon,
-                        title: widget.title,
-                        from: widget.hintFrom,
-                        to: widget.hintTo,
-                      ),
+                      WoxDemoHintCard(accent: widget.accent, icon: widget.icon, title: widget.title, from: widget.hintFrom, to: widget.hintTo),
                       const SizedBox(height: 12),
                       Expanded(
                         // Theme install feature: when the animation reaches the

@@ -29,3 +29,4 @@ part 'wox_action_panel_demo.dart';
 part 'wox_demo_window.dart';
 part 'wox_demo_action_panel.dart';
 part 'wox_demo_glance_accessory.dart';
+part 'wox_query_concept_demo.dart';

@@ -121,6 +121,13 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
   @override
   void initState() {
     super.initState();
+    // Kick off glance loading immediately so the data is ready (or still
+    // loading in the background) by the time the user reaches that step.
+    // Previously this only started when the glance step was entered, which
+    // made every user wait for a network/plugin round-trip at that exact
+    // moment instead of during the earlier setup steps.
+    hasRequestedGlanceLoad = true;
+    unawaited(_loadGlanceChoices());
     _handleStepEntered();
   }
 
@@ -136,6 +143,9 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
   }
 
   void _handleStepEntered() {
+    // Glance loading is now started eagerly in initState, so the guard here
+    // is kept only as a safety fallback in case the step is somehow reached
+    // without the eager load having been requested.
     if (activeStep.id == 'glance' && !hasRequestedGlanceLoad) {
       hasRequestedGlanceLoad = true;
       unawaited(_loadGlanceChoices());
@@ -1115,6 +1125,11 @@ class _OnboardingMediaCard extends StatelessWidget {
         return WoxGlanceDemo(accent: accent, enabled: glanceEnabled, label: glanceLabel, value: glanceValue, icon: glanceIcon, tr: tr);
       case 'actionPanel':
         return WoxActionPanelDemo(accent: accent, hotkey: Platform.isMacOS ? 'Cmd+J' : 'Alt+J', queryAccessory: _buildGlanceAccessory(), tr: tr);
+      case 'welcome':
+        // Show the query anatomy diagram on the welcome step so users learn the
+        // trigger-keyword / command / search-term vocabulary before configuring
+        // anything. The concept is referenced by name throughout the rest of the guide.
+        return WoxQueryConceptDemo(accent: accent, tr: tr);
       case 'queryHotkeys':
         return WoxQueryHotkeysDemo(accent: accent, tr: tr);
       case 'trayQueries':
