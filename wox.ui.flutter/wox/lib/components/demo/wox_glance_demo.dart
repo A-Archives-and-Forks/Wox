@@ -24,7 +24,10 @@ class WoxGlanceDemo extends StatelessWidget {
     return WoxDemoFramedDesktop(
       accent: accent,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(48, 82, 52, 44),
+        // Symmetric vertical padding centres the Wox window within the desktop
+        // frame. The previous 82/44 split was inherited from demos that carry a
+        // hint strip at the top; the Glance demo does not use one.
+        padding: const EdgeInsets.fromLTRB(48, 44, 52, 44),
         child: WoxDemoWindow(
           accent: accent,
           query: 'wox',

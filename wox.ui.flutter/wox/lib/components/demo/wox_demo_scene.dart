@@ -41,7 +41,11 @@ class WoxDemoScene extends StatelessWidget {
             Positioned(left: file.left, top: file.top, child: WoxDemoDesktopFileIcon(label: file.label, icon: file.icon, accent: file.accent, selected: file.selected)),
           Positioned.fill(
             child: Padding(
-              padding: contentPadding,
+              // When a hint card is present the default top padding (82px) is
+              // intentionally larger than the bottom (44px) to leave room for
+              // the hint strip. Without a hint the asymmetry pushes the Wox
+              // window below the visual center, so we equalise both sides.
+              padding: hint != null ? contentPadding : contentPadding.resolve(TextDirection.ltr).copyWith(top: contentPadding.resolve(TextDirection.ltr).bottom),
               child: Column(
                 children: [
                   if (hint != null) ...[hint!, const SizedBox(height: 12)],

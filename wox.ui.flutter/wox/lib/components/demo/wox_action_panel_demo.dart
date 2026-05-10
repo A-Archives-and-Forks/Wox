@@ -69,7 +69,10 @@ class _WoxActionPanelDemoState extends State<WoxActionPanelDemo> with SingleTick
         return WoxDemoFramedDesktop(
           accent: widget.accent,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(48, 76, 52, 44),
+            // Symmetric vertical padding centres the Wox window within the
+            // desktop frame. The previous 76/44 split was a leftover from
+            // when a hint strip occupied the top, which this demo does not have.
+            padding: const EdgeInsets.fromLTRB(48, 44, 52, 44),
             child: WoxDemoWindow(
               accent: widget.accent,
               query: 'sett',
