@@ -65,8 +65,10 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
     // Feature change: the previous Advanced Queries page bundled three
     // unrelated workflows. Splitting them into dedicated steps lets each query
     // feature get its own explanation and animated demo.
+    // Query shortcuts removed from onboarding: the alias expansion concept adds
+    // complexity without being critical for first-run setup. Users can discover
+    // it naturally via Settings after they are comfortable with the launcher.
     const _OnboardingStep(id: 'queryHotkeys', titleKey: 'onboarding_query_hotkeys_title'),
-    const _OnboardingStep(id: 'queryShortcuts', titleKey: 'onboarding_query_shortcuts_title'),
     const _OnboardingStep(id: 'trayQueries', titleKey: 'onboarding_tray_queries_title'),
     // Feature change: plugin and theme installation are common first-run
     // workflows, so they are taught as standalone sections instead of being
@@ -108,7 +110,6 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
       'glance' => const Color(0xFFFACC15),
       'actionPanel' => const Color(0xFF34D399),
       'queryHotkeys' => const Color(0xFFF43F5E),
-      'queryShortcuts' => const Color(0xFFA78BFA),
       'trayQueries' => const Color(0xFF22C55E),
       'wpmInstall' => const Color(0xFF38BDF8),
       'themeInstall' => const Color(0xFFE879F9),
@@ -212,7 +213,11 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
         // Flutter's debug error surface and gives text the expected app style.
         key: const ValueKey('onboarding-view'),
         color: background,
-        child: DefaultTextStyle(
+        // Use DefaultTextStyle.merge so that the fontFamily set by SystemChineseFont
+        // in the MaterialApp theme is preserved. DefaultTextStyle would fully replace
+        // the inherited style, losing the Chinese system font that the setting view
+        // and other views correctly inherit from the Material widget chain.
+        child: DefaultTextStyle.merge(
           style: TextStyle(color: getThemeTextColor(), fontSize: 13),
           child: Stack(
             children: [
@@ -377,21 +382,6 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
       );
     }
 
-    double settingsHeightForStep(String stepId) {
-      // Layout change: the general step description moved out of the right pane
-      // so the animated demo can become the primary teaching surface. Each
-      // settings area gets a fixed, scrollable height instead of sharing a flex
-      // ratio with the demo, which keeps the demo size predictable per viewport.
-      return switch (stepId) {
-        'welcome' => 150,
-        'permissions' => 146,
-        'mainHotkey' || 'selectionHotkey' => 126,
-        'glance' => 148,
-        'finish' => 112,
-        _ => 108,
-      };
-    }
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(38, 30, 38, 20),
       child: LayoutBuilder(
@@ -400,10 +390,6 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
           const titleToSettingsGap = 16.0;
           const settingsToDemoGap = 18.0;
           final availableHeight = constraints.maxHeight;
-          final preferredSettingsHeight = settingsHeightForStep(activeStep.id);
-          final maxSettingsHeight = (availableHeight - titleHeight - titleToSettingsGap - settingsToDemoGap - 360).clamp(84.0, preferredSettingsHeight).toDouble();
-          final settingsHeight = preferredSettingsHeight.clamp(84.0, maxSettingsHeight).toDouble();
-          final demoHeight = (availableHeight - titleHeight - titleToSettingsGap - settingsHeight - settingsToDemoGap).clamp(280.0, double.infinity).toDouble();
 
           return AnimatedSwitcher(
             duration: const Duration(milliseconds: 280),
@@ -432,9 +418,16 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
                     ),
                   ),
                   const SizedBox(height: titleToSettingsGap),
-                  SizedBox(height: settingsHeight, child: SingleChildScrollView(child: Align(alignment: Alignment.topLeft, child: _buildStepContent()))),
+                  // Layout priority: step content renders at its natural intrinsic
+                  // height so it is always fully visible without a scrollbar. The
+                  // fixed-height + SingleChildScrollView approach was shrinking the
+                  // content area too aggressively when the demo minimum consumed too
+                  // much of the available space.
+                  Align(alignment: Alignment.topLeft, child: _buildStepContent()),
                   const SizedBox(height: settingsToDemoGap),
-                  SizedBox(height: demoHeight, child: buildMediaSlot()),
+                  // Demo gets whatever vertical space remains after the step content.
+                  // A minHeight guard keeps the demo usable on shorter viewports.
+                  Expanded(child: ConstrainedBox(constraints: const BoxConstraints(minHeight: 280), child: buildMediaSlot())),
                 ],
               ),
             ),
@@ -467,13 +460,6 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
           titleKey: 'onboarding_query_hotkeys_title',
           bodyKey: 'onboarding_query_hotkeys_body',
           badge: tr('ui_query_hotkeys'),
-        );
-      case 'queryShortcuts':
-        return _buildFeatureStep(
-          key: const ValueKey('onboarding-query-shortcuts-page'),
-          titleKey: 'onboarding_query_shortcuts_title',
-          bodyKey: 'onboarding_query_shortcuts_body',
-          badge: tr('ui_query_shortcuts'),
         );
       case 'trayQueries':
         return _buildFeatureStep(
@@ -1131,8 +1117,6 @@ class _OnboardingMediaCard extends StatelessWidget {
         return WoxActionPanelDemo(accent: accent, hotkey: Platform.isMacOS ? 'Cmd+J' : 'Alt+J', queryAccessory: _buildGlanceAccessory(), tr: tr);
       case 'queryHotkeys':
         return WoxQueryHotkeysDemo(accent: accent, tr: tr);
-      case 'queryShortcuts':
-        return WoxQueryShortcutsDemo(accent: accent, tr: tr);
       case 'trayQueries':
         return WoxTrayQueriesDemo(accent: accent, tr: tr);
       case 'wpmInstall':

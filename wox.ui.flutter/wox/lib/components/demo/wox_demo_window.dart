@@ -1,5 +1,56 @@
 part of 'wox_demo.dart';
 
+// Carries per-demo color overrides used by the theme-install step to preview
+// the applied theme appearance without touching the global WoxThemeUtil state.
+class _DemoThemeData {
+  const _DemoThemeData({
+    required this.background,
+    required this.accent,
+    required this.queryBarBackground,
+    required this.queryBarText,
+    required this.resultTitleColor,
+    required this.resultSubtitleColor,
+    required this.resultActiveBackground,
+    required this.resultActiveTitleColor,
+    required this.resultActiveSubtitleColor,
+    required this.tailColor,
+    required this.activeTailColor,
+    required this.textColor,
+  });
+
+  final Color background;
+  final Color accent;
+  final Color queryBarBackground;
+  final Color queryBarText;
+  final Color resultTitleColor;
+  final Color resultSubtitleColor;
+  final Color resultActiveBackground;
+  final Color resultActiveTitleColor;
+  final Color resultActiveSubtitleColor;
+  final Color tailColor;
+  final Color activeTailColor;
+  // Used for borders, toolbar labels, and other neutral chrome.
+  final Color textColor;
+}
+
+// InheritedWidget that propagates _DemoThemeData through the demo widget tree.
+// Descendant widgets (_MiniSearchBar, _MiniResultRow, _MiniFooter, etc.)
+// read from this widget and substitute its colors instead of WoxThemeUtil,
+// allowing the theme-install demo to show the "after" appearance without
+// altering any global theme state.
+class _InheritedDemoTheme extends InheritedWidget {
+  const _InheritedDemoTheme({required this.data, required super.child});
+
+  final _DemoThemeData data;
+
+  static _DemoThemeData? of(BuildContext context) {
+    return context.dependOnInheritedWidgetOfExactType<_InheritedDemoTheme>()?.data;
+  }
+
+  @override
+  bool updateShouldNotify(_InheritedDemoTheme old) => old.data != data;
+}
+
 class WoxDemoResult {
   const WoxDemoResult({required this.title, required this.icon, this.subtitle, this.tail, this.selected = false});
 
@@ -88,57 +139,72 @@ class WoxDemoWindow extends StatelessWidget {
           child: SizedBox(
             width: previewWidth,
             height: previewHeight,
-            child: Container(
-              decoration: BoxDecoration(
-                // Feature refinement: the main-hotkey desktop scene needs an
-                // opaque launcher surface so the simulated desktop does not
-                // wash through Wox. Other onboarding previews keep their
-                // existing translucent treatment unless they opt in.
-                color: opaqueBackground ? getThemeBackgroundColor().withValues(alpha: 1) : getThemeBackgroundColor().withValues(alpha: 0.86),
-                border: Border.all(color: getThemeTextColor().withValues(alpha: 0.10)),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: RadialGradient(center: const Alignment(0.6, -0.5), radius: 1.05, colors: [accent.withValues(alpha: 0.12), Colors.transparent]),
-                        ),
-                      ),
-                    ),
-                    if (showQueryBox) _MiniSearchBar(query: query, trailing: queryAccessory),
-                    // Feature refinement: the mock launcher now follows the
-                    // production query/result vertical rhythm instead of using
-                    // compact onboarding-only row spacing. This keeps fonts,
-                    // padding, and density comparable to the real Wox window.
-                    Positioned(
-                      left: 12,
-                      right: 12,
-                      top: resultTop,
-                      bottom: shouldShrinkToContent ? null : bottomPadding,
-                      height: shouldShrinkToContent ? resultListHeight : null,
-                      child: _MiniResultList(results: results),
-                    ),
-                    if (hasFooter) _MiniFooter(accent: accent, hotkey: effectiveFooterHotkey, isPressed: isFooterHotkeyPressed),
-                    if (actionPanel != null)
-                      Positioned(
-                        right: 16,
-                        bottom: footerHeight + 12,
-                        width: actionPanelWidth,
-                        child: Opacity(
-                          opacity: actionPanelProgress,
-                          child: Transform.translate(
-                            offset: Offset(18 * (1 - actionPanelProgress), 10 * (1 - actionPanelProgress)),
-                            child: Transform.scale(alignment: Alignment.bottomRight, scale: 0.96 + (0.04 * actionPanelProgress), child: actionPanel),
+            child: Builder(
+              builder: (innerCtx) {
+                // Theme override: the theme-install step wraps this window with
+                // _InheritedDemoTheme to show the applied theme colors. We read
+                // it here so the container background and accent gradient also
+                // switch without needing an extra widget layer.
+                final demoTheme = _InheritedDemoTheme.of(innerCtx);
+                final effectiveAccent = demoTheme?.accent ?? accent;
+                final effectiveBg =
+                    demoTheme != null
+                        ? demoTheme.background
+                        : (opaqueBackground ? getThemeBackgroundColor().withValues(alpha: 1) : getThemeBackgroundColor().withValues(alpha: 0.86));
+                final effectiveBorderColor = (demoTheme?.textColor ?? getThemeTextColor()).withValues(alpha: 0.10);
+                return Container(
+                  decoration: BoxDecoration(
+                    // Feature refinement: the main-hotkey desktop scene needs an
+                    // opaque launcher surface so the simulated desktop does not
+                    // wash through Wox. Other onboarding previews keep their
+                    // existing translucent treatment unless they opt in.
+                    color: effectiveBg,
+                    border: Border.all(color: effectiveBorderColor),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: RadialGradient(center: const Alignment(0.6, -0.5), radius: 1.05, colors: [effectiveAccent.withValues(alpha: 0.12), Colors.transparent]),
+                            ),
                           ),
                         ),
-                      ),
-                  ],
-                ),
-              ),
+                        if (showQueryBox) _MiniSearchBar(query: query, trailing: queryAccessory),
+                        // Feature refinement: the mock launcher now follows the
+                        // production query/result vertical rhythm instead of using
+                        // compact onboarding-only row spacing. This keeps fonts,
+                        // padding, and density comparable to the real Wox window.
+                        Positioned(
+                          left: 12,
+                          right: 12,
+                          top: resultTop,
+                          bottom: shouldShrinkToContent ? null : bottomPadding,
+                          height: shouldShrinkToContent ? resultListHeight : null,
+                          child: _MiniResultList(results: results),
+                        ),
+                        if (hasFooter) _MiniFooter(accent: effectiveAccent, hotkey: effectiveFooterHotkey, isPressed: isFooterHotkeyPressed),
+                        if (actionPanel != null)
+                          Positioned(
+                            right: 16,
+                            bottom: footerHeight + 12,
+                            width: actionPanelWidth,
+                            child: Opacity(
+                              opacity: actionPanelProgress,
+                              child: Transform.translate(
+                                offset: Offset(18 * (1 - actionPanelProgress), 10 * (1 - actionPanelProgress)),
+                                child: Transform.scale(alignment: Alignment.bottomRight, scale: 0.96 + (0.04 * actionPanelProgress), child: actionPanel),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         );
@@ -157,6 +223,11 @@ class _MiniSearchBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final metrics = WoxInterfaceSizeUtil.instance.current;
     final woxTheme = WoxThemeUtil.instance.currentTheme.value;
+    // Theme override: use demo-provided colors when a _InheritedDemoTheme
+    // ancestor is present (e.g. during the theme-install applied state).
+    final demoTheme = _InheritedDemoTheme.of(context);
+    final barBackground = demoTheme?.queryBarBackground ?? woxTheme.queryBoxBackgroundColorParsed;
+    final barText = demoTheme?.queryBarText ?? woxTheme.queryBoxFontColorParsed;
 
     return Positioned(
       left: 12,
@@ -164,13 +235,16 @@ class _MiniSearchBar extends StatelessWidget {
       top: 12,
       child: Container(
         height: metrics.queryBoxBaseHeight,
-        padding: const EdgeInsets.only(left: 8, right: 8, top: QUERY_BOX_CONTENT_PADDING_TOP, bottom: QUERY_BOX_CONTENT_PADDING_BOTTOM),
-        decoration: BoxDecoration(color: woxTheme.queryBoxBackgroundColorParsed, borderRadius: BorderRadius.circular(woxTheme.queryBoxBorderRadius.toDouble())),
+        // Demo fix: use symmetric horizontal padding and let the Row center text
+        // vertically. The real launcher uses asymmetric QUERY_BOX_CONTENT_PADDING
+        // values tuned for TextField cursor positioning, but those values clip
+        // the top ascenders of large glyphs (e.g. 'g') when applied to a plain
+        // Text widget in the demo.
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(color: barBackground, borderRadius: BorderRadius.circular(woxTheme.queryBoxBorderRadius.toDouble())),
         child: Row(
           children: [
-            Expanded(
-              child: Text(query, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: woxTheme.queryBoxFontColorParsed, fontSize: metrics.queryBoxFontSize)),
-            ),
+            Expanded(child: Text(query, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: barText, fontSize: metrics.queryBoxFontSize))),
             // Feature refinement: the search row has no implicit Glance item.
             // Callers opt in only after the Glance step has introduced and
             // enabled it, which keeps earlier examples from leaking later
@@ -230,17 +304,30 @@ class _MiniResultRow extends StatelessWidget {
     // keeps the example aligned with real query results across densities.
     final metrics = WoxInterfaceSizeUtil.instance.current;
     final woxTheme = WoxThemeUtil.instance.currentTheme.value;
+    // Theme override: substitute demo colors when the window is wrapped with
+    // _InheritedDemoTheme (e.g. while previewing the applied Ocean Dark theme).
+    final demoTheme = _InheritedDemoTheme.of(context);
     final hasSubtitle = subtitle != null && subtitle!.isNotEmpty;
     final borderRadius = woxTheme.resultItemBorderRadius > 0 ? BorderRadius.circular(woxTheme.resultItemBorderRadius.toDouble()) : BorderRadius.zero;
     final maxBorderWidth =
         (woxTheme.resultItemActiveBorderLeftWidth > woxTheme.resultItemBorderLeftWidth ? woxTheme.resultItemActiveBorderLeftWidth : woxTheme.resultItemBorderLeftWidth).toDouble();
     final actualBorderWidth = selected ? woxTheme.resultItemActiveBorderLeftWidth.toDouble() : woxTheme.resultItemBorderLeftWidth.toDouble();
-    final titleColor = selected ? woxTheme.resultItemActiveTitleColorParsed : woxTheme.resultItemTitleColorParsed;
-    final subtitleColor = selected ? woxTheme.resultItemActiveSubTitleColorParsed : woxTheme.resultItemSubTitleColorParsed;
-    final tailColor = selected ? woxTheme.resultItemActiveTailTextColorParsed : woxTheme.resultItemTailTextColorParsed;
+    final titleColor =
+        demoTheme != null
+            ? (selected ? demoTheme.resultActiveTitleColor : demoTheme.resultTitleColor)
+            : (selected ? woxTheme.resultItemActiveTitleColorParsed : woxTheme.resultItemTitleColorParsed);
+    final subtitleColor =
+        demoTheme != null
+            ? (selected ? demoTheme.resultActiveSubtitleColor : demoTheme.resultSubtitleColor)
+            : (selected ? woxTheme.resultItemActiveSubTitleColorParsed : woxTheme.resultItemSubTitleColorParsed);
+    final tailColor =
+        demoTheme != null
+            ? (selected ? demoTheme.activeTailColor : demoTheme.tailColor)
+            : (selected ? woxTheme.resultItemActiveTailTextColorParsed : woxTheme.resultItemTailTextColorParsed);
+    final activeBackground = demoTheme?.resultActiveBackground ?? woxTheme.resultItemActiveBackgroundColorParsed;
 
     Widget content = Container(
-      decoration: BoxDecoration(color: selected ? woxTheme.resultItemActiveBackgroundColorParsed : Colors.transparent),
+      decoration: BoxDecoration(color: selected ? activeBackground : Colors.transparent),
       padding: EdgeInsets.only(
         top: metrics.scaledSpacing(woxTheme.resultItemPaddingTop.toDouble()),
         right: metrics.scaledSpacing(woxTheme.resultItemPaddingRight.toDouble()),
@@ -307,7 +394,7 @@ class _MiniResultRow extends StatelessWidget {
             child: Container(
               width: actualBorderWidth,
               decoration: BoxDecoration(
-                color: woxTheme.resultItemActiveBackgroundColorParsed,
+                color: activeBackground,
                 borderRadius: borderRadius != BorderRadius.zero ? BorderRadius.only(topLeft: borderRadius.topLeft, bottomLeft: borderRadius.bottomLeft) : BorderRadius.zero,
               ),
             ),

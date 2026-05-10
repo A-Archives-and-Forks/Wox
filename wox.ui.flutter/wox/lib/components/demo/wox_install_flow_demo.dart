@@ -16,6 +16,9 @@ class _InstallFlowDemo extends StatefulWidget {
     required this.primarySubtitle,
     required this.primaryIcon,
     required this.secondaryResults,
+    // Optional theme data shown after installation completes. When set the demo
+    // window crossfades to these colors to show the "applied theme" result.
+    this.appliedTheme,
   });
 
   final ValueKey<String> demoKey;
@@ -32,6 +35,7 @@ class _InstallFlowDemo extends StatefulWidget {
   final String primarySubtitle;
   final Widget primaryIcon;
   final List<WoxDemoResult> secondaryResults;
+  final _DemoThemeData? appliedTheme;
 
   @override
   State<_InstallFlowDemo> createState() => _InstallFlowDemoState();
@@ -43,7 +47,9 @@ class _InstallFlowDemoState extends State<_InstallFlowDemo> with SingleTickerPro
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 4600))..repeat();
+    // Duration extended from 4600ms to 5600ms so the applied-theme window
+    // stays visible for ~1.7s (was ~0.7s) before the loop restarts.
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 5600))..repeat();
   }
 
   @override
@@ -57,31 +63,46 @@ class _InstallFlowDemoState extends State<_InstallFlowDemo> with SingleTickerPro
     return curve.transform(value);
   }
 
+  // Timeline (5600ms total, thresholds derived from keeping all absolute
+  // durations the same as before except the applied-theme window which gains
+  // ~1000ms so users can read the result before the loop restarts):
+  //   0 –  460ms (0.00–0.08): initial pause
+  //   460 – 2576ms (0.08–0.46): typing query stages
+  //   2576 – 2944ms (0.46–0.53): full query visible, pre-install pause
+  //   2944 – 3496ms (0.53–0.62): install progress ramp
+  //   3496 – 3588ms (0.62–0.64): installed label
+  //   3588 – 5324ms (0.64–0.95): applied theme shown (~1736ms)
+  //   5324 – 5600ms (0.95–1.00): fade out install progress
+
   String _queryText() {
-    final typingProgress = _interval(0.10, 0.56, Curves.easeOutCubic);
+    final typingProgress = _interval(0.08, 0.46, Curves.easeOutCubic);
     final rawStage = (typingProgress * (widget.queryStages.length - 1)).floor();
     final stage = rawStage.clamp(0, widget.queryStages.length - 1).toInt();
     return widget.queryStages[stage];
   }
 
   double _installProgress() {
-    if (_controller.value < 0.64) {
+    if (_controller.value < 0.53) {
       return 0;
     }
-    if (_controller.value < 0.78) {
-      return _interval(0.64, 0.78, Curves.easeOutCubic);
+    if (_controller.value < 0.64) {
+      return _interval(0.53, 0.64, Curves.easeOutCubic);
     }
-    if (_controller.value < 0.94) {
+    if (_controller.value < 0.95) {
       return 1;
     }
-    return 1 - _interval(0.94, 1, Curves.easeInCubic);
+    return 1 - _interval(0.95, 1, Curves.easeInCubic);
   }
 
+  // Returns true during the window where the theme has been fully applied and
+  // the demo window should show the new theme's appearance (~1736ms).
+  bool _isThemeApplied() => _controller.value >= 0.64 && _controller.value < 0.95;
+
   String _primaryTail() {
-    if (_controller.value >= 0.64 && _controller.value < 0.76) {
+    if (_controller.value >= 0.53 && _controller.value < 0.63) {
       return widget.installingLabel;
     }
-    if (_controller.value >= 0.76 && _controller.value < 0.94) {
+    if (_controller.value >= 0.63 && _controller.value < 0.95) {
       return widget.installedLabel;
     }
     return widget.installLabel;
@@ -116,18 +137,38 @@ class _InstallFlowDemoState extends State<_InstallFlowDemo> with SingleTickerPro
                         title: widget.title,
                         from: widget.hintFrom,
                         to: widget.hintTo,
-                        progress: 0.45 + (0.55 * installProgress),
                       ),
                       const SizedBox(height: 12),
                       Expanded(
-                        child: WoxDemoWindow(
-                          accent: widget.accent,
-                          query: _queryText(),
-                          opaqueBackground: true,
-                          results: [
-                            WoxDemoResult(title: widget.primaryTitle, subtitle: widget.primarySubtitle, icon: widget.primaryIcon, selected: true, tail: _primaryTail()),
-                            ...widget.secondaryResults,
-                          ],
+                        // Theme install feature: when the animation reaches the
+                        // "applied" window, crossfade to a WoxDemoWindow wrapped
+                        // with _InheritedDemoTheme so all descendant colors
+                        // (query bar, results, toolbar) switch to the new theme
+                        // without touching any global WoxThemeUtil state.
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 500),
+                          child: KeyedSubtree(
+                            key: ValueKey(_isThemeApplied() && widget.appliedTheme != null),
+                            child: Builder(
+                              builder: (ctx) {
+                                final isApplied = _isThemeApplied() && widget.appliedTheme != null;
+                                final effectiveAccent = isApplied ? widget.appliedTheme!.accent : widget.accent;
+                                final window = WoxDemoWindow(
+                                  accent: effectiveAccent,
+                                  query: _queryText(),
+                                  opaqueBackground: true,
+                                  results: [
+                                    WoxDemoResult(title: widget.primaryTitle, subtitle: widget.primarySubtitle, icon: widget.primaryIcon, selected: true, tail: _primaryTail()),
+                                    ...widget.secondaryResults,
+                                  ],
+                                );
+                                if (isApplied) {
+                                  return _InheritedDemoTheme(data: widget.appliedTheme!, child: window);
+                                }
+                                return window;
+                              },
+                            ),
+                          ),
                         ),
                       ),
                     ],

@@ -30,6 +30,9 @@ class _ExpansionBadge extends StatelessWidget {
 }
 
 class WoxDemoHintCard extends StatelessWidget {
+  // progress parameter is kept for API compatibility but no longer affects
+  // visibility. The badge is always shown so users can immediately read the
+  // from→to mapping without waiting for the animation to reach it.
   const WoxDemoHintCard({super.key, required this.accent, required this.icon, required this.title, required this.from, required this.to, this.progress = 1});
 
   final Color accent;
@@ -58,10 +61,7 @@ class WoxDemoHintCard extends StatelessWidget {
             child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w700)),
           ),
           const Spacer(),
-          Opacity(
-            opacity: progress.clamp(0.0, 1.0).toDouble(),
-            child: Transform.translate(offset: Offset(0, 6 * (1 - progress.clamp(0.0, 1.0).toDouble())), child: _ExpansionBadge(accent: accent, from: from, to: to)),
-          ),
+          _ExpansionBadge(accent: accent, from: from, to: to),
         ],
       ),
     );

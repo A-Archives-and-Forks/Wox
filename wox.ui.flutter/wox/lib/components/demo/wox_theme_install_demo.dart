@@ -36,6 +36,23 @@ class WoxThemeInstallDemo extends StatelessWidget {
           tail: tr('ui_setting_theme_system_tag'),
         ),
       ],
+      // Theme install feature: after the animation applies Ocean Dark, the demo
+      // window switches to these colors so users see the real visual effect of
+      // the theme change rather than the launcher staying in the current theme.
+      appliedTheme: const _DemoThemeData(
+        background: Color(0xFF0F172A),
+        accent: Color(0xFF38BDF8),
+        queryBarBackground: Color(0xFF1E293B),
+        queryBarText: Color(0xFFE0F2FE),
+        resultTitleColor: Color(0xFFCBD5E1),
+        resultSubtitleColor: Color(0xFF64748B),
+        resultActiveBackground: Color(0xFF1E3A5F),
+        resultActiveTitleColor: Color(0xFFFFFFFF),
+        resultActiveSubtitleColor: Color(0xFF7DD3FC),
+        tailColor: Color(0xFF475569),
+        activeTailColor: Color(0xFF38BDF8),
+        textColor: Color(0xFF94A3B8),
+      ),
     );
   }
 }
