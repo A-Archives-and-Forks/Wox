@@ -50,15 +50,24 @@ class WoxSettingDataView extends WoxSettingBaseView {
                 Text(controller.tr("ui_data_backup_list_title"), style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w500)),
                 const Spacer(),
                 // Keep backup creation visually aligned with table Add buttons: compact, outlined, and anchored to the table header edge.
-                WoxButton.secondary(
-                  text: controller.tr("ui_data_backup_now"),
-                  icon: Icon(Icons.add, color: getThemeSubTextColor()),
-                  height: 30,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  onPressed: () {
-                    controller.backupNow();
-                  },
-                ),
+                Obx(() {
+                  final isBackingUp = controller.isBackingUp.value;
+                  // Manual backups can run long enough for users to click again. Disabling the
+                  // button uses the existing gray disabled style, while the spinner shows that
+                  // the click was accepted without adding another dialog or background state.
+                  return WoxButton.secondary(
+                    text: controller.tr("ui_data_backup_now"),
+                    icon: isBackingUp ? WoxLoadingIndicator(size: 14, color: getThemeTextColor().withValues(alpha: 0.5)) : Icon(Icons.add, color: getThemeSubTextColor()),
+                    height: 30,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    onPressed:
+                        isBackingUp
+                            ? null
+                            : () {
+                              controller.backupNow();
+                            },
+                  );
+                }),
               ],
             ),
             const SizedBox(height: 10),

@@ -24,6 +24,10 @@ class WoxSettingController extends GetxController {
   final woxSetting = WoxSettingUtil.instance.currentSetting.obs;
   final userDataLocation = "".obs;
   final backups = <WoxBackup>[].obs;
+  // Manual backup can take noticeable time. Keep the in-flight state in the
+  // controller so the settings UI can disable duplicate clicks, and so calls
+  // that arrive before the widget rebuilds are still ignored in one place.
+  final isBackingUp = false.obs;
   final woxVersion = "".obs;
   final runtimeStatuses = <WoxRuntimeStatus>[].obs;
   final isRuntimeStatusLoading = false.obs;
@@ -1231,8 +1235,20 @@ class WoxSettingController extends GetxController {
   }
 
   Future<void> backupNow() async {
-    await WoxApi.instance.backupNow(const UuidV4().generate());
-    refreshBackups();
+    if (isBackingUp.value) {
+      return;
+    }
+
+    final traceId = const UuidV4().generate();
+    isBackingUp.value = true;
+    try {
+      await WoxApi.instance.backupNow(traceId);
+      await refreshBackups();
+    } catch (e) {
+      Logger.instance.error(traceId, 'Failed to create manual backup: $e');
+    } finally {
+      isBackingUp.value = false;
+    }
   }
 
   Future<void> refreshBackups() async {

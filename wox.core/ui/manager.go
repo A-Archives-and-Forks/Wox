@@ -1219,6 +1219,16 @@ func (m *Manager) RefreshActiveWindowSnapshot(ctx context.Context) {
 }
 
 func (m *Manager) shouldIgnoreHotkeyTrigger(ctx context.Context) bool {
+	if m.isOnboardingViewActive() {
+		// Bug fix: onboarding has its own hotkey setup UI and uses the shared
+		// Wox window. The previous guard only checked ignored foreground apps,
+		// so pressing a registered global hotkey during the guide could toggle
+		// or replace the onboarding surface. Keeping the check in the common
+		// hotkey gate blocks all global hotkey handlers while onboarding is active.
+		logger.Info(ctx, "ignore hotkey trigger while onboarding is active")
+		return true
+	}
+
 	ignoredApps := setting.GetSettingManager().GetWoxSetting(ctx).IgnoredHotkeyApps.Get()
 	if len(ignoredApps) == 0 {
 		return false
@@ -1242,6 +1252,13 @@ func (m *Manager) shouldIgnoreHotkeyTrigger(ctx context.Context) bool {
 		}
 	}
 
+	return false
+}
+
+func (m *Manager) isOnboardingViewActive() bool {
+	if impl, ok := m.ui.(*uiImpl); ok {
+		return impl.isInOnboardingView
+	}
 	return false
 }
 

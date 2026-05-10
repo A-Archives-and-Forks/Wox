@@ -1198,7 +1198,7 @@
   "onboarding_finish": "Finish",
   "onboarding_loading": "Loading",
   "onboarding_can_skip": "Skippable",
-  "onboarding_welcome_title": "Welcome",
+  "onboarding_welcome_title": "Welcome to Wox",
   "onboarding_welcome_description": "Configure the basics first, then skim the productivity features you can enable later.",
   "onboarding_permissions_title": "Permissions",
   "onboarding_permissions_description": "Some Wox features need operating-system permission before they can work reliably.",

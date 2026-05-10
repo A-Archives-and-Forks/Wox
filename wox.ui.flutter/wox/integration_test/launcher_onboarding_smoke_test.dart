@@ -9,195 +9,104 @@ import 'smoke_test_helper.dart';
 
 void registerLauncherOnboardingSmokeTests() {
   group('T1B: Onboarding Smoke Tests', () {
-    testWidgets(
-      'T1B-01: unfinished startup opens onboarding and skip finishes before launcher',
-      (tester) async {
-        final controller = await launchOnboardingApp(tester);
+    testWidgets('T1B-01: unfinished startup opens onboarding and skip finishes before launcher', (tester) async {
+      final controller = await launchOnboardingApp(tester);
 
-        expect(controller.isInOnboardingView.value, isTrue);
-        expect(find.byKey(const ValueKey('onboarding-view')), findsOneWidget);
+      expect(controller.isInOnboardingView.value, isTrue);
+      expect(find.byKey(const ValueKey('onboarding-view')), findsOneWidget);
 
-        await tester.tap(
-          find.byKey(const ValueKey('onboarding-skip-button')),
-          warnIfMissed: false,
-        );
+      await tester.tap(find.byKey(const ValueKey('onboarding-skip-button')), warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
+      await WoxSettingUtil.instance.loadSetting('onboarding-smoke-reload');
+
+      expect(controller.isInOnboardingView.value, isFalse);
+      expect(WoxSettingUtil.instance.currentSetting.onboardingFinished, isTrue);
+      expect(find.byType(WoxLauncherView), findsOneWidget);
+    });
+
+    testWidgets('T1B-02: about page can reopen onboarding and complete returns to launcher', (tester) async {
+      final controller = await launchLauncherApp(tester);
+      final settingController = await openSettings(tester, controller, '/about');
+
+      await tester.tap(find.byKey(const ValueKey('about-open-onboarding-button')), warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      await pumpUntil(tester, () => find.byKey(const ValueKey('onboarding-view')).evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
+      expect(controller.isInOnboardingView.value, isTrue);
+
+      await tester.tap(find.byKey(const ValueKey('onboarding-skip-button')), warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      await pumpUntil(tester, () => find.byType(WoxLauncherView).evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
+      expect(controller.isInOnboardingView.value, isFalse);
+      expect(settingController.activeNavPath.value, 'about');
+    });
+
+    testWidgets('T1B-03: onboarding config pages save immediately and glance never renders blank', (tester) async {
+      await launchOnboardingApp(tester);
+
+      expect(find.byKey(const ValueKey('onboarding-step-permissions')), Platform.isMacOS ? findsOneWidget : findsNothing);
+      if (Platform.isMacOS) {
+        // The permission step only exists on macOS. Windows and Linux go
+        // straight to configurable features so their progress does not include
+        // a non-actionable permission page.
+        await _goNext(tester); // permissions
+        expect(find.byKey(const ValueKey('onboarding-permission-macos')), findsOneWidget);
+      }
+
+      await _goNext(tester); // main hotkey
+      expect(find.byKey(const ValueKey('onboarding-main-hotkey-demo')), findsOneWidget);
+      await _goNext(tester); // selection hotkey
+      expect(find.byKey(const ValueKey('onboarding-selection-hotkey-demo')), findsOneWidget);
+      // Feature change: the window/interface page was removed from the
+      // first-run flow, so the smoke path now moves directly from hotkey
+      // setup to Glance instead of asserting width and density controls.
+      await _goNext(tester); // glance
+      await pumpUntil(
+        tester,
+        () =>
+            find.byKey(const ValueKey('onboarding-glance-disabled')).evaluate().isNotEmpty ||
+            find.byKey(const ValueKey('onboarding-glance-loading')).evaluate().isNotEmpty ||
+            find.byKey(const ValueKey('onboarding-glance-empty')).evaluate().isNotEmpty ||
+            find.byKey(const ValueKey('onboarding-glance-picker')).evaluate().isNotEmpty,
+        timeout: const Duration(seconds: 30),
+      );
+      if (find.byKey(const ValueKey('onboarding-glance-disabled')).evaluate().isNotEmpty) {
+        // Glance is optional in onboarding. The smoke test toggles it on when
+        // the default setting is disabled so both the enable flag and the
+        // provider loading state are covered.
+        await tester.tap(find.byKey(const ValueKey('onboarding-glance-enable-switch')), warnIfMissed: false);
         await tester.pump(const Duration(milliseconds: 500));
-
-        await pumpUntil(
-          tester,
-          () => find.byType(WoxLauncherView).evaluate().isNotEmpty,
-          timeout: const Duration(seconds: 30),
-        );
-        await WoxSettingUtil.instance.loadSetting('onboarding-smoke-reload');
-
-        expect(controller.isInOnboardingView.value, isFalse);
-        expect(
-          WoxSettingUtil.instance.currentSetting.onboardingFinished,
-          isTrue,
-        );
-        expect(find.byType(WoxLauncherView), findsOneWidget);
-      },
-    );
-
-    testWidgets(
-      'T1B-02: about page can reopen onboarding and complete returns to launcher',
-      (tester) async {
-        final controller = await launchLauncherApp(tester);
-        final settingController = await openSettings(
-          tester,
-          controller,
-          '/about',
-        );
-
-        await tester.tap(
-          find.byKey(const ValueKey('about-open-onboarding-button')),
-          warnIfMissed: false,
-        );
-        await tester.pump(const Duration(milliseconds: 500));
-
-        await pumpUntil(
-          tester,
-          () =>
-              find
-                  .byKey(const ValueKey('onboarding-view'))
-                  .evaluate()
-                  .isNotEmpty,
-          timeout: const Duration(seconds: 30),
-        );
-        expect(controller.isInOnboardingView.value, isTrue);
-
-        await tester.tap(
-          find.byKey(const ValueKey('onboarding-skip-button')),
-          warnIfMissed: false,
-        );
-        await tester.pump(const Duration(milliseconds: 500));
-
-        await pumpUntil(
-          tester,
-          () => find.byType(WoxLauncherView).evaluate().isNotEmpty,
-          timeout: const Duration(seconds: 30),
-        );
-        expect(controller.isInOnboardingView.value, isFalse);
-        expect(settingController.activeNavPath.value, 'about');
-      },
-    );
-
-    testWidgets(
-      'T1B-03: onboarding config pages save immediately and glance never renders blank',
-      (tester) async {
-        await launchOnboardingApp(tester);
-
-        expect(
-          find.byKey(const ValueKey('onboarding-step-permissions')),
-          Platform.isMacOS ? findsOneWidget : findsNothing,
-        );
-        if (Platform.isMacOS) {
-          // The permission step only exists on macOS. Windows and Linux go
-          // straight to configurable features so their progress does not include
-          // a non-actionable permission page.
-          await _goNext(tester); // permissions
-          expect(
-            find.byKey(const ValueKey('onboarding-permission-macos')),
-            findsOneWidget,
-          );
-        }
-
-        await _goNext(tester); // main hotkey
-        await _goNext(tester); // selection hotkey
-        await _goNext(tester); // window/interface
-
-        await tester.tap(
-          find.byKey(const ValueKey('onboarding-width-900')),
-          warnIfMissed: false,
-        );
-        await tester.tap(
-          find.byKey(const ValueKey('onboarding-interface-comfortable')),
-          warnIfMissed: false,
-        );
-        await tester.pump(const Duration(milliseconds: 500));
-        await WoxSettingUtil.instance.loadSetting(
-          'onboarding-smoke-config-reload',
-        );
-
-        expect(WoxSettingUtil.instance.currentSetting.appWidth, 900);
-        expect(WoxSettingUtil.instance.currentSetting.uiDensity, 'comfortable');
-
-        await _goNext(tester); // glance
+        await WoxSettingUtil.instance.loadSetting('onboarding-smoke-glance-enable-reload');
+        expect(WoxSettingUtil.instance.currentSetting.enableGlance, isTrue);
         await pumpUntil(
           tester,
           () =>
-              find
-                  .byKey(const ValueKey('onboarding-glance-disabled'))
-                  .evaluate()
-                  .isNotEmpty ||
-              find
-                  .byKey(const ValueKey('onboarding-glance-loading'))
-                  .evaluate()
-                  .isNotEmpty ||
-              find
-                  .byKey(const ValueKey('onboarding-glance-empty'))
-                  .evaluate()
-                  .isNotEmpty ||
-              find
-                  .byKey(const ValueKey('onboarding-glance-picker'))
-                  .evaluate()
-                  .isNotEmpty,
+              find.byKey(const ValueKey('onboarding-glance-loading')).evaluate().isNotEmpty ||
+              find.byKey(const ValueKey('onboarding-glance-empty')).evaluate().isNotEmpty ||
+              find.byKey(const ValueKey('onboarding-glance-picker')).evaluate().isNotEmpty,
           timeout: const Duration(seconds: 30),
         );
-        if (find
-            .byKey(const ValueKey('onboarding-glance-disabled'))
-            .evaluate()
-            .isNotEmpty) {
-          // Glance is optional in onboarding. The smoke test toggles it on when
-          // the default setting is disabled so both the enable flag and the
-          // provider loading state are covered.
-          await tester.tap(
-            find.byKey(const ValueKey('onboarding-glance-enable-switch')),
-            warnIfMissed: false,
-          );
-          await tester.pump(const Duration(milliseconds: 500));
-          await WoxSettingUtil.instance.loadSetting(
-            'onboarding-smoke-glance-enable-reload',
-          );
-          expect(WoxSettingUtil.instance.currentSetting.enableGlance, isTrue);
-          await pumpUntil(
-            tester,
-            () =>
-                find
-                    .byKey(const ValueKey('onboarding-glance-loading'))
-                    .evaluate()
-                    .isNotEmpty ||
-                find
-                    .byKey(const ValueKey('onboarding-glance-empty'))
-                    .evaluate()
-                    .isNotEmpty ||
-                find
-                    .byKey(const ValueKey('onboarding-glance-picker'))
-                    .evaluate()
-                    .isNotEmpty,
-            timeout: const Duration(seconds: 30),
-          );
-        }
+      }
 
-        await _goNext(tester); // action panel
-        expect(
-          find.byKey(const ValueKey('onboarding-action-panel-page')),
-          findsOneWidget,
-        );
-        await _goNext(tester); // advanced queries
-        expect(
-          find.byKey(const ValueKey('onboarding-advanced-query-page')),
-          findsOneWidget,
-        );
-      },
-    );
+      await _goNext(tester); // action panel
+      expect(find.byKey(const ValueKey('onboarding-action-panel-page')), findsOneWidget);
+      await _goNext(tester); // query hotkeys
+      expect(find.byKey(const ValueKey('onboarding-query-hotkeys-page')), findsOneWidget);
+      expect(find.byKey(const ValueKey('onboarding-query-hotkeys-demo')), findsOneWidget);
+      await _goNext(tester); // query shortcuts
+      expect(find.byKey(const ValueKey('onboarding-query-shortcuts-page')), findsOneWidget);
+      expect(find.byKey(const ValueKey('onboarding-query-shortcuts-demo')), findsOneWidget);
+      await _goNext(tester); // tray queries
+      expect(find.byKey(const ValueKey('onboarding-tray-queries-page')), findsOneWidget);
+      expect(find.byKey(const ValueKey('onboarding-tray-queries-demo')), findsOneWidget);
+    });
   });
 }
 
 Future<void> _goNext(WidgetTester tester) async {
-  await tester.tap(
-    find.byKey(const ValueKey('onboarding-next-button')),
-    warnIfMissed: false,
-  );
+  await tester.tap(find.byKey(const ValueKey('onboarding-next-button')), warnIfMissed: false);
   await tester.pump(const Duration(milliseconds: 500));
 }
