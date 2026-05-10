@@ -55,12 +55,6 @@ class WoxGlanceDemo extends StatelessWidget {
               icon: const Icon(Icons.push_pin_outlined, color: Color(0xFF60A5FA), size: 22),
               tail: enabled ? label : '',
             ),
-            WoxDemoResult(
-              title: tr('onboarding_glance_empty_title'),
-              subtitle: tr('onboarding_glance_empty_body'),
-              icon: const Icon(Icons.visibility_outlined, color: Color(0xFFFACC15), size: 22),
-              tail: enabled ? '' : tr('onboarding_can_skip'),
-            ),
           ],
         ),
       ),
