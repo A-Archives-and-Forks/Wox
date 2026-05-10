@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/entity/wox_image.dart';
@@ -269,6 +271,33 @@ void registerLauncherCoreSmokeTests() {
 
       await tapSettingNavItem(tester, settingController, 'data');
       expect(find.byType(WoxSettingView), findsOneWidget);
+
+      await closeSettings(tester, settingController, launcherController);
+    });
+
+    testWidgets('T2-15a: General query settings expose reusable demo popovers', (tester) async {
+      final launcherController = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
+      final settingController = await openSettings(tester, launcherController, 'general');
+
+      for (final demo in const [
+        (triggerKey: 'settings-query-hotkeys-demo-trigger', popoverKey: 'wox-demo-popover-queryHotkeys'),
+        (triggerKey: 'settings-query-shortcuts-demo-trigger', popoverKey: 'wox-demo-popover-queryShortcuts'),
+        (triggerKey: 'settings-tray-queries-demo-trigger', popoverKey: 'wox-demo-popover-trayQueries'),
+      ]) {
+        final trigger = find.byKey(ValueKey(demo.triggerKey));
+        await tester.scrollUntilVisible(trigger, 260, scrollable: find.byType(Scrollable).first, duration: const Duration(milliseconds: 80), continuous: true);
+        expect(trigger, findsOneWidget);
+
+        // Smoke coverage: demo previews are hover-only so table editing keeps keyboard focus; moving the synthetic mouse verifies the trigger without clicking the table header.
+        final gesture = await tester.createGesture(kind: ui.PointerDeviceKind.mouse);
+        final triggerCenter = tester.getCenter(trigger);
+        await gesture.addPointer(location: triggerCenter);
+        await gesture.moveTo(triggerCenter);
+        await tester.pump(const Duration(milliseconds: 450));
+        expect(find.byKey(ValueKey(demo.popoverKey)), findsOneWidget);
+        await gesture.removePointer();
+        await tester.pump(const Duration(milliseconds: 250));
+      }
 
       await closeSettings(tester, settingController, launcherController);
     });

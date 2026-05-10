@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
+import 'package:wox/components/demo/wox_demo.dart';
 import 'package:wox/components/plugin/wox_setting_plugin_table_view.dart';
 import 'package:wox/components/wox_hotkey_recorder_view.dart';
 import 'package:wox/components/wox_switch.dart';
@@ -15,6 +16,7 @@ import 'package:wox/entity/wox_lang.dart';
 import 'package:wox/enums/wox_launch_mode_enum.dart';
 import 'package:wox/enums/wox_start_page_enum.dart';
 import 'package:wox/modules/setting/views/wox_setting_base.dart';
+import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/consts.dart';
 
 class WoxSettingGeneralView extends WoxSettingBaseView {
@@ -268,6 +270,13 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
                   return WoxSettingPluginTable(
                     inlineTitleActions: true,
                     tableWidth: GENERAL_SETTING_TABLE_WIDTH,
+                    titleActions: [
+                      _buildDemoTitleAction(
+                        triggerKey: 'settings-query-hotkeys-demo-trigger',
+                        popoverKey: 'wox-demo-popover-queryHotkeys',
+                        demo: WoxQueryHotkeysDemo(accent: const Color(0xFFF43F5E), tr: controller.tr),
+                      ),
+                    ],
                     value: json.encode(controller.woxSetting.value.queryHotkeys),
                     item: PluginSettingValueTable.fromJson({
                       "Key": "QueryHotkeys",
@@ -353,6 +362,13 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
                   return WoxSettingPluginTable(
                     inlineTitleActions: true,
                     tableWidth: GENERAL_SETTING_TABLE_WIDTH,
+                    titleActions: [
+                      _buildDemoTitleAction(
+                        triggerKey: 'settings-query-shortcuts-demo-trigger',
+                        popoverKey: 'wox-demo-popover-queryShortcuts',
+                        demo: WoxQueryShortcutsDemo(accent: const Color(0xFFA78BFA), tr: controller.tr),
+                      ),
+                    ],
                     value: json.encode(controller.woxSetting.value.queryShortcuts),
                     item: PluginSettingValueTable.fromJson({
                       "Key": "QueryShortcuts",
@@ -398,6 +414,13 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
                   return WoxSettingPluginTable(
                     inlineTitleActions: true,
                     tableWidth: GENERAL_SETTING_TABLE_WIDTH,
+                    titleActions: [
+                      _buildDemoTitleAction(
+                        triggerKey: 'settings-tray-queries-demo-trigger',
+                        popoverKey: 'wox-demo-popover-trayQueries',
+                        demo: WoxTrayQueriesDemo(accent: const Color(0xFF22C55E), tr: controller.tr),
+                      ),
+                    ],
                     value: json.encode(controller.woxSetting.value.trayQueries),
                     autoOpenEditRowIndex: controller.pendingTrayQueryEditRowIndex.value,
                     item: PluginSettingValueTable.fromJson({
@@ -455,5 +478,29 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
         ],
       );
     });
+  }
+
+  Widget _buildDemoTitleAction({required String triggerKey, required String popoverKey, required Widget demo}) {
+    final foreground = getThemeTextColor();
+
+    return WoxDemoPopover(
+      key: ValueKey(triggerKey),
+      popoverKey: ValueKey(popoverKey),
+      demo: demo,
+      height: 460,
+      child: Semantics(
+        label: controller.tr("ui_demo_preview"),
+        button: true,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.help,
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            // Feature refinement: the demo trigger now behaves like a title-side affordance, so it uses the same color as the title and avoids a separate text tooltip that would compete with the preview popover.
+            child: Icon(Icons.play_circle_outline_rounded, color: foreground.withValues(alpha: 0.88), size: 18),
+          ),
+        ),
+      ),
+    );
   }
 }

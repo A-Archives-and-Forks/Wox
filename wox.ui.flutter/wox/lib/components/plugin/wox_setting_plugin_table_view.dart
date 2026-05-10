@@ -36,6 +36,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   final columnTooltipWidth = 20.0;
   final bool readonly;
   final bool inlineTitleActions;
+  final List<Widget> titleActions;
   final int minimumRowCount;
   final String minimumRowDeleteMessage;
   final Widget? Function(PluginSettingValueTableColumn column, Map<String, dynamic> row)? customCellBuilder;
@@ -55,6 +56,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     this.tableWidth = PLUGIN_SETTING_TABLE_WIDTH,
     this.readonly = false,
     this.inlineTitleActions = false,
+    this.titleActions = const [],
     this.minimumRowCount = 0,
     this.minimumRowDeleteMessage = "",
     this.customCellBuilder,
@@ -1013,7 +1015,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
   Widget buildInlineTitleHeader(BuildContext context) {
     final hasTitle = item.title.trim().isNotEmpty;
     final hasTooltip = item.tooltip.trim().isNotEmpty;
-    final hasAction = !readonly;
+    final hasAction = !readonly || titleActions.isNotEmpty;
 
     if (!hasTitle && !hasTooltip && !hasAction) {
       return const SizedBox.shrink();
@@ -1030,12 +1032,32 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (hasTitle) Text(tr(item.title), style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w600)),
+                if (hasTitle || titleActions.isNotEmpty)
+                  Row(
+                    mainAxisSize: MainAxisSize.max,
+                    children: [
+                      if (hasTitle)
+                        Flexible(
+                          fit: FlexFit.loose,
+                          child: Text(
+                            tr(item.title),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      if (titleActions.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        // Feature refinement: demo triggers sit directly beside the table title so the preview affordance is attached to the feature name instead of competing with the Add button.
+                        ...titleActions,
+                      ],
+                    ],
+                  ),
                 if (hasTooltip) Padding(padding: const EdgeInsets.only(top: 4), child: tooltipText(item.tooltip)),
               ],
             ),
           ),
-          if (hasAction) ...[const SizedBox(width: 16), buildAddButton(context)],
+          if (!readonly) ...[const SizedBox(width: 16), buildAddButton(context)],
         ],
       ),
     );

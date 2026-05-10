@@ -25,6 +25,8 @@
   "ui_hotkey_ignore_apps_loading": "Loading...",
   "ui_preview_image_loading": "Loading image",
   "ui_preview_image_load_failed": "Failed to load image",
+  "ui_demo_preview": "Preview demo",
+  "ui_demo_preview_tooltip": "Preview how this feature works",
   "ui_use_pinyin": "Use Pinyin",
   "ui_use_pinyin_tips": "When selected, Wox will convert Chinese into Pinyin",
   "ui_launch_mode": "Launch Mode",
