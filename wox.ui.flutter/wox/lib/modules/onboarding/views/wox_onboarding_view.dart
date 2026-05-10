@@ -70,6 +70,11 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
     const _OnboardingStep(id: 'queryHotkeys', titleKey: 'onboarding_query_hotkeys_title', descriptionKey: 'onboarding_query_hotkeys_body'),
     const _OnboardingStep(id: 'queryShortcuts', titleKey: 'onboarding_query_shortcuts_title', descriptionKey: 'onboarding_query_shortcuts_body'),
     const _OnboardingStep(id: 'trayQueries', titleKey: 'onboarding_tray_queries_title', descriptionKey: 'onboarding_tray_queries_body'),
+    // Feature change: plugin and theme installation are common first-run
+    // workflows, so they are taught as standalone sections instead of being
+    // hidden behind generic query examples.
+    const _OnboardingStep(id: 'wpmInstall', titleKey: 'onboarding_wpm_install_title', descriptionKey: 'onboarding_wpm_install_body'),
+    const _OnboardingStep(id: 'themeInstall', titleKey: 'onboarding_theme_install_title', descriptionKey: 'onboarding_theme_install_body'),
     const _OnboardingStep(id: 'finish', titleKey: 'onboarding_finish_title', descriptionKey: 'onboarding_finish_description'),
   ];
 
@@ -107,6 +112,8 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
       'queryHotkeys' => const Color(0xFFF43F5E),
       'queryShortcuts' => const Color(0xFFA78BFA),
       'trayQueries' => const Color(0xFF22C55E),
+      'wpmInstall' => const Color(0xFF38BDF8),
+      'themeInstall' => const Color(0xFFE879F9),
       'finish' => const Color(0xFF2DD4BF),
       _ => const Color(0xFF22C55E),
     };
@@ -459,6 +466,20 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
           titleKey: 'onboarding_tray_queries_title',
           bodyKey: 'onboarding_tray_queries_body',
           badge: tr('ui_tray_queries'),
+        );
+      case 'wpmInstall':
+        return _buildFeatureStep(
+          key: const ValueKey('onboarding-wpm-install-page'),
+          titleKey: 'onboarding_wpm_install_title',
+          bodyKey: 'onboarding_wpm_install_body',
+          badge: 'wpm install',
+        );
+      case 'themeInstall':
+        return _buildFeatureStep(
+          key: const ValueKey('onboarding-theme-install-page'),
+          titleKey: 'onboarding_theme_install_title',
+          bodyKey: 'onboarding_theme_install_body',
+          badge: tr('plugin_theme_install_theme'),
         );
       case 'finish':
         return _buildFeatureStep(
@@ -1152,6 +1173,10 @@ class _OnboardingMediaCard extends StatelessWidget {
         return _QueryShortcutsDemo(accent: accent, tr: tr);
       case 'trayQueries':
         return _TrayQueriesDemo(accent: accent, tr: tr);
+      case 'wpmInstall':
+        return _WpmInstallDemo(accent: accent, tr: tr);
+      case 'themeInstall':
+        return _ThemeInstallDemo(accent: accent, tr: tr);
       case 'finish':
         return _MiniWoxWindow(
           accent: accent,
@@ -1977,6 +2002,252 @@ class _TrayQueriesDemoState extends State<_TrayQueriesDemo> with SingleTickerPro
           },
         );
       },
+    );
+  }
+}
+
+class _WpmInstallDemo extends StatelessWidget {
+  const _WpmInstallDemo({required this.accent, required this.tr});
+
+  final Color accent;
+  final String Function(String key) tr;
+
+  @override
+  Widget build(BuildContext context) {
+    return _InstallFlowDemo(
+      demoKey: const ValueKey('onboarding-wpm-install-demo'),
+      accent: accent,
+      icon: Icons.extension_outlined,
+      title: tr('onboarding_wpm_install_title'),
+      hintFrom: 'wpm install',
+      hintTo: tr('onboarding_wpm_install_hint_target'),
+      queryStages: const ['', 'w', 'wpm', 'wpm install', 'wpm install clip', 'wpm install clipboard'],
+      installLabel: tr('plugin_wpm_install'),
+      installingLabel: tr('plugin_wpm_installing'),
+      installedLabel: tr('plugin_wpm_start_using'),
+      primaryTitle: 'Clipboard History',
+      primarySubtitle: tr('onboarding_wpm_install_result_subtitle'),
+      primaryIcon: const Icon(Icons.content_paste_search_outlined, color: Colors.white, size: 23),
+      secondaryResults: [
+        _MiniResultEntry(
+          title: 'Browser Bookmarks',
+          subtitle: tr('plugin_wpm_command_install'),
+          icon: const Icon(Icons.bookmark_outline_rounded, color: Color(0xFFFACC15), size: 23),
+          tail: tr('plugin_wpm_install'),
+        ),
+        const _MiniResultEntry(title: 'ChatGPT', subtitle: 'AI assistant plugin', icon: Icon(Icons.auto_awesome_outlined, color: Color(0xFFA78BFA), size: 23), tail: 'AI'),
+      ],
+    );
+  }
+}
+
+class _ThemeInstallDemo extends StatelessWidget {
+  const _ThemeInstallDemo({required this.accent, required this.tr});
+
+  final Color accent;
+  final String Function(String key) tr;
+
+  @override
+  Widget build(BuildContext context) {
+    return _InstallFlowDemo(
+      demoKey: const ValueKey('onboarding-theme-install-demo'),
+      accent: accent,
+      icon: Icons.palette_outlined,
+      title: tr('onboarding_theme_install_title'),
+      hintFrom: 'theme',
+      hintTo: tr('onboarding_theme_install_hint_target'),
+      queryStages: const ['', 't', 'theme', 'theme ocean', 'theme ocean dark'],
+      installLabel: tr('plugin_theme_install_theme'),
+      installingLabel: tr('plugin_wpm_installing'),
+      installedLabel: tr('ui_setting_theme_apply'),
+      primaryTitle: 'Ocean Dark',
+      primarySubtitle: tr('onboarding_theme_install_result_subtitle'),
+      primaryIcon: const _ThemeSwatchIcon(background: Color(0xFF0F172A), accent: Color(0xFF38BDF8), highlight: Color(0xFF22C55E)),
+      secondaryResults: [
+        _MiniResultEntry(
+          title: 'Aurora',
+          subtitle: tr('plugin_theme_group_store'),
+          icon: const _ThemeSwatchIcon(background: Color(0xFF261A3D), accent: Color(0xFFE879F9), highlight: Color(0xFFFACC15)),
+          tail: tr('plugin_theme_install_theme'),
+        ),
+        _MiniResultEntry(
+          title: 'Default Dark',
+          subtitle: tr('plugin_theme_group_current'),
+          icon: const _ThemeSwatchIcon(background: Color(0xFF1F2937), accent: Color(0xFF60A5FA), highlight: Color(0xFF94A3B8)),
+          tail: tr('ui_setting_theme_system_tag'),
+        ),
+      ],
+    );
+  }
+}
+
+class _InstallFlowDemo extends StatefulWidget {
+  const _InstallFlowDemo({
+    required this.demoKey,
+    required this.accent,
+    required this.icon,
+    required this.title,
+    required this.hintFrom,
+    required this.hintTo,
+    required this.queryStages,
+    required this.installLabel,
+    required this.installingLabel,
+    required this.installedLabel,
+    required this.primaryTitle,
+    required this.primarySubtitle,
+    required this.primaryIcon,
+    required this.secondaryResults,
+  });
+
+  final ValueKey<String> demoKey;
+  final Color accent;
+  final IconData icon;
+  final String title;
+  final String hintFrom;
+  final String hintTo;
+  final List<String> queryStages;
+  final String installLabel;
+  final String installingLabel;
+  final String installedLabel;
+  final String primaryTitle;
+  final String primarySubtitle;
+  final Widget primaryIcon;
+  final List<_MiniResultEntry> secondaryResults;
+
+  @override
+  State<_InstallFlowDemo> createState() => _InstallFlowDemoState();
+}
+
+class _InstallFlowDemoState extends State<_InstallFlowDemo> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 4600))..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  double _interval(double start, double end, Curve curve) {
+    final value = ((_controller.value - start) / (end - start)).clamp(0.0, 1.0).toDouble();
+    return curve.transform(value);
+  }
+
+  String _queryText() {
+    final typingProgress = _interval(0.10, 0.56, Curves.easeOutCubic);
+    final rawStage = (typingProgress * (widget.queryStages.length - 1)).floor();
+    final stage = rawStage.clamp(0, widget.queryStages.length - 1).toInt();
+    return widget.queryStages[stage];
+  }
+
+  double _installProgress() {
+    if (_controller.value < 0.64) {
+      return 0;
+    }
+    if (_controller.value < 0.78) {
+      return _interval(0.64, 0.78, Curves.easeOutCubic);
+    }
+    if (_controller.value < 0.94) {
+      return 1;
+    }
+    return 1 - _interval(0.94, 1, Curves.easeInCubic);
+  }
+
+  String _primaryTail() {
+    if (_controller.value >= 0.64 && _controller.value < 0.76) {
+      return widget.installingLabel;
+    }
+    if (_controller.value >= 0.76 && _controller.value < 0.94) {
+      return widget.installedLabel;
+    }
+    return widget.installLabel;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Feature change: WPM and theme installation use the same compact desktop
+    // teaching pattern as query shortcuts. The shared animation keeps the top
+    // hint strip stable while the launcher demonstrates typing, selecting a
+    // store result, and reaching the install action.
+    return AnimatedBuilder(
+      key: widget.demoKey,
+      animation: _controller,
+      builder: (context, child) {
+        final installProgress = _installProgress();
+
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Stack(
+            children: [
+              Positioned.fill(child: _DesktopDemoBackground(accent: widget.accent, isMac: Platform.isMacOS, showDefaultIcons: false)),
+              Positioned.fill(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(48, 18, 52, 36),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _QueryDemoHintStrip(
+                        accent: widget.accent,
+                        icon: widget.icon,
+                        title: widget.title,
+                        from: widget.hintFrom,
+                        to: widget.hintTo,
+                        progress: 0.45 + (0.55 * installProgress),
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: _MiniWoxWindow(
+                          accent: widget.accent,
+                          query: _queryText(),
+                          opaqueBackground: true,
+                          results: [
+                            _MiniResultEntry(title: widget.primaryTitle, subtitle: widget.primarySubtitle, icon: widget.primaryIcon, selected: true, tail: _primaryTail()),
+                            ...widget.secondaryResults,
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ThemeSwatchIcon extends StatelessWidget {
+  const _ThemeSwatchIcon({required this.background, required this.accent, required this.highlight});
+
+  final Color background;
+  final Color accent;
+  final Color highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 28,
+      height: 28,
+      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(7), border: Border.all(color: Colors.white.withValues(alpha: 0.16))),
+      child: Stack(
+        children: [
+          Positioned(left: 5, right: 5, top: 7, child: Container(height: 4, decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(999)))),
+          Positioned(left: 5, right: 11, top: 14, child: Container(height: 4, decoration: BoxDecoration(color: highlight, borderRadius: BorderRadius.circular(999)))),
+          Positioned(
+            left: 5,
+            right: 15,
+            top: 20,
+            child: Container(height: 3, decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.72), borderRadius: BorderRadius.circular(999))),
+          ),
+        ],
+      ),
     );
   }
 }
