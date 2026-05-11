@@ -8,7 +8,7 @@ class WoxThemeInstallDemo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _InstallFlowDemo(
+    return _ThemeStoreDemo(
       demoKey: const ValueKey('onboarding-theme-install-demo'),
       accent: accent,
       icon: Icons.palette_outlined,

@@ -1153,7 +1153,7 @@ class _OnboardingMediaCard extends StatelessWidget {
       case 'trayQueries':
         return WoxTrayQueriesDemo(accent: accent, tr: tr);
       case 'wpmInstall':
-        return WoxWpmInstallDemo(accent: accent, tr: tr);
+        return WoxPluginStoreDemo(accent: accent, tr: tr);
       case 'themeInstall':
         return WoxThemeInstallDemo(accent: accent, tr: tr);
       case 'finish':

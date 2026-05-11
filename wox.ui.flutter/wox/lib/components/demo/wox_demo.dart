@@ -1,11 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/entity/wox_image.dart';
+import 'package:wox/enums/wox_image_type_enum.dart';
 import 'package:wox/utils/colors.dart';
-import 'package:wox/utils/consts.dart';
 import 'package:wox/utils/wox_interface_size_util.dart';
 import 'package:wox/utils/wox_theme_util.dart';
 
@@ -17,9 +18,9 @@ part 'wox_selection_hotkey_demo.dart';
 part 'wox_query_hotkeys_demo.dart';
 part 'wox_query_shortcuts_demo.dart';
 part 'wox_tray_queries_demo.dart';
-part 'wox_wpm_install_demo.dart';
+part 'wox_plugin_store_demo.dart';
 part 'wox_theme_install_demo.dart';
-part 'wox_install_flow_demo.dart';
+part 'wox_theme_store_demo.dart';
 part 'wox_theme_swatch_icon.dart';
 part 'wox_demo_hint_card.dart';
 part 'wox_tray_query_icon.dart';
