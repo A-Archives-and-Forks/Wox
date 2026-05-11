@@ -121,8 +121,16 @@ func (a *WindowsRetriever) GetAppDirectories(ctx context.Context) []appDirectory
 			trackChanges:   true,
 		},
 		{
+			Path:           usr.HomeDir + "\\AppData\\Local\\Programs",
+			Recursive:      true,
+			RecursiveDepth: 3,
+			trackChanges:   true,
+		},
+		{
+			// Exclude Programs because it is tracked separately above with trackChanges support.
+			// Excluding it here avoids double-scanning the same executables during full indexing.
 			Path:              usr.HomeDir + "\\AppData\\Local",
-			RecursiveExcludes: []string{"Temp"},
+			RecursiveExcludes: []string{"Temp", "Programs"},
 			Recursive:         true,
 			RecursiveDepth:    4,
 		},
