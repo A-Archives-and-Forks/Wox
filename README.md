@@ -28,14 +28,6 @@ It is a practical alternative to [Alfred](https://www.alfredapp.com/) and [Rayca
 | Arch Linux | AUR | `yay -S wox-bin` |
 | macOS / Linux / Windows | Manual | Download the latest package from [Releases](https://github.com/Wox-launcher/Wox/releases) and run it directly |
 
-## Default Shortcuts
-
-| Action | Shortcut |
-| --- | --- |
-| Open or hide Wox | <kbd>Alt</kbd>/<kbd>Command</kbd> + <kbd>Space</kbd> |
-| Show item actions | <kbd>Alt</kbd>/<kbd>Command</kbd> + <kbd>J</kbd> |
-| Close or go back | <kbd>Esc</kbd> |
-
 
 ## Documentation
 
@@ -48,6 +40,7 @@ It is a practical alternative to [Alfred](https://www.alfredapp.com/) and [Rayca
 Contributions are welcome through issues, discussions, and pull requests.
 
 - [Discussions](https://github.com/Wox-launcher/Wox/discussions)
+- [Reddit](https://www.reddit.com/r/WoxLauncher/)
 - [Issues](https://github.com/Wox-launcher/Wox/issues)
 - [Pull requests](https://github.com/Wox-launcher/Wox/pulls)
 
