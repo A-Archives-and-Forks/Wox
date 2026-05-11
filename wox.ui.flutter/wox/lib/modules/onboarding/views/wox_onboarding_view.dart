@@ -61,7 +61,9 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
     // the core first-run flow. Removing that dedicated page keeps the tour
     // focused while the shared Wox preview still demonstrates the real layout.
     const _OnboardingStep(id: 'glance', titleKey: 'onboarding_glance_title'),
-    const _OnboardingStep(id: 'actionPanel', titleKey: 'onboarding_action_panel_title'),
+    // Feature change: action panel intro was merged into the welcome step demo
+    // so the anatomy animation flows directly into the Alt+J reveal, giving
+    // users the full search-to-action story without an extra navigation step.
     // Feature change: the previous Advanced Queries page bundled three
     // unrelated workflows. Splitting them into dedicated steps lets each query
     // feature get its own explanation and animated demo.
@@ -452,18 +454,15 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
       case 'permissions':
         return _buildPermissionsStep();
       case 'mainHotkey':
-        return _buildHotkeyStep(settingKey: 'MainHotkey', currentValue: settingController.woxSetting.value.mainHotkey, tipKey: 'onboarding_main_hotkey_tip');
+        return _buildHotkeyStep(settingKey: 'MainHotkey', currentValue: settingController.woxSetting.value.mainHotkey, bodyKey: 'onboarding_main_hotkey_tip');
       case 'selectionHotkey':
-        return _buildHotkeyStep(settingKey: 'SelectionHotkey', currentValue: settingController.woxSetting.value.selectionHotkey, tipKey: 'onboarding_selection_hotkey_tip');
+        return _buildHotkeyStep(
+          settingKey: 'SelectionHotkey',
+          currentValue: settingController.woxSetting.value.selectionHotkey,
+          bodyKey: 'onboarding_selection_hotkey_description',
+        );
       case 'glance':
         return _buildGlanceStep();
-      case 'actionPanel':
-        return _buildFeatureStep(
-          key: const ValueKey('onboarding-action-panel-page'),
-          titleKey: 'onboarding_action_panel_card_title',
-          bodyKey: 'onboarding_action_panel_card_body',
-          badge: Platform.isMacOS ? 'Cmd+J' : 'Alt+J',
-        );
       case 'queryHotkeys':
         return _buildFeatureStep(
           key: const ValueKey('onboarding-query-hotkeys-page'),
@@ -593,10 +592,10 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
     );
   }
 
-  Widget _buildHotkeyStep({required String settingKey, required String currentValue, required String tipKey}) {
+  Widget _buildHotkeyStep({required String settingKey, required String currentValue, required String bodyKey}) {
     return _SettingsPanel(
       children: [
-        Text(tr(tipKey), style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.45)),
+        Text(tr(bodyKey), style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.45)),
         const SizedBox(height: 26),
         Align(
           alignment: Alignment.centerLeft,
@@ -782,7 +781,9 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
   }
 
   Widget _buildFeatureStep({required Key key, required String titleKey, required String bodyKey, required String badge}) {
-    return _InfoPanel(key: key, title: tr(titleKey), body: tr(bodyKey), badge: badge);
+    // Title and badge are both omitted: the large section heading above already
+    // shows the title, and the badge duplicates it again. Body text only.
+    return _InfoPanel(key: key, body: tr(bodyKey));
   }
 
   Widget _buildFooter(Color accent) {
@@ -906,41 +907,60 @@ class _SettingsPanel extends StatelessWidget {
 }
 
 class _InfoPanel extends StatelessWidget {
-  const _InfoPanel({super.key, required this.title, required this.body, required this.badge});
+  // title and badge are both optional.
+  // Omit title when the section heading above already shows it.
+  // Omit badge when no short label is needed alongside the body text.
+  const _InfoPanel({super.key, this.title, required this.body, this.badge});
 
-  final String title;
+  final String? title;
   final String body;
-  final String badge;
+  final String? badge;
 
   @override
   Widget build(BuildContext context) {
+    final badgeWidget =
+        badge != null
+            ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(color: getThemeActiveBackgroundColor().withValues(alpha: 0.16), borderRadius: BorderRadius.circular(16)),
+              child: Text(badge!, style: TextStyle(color: getThemeActiveBackgroundColor(), fontSize: 12, fontWeight: FontWeight.w600)),
+            )
+            : null;
+
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: getThemeTextColor().withValues(alpha: 0.04),
         border: Border.all(color: getThemeSubTextColor().withValues(alpha: 0.18)),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: Text(title, style: TextStyle(color: getThemeTextColor(), fontSize: 17, fontWeight: FontWeight.w600))),
-              const SizedBox(width: 14),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(color: getThemeActiveBackgroundColor().withValues(alpha: 0.16), borderRadius: BorderRadius.circular(16)),
-                child: Text(badge, style: TextStyle(color: getThemeActiveBackgroundColor(), fontSize: 12, fontWeight: FontWeight.w600)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5)),
-        ],
-      ),
+      child:
+          title != null
+              ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Title row; badge is optional alongside the title.
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: Text(title!, style: TextStyle(color: getThemeTextColor(), fontSize: 17, fontWeight: FontWeight.w600))),
+                      if (badgeWidget != null) ...[const SizedBox(width: 14), badgeWidget],
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5)),
+                ],
+              )
+              : badgeWidget != null
+              ? Row(
+                // No title but badge present: body and badge on the same row.
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [Expanded(child: Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5))), const SizedBox(width: 14), badgeWidget],
+              )
+              // No title, no badge: body text only.
+              : Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5)),
     );
   }
 }
@@ -1123,8 +1143,6 @@ class _OnboardingMediaCard extends StatelessWidget {
         return WoxSelectionHotkeyDemo(accent: accent, hotkey: selectionHotkey, tr: tr);
       case 'glance':
         return WoxGlanceDemo(accent: accent, enabled: glanceEnabled, label: glanceLabel, value: glanceValue, icon: glanceIcon, tr: tr);
-      case 'actionPanel':
-        return WoxActionPanelDemo(accent: accent, hotkey: Platform.isMacOS ? 'Cmd+J' : 'Alt+J', queryAccessory: _buildGlanceAccessory(), tr: tr);
       case 'welcome':
         // Show the query anatomy diagram on the welcome step so users learn the
         // trigger-keyword / command / search-term vocabulary before configuring

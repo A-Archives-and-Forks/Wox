@@ -31,12 +31,14 @@ class _WoxQueryShortcutsDemoState extends State<WoxQueryShortcutsDemo> with Sing
   }
 
   String _queryText() {
+    // Bug fix: the previous hard-coded stage ranges had unequal character
+    // intervals (528ms, 792ms, 440ms, 440ms) and a 3-char jump from 'gh r'
+    // directly to 'gh repo'. Typing character-by-character at a uniform
+    // ~264ms/char keeps each keystroke visible and feels natural.
+    const target = 'gh repo';
     if (_controller.value < 0.18) return '';
-    if (_controller.value < 0.30) return 'g';
-    if (_controller.value < 0.48) return 'gh';
-    if (_controller.value < 0.58) return 'gh ';
-    if (_controller.value < 0.68) return 'gh r';
-    return 'gh repo';
+    final t = ((_controller.value - 0.18) / (0.62 - 0.18)).clamp(0.0, 1.0);
+    return target.substring(0, (t * target.length).floor().clamp(0, target.length));
   }
 
   bool _isExpanded() {

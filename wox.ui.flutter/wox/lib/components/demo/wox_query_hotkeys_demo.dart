@@ -1,5 +1,31 @@
 part of 'wox_demo.dart';
 
+// Two-example showcase for Query Hotkeys.
+//
+// Phase timeline (total 9200 ms, looping):
+//
+//   Example 1 – "Ctrl+Shift+G → github repo" (0.00–0.47):
+//     Demonstrates a basic hotkey that opens Wox with a preset query.
+//     0.00–0.09  Static hint card; hotkey badge fades in.
+//     0.09–0.15  Hotkey overlay rises in.
+//     0.15–0.25  Hotkey badge held (key visually pressed at 0.15–0.21).
+//     0.25–0.31  Hotkey overlay fades out.
+//     0.20–0.29  Wox window rises in.
+//     0.29–0.47  Wox window held (results fully visible).
+//
+//   Crossfade (0.43–0.55):
+//     Example 1 fades out while example 2 fades in.
+//
+//   Example 2 – "Ctrl+Shift+I → webview instagram" (0.55–0.94):
+//     Demonstrates hiding the query box and toolbar so the entire Wox
+//     window becomes a borderless embedded webpage (webview plugin).
+//     0.55–0.63  Hotkey overlay rises in.
+//     0.63–0.72  Hotkey badge held (key visually pressed at 0.63–0.70).
+//     0.72–0.79  Hotkey overlay fades out.
+//     0.68–0.80  Instagram webview window rises in.
+//     0.80–0.94  Webview window held fully visible.
+//
+//   Pause (0.94–1.00): brief gap before the loop restarts.
 class WoxQueryHotkeysDemo extends StatefulWidget {
   const WoxQueryHotkeysDemo({super.key, required this.accent, required this.tr});
 
@@ -16,7 +42,9 @@ class _WoxQueryHotkeysDemoState extends State<WoxQueryHotkeysDemo> with SingleTi
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 4600))..repeat();
+    // Extended from 4600 ms to 9200 ms to fit both examples without
+    // compressing their individual pacing.
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 9200))..repeat();
   }
 
   @override
@@ -30,124 +58,413 @@ class _WoxQueryHotkeysDemoState extends State<WoxQueryHotkeysDemo> with SingleTi
     return curve.transform(value);
   }
 
-  double _shortcutProgress() {
-    if (_controller.value < 0.18) return 0;
-    if (_controller.value < 0.30) {
-      return _interval(0.18, 0.30, Curves.easeOutCubic);
-    }
-    if (_controller.value < 0.50) return 1;
-    return 1 - _interval(0.50, 0.62, Curves.easeInCubic);
+  // ── Example 1 animations ──────────────────────────────────────────────────
+
+  double _shortcutProgress1() {
+    if (_controller.value < 0.09) return 0;
+    if (_controller.value < 0.15) return _interval(0.09, 0.15, Curves.easeOutCubic);
+    if (_controller.value < 0.25) return 1;
+    if (_controller.value < 0.31) return 1 - _interval(0.25, 0.31, Curves.easeInCubic);
+    return 0;
   }
 
-  double _windowProgress() {
-    if (_controller.value < 0.40) return 0;
-    if (_controller.value < 0.58) {
-      return _interval(0.40, 0.58, Curves.easeOutCubic);
-    }
-    if (_controller.value < 0.90) return 1;
-    return 1 - _interval(0.90, 1, Curves.easeInCubic);
+  double _windowProgress1() {
+    if (_controller.value < 0.20) return 0;
+    if (_controller.value < 0.29) return _interval(0.20, 0.29, Curves.easeOutCubic);
+    return 1;
   }
 
-  bool _isShortcutPressed() {
-    return _controller.value >= 0.30 && _controller.value <= 0.42;
+  bool _isShortcutPressed1() => _controller.value >= 0.15 && _controller.value <= 0.21;
+
+  // ── Crossfade between examples ────────────────────────────────────────────
+
+  // Example 1 starts fading at 0.43 (while still holding) and is gone by 0.52.
+  double get _example1Opacity {
+    if (_controller.value < 0.43) return 1.0;
+    if (_controller.value < 0.52) return 1.0 - _interval(0.43, 0.52, Curves.easeInCubic);
+    return 0.0;
   }
+
+  // Example 2 fades in from 0.50 to 0.60, holds through 0.94, then fades out.
+  double get _example2Opacity {
+    if (_controller.value < 0.50) return 0.0;
+    if (_controller.value < 0.60) return _interval(0.50, 0.60, Curves.easeOutCubic);
+    if (_controller.value < 0.94) return 1.0;
+    return 1.0 - _interval(0.94, 1.00, Curves.easeInCubic);
+  }
+
+  // ── Example 2 animations ──────────────────────────────────────────────────
+
+  double _shortcutProgress2() {
+    if (_controller.value < 0.55) return 0;
+    if (_controller.value < 0.63) return _interval(0.55, 0.63, Curves.easeOutCubic);
+    if (_controller.value < 0.72) return 1;
+    if (_controller.value < 0.79) return 1 - _interval(0.72, 0.79, Curves.easeInCubic);
+    return 0;
+  }
+
+  double _windowProgress2() {
+    if (_controller.value < 0.68) return 0;
+    if (_controller.value < 0.80) return _interval(0.68, 0.80, Curves.easeOutCubic);
+    return 1.0;
+  }
+
+  bool _isShortcutPressed2() => _controller.value >= 0.63 && _controller.value <= 0.70;
 
   @override
   Widget build(BuildContext context) {
-    final hotkey = _formatDemoHotkey('', fallback: Platform.isMacOS ? 'cmd+shift+g' : 'ctrl+shift+g');
+    final hotkey1 = _formatDemoHotkey('', fallback: Platform.isMacOS ? 'cmd+shift+g' : 'ctrl+shift+g');
+    // Example 2 uses a fixed illustrative hotkey; it is not tied to any user
+    // configuration because its purpose is to show the hide-chrome capability
+    // rather than the exact shortcut value.
+    const hotkey2 = 'Ctrl+Shift+I';
 
-    // Feature change: Query Hotkeys now get their own onboarding motion. The
-    // demo starts from a configured binding, then shows the hotkey opening Wox
-    // directly with the bound query instead of sharing the old summary list.
     return AnimatedBuilder(
       key: const ValueKey('onboarding-query-hotkeys-demo'),
       animation: _controller,
       builder: (context, child) {
-        final shortcutProgress = _shortcutProgress();
-        final windowProgress = _windowProgress();
+        final sp1 = _shortcutProgress1();
+        final wp1 = _windowProgress1();
+        final sp2 = _shortcutProgress2();
+        final wp2 = _windowProgress2();
+        final ex1 = _example1Opacity;
+        final ex2 = _example2Opacity;
 
         return ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: Stack(
             children: [
               Positioned.fill(child: WoxDemoDesktopBackground(accent: widget.accent, isMac: Platform.isMacOS, showDefaultIcons: false)),
-              Positioned.fill(
-                child: Padding(
-                  // Feature refinement: query feature demos use a shared top
-                  // hint strip and reserve the rest of the scene for the actual
-                  // launcher animation. This keeps explanation and demo from
-                  // competing for the same vertical space.
-                  padding: const EdgeInsets.fromLTRB(48, 18, 52, 36),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      WoxDemoHintCard(accent: widget.accent, icon: Icons.keyboard_command_key, title: widget.tr('onboarding_query_hotkeys_title'), from: hotkey, to: 'github repo'),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: Stack(
-                          children: [
-                            Positioned.fill(
-                              child: Opacity(
-                                opacity: shortcutProgress,
-                                child: Transform.translate(
-                                  offset: Offset(0, 8 * (1 - shortcutProgress)),
-                                  child: _HotkeyPressOverlay(hotkey: hotkey, accent: widget.accent, pressed: _isShortcutPressed()),
-                                ),
-                              ),
-                            ),
-                            if (windowProgress > 0.01)
-                              Positioned.fill(
-                                child: Transform.translate(
-                                  offset: Offset(0, 20 * (1 - windowProgress)),
-                                  child: Transform.scale(
-                                    scale: 0.95 + (0.05 * windowProgress),
-                                    // Feature refinement: keep Query Hotkeys
-                                    // aligned with Query Shortcuts. The
-                                    // previous extra top inset left an empty
-                                    // band between the hint strip and Wox,
-                                    // while the shared remaining-area layout
-                                    // gives the demo more usable space.
-                                    child: WoxDemoWindow(
-                                      accent: widget.accent,
-                                      query: 'github repo',
-                                      opaqueBackground: true,
-                                      footerHotkey: _demoActionPanelHotkey(),
-                                      results: [
-                                        WoxDemoResult(
-                                          title: 'Wox repository',
-                                          subtitle: 'Open Wox-launcher/Wox on GitHub',
-                                          icon: const Icon(Icons.code_rounded, color: Colors.white, size: 23),
-                                          selected: true,
-                                          tail: hotkey,
-                                        ),
-                                        WoxDemoResult(
-                                          title: widget.tr('onboarding_query_hotkeys_title'),
-                                          subtitle: widget.tr('onboarding_query_hotkeys_body'),
-                                          icon: Icon(Icons.bolt_outlined, color: widget.accent, size: 23),
-                                          tail: widget.tr('ui_query_hotkeys'),
-                                        ),
-                                        const WoxDemoResult(
-                                          title: 'Issues',
-                                          subtitle: 'github repo issues',
-                                          icon: Icon(Icons.bug_report_outlined, color: Color(0xFFFACC15), size: 23),
-                                          tail: 'GitHub',
-                                        ),
-                                      ],
+
+              // ── Example 1: Ctrl+Shift+G opens a normal Wox query ───────────
+              if (ex1 > 0.01)
+                Positioned.fill(
+                  child: Opacity(
+                    opacity: ex1,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(48, 18, 52, 36),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          WoxDemoHintCard(
+                            accent: widget.accent,
+                            icon: Icons.keyboard_command_key,
+                            title: widget.tr('onboarding_query_hotkeys_title'),
+                            from: hotkey1,
+                            to: 'github repo',
+                          ),
+                          const SizedBox(height: 12),
+                          Expanded(
+                            child: Stack(
+                              children: [
+                                Positioned.fill(
+                                  child: Opacity(
+                                    opacity: sp1,
+                                    child: Transform.translate(
+                                      offset: Offset(0, 8 * (1 - sp1)),
+                                      child: _HotkeyPressOverlay(hotkey: hotkey1, accent: widget.accent, pressed: _isShortcutPressed1()),
                                     ),
                                   ),
                                 ),
-                              ),
-                          ],
-                        ),
+                                if (wp1 > 0.01)
+                                  Positioned.fill(
+                                    child: Transform.translate(
+                                      offset: Offset(0, 20 * (1 - wp1)),
+                                      child: Transform.scale(
+                                        scale: 0.95 + (0.05 * wp1),
+                                        child: WoxDemoWindow(
+                                          accent: widget.accent,
+                                          query: 'github repo',
+                                          opaqueBackground: true,
+                                          footerHotkey: _demoActionPanelHotkey(),
+                                          results: [
+                                            WoxDemoResult(
+                                              title: 'Wox repository',
+                                              subtitle: 'Open Wox-launcher/Wox on GitHub',
+                                              icon: const Icon(Icons.code_rounded, color: Colors.white, size: 23),
+                                              selected: true,
+                                              tail: hotkey1,
+                                            ),
+                                            WoxDemoResult(
+                                              title: widget.tr('onboarding_query_hotkeys_title'),
+                                              subtitle: widget.tr('onboarding_query_hotkeys_body'),
+                                              icon: Icon(Icons.bolt_outlined, color: widget.accent, size: 23),
+                                              tail: widget.tr('ui_query_hotkeys'),
+                                            ),
+                                            const WoxDemoResult(
+                                              title: 'Issues',
+                                              subtitle: 'github repo issues',
+                                              icon: Icon(Icons.bug_report_outlined, color: Color(0xFFFACC15), size: 23),
+                                              tail: 'GitHub',
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
+
+              // ── Example 2: Ctrl+Shift+X opens a borderless webview ─────────
+              // Demonstrates that hideQueryBox + hideToolbar lets the entire
+              // Wox window become a frameless embedded webpage, ideal for
+              // quick browsing via the webview plugin.
+              if (ex2 > 0.01)
+                Positioned.fill(
+                  child: Opacity(
+                    opacity: ex2,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(48, 18, 52, 36),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          WoxDemoHintCard(
+                            accent: widget.accent,
+                            icon: Icons.keyboard_command_key,
+                            title: widget.tr('onboarding_query_hotkeys_title'),
+                            from: hotkey2,
+                            to: 'webview instagram',
+                          ),
+                          const SizedBox(height: 12),
+                          Expanded(
+                            child: Stack(
+                              children: [
+                                // Hotkey press overlay – same visual as example 1 but with hotkey2.
+                                Positioned.fill(
+                                  child: Opacity(
+                                    opacity: sp2,
+                                    child: Transform.translate(
+                                      offset: Offset(0, 8 * (1 - sp2)),
+                                      child: _HotkeyPressOverlay(hotkey: hotkey2, accent: widget.accent, pressed: _isShortcutPressed2()),
+                                    ),
+                                  ),
+                                ),
+                                // Instagram webview window – rises in after the
+                                // hotkey press. It is narrower than the full
+                                // available width (capped at 340 px) to convey
+                                // that Query Hotkeys support a custom window
+                                // size — the user would set a narrow width so
+                                // the frameless page sits in one corner of the
+                                // screen without covering everything.
+                                if (wp2 > 0.01)
+                                  Positioned(
+                                    top: 0,
+                                    bottom: 0,
+                                    // Center a narrow window inside the stack,
+                                    // mirroring how a real narrow-hotkey window
+                                    // would appear floating on the desktop.
+                                    left: 0,
+                                    right: 0,
+                                    child: Center(
+                                      child: ConstrainedBox(
+                                        constraints: const BoxConstraints(maxWidth: 340),
+                                        child: Transform.translate(
+                                          offset: Offset(0, 20 * (1 - wp2)),
+                                          child: Transform.scale(scale: 0.95 + (0.05 * wp2), child: const _InstagramWebviewWindow()),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+// A mocked Instagram post rendered inside a Wox-window chrome that has no
+// query box and no toolbar.  The sole purpose of this widget is to convey
+// the "borderless embedded webpage" concept that hideQueryBox + hideToolbar
+// enables when combined with the webview plugin.  All content is fictional.
+class _InstagramWebviewWindow extends StatelessWidget {
+  const _InstagramWebviewWindow();
+
+  // Instagram-like color palette (light theme to contrast with the dark Wox UI).
+  static const _bg = Color(0xFFFFFFFF);
+  static const _textColor = Color(0xFF000000);
+  static const _subText = Color(0xFF737373);
+  static const _divider = Color(0xFFDBDBDB);
+  static const _igBlue = Color(0xFF0095F6);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(color: _bg, border: Border.all(color: getThemeTextColor().withValues(alpha: 0.10)), borderRadius: BorderRadius.circular(8)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Column(
+          children: [
+            // ── Instagram top bar ────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: const BoxDecoration(color: _bg, border: Border(bottom: BorderSide(color: _divider, width: 0.5))),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: const [
+                        Text('Instagram', style: TextStyle(color: _textColor, fontSize: 18, fontWeight: FontWeight.w700, fontStyle: FontStyle.italic)),
+                        SizedBox(width: 3),
+                        Icon(Icons.keyboard_arrow_down_rounded, color: _textColor, size: 18),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.add_box_outlined, color: _textColor, size: 22),
+                  const SizedBox(width: 16),
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      const Icon(Icons.favorite_border, color: _textColor, size: 22),
+                      // Notification dot
+                      Positioned(top: -1, right: -1, child: Container(width: 7, height: 7, decoration: const BoxDecoration(color: Color(0xFFE1306C), shape: BoxShape.circle))),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            // ── Post image placeholder ───────────────────────────────────────
+            // A gradient stand-in for the photo of a girl holding a camera in
+            // front of colorful koi-nobori (kite) streamers.
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // Sky-to-ground gradient evokes a sunny outdoor scene.
+                  Container(
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(colors: [Color(0xFF87CEEB), Color(0xFFB0D8C8), Color(0xFFF5EFD8)], begin: Alignment.topCenter, end: Alignment.bottomCenter),
+                    ),
+                  ),
+                  // A few decorative streamer rectangles to hint at the koi flags.
+                  Positioned(left: 18, top: 12, child: _KoiFlag(color: const Color(0xFFE96B6B), angle: -0.15)),
+                  Positioned(left: 38, top: 6, child: _KoiFlag(color: const Color(0xFF5BC8E8), angle: 0.08)),
+                  Positioned(left: 60, top: 18, child: _KoiFlag(color: const Color(0xFFF5C842), angle: -0.05)),
+                  Positioned(left: 80, top: 8, child: _KoiFlag(color: const Color(0xFF82D48A), angle: 0.12)),
+                  Positioned(left: 98, top: 16, child: _KoiFlag(color: const Color(0xFFE96B6B), angle: -0.08)),
+                  Positioned(right: 18, top: 10, child: _KoiFlag(color: const Color(0xFF5BC8E8), angle: 0.15)),
+                  Positioned(right: 40, top: 4, child: _KoiFlag(color: const Color(0xFFF5C842), angle: -0.10)),
+                  Positioned(right: 62, top: 20, child: _KoiFlag(color: const Color(0xFF82D48A), angle: 0.06)),
+                  // Silhouette of a person (avatar placeholder).
+                  Positioned(
+                    bottom: 10,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(color: const Color(0xFFCCCCCC), shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)),
+                        child: const Icon(Icons.person, color: Color(0xFF888888), size: 24),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── Post actions and caption ─────────────────────────────────────
+            Container(
+              color: _bg,
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Action icon row: like, comment, share, bookmark.
+                  Row(
+                    children: [
+                      const Icon(Icons.favorite_border, color: _textColor, size: 20),
+                      const SizedBox(width: 12),
+                      const Icon(Icons.chat_bubble_outline, color: _textColor, size: 20),
+                      const SizedBox(width: 12),
+                      Transform.rotate(angle: -0.45, child: const Icon(Icons.send_outlined, color: _textColor, size: 20)),
+                      const Spacer(),
+                      const Icon(Icons.bookmark_border, color: _textColor, size: 20),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  const Text('eu_imozou和其他用户赞了', style: TextStyle(color: _textColor, fontSize: 10, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  RichText(
+                    text: const TextSpan(
+                      children: [
+                        TextSpan(text: 'camel8326', style: TextStyle(color: _textColor, fontSize: 10, fontWeight: FontWeight.w700)),
+                        TextSpan(text: '  こどもの日…', style: TextStyle(color: _textColor, fontSize: 10)),
+                        TextSpan(text: '  更多', style: TextStyle(color: _subText, fontSize: 10)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  const Text('5天前', style: TextStyle(color: _subText, fontSize: 9)),
+
+                  // "Use this app" call-to-action banner that appears in mobile
+                  // web Instagram, reinforcing the "real webpage" feel.
+                  Container(
+                    margin: const EdgeInsets.only(top: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4),
+                    decoration: const BoxDecoration(border: Border(top: BorderSide(color: _divider, width: 0.5))),
+                    child: Row(
+                      children: const [
+                        Expanded(child: Text('使用这款应用', style: TextStyle(color: _igBlue, fontSize: 10, fontWeight: FontWeight.w600))),
+                        Icon(Icons.close, color: _subText, size: 14),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── Bottom navigation bar ────────────────────────────────────────
+            Container(
+              decoration: const BoxDecoration(color: _bg, border: Border(top: BorderSide(color: _divider, width: 0.5))),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  const Icon(Icons.home_filled, color: _textColor, size: 22),
+                  const Icon(Icons.search_rounded, color: _textColor, size: 22),
+                  const Icon(Icons.play_circle_outline, color: _textColor, size: 22),
+                  Transform.rotate(angle: -0.45, child: const Icon(Icons.send_outlined, color: _textColor, size: 22)),
+                  CircleAvatar(radius: 10, backgroundImage: null, backgroundColor: Colors.grey.shade300),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// A small tilted rectangle that resembles a koi-nobori (kite streamer) in
+// the Instagram post image placeholder.
+class _KoiFlag extends StatelessWidget {
+  const _KoiFlag({required this.color, required this.angle});
+
+  final Color color;
+  final double angle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Transform.rotate(
+      angle: angle,
+      child: Container(width: 8, height: 28, decoration: BoxDecoration(color: color.withValues(alpha: 0.80), borderRadius: BorderRadius.circular(2))),
     );
   }
 }

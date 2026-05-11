@@ -52,16 +52,21 @@ class WoxDemoHintCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 22, offset: const Offset(0, 10))],
       ),
+      // Left-right split: title occupies the left half, badge the right half.
+      // Both sides are Expanded so the dividing point stays at the center
+      // regardless of text length or container width.
       child: Row(
         children: [
-          Icon(icon, color: accent, size: 20),
-          const SizedBox(width: 8),
-          Flexible(
-            flex: 2,
-            child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w700)),
+          Expanded(
+            child: Row(
+              children: [
+                Icon(icon, color: accent, size: 20),
+                const SizedBox(width: 8),
+                Flexible(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: getThemeTextColor(), fontSize: 13, fontWeight: FontWeight.w700))),
+              ],
+            ),
           ),
-          const Spacer(),
-          _ExpansionBadge(accent: accent, from: from, to: to),
+          Expanded(child: Align(alignment: Alignment.centerRight, child: _ExpansionBadge(accent: accent, from: from, to: to))),
         ],
       ),
     );

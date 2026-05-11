@@ -109,11 +109,10 @@ class WoxDemoWindow extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final metrics = WoxInterfaceSizeUtil.instance.current;
-        // Bug fix: the preview is now a supporting element with less vertical
-        // weight. Respecting the parent height prevents small onboarding
-        // windows from overflowing while still capping tall windows so the demo
-        // does not dominate the current setup task.
-        final maxPreviewHeight = constraints.maxHeight.clamp(0.0, 320.0).toDouble();
+        // Bug fix: the previous 320px cap was not enough for 4-result demos with
+        // a toolbar at normal/comfortable density (required up to ~337px). Raised
+        // to 400 so all densities fit without clipping the last result row.
+        final maxPreviewHeight = constraints.maxHeight.clamp(0.0, 400.0).toDouble();
         final previewWidth = constraints.maxWidth;
         // Feature refinement: the shared demo now defaults to the full Wox
         // launcher chrome. Most previews should show both the query box and the

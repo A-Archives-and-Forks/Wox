@@ -75,10 +75,15 @@ class _InstallFlowDemoState extends State<_InstallFlowDemo> with SingleTickerPro
   //   5324 – 5600ms (0.95–1.00): fade out install progress
 
   String _queryText() {
-    final typingProgress = _interval(0.08, 0.46, Curves.easeOutCubic);
-    final rawStage = (typingProgress * (widget.queryStages.length - 1)).floor();
-    final stage = rawStage.clamp(0, widget.queryStages.length - 1).toInt();
-    return widget.queryStages[stage];
+    // Bug fix: the previous easeOutCubic curve over a stage list caused early
+    // characters to rush by and later ones to linger, and each stage had
+    // multi-character jumps (e.g., '' → 'w' → 'wpm'). Typing the final query
+    // string one character at a time with linear speed gives equal per-character
+    // duration (~56ms/char for 'wpm install clipboard', ~74ms for 'theme ocean dark').
+    final target = widget.queryStages.last;
+    if (target.isEmpty) return '';
+    final t = _interval(0.08, 0.29, Curves.linear);
+    return target.substring(0, (t * target.length).floor().clamp(0, target.length));
   }
 
   double _installProgress() {

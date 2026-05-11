@@ -487,6 +487,7 @@ class WoxSettingGeneralView extends WoxSettingBaseView {
       key: ValueKey(triggerKey),
       popoverKey: ValueKey(popoverKey),
       demo: demo,
+      width: 680,
       height: 460,
       child: Semantics(
         label: controller.tr("ui_demo_preview"),

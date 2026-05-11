@@ -62,16 +62,14 @@ class _WoxMainHotkeyDemoState extends State<WoxMainHotkeyDemo> with SingleTicker
   }
 
   String _queryText() {
-    if (_controller.value < 0.52) {
-      return '';
-    }
-    if (_controller.value < 0.60) {
-      return 'a';
-    }
-    if (_controller.value < 0.68) {
-      return 'ap';
-    }
-    return 'app';
+    // Bug fix: each character previously showed after a fixed 336ms gap (0.08 × 4200ms),
+    // making 3-char typing feel sluggish. Now matched to the ~65ms/char reference
+    // speed from the wpm-install-everything demo (22 chars over 1425ms).
+    // 'app' (3 chars) × 65ms ≈ 195ms = 0.046 of 4200ms; window: 0.52–0.566.
+    const target = 'app';
+    if (_controller.value < 0.52) return '';
+    final t = ((_controller.value - 0.52) / (0.566 - 0.52)).clamp(0.0, 1.0);
+    return target.substring(0, (t * target.length).floor().clamp(0, target.length));
   }
 
   String _displayHotkey() {
