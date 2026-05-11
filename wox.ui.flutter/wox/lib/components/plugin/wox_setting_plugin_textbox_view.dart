@@ -96,22 +96,31 @@ class _WoxSettingPluginTextBoxState extends State<WoxSettingPluginTextBox> with 
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          WoxTextField(
-            maxLines: maxLines,
-            controller: _controller,
-            focusNode: _focusNode,
-            width: fieldWidth,
-            onChanged: (value) {
-              final validationError = _validateValue(value);
-              if (_hasInteracted && _errorMessage == validationError) {
-                return;
-              }
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Flexible(
+                fit: hasExplicitWidth ? FlexFit.loose : FlexFit.tight,
+                child: WoxTextField(
+                  maxLines: maxLines,
+                  controller: _controller,
+                  focusNode: _focusNode,
+                  width: fieldWidth,
+                  onChanged: (value) {
+                    final validationError = _validateValue(value);
+                    if (_hasInteracted && _errorMessage == validationError) {
+                      return;
+                    }
 
-              setState(() {
-                _hasInteracted = true;
-                _errorMessage = validationError;
-              });
-            },
+                    setState(() {
+                      _hasInteracted = true;
+                      _errorMessage = validationError;
+                    });
+                  },
+                ),
+              ),
+              suffix(widget.item.suffix),
+            ],
           ),
           validationMessage(_errorMessage),
         ],
@@ -120,22 +129,11 @@ class _WoxSettingPluginTextBoxState extends State<WoxSettingPluginTextBox> with 
 
     return layout(
       label: widget.item.label,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Flexible(
-            fit: hasExplicitWidth ? FlexFit.loose : FlexFit.tight,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // Plugin text boxes fill the value column by default, but explicit
-                // widths are capped to the available column width to prevent overflow.
-                final effectiveWidth = hasExplicitWidth ? math.min(requestedInputWidth, constraints.maxWidth) : constraints.maxWidth;
-                return buildField(effectiveWidth);
-              },
-            ),
-          ),
-          suffix(widget.item.suffix),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final effectiveWidth = hasExplicitWidth ? math.min(requestedInputWidth, constraints.maxWidth) : constraints.maxWidth;
+          return buildField(effectiveWidth);
+        },
       ),
       style: widget.item.style,
       tooltip: widget.item.tooltip,

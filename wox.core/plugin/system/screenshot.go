@@ -6,11 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"wox/common"
 	"wox/plugin"
+	"wox/setting/definition"
+	"wox/setting/validator"
 	"wox/util"
 	"wox/util/clipboard"
 	"wox/util/overlay"
@@ -24,6 +27,8 @@ var screenshotCommandNew = "new"
 var screenshotHistoryPreviewWidth = 400
 var screenshotHistoryIconWidth = 40
 var screenshotPinnedOverlayPrefix = "wox_screenshot_pin_"
+var screenshotRetentionDaysSettingKey = "retention_days"
+var screenshotDefaultRetentionDays = 30
 
 func init() {
 	plugin.AllSystemPlugin = append(plugin.AllSystemPlugin, &ScreenshotPlugin{})
@@ -60,6 +65,30 @@ func (p *ScreenshotPlugin) GetMetadata() plugin.Metadata {
 			"Macos",
 			"Linux",
 		},
+		SettingDefinitions: []definition.PluginSettingDefinitionItem{
+			{
+				Type: definition.PluginSettingDefinitionTypeTextBox,
+				Value: &definition.PluginSettingValueTextBox{
+					Key:          screenshotRetentionDaysSettingKey,
+					Label:        "i18n:plugin_screenshot_retention_days",
+					Tooltip:      "i18n:plugin_screenshot_retention_days_tooltip",
+					Suffix:       "i18n:plugin_screenshot_days",
+					DefaultValue: strconv.Itoa(screenshotDefaultRetentionDays),
+					Validators: []validator.PluginSettingValidator{
+						{
+							Type:  validator.PluginSettingValidatorTypeNotEmpty,
+							Value: &validator.PluginSettingValidatorNotEmpty{},
+						},
+						{
+							Type: validator.PluginSettingValidatorTypeIsNumber,
+							Value: &validator.PluginSettingValidatorIsNumber{
+								IsInteger: true,
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -70,6 +99,11 @@ func (p *ScreenshotPlugin) Init(ctx context.Context, initParams plugin.InitParam
 	// not pay the old cost of decoding every original screenshot through the generic icon pipeline.
 	util.Go(ctx, "warm screenshot history thumbnails", func() {
 		p.warmScreenshotHistoryThumbnails(ctx)
+	})
+	// Screenshot retention uses one scheduled owner instead of tying deletion to capture or query
+	// flows. Keeping cleanup periodic avoids surprising file removal during user-driven actions.
+	util.Go(ctx, "cleanup screenshot history", func() {
+		p.startScreenshotCleanupRoutine(ctx)
 	})
 }
 
@@ -150,7 +184,7 @@ func (p *ScreenshotPlugin) queryScreenshotHistory(query plugin.Query) ([]plugin.
 }
 
 func (p *ScreenshotPlugin) listScreenshotHistory() ([]screenshotHistoryItem, error) {
-	screenshotDirectory := filepath.Join(util.GetLocation().GetWoxDataDirectory(), "screenshots")
+	screenshotDirectory := p.getScreenshotDirectory()
 	entries, err := os.ReadDir(screenshotDirectory)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -189,6 +223,94 @@ func (p *ScreenshotPlugin) listScreenshotHistory() ([]screenshotHistoryItem, err
 	})
 
 	return items, nil
+}
+
+func (p *ScreenshotPlugin) getScreenshotDirectory() string {
+	return filepath.Join(util.GetLocation().GetWoxDataDirectory(), "screenshots")
+}
+
+func (p *ScreenshotPlugin) getScreenshotRetentionDays(ctx context.Context) int {
+	value := strings.TrimSpace(p.api.GetSetting(ctx, screenshotRetentionDaysSettingKey))
+	if value == "" {
+		return screenshotDefaultRetentionDays
+	}
+
+	retentionDays, err := strconv.Atoi(value)
+	if err != nil || retentionDays <= 0 {
+		// Retention controls deletion, so invalid or non-positive values fall back to the default
+		// instead of accidentally treating a bad setting as "delete everything immediately".
+		return screenshotDefaultRetentionDays
+	}
+	return retentionDays
+}
+
+func (p *ScreenshotPlugin) startScreenshotCleanupRoutine(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.cleanupExpiredScreenshots(ctx)
+		}
+	}
+}
+
+func (p *ScreenshotPlugin) cleanupExpiredScreenshots(ctx context.Context) {
+	retentionDays := p.getScreenshotRetentionDays(ctx)
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	screenshotDirectory := p.getScreenshotDirectory()
+
+	entries, err := os.ReadDir(screenshotDirectory)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		p.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to read screenshot directory for cleanup: %s", err.Error()))
+		return
+	}
+
+	removedCount := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".png") {
+			continue
+		}
+
+		screenshotPath := filepath.Join(screenshotDirectory, entry.Name())
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			p.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to read screenshot file info for cleanup: path=%s err=%s", screenshotPath, infoErr.Error()))
+			continue
+		}
+		if !info.ModTime().Before(cutoff) {
+			continue
+		}
+
+		// Cleanup follows the same file-modified timestamp used by history ordering. That keeps the
+		// retention rule easy to audit and avoids introducing a separate metadata store just to decide
+		// whether an exported screenshot is old enough to delete.
+		item := screenshotHistoryItem{
+			path:      screenshotPath,
+			fileName:  entry.Name(),
+			size:      info.Size(),
+			timestamp: info.ModTime().UnixMilli(),
+		}
+		if removeErr := os.Remove(screenshotPath); removeErr != nil {
+			if os.IsNotExist(removeErr) {
+				continue
+			}
+			p.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to remove expired screenshot: path=%s err=%s", screenshotPath, removeErr.Error()))
+			continue
+		}
+		removedCount++
+		p.removeScreenshotHistoryThumbnails(ctx, item)
+	}
+
+	if removedCount > 0 {
+		p.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("removed %d expired screenshots older than %d days", removedCount, retentionDays))
+	}
 }
 
 func (p *ScreenshotPlugin) warmScreenshotHistoryThumbnails(ctx context.Context) {
@@ -298,6 +420,23 @@ func (p *ScreenshotPlugin) screenshotHistoryThumbnailPaths(item screenshotHistor
 	cacheDirectory := util.GetLocation().GetImageCacheDirectory()
 	return filepath.Join(cacheDirectory, fmt.Sprintf("screenshot_%s_preview.png", cacheKey)),
 		filepath.Join(cacheDirectory, fmt.Sprintf("screenshot_%s_icon.png", cacheKey))
+}
+
+func (p *ScreenshotPlugin) removeScreenshotHistoryThumbnails(ctx context.Context, item screenshotHistoryItem) {
+	previewPath, iconPath := p.screenshotHistoryThumbnailPaths(item)
+	for _, thumbnailPath := range []string{previewPath, iconPath} {
+		if !util.IsFileExists(thumbnailPath) {
+			continue
+		}
+		// Expired screenshots own their generated thumbnails. Removing both avoids shifting storage
+		// growth from the screenshot directory into the shared image cache.
+		if err := os.Remove(thumbnailPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			p.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to remove expired screenshot thumbnail: path=%s err=%s", thumbnailPath, err.Error()))
+		}
+	}
 }
 
 func (p *ScreenshotPlugin) screenshotHistoryResult(item screenshotHistoryItem) plugin.QueryResult {
@@ -472,7 +611,6 @@ func (p *ScreenshotPlugin) captureScreenshot(ctx context.Context, actionContext 
 			// can repair the cache.
 			p.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("failed to generate screenshot history thumbnails: path=%s err=%s", result.ScreenshotPath, err.Error()))
 		}
-
 		if result.PinToScreen {
 			// Flutter owns final image composition, but the pinned desktop window belongs in Go because
 			// util/overlay is already the native surface abstraction used by core. Branching on the
