@@ -118,6 +118,7 @@ func (a *WindowsRetriever) GetAppDirectories(ctx context.Context) []appDirectory
 			Path:           usr.HomeDir + "\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
 			Recursive:      true,
 			RecursiveDepth: 2,
+			trackChanges:   true,
 		},
 		{
 			Path:              usr.HomeDir + "\\AppData\\Local",
@@ -129,6 +130,7 @@ func (a *WindowsRetriever) GetAppDirectories(ctx context.Context) []appDirectory
 			Path:           "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
 			Recursive:      true,
 			RecursiveDepth: 2,
+			trackChanges:   true,
 		},
 		{
 			Path:           "C:\\Program Files",
@@ -150,6 +152,7 @@ func (a *WindowsRetriever) GetAppDirectories(ctx context.Context) []appDirectory
 			Path:           usr.HomeDir + "\\Desktop",
 			Recursive:      false,
 			RecursiveDepth: 0,
+			trackChanges:   true,
 		},
 	}
 }

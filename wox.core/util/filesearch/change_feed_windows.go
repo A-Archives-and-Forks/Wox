@@ -90,6 +90,7 @@ type usnRawRecord struct {
 	fileID       usnFileID
 	parentFileID usnFileID
 	usn          int64
+	reason       uint32
 	name         string
 	fileAttrs    uint32
 }
@@ -99,6 +100,7 @@ type usnResolvedRecord struct {
 	PathKnown bool
 	PathIsDir bool
 	USN       int64
+	Reason    uint32
 }
 
 func NewWindowsChangeFeed() *WindowsChangeFeed {
@@ -366,7 +368,7 @@ func (u *usnWatcherSet) emitResolvedRecords(roots []RootRecord, journal usnJourn
 				// Known USN paths must be routed to the longest matching root. The
 				// previous broadcast woke both a dynamic root and its parent, which
 				// defeated the ownership split and forced unnecessary parent rescans.
-				u.emit(translateUSNDelta(root, journal, record.Path, record.PathIsDir, record.PathKnown, record.USN, now))
+				u.emit(translateUSNDelta(root, journal, record.Path, record.PathIsDir, record.PathKnown, record.USN, record.Reason, now))
 			}
 			continue
 		}
@@ -575,6 +577,7 @@ func parseUSNRawRecord(buffer []byte) (usnRawRecord, error) {
 			fileID:       fileID,
 			parentFileID: parentFileID,
 			usn:          int64(binary.LittleEndian.Uint64(buffer[24:32])),
+			reason:       binary.LittleEndian.Uint32(buffer[40:44]),
 			name:         decodeUSNFileName(buffer[fileNameOffset : fileNameOffset+fileNameLength]),
 			fileAttrs:    binary.LittleEndian.Uint32(buffer[52:56]),
 		}, nil
@@ -598,6 +601,7 @@ func parseUSNRawRecord(buffer []byte) (usnRawRecord, error) {
 			fileID:       fileID,
 			parentFileID: parentFileID,
 			usn:          int64(binary.LittleEndian.Uint64(buffer[40:48])),
+			reason:       binary.LittleEndian.Uint32(buffer[56:60]),
 			name:         decodeUSNFileName(buffer[fileNameOffset : fileNameOffset+fileNameLength]),
 			fileAttrs:    binary.LittleEndian.Uint32(buffer[68:72]),
 		}, nil
@@ -610,6 +614,7 @@ func resolveUSNRecord(rootHandle windows.Handle, volumePath string, rawRecord us
 	record := usnResolvedRecord{
 		PathIsDir: rawRecord.fileAttrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0,
 		USN:       rawRecord.usn,
+		Reason:    rawRecord.reason,
 	}
 
 	path, err := openUSNPathByID(rootHandle, rawRecord.fileID, record.PathIsDir)

@@ -21,6 +21,7 @@ import (
 	"wox/setting/validator"
 	"wox/util"
 	"wox/util/clipboard"
+	"wox/util/filesearch"
 	"wox/util/nativecontextmenu"
 	"wox/util/shell"
 	"wox/util/window"
@@ -78,6 +79,17 @@ const (
 	appCommandReindex   = "reindex"
 	appCommandLaunchpad = "launchpad"
 )
+
+const (
+	appChangeDebounceWindow = 3 * time.Second
+	appChangeMaxWait        = 20 * time.Second
+)
+
+type appPendingChange struct {
+	Path         string
+	SemanticKind filesearch.ChangeSemanticKind
+	PathIsDir    bool
+}
 
 type appContextData struct {
 	Name string `json:"name"`
@@ -155,6 +167,7 @@ type appDirectory struct {
 	RecursiveDepth    int
 	RecursiveExcludes []string
 	excludeAbsPaths   []string // internal: absolute paths of excluded directories
+	trackChanges      bool     // internal: true for roots whose precise file changes should update the app cache
 }
 
 func init() {
@@ -195,6 +208,7 @@ func (a *ApplicationPlugin) GetMetadata() plugin.Metadata {
 		Entry:         "",
 		TriggerKeywords: []string{
 			"*",
+			"app",
 		},
 		SupportedOS: []string{
 			"Windows",
@@ -655,67 +669,479 @@ func (a *ApplicationPlugin) getRetriever(ctx context.Context) Retriever {
 }
 
 func (a *ApplicationPlugin) watchAppChanges(ctx context.Context) {
-	var appDirectories = a.getAppDirectories(ctx)
-	var appExtensions = a.retriever.GetAppExtensions(ctx)
+	directories := a.getAppDirectories(ctx)
+	appExtensions := a.retriever.GetAppExtensions(ctx)
+	a.watchRootOnlyAppChanges(ctx, directories, appExtensions)
+
+	roots := a.getAppChangeRoots(ctx)
+	if len(roots) == 0 {
+		a.api.Log(ctx, plugin.LogLevelInfo, "app change feed skipped: no tracked app directories")
+		return
+	}
+
+	feed := filesearch.NewChangeFeed()
+	defer feed.Close()
+	if refreshErr := feed.Refresh(ctx, roots); refreshErr != nil {
+		a.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to start app change feed: %s", refreshErr.Error()))
+		return
+	}
+	a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app change feed started: roots=%d mode=%s", len(roots), feed.Mode()))
+	rootPaths := map[string]string{}
+	for _, root := range roots {
+		rootPaths[root.ID] = root.Path
+	}
+
+	pending := map[string]appPendingChange{}
+	var firstPendingAt time.Time
+	var timer *time.Timer
+	var timerC <-chan time.Time
+
+	stopTimer := func() {
+		if timer == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer = nil
+		timerC = nil
+	}
+
+	scheduleFlush := func(now time.Time) {
+		if len(pending) == 0 {
+			stopTimer()
+			firstPendingAt = time.Time{}
+			return
+		}
+		if firstPendingAt.IsZero() {
+			firstPendingAt = now
+		}
+		delay := appChangeDebounceWindow
+		if elapsed := now.Sub(firstPendingAt); elapsed >= appChangeMaxWait {
+			delay = 0
+		} else if remaining := appChangeMaxWait - elapsed; remaining < delay {
+			delay = remaining
+		}
+		if delay <= 0 {
+			stopTimer()
+			a.applyPendingAppChanges(ctx, pending)
+			pending = map[string]appPendingChange{}
+			firstPendingAt = time.Time{}
+			return
+		}
+		stopTimer()
+		timer = time.NewTimer(delay)
+		timerC = timer.C
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			stopTimer()
+			return
+		case <-timerC:
+			a.applyPendingAppChanges(ctx, pending)
+			pending = map[string]appPendingChange{}
+			firstPendingAt = time.Time{}
+			stopTimer()
+		case signal, ok := <-feed.Signals():
+			if !ok {
+				stopTimer()
+				return
+			}
+
+			a.logAppChangeFeedSignal(ctx, signal, rootPaths)
+			change, ok := a.getActionableAppChange(signal, appExtensions, rootPaths)
+			if !ok {
+				continue
+			}
+			pending[a.appChangeTaskKey(change)] = change
+			a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app change feed accepted: path=%s semantic=%s isDir=%t pending=%d", change.Path, change.SemanticKind, change.PathIsDir, len(pending)))
+			scheduleFlush(time.Now())
+		}
+	}
+}
+
+func (a *ApplicationPlugin) logAppChangeFeedSignal(ctx context.Context, signal filesearch.ChangeSignal, rootPaths map[string]string) {
+	rootPath := rootPaths[signal.RootID]
+	if rootPath == "" {
+		rootPath = "<unknown>"
+	}
+	at := ""
+	if !signal.At.IsZero() {
+		at = signal.At.Format(time.RFC3339Nano)
+	}
+	// Diagnostic logging only: the app change feed crosses from filesearch into
+	// the app plugin here, so log the raw signal before filtering to verify
+	// installer/uninstaller flows without changing indexing behavior.
+	a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf(
+		"app change feed signal: kind=%s semantic=%s feed=%s root=%s rootPath=%s path=%s isDir=%t pathTypeKnown=%t reason=%s cursor=%s at=%s",
+		signal.Kind,
+		signal.SemanticKind,
+		signal.FeedType,
+		signal.RootID,
+		rootPath,
+		signal.Path,
+		signal.PathIsDir,
+		signal.PathTypeKnown,
+		signal.Reason,
+		signal.Cursor,
+		at,
+	))
+}
+
+func (a *ApplicationPlugin) watchRootOnlyAppChanges(ctx context.Context, appDirectories []appDirectory, appExtensions []string) {
 	for _, d := range appDirectories {
-		var directory = d
+		if d.trackChanges {
+			continue
+		}
+
+		directory := d
 		util.WatchDirectoryChanges(ctx, directory.Path, func(e fsnotify.Event) {
-			var appPath = e.Name
-			var isExtensionMatch = lo.ContainsBy(appExtensions, func(ext string) bool {
-				return strings.HasSuffix(e.Name, fmt.Sprintf(".%s", ext))
-			})
-			if !isExtensionMatch {
+			appPath := filepath.Clean(e.Name)
+			if !a.isAppPathExtensionMatch(appPath, appExtensions) {
 				return
 			}
 
 			a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app %s changed (%s)", appPath, e.Op))
-			if e.Op == fsnotify.Remove || e.Op == fsnotify.Rename {
-				for i, app := range a.apps {
-					if app.Path == appPath {
-						a.apps = append(a.apps[:i], a.apps[i+1:]...)
-						a.rebuildHotkeyAppCandidates(ctx)
-						a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app %s removed", appPath))
-						a.saveAppToCache(ctx)
-						break
-					}
-				}
-			} else if e.Op == fsnotify.Create {
-				//check if already exist
-				for _, app := range a.apps {
-					if app.Path == e.Name {
-						return
-					}
-				}
+			changed := false
+			if e.Op&fsnotify.Remove == fsnotify.Remove || e.Op&fsnotify.Rename == fsnotify.Rename {
+				changed = a.removeIndexedAppByPath(ctx, appPath)
+			} else if e.Op&fsnotify.Create == fsnotify.Create || e.Op&fsnotify.Write == fsnotify.Write {
+				// Bug fix: keep the legacy root-only watcher as a compatibility path for
+				// untracked roots, but apply the same local update strategy as the precise
+				// change feed so root-level changes never trigger a full app index.
+				time.Sleep(appChangeDebounceWindow)
+				changed = a.upsertIndexedAppByPath(ctx, appPath)
+			}
 
-				//wait for file copy complete
-				time.Sleep(time.Second * 3)
-
-				var info appInfo
-				var getErr error
-
-				// Retry a few times if icon is default (failed to load)
-				for i := 0; i < 3; i++ {
-					info, getErr = a.retriever.ParseAppInfo(ctx, appPath)
-					if getErr != nil {
-						a.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("error getting app info for %s: %s", e.Name, getErr.Error()))
-						return
-					}
-					if !info.IsDefaultIcon {
-						break
-					}
-					time.Sleep(time.Second * time.Duration(i+1))
-				}
-
-				a.populateAppMetadata(ctx, appPath, &info, nil)
-				info.Icon = common.ConvertIcon(ctx, info.Icon, a.pluginDirectory)
-
-				a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app %s added", e.Name))
-				a.apps = append(a.apps, info)
+			if changed {
 				a.rebuildHotkeyAppCandidates(ctx)
+				a.rebuildQueryEntries(ctx)
 				a.saveAppToCache(ctx)
+				a.api.RefreshQuery(ctx, plugin.RefreshQueryParam{PreserveSelectedIndex: true})
 			}
 		})
 	}
+}
+
+func (a *ApplicationPlugin) getAppChangeRoots(ctx context.Context) []filesearch.RootRecord {
+	directories := a.getAppDirectories(ctx)
+	roots := make([]filesearch.RootRecord, 0, len(directories))
+	now := util.GetSystemTimestamp()
+	for _, directory := range directories {
+		if !directory.trackChanges || strings.TrimSpace(directory.Path) == "" {
+			continue
+		}
+		cleanPath := filepath.Clean(directory.Path)
+		info, statErr := os.Stat(cleanPath)
+		if statErr != nil {
+			a.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("skip app change root %s: %s", cleanPath, statErr.Error()))
+			continue
+		}
+		if !info.IsDir() {
+			continue
+		}
+		roots = append(roots, filesearch.RootRecord{
+			ID:        uuid.NewString(),
+			Path:      cleanPath,
+			Kind:      filesearch.RootKindDefault,
+			Status:    filesearch.RootStatusIdle,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+	}
+
+	return roots
+}
+
+func (a *ApplicationPlugin) appChangeTaskKey(change appPendingChange) string {
+	prefix := "file:"
+	if change.PathIsDir {
+		prefix = "dir:"
+	}
+	return prefix + a.pathCacheKey(change.Path)
+}
+
+func (a *ApplicationPlugin) getActionableAppChange(signal filesearch.ChangeSignal, appExtensions []string, rootPaths map[string]string) (appPendingChange, bool) {
+	if signal.Kind != filesearch.ChangeSignalKindDirtyPath {
+		if signal.Kind == filesearch.ChangeSignalKindDirtyRoot && signal.SemanticKind == filesearch.ChangeSemanticKindRemove && strings.TrimSpace(signal.Path) != "" {
+			changePath := filepath.Clean(signal.Path)
+			if rootPath := rootPaths[signal.RootID]; rootPath != "" && a.pathCacheKey(filepath.Clean(rootPath)) == a.pathCacheKey(changePath) {
+				// Bug fix: fallback feeds may mark a whole root dirty when precision is
+				// insufficient. Updating every cached app under that root would be a
+				// hidden full reconcile, so only path-level remove signals are allowed.
+				a.api.Log(context.Background(), plugin.LogLevelInfo, fmt.Sprintf("app change feed skipped: dirty root remove points at root path=%s", changePath))
+				return appPendingChange{}, false
+			}
+
+			// Bug fix: Windows fallback notifications report deletes as dirty_root with
+			// pathTypeKnown=false, but still carry the changed path. Treat that as a
+			// local remove only for concrete app files or a cached subdirectory, avoiding
+			// the expensive full indexApps fallback while keeping uninstall cleanup live.
+			if a.isAppPathExtensionMatch(changePath, appExtensions) {
+				return appPendingChange{Path: changePath, SemanticKind: signal.SemanticKind}, true
+			}
+			if a.hasIndexedAppsUnderDirectory(changePath) {
+				return appPendingChange{Path: changePath, SemanticKind: signal.SemanticKind, PathIsDir: true}, true
+			}
+			a.api.Log(context.Background(), plugin.LogLevelInfo, fmt.Sprintf("app change feed skipped: dirty root remove did not match cached app path=%s", changePath))
+			return appPendingChange{}, false
+		}
+		if signal.Kind == filesearch.ChangeSignalKindRequiresRootReconcile || signal.Kind == filesearch.ChangeSignalKindFeedUnavailable {
+			// Diagnostic logging only: app indexing intentionally avoids fallback full
+			// reindexing because broad app scans are expensive. Keep the skip visible
+			// while testing install/uninstall flows so we can tell whether filesearch
+			// produced a precise path or only a root-level reconciliation request.
+			a.api.Log(context.Background(), plugin.LogLevelInfo, fmt.Sprintf("app change feed skipped: kind=%s reason=%s path=%s", signal.Kind, signal.Reason, signal.Path))
+		}
+		return appPendingChange{}, false
+	}
+	if signal.Path == "" {
+		a.api.Log(context.Background(), plugin.LogLevelInfo, fmt.Sprintf("app change feed skipped: empty path semantic=%s reason=%s", signal.SemanticKind, signal.Reason))
+		return appPendingChange{}, false
+	}
+	changePath := filepath.Clean(signal.Path)
+	if signal.PathIsDir {
+		switch signal.SemanticKind {
+		case filesearch.ChangeSemanticKindCreate,
+			filesearch.ChangeSemanticKindModify,
+			filesearch.ChangeSemanticKindRename,
+			filesearch.ChangeSemanticKindRemove:
+			// Bug fix: installers often create a vendor folder under Start Menu and the
+			// fallback feed only reports that directory, not each nested .lnk. Reconcile
+			// just this directory so nested shortcuts update without a full app scan.
+			return appPendingChange{Path: changePath, SemanticKind: signal.SemanticKind, PathIsDir: true}, true
+		default:
+			a.api.Log(context.Background(), plugin.LogLevelInfo, fmt.Sprintf("app change feed skipped: directory path=%s semantic=%s reason=%s", signal.Path, signal.SemanticKind, signal.Reason))
+			return appPendingChange{}, false
+		}
+	}
+	if !a.isAppPathExtensionMatch(changePath, appExtensions) {
+		a.api.Log(context.Background(), plugin.LogLevelInfo, fmt.Sprintf("app change feed skipped: extension mismatch path=%s semantic=%s reason=%s", signal.Path, signal.SemanticKind, signal.Reason))
+		return appPendingChange{}, false
+	}
+
+	switch signal.SemanticKind {
+	case filesearch.ChangeSemanticKindCreate,
+		filesearch.ChangeSemanticKindRemove,
+		filesearch.ChangeSemanticKindRename,
+		filesearch.ChangeSemanticKindModify:
+		return appPendingChange{Path: changePath, SemanticKind: signal.SemanticKind}, true
+	default:
+		a.api.Log(context.Background(), plugin.LogLevelInfo, fmt.Sprintf("app change feed skipped: semantic=%s path=%s reason=%s", signal.SemanticKind, signal.Path, signal.Reason))
+		return appPendingChange{}, false
+	}
+}
+
+func (a *ApplicationPlugin) applyPendingAppChanges(ctx context.Context, pending map[string]appPendingChange) {
+	if len(pending) == 0 {
+		return
+	}
+
+	a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app change feed flushing pending changes: count=%d", len(pending)))
+	changed := false
+	for _, change := range pending {
+		if change.PathIsDir {
+			switch change.SemanticKind {
+			case filesearch.ChangeSemanticKindRemove:
+				changed = a.removeIndexedAppsUnderDirectory(ctx, change.Path) || changed
+			case filesearch.ChangeSemanticKindCreate, filesearch.ChangeSemanticKindModify, filesearch.ChangeSemanticKindRename:
+				changed = a.reconcileIndexedAppsInDirectory(ctx, change.Path) || changed
+			}
+			continue
+		}
+
+		switch change.SemanticKind {
+		case filesearch.ChangeSemanticKindRemove:
+			changed = a.removeIndexedAppByPath(ctx, change.Path) || changed
+		case filesearch.ChangeSemanticKindCreate, filesearch.ChangeSemanticKindModify, filesearch.ChangeSemanticKindRename:
+			if _, statErr := os.Stat(change.Path); statErr != nil {
+				a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app change feed stat failed, removing cached entry if present: path=%s err=%s", change.Path, statErr.Error()))
+				changed = a.removeIndexedAppByPath(ctx, change.Path) || changed
+				continue
+			}
+			changed = a.upsertIndexedAppByPath(ctx, change.Path) || changed
+		}
+	}
+
+	if !changed {
+		return
+	}
+
+	// Bug fix: runtime app changes previously updated a.apps/cache only for root-level
+	// fsnotify events, while searches read the prebuilt queryEntries snapshot. Rebuilding
+	// once per debounced batch keeps newly installed apps searchable without a full scan.
+	a.rebuildHotkeyAppCandidates(ctx)
+	a.rebuildQueryEntries(ctx)
+	a.saveAppToCache(ctx)
+}
+
+func (a *ApplicationPlugin) removeIndexedAppByPath(ctx context.Context, appPath string) bool {
+	for i, app := range a.apps {
+		if a.pathCacheKey(app.Path) != a.pathCacheKey(appPath) {
+			continue
+		}
+		a.apps = append(a.apps[:i], a.apps[i+1:]...)
+		a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app %s removed by change feed", appPath))
+		return true
+	}
+	a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app %s remove requested by change feed but no cached entry matched", appPath))
+	return false
+}
+
+func (a *ApplicationPlugin) hasIndexedAppsUnderDirectory(directoryPath string) bool {
+	for _, app := range a.apps {
+		if a.isPathAtOrUnderDirectory(app.Path, directoryPath) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *ApplicationPlugin) removeIndexedAppsUnderDirectory(ctx context.Context, directoryPath string) bool {
+	kept := make([]appInfo, 0, len(a.apps))
+	removed := 0
+	for _, app := range a.apps {
+		if a.isPathAtOrUnderDirectory(app.Path, directoryPath) {
+			removed++
+			continue
+		}
+		kept = append(kept, app)
+	}
+	if removed == 0 {
+		a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app directory %s remove requested by change feed but no cached entries matched", directoryPath))
+		return false
+	}
+
+	a.apps = kept
+	a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app directory %s removed %d cached apps by change feed", directoryPath, removed))
+	return true
+}
+
+func (a *ApplicationPlugin) reconcileIndexedAppsInDirectory(ctx context.Context, directoryPath string) bool {
+	info, statErr := os.Stat(directoryPath)
+	if statErr != nil {
+		a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app change feed directory stat failed, removing cached entries if present: path=%s err=%s", directoryPath, statErr.Error()))
+		return a.removeIndexedAppsUnderDirectory(ctx, directoryPath)
+	}
+	if !info.IsDir() {
+		return false
+	}
+
+	// Bug fix: directory-only notifications from Start Menu installers need a
+	// bounded local reconciliation. Scanning just the changed directory preserves
+	// the user's no-full-index requirement while discovering nested shortcuts.
+	paths := a.getAppPaths(ctx, []appDirectory{a.getLocalAppDirectoryForChange(ctx, directoryPath)})
+	currentPaths := make(map[string]bool, len(paths))
+	changed := false
+	for _, appPath := range paths {
+		currentPaths[a.pathCacheKey(appPath)] = true
+		changed = a.upsertIndexedAppByPath(ctx, appPath) || changed
+	}
+
+	for _, app := range append([]appInfo(nil), a.apps...) {
+		if !a.isPathAtOrUnderDirectory(app.Path, directoryPath) {
+			continue
+		}
+		if currentPaths[a.pathCacheKey(app.Path)] {
+			continue
+		}
+		changed = a.removeIndexedAppByPath(ctx, app.Path) || changed
+	}
+
+	a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app directory %s reconciled by change feed: paths=%d changed=%t", directoryPath, len(paths), changed))
+	return changed
+}
+
+func (a *ApplicationPlugin) getLocalAppDirectoryForChange(ctx context.Context, directoryPath string) appDirectory {
+	cleanDirectory := filepath.Clean(directoryPath)
+	for _, root := range a.getAppDirectories(ctx) {
+		if !root.trackChanges || strings.TrimSpace(root.Path) == "" {
+			continue
+		}
+		cleanRoot := filepath.Clean(root.Path)
+		if !a.isPathAtOrUnderDirectory(cleanDirectory, cleanRoot) {
+			continue
+		}
+
+		remainingDepth := root.RecursiveDepth
+		if rel, relErr := filepath.Rel(cleanRoot, cleanDirectory); relErr == nil && rel != "." {
+			remainingDepth -= len(strings.Split(rel, string(os.PathSeparator)))
+			if remainingDepth < 0 {
+				remainingDepth = 0
+			}
+		}
+		return appDirectory{
+			Path:              cleanDirectory,
+			Recursive:         root.Recursive && remainingDepth > 0,
+			RecursiveDepth:    remainingDepth,
+			RecursiveExcludes: root.RecursiveExcludes,
+		}
+	}
+
+	return appDirectory{Path: cleanDirectory, Recursive: true, RecursiveDepth: 1}
+}
+
+func (a *ApplicationPlugin) upsertIndexedAppByPath(ctx context.Context, appPath string) bool {
+	// Feature change: precise change-feed paths let us refresh one app entry instead
+	// of calling indexApps(). This keeps installer bursts cheap while still reusing
+	// the existing platform parser and icon conversion behavior.
+	var info appInfo
+	var getErr error
+	for i := 0; i < 3; i++ {
+		info, getErr = a.retriever.ParseAppInfo(ctx, appPath)
+		if getErr == nil {
+			break
+		}
+		time.Sleep(time.Second * time.Duration(i+1))
+	}
+	if getErr != nil {
+		if !errors.Is(getErr, errSkipAppIndexing) {
+			a.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("error getting app info for %s: %s", appPath, getErr.Error()))
+		}
+		// If a path is still locked or otherwise unreadable after a short retry,
+		// skip the local update rather than falling back to the expensive full index.
+		return false
+	}
+
+	a.populateAppMetadata(ctx, appPath, &info, nil)
+	info.Icon = common.ConvertIcon(ctx, info.Icon, a.pluginDirectory)
+
+	for i, app := range a.apps {
+		if a.pathCacheKey(app.Path) != a.pathCacheKey(appPath) {
+			continue
+		}
+		a.apps[i] = info
+		a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app %s updated by change feed", appPath))
+		return true
+	}
+
+	a.apps = append(a.apps, info)
+	a.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("app %s added by change feed", appPath))
+	return true
+}
+
+func (a *ApplicationPlugin) isAppPathExtensionMatch(appPath string, appExtensions []string) bool {
+	lowerPath := strings.ToLower(filepath.Clean(appPath))
+	return lo.ContainsBy(appExtensions, func(ext string) bool {
+		return strings.HasSuffix(lowerPath, fmt.Sprintf(".%s", strings.ToLower(ext)))
+	})
+}
+
+func (a *ApplicationPlugin) isPathAtOrUnderDirectory(appPath string, directoryPath string) bool {
+	cleanAppPath := a.pathCacheKey(filepath.Clean(appPath))
+	cleanDirectoryPath := a.pathCacheKey(filepath.Clean(directoryPath))
+	if cleanAppPath == cleanDirectoryPath {
+		return true
+	}
+	if !strings.HasSuffix(cleanDirectoryPath, string(os.PathSeparator)) {
+		cleanDirectoryPath += string(os.PathSeparator)
+	}
+	return strings.HasPrefix(cleanAppPath, cleanDirectoryPath)
 }
 
 func (a *ApplicationPlugin) indexApps(ctx context.Context) {
@@ -766,6 +1192,10 @@ func (a *ApplicationPlugin) getUserAddedPaths(ctx context.Context) []appDirector
 	for i := range appDirectories {
 		appDirectories[i].Recursive = true
 		appDirectories[i].RecursiveDepth = 3
+		// Feature change: user-added app directories are explicit, bounded roots.
+		// Track their precise file changes so custom app folders update locally
+		// without falling back to the expensive full app index.
+		appDirectories[i].trackChanges = true
 	}
 
 	return appDirectories
