@@ -405,3 +405,85 @@ class _MiniResultRow extends StatelessWidget {
     return SizedBox(height: WoxThemeUtil.instance.getResultItemHeight(), child: content);
   }
 }
+
+class _MiniFooter extends StatelessWidget {
+  const _MiniFooter({required this.accent, required this.hotkey, required this.isPressed});
+
+  final Color accent;
+  final String hotkey;
+  final bool isPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final keyLabels = hotkey.split('+');
+    final metrics = WoxInterfaceSizeUtil.instance.current;
+    // Organization cleanup: the toolbar belongs to the shared demo window, not
+    // to the Action Panel overlay. Keeping it here makes the file layout match
+    // the rendered hierarchy and avoids another action-panel-like file.
+    final demoTheme = _InheritedDemoTheme.of(context);
+    final textColor = demoTheme?.textColor ?? getThemeTextColor();
+
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: Container(
+        height: metrics.toolbarHeight,
+        padding: EdgeInsets.symmetric(horizontal: metrics.scaledSpacing(12)),
+        decoration: BoxDecoration(color: textColor.withValues(alpha: 0.035), border: Border(top: BorderSide(color: textColor.withValues(alpha: 0.07)))),
+        child: FittedBox(
+          alignment: Alignment.centerRight,
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Execute', style: TextStyle(color: textColor, fontSize: metrics.toolbarFontSize)),
+              SizedBox(width: metrics.toolbarActionNameHotkeySpacing),
+              _MiniShortcutKey(label: 'Enter', accent: accent, textColor: textColor, active: false),
+              SizedBox(width: metrics.toolbarActionSpacing),
+              Text('More Actions', style: TextStyle(color: isPressed ? accent : textColor, fontSize: metrics.toolbarFontSize)),
+              SizedBox(width: metrics.toolbarActionNameHotkeySpacing),
+              for (var index = 0; index < keyLabels.length; index++) ...[
+                _MiniShortcutKey(label: keyLabels[index], accent: accent, textColor: textColor, active: isPressed),
+                if (index < keyLabels.length - 1) SizedBox(width: metrics.toolbarHotkeyKeySpacing),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniShortcutKey extends StatelessWidget {
+  const _MiniShortcutKey({required this.label, required this.accent, required this.textColor, required this.active});
+
+  final String label;
+  final Color accent;
+  final Color textColor;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final metrics = WoxInterfaceSizeUtil.instance.current;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 140),
+      height: metrics.scaledSpacing(22),
+      constraints: BoxConstraints(minWidth: metrics.scaledSpacing(28)),
+      padding: EdgeInsets.symmetric(horizontal: metrics.scaledSpacing(7)),
+      decoration: BoxDecoration(
+        color: active ? accent.withValues(alpha: 0.20) : Colors.transparent,
+        border: Border.all(color: active ? accent : textColor.withValues(alpha: 0.66)),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(color: active ? accent : textColor, fontSize: metrics.tailHotkeyFontSize, fontWeight: FontWeight.w500),
+      ),
+    );
+  }
+}

@@ -1,21 +1,25 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
-import 'package:wox/components/demo/wox_demo.dart';
+import 'package:wox/components/onboarding/finish_onboarding.dart';
+import 'package:wox/components/onboarding/glance_onboarding.dart';
+import 'package:wox/components/onboarding/hotkey_onboarding.dart';
+import 'package:wox/components/onboarding/permissions_onboarding.dart';
+import 'package:wox/components/onboarding/plugin_store_onboarding.dart';
+import 'package:wox/components/onboarding/query_hotkeys_onboarding.dart';
+import 'package:wox/components/onboarding/theme_install_onboarding.dart';
+import 'package:wox/components/onboarding/tray_queries_onboarding.dart';
+import 'package:wox/components/onboarding/welcome_onboarding.dart';
 import 'package:wox/components/wox_button.dart';
 import 'package:wox/components/wox_dropdown_button.dart';
-import 'package:wox/components/wox_hotkey_recorder_view.dart';
 import 'package:wox/components/wox_image_view.dart';
-import 'package:wox/components/wox_switch.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/wox_glance.dart';
-import 'package:wox/entity/wox_hotkey.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/wox_lang.dart';
 import 'package:wox/utils/colors.dart';
@@ -380,27 +384,12 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
   }
 
   Widget _buildStepBody(Color accent) {
-    Widget buildMediaSlot() {
-      return _OnboardingMediaSlot(
-        stepId: activeStep.id,
-        tr: tr,
-        accent: accent,
-        mainHotkey: settingController.woxSetting.value.mainHotkey,
-        selectionHotkey: settingController.woxSetting.value.selectionHotkey,
-        glanceEnabled: settingController.woxSetting.value.enableGlance,
-        glanceLabel: _currentGlanceLabel(),
-        glanceValue: _currentGlanceValue(),
-        glanceIcon: _currentGlanceIcon(),
-      );
-    }
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(38, 30, 38, 20),
       child: LayoutBuilder(
         builder: (context, constraints) {
           const titleHeight = 44.0;
           const titleToSettingsGap = 16.0;
-          const settingsToDemoGap = 18.0;
           final availableHeight = constraints.maxHeight;
 
           return AnimatedSwitcher(
@@ -430,16 +419,11 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
                     ),
                   ),
                   const SizedBox(height: titleToSettingsGap),
-                  // Layout priority: step content renders at its natural intrinsic
-                  // height so it is always fully visible without a scrollbar. The
-                  // fixed-height + SingleChildScrollView approach was shrinking the
-                  // content area too aggressively when the demo minimum consumed too
-                  // much of the available space.
-                  Align(alignment: Alignment.topLeft, child: _buildStepContent()),
-                  const SizedBox(height: settingsToDemoGap),
-                  // Demo gets whatever vertical space remains after the step content.
-                  // A minHeight guard keeps the demo usable on shorter viewports.
-                  Expanded(child: ConstrainedBox(constraints: const BoxConstraints(minHeight: 280), child: buildMediaSlot())),
+                  // Architecture cleanup: the view owns only the common title
+                  // and navigation frame. Each concrete step now lives under
+                  // components/onboarding and decides which reusable demo it
+                  // needs, keeping this file from becoming a catalog of demos.
+                  Expanded(child: _buildActiveStep(accent)),
                 ],
               ),
             ),
@@ -449,272 +433,83 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
     );
   }
 
-  Widget _buildStepContent() {
+  Widget _buildActiveStep(Color accent) {
     switch (activeStep.id) {
       case 'permissions':
-        return _buildPermissionsStep();
+        return WoxPermissionsOnboarding(accent: accent, tr: tr, isPermissionLoading: isPermissionLoading, accessibilityPassed: accessibilityPassed);
       case 'mainHotkey':
-        return _buildHotkeyStep(settingKey: 'MainHotkey', currentValue: settingController.woxSetting.value.mainHotkey, bodyKey: 'onboarding_main_hotkey_tip');
+        return WoxMainHotkeyOnboarding(
+          accent: accent,
+          hotkey: settingController.woxSetting.value.mainHotkey,
+          tr: tr,
+          onHotkeyChanged: (hotkey) {
+            // Step extraction: persistence remains in the view/controller layer
+            // so the onboarding component stays a focused UI widget.
+            settingController.updateConfig('MainHotkey', hotkey);
+          },
+        );
       case 'selectionHotkey':
-        return _buildHotkeyStep(
-          settingKey: 'SelectionHotkey',
-          currentValue: settingController.woxSetting.value.selectionHotkey,
-          bodyKey: 'onboarding_selection_hotkey_description',
+        return WoxSelectionHotkeyOnboarding(
+          accent: accent,
+          hotkey: settingController.woxSetting.value.selectionHotkey,
+          tr: tr,
+          onHotkeyChanged: (hotkey) {
+            // Step extraction: the component reports the new value, while the
+            // parent keeps the setting key and controller dependency here.
+            settingController.updateConfig('SelectionHotkey', hotkey);
+          },
         );
       case 'glance':
-        return _buildGlanceStep();
+        final items = _buildGlanceDropdownItems();
+        final currentRef = settingController.woxSetting.value.primaryGlance;
+        final currentValue = items.any((item) => item.value == currentRef.key) ? currentRef.key : (items.isEmpty ? currentRef.key : items.first.value);
+        return WoxGlanceOnboarding(
+          accent: accent,
+          tr: tr,
+          enabled: settingController.woxSetting.value.enableGlance,
+          isLoading: isGlanceLoading,
+          isLoadFailed: isGlanceLoadFailed,
+          items: items,
+          currentValue: currentValue,
+          label: _currentGlanceLabel(),
+          value: _currentGlanceValue(),
+          icon: _currentGlanceIcon(),
+          onEnableChanged: (value) {
+            // Step extraction: Glance setup is optional and persisted through
+            // the same setting update path as the full settings page.
+            settingController.updateConfig('EnableGlance', value.toString());
+          },
+          onPrimaryGlanceChanged: (encodedRef) {
+            settingController.updateConfig('EnableGlance', 'true');
+            settingController.updateConfig('PrimaryGlance', encodedRef);
+          },
+        );
       case 'queryHotkeys':
-        return _buildFeatureStep(
-          key: const ValueKey('onboarding-query-hotkeys-page'),
-          titleKey: 'onboarding_query_hotkeys_title',
-          bodyKey: 'onboarding_query_hotkeys_body',
-          badge: tr('ui_query_hotkeys'),
-        );
+        return WoxQueryHotkeysOnboarding(accent: accent, tr: tr);
       case 'trayQueries':
-        return _buildFeatureStep(
-          key: const ValueKey('onboarding-tray-queries-page'),
-          titleKey: 'onboarding_tray_queries_title',
-          bodyKey: 'onboarding_tray_queries_body',
-          badge: tr('ui_tray_queries'),
-        );
+        return WoxTrayQueriesOnboarding(accent: accent, tr: tr);
       case 'wpmInstall':
-        return _buildFeatureStep(
-          key: const ValueKey('onboarding-wpm-install-page'),
-          titleKey: 'onboarding_wpm_install_title',
-          bodyKey: 'onboarding_wpm_install_body',
-          badge: 'wpm install',
-        );
+        return WoxPluginStoreOnboarding(accent: accent, tr: tr);
       case 'themeInstall':
-        return _buildFeatureStep(
-          key: const ValueKey('onboarding-theme-install-page'),
-          titleKey: 'onboarding_theme_install_title',
-          bodyKey: 'onboarding_theme_install_body',
-          badge: tr('plugin_theme_install_theme'),
-        );
+        return WoxThemeInstallOnboarding(accent: accent, tr: tr);
       case 'finish':
-        return _buildFeatureStep(
-          key: const ValueKey('onboarding-finish-page'),
-          titleKey: 'onboarding_finish_card_title',
-          bodyKey: 'onboarding_finish_card_body',
-          badge: tr('onboarding_finish_badge'),
+        return WoxFinishOnboarding(
+          accent: accent,
+          tr: tr,
+          glanceEnabled: settingController.woxSetting.value.enableGlance,
+          glanceLabel: _currentGlanceLabel(),
+          glanceValue: _currentGlanceValue(),
+          glanceIcon: _currentGlanceIcon(),
         );
       default:
-        return _buildWelcomeStep();
+        return WoxWelcomeOnboarding(
+          accent: accent,
+          tr: tr,
+          languagesFuture: availableLanguagesFuture,
+          currentLangCode: settingController.woxSetting.value.langCode,
+          onLangChanged: settingController.updateLang,
+        );
     }
-  }
-
-  Widget _buildWelcomeStep() {
-    return _SettingsPanel(
-      key: const ValueKey('onboarding-welcome-page'),
-      children: [
-        Text(tr('onboarding_welcome_card_body'), style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5)),
-        const SizedBox(height: 20),
-        Container(height: 1, color: getThemeSubTextColor().withValues(alpha: 0.14)),
-        const SizedBox(height: 18),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Text(tr('ui_lang'), style: TextStyle(color: getThemeTextColor(), fontSize: 14, fontWeight: FontWeight.w600)),
-            const SizedBox(width: 18),
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 320),
-                  child: FutureBuilder<List<WoxLang>>(
-                    future: availableLanguagesFuture,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState != ConnectionState.done) {
-                        return Text(tr('onboarding_loading'), textAlign: TextAlign.right, style: TextStyle(color: getThemeSubTextColor(), fontSize: 13));
-                      }
-
-                      final languages = snapshot.data ?? const <WoxLang>[];
-                      if (languages.isEmpty) {
-                        return Text(settingController.woxSetting.value.langCode, textAlign: TextAlign.right, style: TextStyle(color: getThemeSubTextColor(), fontSize: 13));
-                      }
-
-                      // Feature refinement: language selection is now an inline
-                      // setting row instead of a stacked block. The dropdown
-                      // keeps a bounded width so the welcome copy remains the
-                      // dominant content while the control still uses the same
-                      // updateLang path as settings.
-                      return WoxDropdownButton<String>(
-                        key: const ValueKey('onboarding-language-dropdown'),
-                        items: languages.map((language) => WoxDropdownItem(value: language.code, label: language.name)).toList(),
-                        value: settingController.woxSetting.value.langCode,
-                        onChanged: (value) {
-                          if (value != null) {
-                            unawaited(settingController.updateLang(value));
-                          }
-                        },
-                        isExpanded: true,
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildPermissionsStep() {
-    if (!Platform.isMacOS) {
-      return _InfoPanel(
-        key: const ValueKey('onboarding-permission-lite'),
-        title: tr('onboarding_permissions_lite_title'),
-        body: tr('onboarding_permissions_lite_body'),
-        badge: Platform.operatingSystem,
-      );
-    }
-
-    final statusText =
-        isPermissionLoading ? tr('onboarding_permission_checking') : (accessibilityPassed == true ? tr('onboarding_permission_ready') : tr('onboarding_permission_needs_action'));
-    return Column(
-      key: const ValueKey('onboarding-permission-macos'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _InfoPanel(title: tr('onboarding_permission_accessibility_title'), body: tr('onboarding_permission_accessibility_body'), badge: statusText),
-        const SizedBox(height: 14),
-        _InfoPanel(title: tr('onboarding_permission_disk_title'), body: tr('onboarding_permission_disk_body'), badge: tr('onboarding_permission_optional')),
-        const SizedBox(height: 20),
-        Wrap(
-          spacing: 12,
-          runSpacing: 10,
-          children: [
-            WoxButton.secondary(text: tr('onboarding_permission_open_accessibility'), onPressed: () => WoxApi.instance.openAccessibilityPermission(const UuidV4().generate())),
-            WoxButton.secondary(text: tr('onboarding_permission_open_privacy'), onPressed: () => WoxApi.instance.openPrivacyPermission(const UuidV4().generate())),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHotkeyStep({required String settingKey, required String currentValue, required String bodyKey}) {
-    return _SettingsPanel(
-      children: [
-        Text(tr(bodyKey), style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.45)),
-        const SizedBox(height: 26),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: WoxHotkeyRecorder(
-            hotkey: WoxHotkey.parseHotkeyFromString(currentValue),
-            tipPosition: WoxHotkeyRecorderTipPosition.right,
-            onHotKeyRecorded: (hotkey) {
-              // Hotkey setup is saved immediately so leaving the guide after
-              // this step preserves the user's chosen launch behavior.
-              settingController.updateConfig(settingKey, hotkey);
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildGlanceStep() {
-    final isEnabled = settingController.woxSetting.value.enableGlance;
-    final children = <Widget>[
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(tr('ui_glance_enable'), style: TextStyle(color: getThemeTextColor(), fontSize: 14, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 7),
-                Text(tr('ui_glance_enable_tips'), style: TextStyle(color: getThemeSubTextColor(), fontSize: 13, height: 1.45)),
-              ],
-            ),
-          ),
-          const SizedBox(width: 18),
-          WoxSwitch(
-            key: const ValueKey('onboarding-glance-enable-switch'),
-            value: isEnabled,
-            onChanged: (value) {
-              // Glance is optional during onboarding. Save the enable flag
-              // independently so users can leave this step without selecting
-              // a provider when they do not want the accessory value.
-              settingController.updateConfig('EnableGlance', value.toString());
-            },
-          ),
-        ],
-      ),
-    ];
-
-    if (!isEnabled) {
-      return _SettingsPanel(key: const ValueKey('onboarding-glance-disabled'), children: children);
-    }
-
-    if (isGlanceLoading) {
-      children.addAll([
-        const SizedBox(height: 22),
-        _InfoPanel(
-          key: const ValueKey('onboarding-glance-loading'),
-          title: tr('onboarding_glance_loading_title'),
-          body: tr('onboarding_glance_loading_body'),
-          badge: tr('onboarding_loading'),
-        ),
-      ]);
-      return _SettingsPanel(children: children);
-    }
-
-    final items = _buildGlanceDropdownItems();
-    if (isGlanceLoadFailed || items.isEmpty) {
-      children.addAll([
-        const SizedBox(height: 22),
-        _InfoPanel(
-          key: const ValueKey('onboarding-glance-empty'),
-          title: tr('onboarding_glance_empty_title'),
-          body: tr('onboarding_glance_empty_body'),
-          badge: tr('onboarding_can_skip'),
-        ),
-      ]);
-      return _SettingsPanel(children: children);
-    }
-
-    final currentRef = settingController.woxSetting.value.primaryGlance;
-    final currentValue = items.any((item) => item.value == currentRef.key) ? currentRef.key : items.first.value;
-    return _SettingsPanel(
-      key: const ValueKey('onboarding-glance-picker'),
-      children: [
-        ...children,
-        const SizedBox(height: 24),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Text(tr('onboarding_glance_picker_label'), style: TextStyle(color: getThemeTextColor(), fontSize: 14, fontWeight: FontWeight.w600)),
-            const SizedBox(width: 18),
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  // Feature refinement: the primary Glance selector now uses
-                  // the same inline setting-row layout as the welcome language
-                  // picker. The previous stacked label made the card taller
-                  // than necessary, while a bounded dropdown keeps the setting
-                  // compact without letting long provider names dominate.
-                  child: WoxDropdownButton<String>(
-                    value: currentValue,
-                    items: items,
-                    onChanged: (value) {
-                      if (value == null) return;
-                      final ref = _parseGlanceKey(value);
-                      settingController.updateConfig('EnableGlance', 'true');
-                      settingController.updateConfig('PrimaryGlance', jsonEncode(ref.toJson()));
-                    },
-                    isExpanded: true,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
   }
 
   List<WoxDropdownItem<String>> _buildGlanceDropdownItems() {
@@ -770,20 +565,6 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
       }
     }
     return preview != null && preview.icon.imageData.isNotEmpty ? preview.icon : null;
-  }
-
-  GlanceRef _parseGlanceKey(String key) {
-    final parts = key.split('\x00');
-    if (parts.length != 2) {
-      return GlanceRef.empty();
-    }
-    return GlanceRef(pluginId: parts[0], glanceId: parts[1]);
-  }
-
-  Widget _buildFeatureStep({required Key key, required String titleKey, required String bodyKey, required String badge}) {
-    // Title and badge are both omitted: the large section heading above already
-    // shows the title, and the badge duplicates it again. Body text only.
-    return _InfoPanel(key: key, body: tr(bodyKey));
   }
 
   Widget _buildFooter(Color accent) {
@@ -884,308 +665,5 @@ class _OnboardingBackdropPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _OnboardingBackdropPainter oldDelegate) {
     return oldDelegate.accent != accent || oldDelegate.textColor != textColor || oldDelegate.backgroundColor != backgroundColor;
-  }
-}
-
-class _SettingsPanel extends StatelessWidget {
-  const _SettingsPanel({super.key, required this.children});
-
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        color: getThemeTextColor().withValues(alpha: 0.04),
-        border: Border.all(color: getThemeSubTextColor().withValues(alpha: 0.18)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: children),
-    );
-  }
-}
-
-class _InfoPanel extends StatelessWidget {
-  // title and badge are both optional.
-  // Omit title when the section heading above already shows it.
-  // Omit badge when no short label is needed alongside the body text.
-  const _InfoPanel({super.key, this.title, required this.body, this.badge});
-
-  final String? title;
-  final String body;
-  final String? badge;
-
-  @override
-  Widget build(BuildContext context) {
-    final badgeWidget =
-        badge != null
-            ? Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(color: getThemeActiveBackgroundColor().withValues(alpha: 0.16), borderRadius: BorderRadius.circular(16)),
-              child: Text(badge!, style: TextStyle(color: getThemeActiveBackgroundColor(), fontSize: 12, fontWeight: FontWeight.w600)),
-            )
-            : null;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        color: getThemeTextColor().withValues(alpha: 0.04),
-        border: Border.all(color: getThemeSubTextColor().withValues(alpha: 0.18)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child:
-          title != null
-              ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Title row; badge is optional alongside the title.
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: Text(title!, style: TextStyle(color: getThemeTextColor(), fontSize: 17, fontWeight: FontWeight.w600))),
-                      if (badgeWidget != null) ...[const SizedBox(width: 14), badgeWidget],
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5)),
-                ],
-              )
-              : badgeWidget != null
-              ? Row(
-                // No title but badge present: body and badge on the same row.
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [Expanded(child: Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5))), const SizedBox(width: 14), badgeWidget],
-              )
-              // No title, no badge: body text only.
-              : Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5)),
-    );
-  }
-}
-
-class _OnboardingMediaSlot extends StatelessWidget {
-  const _OnboardingMediaSlot({
-    required this.stepId,
-    required this.tr,
-    required this.accent,
-    required this.mainHotkey,
-    required this.selectionHotkey,
-    required this.glanceEnabled,
-    required this.glanceLabel,
-    required this.glanceValue,
-    required this.glanceIcon,
-  });
-
-  final String stepId;
-  final String Function(String key) tr;
-  final Color accent;
-  final String mainHotkey;
-  final String selectionHotkey;
-  final bool glanceEnabled;
-  final String glanceLabel;
-  final String glanceValue;
-  final WoxImage? glanceIcon;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      // Layout change: the parent now calculates an explicit demo height, so
-      // this slot fills that space instead of applying its own cap. Keeping the
-      // size decision in one place makes every onboarding section allocate as
-      // much room as possible to the animated walkthrough.
-      child: _OnboardingMediaCard(
-        stepId: stepId,
-        tr: tr,
-        accent: accent,
-        mainHotkey: mainHotkey,
-        selectionHotkey: selectionHotkey,
-        glanceEnabled: glanceEnabled,
-        glanceLabel: glanceLabel,
-        glanceValue: glanceValue,
-        glanceIcon: glanceIcon,
-      ),
-    );
-  }
-}
-
-class _OnboardingMediaCard extends StatelessWidget {
-  const _OnboardingMediaCard({
-    required this.stepId,
-    required this.tr,
-    required this.accent,
-    required this.mainHotkey,
-    required this.selectionHotkey,
-    required this.glanceEnabled,
-    required this.glanceLabel,
-    required this.glanceValue,
-    required this.glanceIcon,
-  });
-
-  final String stepId;
-  final String Function(String key) tr;
-  final Color accent;
-  final String mainHotkey;
-  final String selectionHotkey;
-  final bool glanceEnabled;
-  final String glanceLabel;
-  final String glanceValue;
-  final WoxImage? glanceIcon;
-
-  @override
-  Widget build(BuildContext context) {
-    return TweenAnimationBuilder<double>(
-      key: ValueKey('onboarding-media-$stepId'),
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOutCubic,
-      tween: Tween(begin: 0, end: 1),
-      builder: (context, value, child) {
-        // Animation optimization: the previous longer slide made each step feel
-        // heavy. A shorter travel distance keeps the card responsive without
-        // adding bounce to the settings-style onboarding surface.
-        return Opacity(opacity: value, child: Transform.translate(offset: Offset(0, 8 * (1 - value)), child: child));
-      },
-      // Feature refinement: every step already has its title and explanation
-      // above the media area. The previous generic chrome duplicated labels,
-      // dots, icons, padding, and borders, so this focused surface keeps the
-      // examples compact and consistent with the Action Panel step.
-      child: _buildFocusedPreviewCard(),
-    );
-  }
-
-  Widget _buildFocusedPreviewCard() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(color: getThemeTextColor().withValues(alpha: 0.028), borderRadius: BorderRadius.circular(8)),
-      child: _buildPreviewSwitcher(),
-    );
-  }
-
-  Widget _buildPreviewSwitcher() {
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 180),
-      reverseDuration: const Duration(milliseconds: 120),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInQuad,
-      transitionBuilder: (child, animation) {
-        // Animation optimization: preview content still crossfades between
-        // steps, but the scale range is now nearly flat so text and controls
-        // feel snappier instead of popping.
-        return FadeTransition(opacity: animation, child: ScaleTransition(scale: Tween<double>(begin: 0.995, end: 1).animate(animation), child: child));
-      },
-      child: KeyedSubtree(
-        key: ValueKey('preview-$stepId-$mainHotkey-$selectionHotkey-$glanceEnabled-$glanceLabel-$glanceValue-${glanceIcon?.imageType}-${glanceIcon?.imageData}'),
-        child: _buildPreviewContent(),
-      ),
-    );
-  }
-
-  Widget? _buildGlanceAccessory() {
-    if (!glanceEnabled) {
-      return null;
-    }
-
-    // Feature refinement: Glance is a learned capability, so the shared Wox
-    // preview only shows the live query accessory on the Glance step and later
-    // sections after the user enables it. Earlier steps stay clean and do not
-    // reveal the feature before onboarding explains it.
-    return WoxDemoGlanceAccessory(
-      key: ValueKey('mini-glance-pill-$glanceLabel-$glanceValue-${glanceIcon?.imageType}-${glanceIcon?.imageData}'),
-      label: glanceLabel,
-      value: glanceValue,
-      icon: glanceIcon,
-    );
-  }
-
-  Widget _buildPreviewContent() {
-    // Feature refinement: every section preview now uses the same mini Wox
-    // shell. Earlier custom sketches made Glance, hotkeys, and advanced
-    // queries look like separate products, so the data varies while the Wox
-    // window structure stays shared and launcher-like.
-    switch (stepId) {
-      case 'permissions':
-        return WoxDemoWindow(
-          accent: accent,
-          query: 'permissions',
-          results: [
-            WoxDemoResult(
-              title: tr('onboarding_permission_accessibility_title'),
-              subtitle: tr('onboarding_permission_accessibility_body'),
-              icon: const Icon(Icons.accessibility_new_outlined, color: Colors.white, size: 22),
-              selected: true,
-              tail: tr('onboarding_permission_needs_action'),
-            ),
-            WoxDemoResult(
-              title: tr('onboarding_permission_disk_title'),
-              subtitle: tr('onboarding_permission_disk_body'),
-              icon: Icon(Icons.folder_open_outlined, color: accent, size: 22),
-              tail: tr('onboarding_permission_optional'),
-            ),
-            WoxDemoResult(
-              title: tr('onboarding_permission_privacy_card'),
-              subtitle: Platform.isMacOS ? tr('onboarding_permission_open_privacy') : tr('onboarding_permissions_lite_body'),
-              icon: Icon(Icons.security_outlined, color: accent, size: 22),
-              tail: tr('onboarding_permission_ready'),
-            ),
-            WoxDemoResult(
-              title: tr('onboarding_permissions_lite_title'),
-              subtitle: tr('onboarding_permissions_lite_body'),
-              icon: Icon(Icons.verified_user_outlined, color: accent, size: 22),
-              tail: Platform.operatingSystem,
-            ),
-          ],
-        );
-      case 'mainHotkey':
-        return WoxMainHotkeyDemo(accent: accent, hotkey: mainHotkey, tr: tr);
-      case 'selectionHotkey':
-        return WoxSelectionHotkeyDemo(accent: accent, hotkey: selectionHotkey, tr: tr);
-      case 'glance':
-        return WoxGlanceDemo(accent: accent, enabled: glanceEnabled, label: glanceLabel, value: glanceValue, icon: glanceIcon, tr: tr);
-      case 'welcome':
-        // Show the query anatomy diagram on the welcome step so users learn the
-        // trigger-keyword / command / search-term vocabulary before configuring
-        // anything. The concept is referenced by name throughout the rest of the guide.
-        return WoxQueryConceptDemo(accent: accent, tr: tr);
-      case 'queryHotkeys':
-        return WoxQueryHotkeysDemo(accent: accent, tr: tr);
-      case 'trayQueries':
-        return WoxTrayQueriesDemo(accent: accent, tr: tr);
-      case 'wpmInstall':
-        return WoxPluginStoreDemo(accent: accent, tr: tr);
-      case 'themeInstall':
-        return WoxThemeInstallDemo(accent: accent, tr: tr);
-      case 'finish':
-        return WoxDemoWindow(
-          accent: accent,
-          query: 'ready',
-          queryAccessory: _buildGlanceAccessory(),
-          results: [
-            WoxDemoResult(
-              title: tr('onboarding_finish_card_title'),
-              subtitle: tr('onboarding_finish_card_body'),
-              icon: const Icon(Icons.check_rounded, color: Colors.white, size: 24),
-              selected: true,
-              tail: tr('onboarding_finish_badge'),
-            ),
-            const WoxDemoResult(title: 'Open Wox Settings', subtitle: r'C:\Users\qianl\AppData\Roaming\Wox', icon: WoxDemoLogoMark()),
-            WoxDemoResult(
-              title: tr('onboarding_action_panel_title'),
-              subtitle: tr('onboarding_action_panel_description'),
-              icon: Icon(Icons.play_arrow_rounded, color: accent, size: 23),
-              tail: Platform.isMacOS ? 'Cmd+J' : 'Alt+J',
-            ),
-            WoxDemoResult(
-              title: tr('onboarding_query_hotkeys_title'),
-              subtitle: tr('onboarding_query_shortcuts_title'),
-              icon: const Icon(Icons.manage_search_rounded, color: Color(0xFFA78BFA), size: 23),
-              tail: tr('ui_tray_queries'),
-            ),
-          ],
-        );
-      default:
-        return WoxDemoWindow(accent: accent, query: 'wox');
-    }
   }
 }
