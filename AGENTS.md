@@ -12,7 +12,7 @@
 - **Readability First**: Favor the simplest control flow that keeps behavior correct. Avoid clever abstractions, layered state handling, or indirection that make the execution path harder to follow.
 - **Explain Structures And Logic**: Add necessary comments for structs, state transitions, control-flow branches, and non-obvious logic so readers can understand the intent without reverse-engineering the code.
 - **Refactors**: Scan `AGENTS.md` and `README.md` files first
-- **Build**: Verify with `make build` in wox.core (you can skip UI build for small changes)
+- **Build**: Verify with `make build` in wox.core (you should skip Go or UI build for small changes)
 - **Unit Tests**: Do not write unit tests unless the user requests them
 - **Smoke Tests**: For major fixes or feature additions, corresponding smoke tests must be added
 - **Format**: When formatting code, you must adhere to the coding style guidelines specified in Wox.code-workspace file.

@@ -1216,5 +1216,10 @@
   "onboarding_media_app_result_subtitle": "Open apps and commands",
   "onboarding_media_file_result": "Files",
   "onboarding_media_file_result_subtitle": "Search local files",
-  "ui_glance_enable_tips": "Show short, glanceable live information beside the query box while Wox is in global mode."
+  "ui_glance_enable_tips": "Show short, glanceable live information beside the query box while Wox is in global mode.",
+  "plugin_converter_rates_updated": "Taxas atualizadas: %s",
+  "plugin_converter_rates_updated_seconds_ago": "%d s atrás",
+  "plugin_converter_rates_updated_minutes_ago": "%d min atrás",
+  "plugin_converter_rates_updated_hours_ago": "%d h atrás",
+  "plugin_converter_rates_fallback": "Taxas ainda não atualizadas, usando taxas de fallback"
 }

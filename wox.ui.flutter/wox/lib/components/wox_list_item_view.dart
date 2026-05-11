@@ -23,9 +23,9 @@ class WoxListItemView extends StatelessWidget {
 
   static const _quickSelectBorderRadius = BorderRadius.all(Radius.circular(4));
   static const _textTailBorderRadius = BorderRadius.all(Radius.circular(999));
-  static const _dangerTailColor = Color(0xFFD92D20);
-  static const _warningTailColor = Color(0xFFF79009);
-  static const _successTailColor = Color(0xFF12B76A);
+  static const _dangerTailColor = Color(0xFFB42318);
+  static const _warningTailColor = Color(0xFFB54708);
+  static const _successTailColor = Color(0xFF027A48);
 
   const WoxListItemView({super.key, required this.item, required this.woxTheme, required this.isActive, required this.isHovered, required this.listViewType});
 
@@ -104,12 +104,12 @@ class WoxListItemView extends StatelessWidget {
     }
   }
 
-  _TextTailStyle _buildSemanticTextTailStyle(Color textColor) {
-    return _TextTailStyle(
-      textColor: textColor,
-      backgroundColor: textColor.withValues(alpha: isActive ? 0.18 : 0.1),
-      borderColor: textColor.withValues(alpha: isActive ? 0.42 : 0.28),
-    );
+  _TextTailStyle _buildSemanticTextTailStyle(Color semanticColor) {
+    // Category tails used to tint only the text, which became unreadable when a
+    // theme's active row background was close to the semantic color. Solid chips
+    // keep status categories recognizable and use white text for stable contrast
+    // without requiring new theme fields or plugin API changes.
+    return _TextTailStyle(textColor: Colors.white, backgroundColor: semanticColor, borderColor: semanticColor.withValues(alpha: 0.72));
   }
 
   Widget buildTextTailTag(String text, String textCategory, Color defaultTextColor, double maxTailWidth) {

@@ -8,6 +8,7 @@ import (
 	"wox/plugin"
 	"wox/plugin/system/converter/core"
 	"wox/plugin/system/converter/modules"
+	"wox/util"
 	"wox/util/clipboard"
 	"wox/util/locale"
 
@@ -106,15 +107,9 @@ func (c *Converter) parseExpression(ctx context.Context, tokens []core.Token) (r
 		}
 
 		if token.Kind == core.ConversionToken {
-			// Try to find a module that can handle this token
-			var result core.Result
-			var err error
-			for _, module := range c.registry.Modules() {
-				result, err = module.Calculate(ctx, token)
-				if err == nil {
-					targetUnit = result.Unit
-					break
-				}
+			result, err := c.calculateToken(ctx, token)
+			if err == nil {
+				targetUnit = result.Unit
 			}
 			if targetUnit.Name == "" {
 				c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("Failed to parse target unit from token %s", token.Str))
@@ -126,23 +121,12 @@ func (c *Converter) parseExpression(ctx context.Context, tokens []core.Token) (r
 			continue
 		}
 
-		// Try to find a module that can handle this token
-		var result core.Result
-		var err error
-		var moduleFound bool
-		for _, module := range c.registry.Modules() {
-			result, err = module.Calculate(ctx, token)
-			if err == nil {
-				moduleFound = true
-				results = append(results, result)
-				break
-			}
-		}
-
-		if !moduleFound {
+		result, err := c.calculateToken(ctx, token)
+		if err != nil {
 			c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("Failed to calculate token %s: no module can handle it", token.Str))
 			return nil, nil, core.Unit{}, fmt.Errorf("no module can handle token: %s", token.Str)
 		}
+		results = append(results, result)
 	}
 
 	// If we have a target unit, convert all values to that unit
@@ -166,6 +150,27 @@ func (c *Converter) parseExpression(ctx context.Context, tokens []core.Token) (r
 	}
 
 	return results, operators, targetUnit, nil
+}
+
+func (c *Converter) calculateToken(ctx context.Context, token core.Token) (core.Result, error) {
+	// The tokenizer has already chosen the most specific pattern for this token.
+	// The old parser retried every module in registration order, which allowed
+	// broad unit/time regexes to reinterpret a currency token such as "1000hkd"
+	// before CurrencyModule could calculate it. Use the owning module first so
+	// tokenization and calculation stay on the same route.
+	if token.Module != nil {
+		return token.Module.Calculate(ctx, token)
+	}
+
+	// Older token patterns did not always populate Module. Keep this fallback so
+	// existing number/base/time expressions continue to work while each module is
+	// migrated to explicit ownership.
+	for _, module := range c.registry.Modules() {
+		if result, err := module.Calculate(ctx, token); err == nil {
+			return result, nil
+		}
+	}
+	return core.Result{}, fmt.Errorf("no module can handle token: %s", token.Str)
 }
 
 // calculateExpression calculates expressions with mixed units
@@ -380,6 +385,7 @@ func (c *Converter) Query(ctx context.Context, query plugin.Query) []plugin.Quer
 		{
 			Title: result.DisplayValue,
 			Icon:  common.PluginConverterIcon,
+			Tails: c.buildCurrencyRateTails(ctx, result),
 			Actions: []plugin.QueryResultAction{
 				{
 					Name:        "i18n:plugin_converter_copy_result",
@@ -391,6 +397,62 @@ func (c *Converter) Query(ctx context.Context, query plugin.Query) []plugin.Quer
 			},
 		},
 	}
+}
+
+func (c *Converter) buildCurrencyRateTails(ctx context.Context, result core.Result) []plugin.QueryResultTail {
+	if result.Unit.Type != core.UnitTypeCurrency {
+		return nil
+	}
+
+	for _, module := range c.registry.Modules() {
+		currencyModule, ok := module.(*modules.CurrencyModule)
+		if !ok {
+			continue
+		}
+
+		updatedAt := currencyModule.LastRateUpdatedAt()
+		if updatedAt == 0 {
+			// Currency conversions can run from approximate startup rates before
+			// the first network refresh finishes. Show that state explicitly so
+			// users do not mistake fallback data for fresh exchange rates.
+			return []plugin.QueryResultTail{
+				plugin.NewQueryResultTailText(c.api.GetTranslation(ctx, "plugin_converter_rates_fallback")),
+			}
+		}
+
+		// Put the live-rate refresh timestamp in the result tail so users can judge
+		// how fresh the exchange rate is without opening settings or logs. Currency
+		// rates are shown as relative time only; other timestamps keep the existing
+		// absolute util.FormatTimestamp format used elsewhere in Wox.
+		relativeUpdatedAt := c.formatCurrencyRateUpdatedAgo(ctx, updatedAt)
+		return []plugin.QueryResultTail{
+			plugin.NewQueryResultTailText(fmt.Sprintf(c.api.GetTranslation(ctx, "plugin_converter_rates_updated"), relativeUpdatedAt)),
+		}
+	}
+
+	return nil
+}
+
+func (c *Converter) formatCurrencyRateUpdatedAgo(ctx context.Context, updatedAt int64) string {
+	// Keep this formatter local to converter currency tails. Reusing or changing
+	// the global timestamp formatter would accidentally alter unrelated event
+	// dates in history, screenshots, backups, and other plugins.
+	elapsedSeconds := (util.GetSystemTimestamp() - updatedAt) / 1000
+	if elapsedSeconds < 0 {
+		elapsedSeconds = 0
+	}
+
+	if elapsedSeconds < 60 {
+		return fmt.Sprintf(c.api.GetTranslation(ctx, "plugin_converter_rates_updated_seconds_ago"), elapsedSeconds)
+	}
+
+	elapsedMinutes := elapsedSeconds / 60
+	if elapsedMinutes < 60 {
+		return fmt.Sprintf(c.api.GetTranslation(ctx, "plugin_converter_rates_updated_minutes_ago"), elapsedMinutes)
+	}
+
+	elapsedHours := elapsedMinutes / 60
+	return fmt.Sprintf(c.api.GetTranslation(ctx, "plugin_converter_rates_updated_hours_ago"), elapsedHours)
 }
 
 func (c *Converter) handleMRURestore(ctx context.Context, mruData plugin.MRUData) (*plugin.QueryResult, error) {

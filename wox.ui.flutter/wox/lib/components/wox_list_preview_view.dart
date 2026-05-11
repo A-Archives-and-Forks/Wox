@@ -127,7 +127,11 @@ class _ListPreviewRow extends StatelessWidget {
     if (tail.type == WoxListItemTailTypeEnum.WOX_LIST_ITEM_TAIL_TYPE_IMAGE.code && tail.image != null && tail.image!.imageData.isNotEmpty) {
       return Padding(
         padding: EdgeInsets.only(left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(6)),
-        child: WoxImageView(woxImage: tail.image!, width: tail.imageWidth ?? WoxInterfaceSizeUtil.instance.current.tailImageSize, height: tail.imageHeight ?? WoxInterfaceSizeUtil.instance.current.tailImageSize),
+        child: WoxImageView(
+          woxImage: tail.image!,
+          width: tail.imageWidth ?? WoxInterfaceSizeUtil.instance.current.tailImageSize,
+          height: tail.imageHeight ?? WoxInterfaceSizeUtil.instance.current.tailImageSize,
+        ),
       );
     }
 
@@ -142,28 +146,37 @@ class _ListPreviewRow extends StatelessWidget {
         constraints: BoxConstraints(maxWidth: WoxInterfaceSizeUtil.instance.current.scaledSpacing(92)),
         padding: EdgeInsets.symmetric(horizontal: WoxInterfaceSizeUtil.instance.current.scaledSpacing(8), vertical: WoxInterfaceSizeUtil.instance.current.scaledSpacing(4)),
         decoration: BoxDecoration(color: style.backgroundColor, borderRadius: BorderRadius.circular(8), border: Border.all(color: style.borderColor)),
-        child: Text(tail.text!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: style.textColor, fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, fontWeight: FontWeight.w600, height: 1.1)),
+        child: Text(
+          tail.text!,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: style.textColor, fontSize: WoxInterfaceSizeUtil.instance.current.tailHotkeyFontSize, fontWeight: FontWeight.w600, height: 1.1),
+        ),
       ),
     );
   }
 
   _TailStyle _tailStyle(String textCategory, Color fontColor, Color splitLineColor) {
     final normalizedCategory = WoxListItemTailTextCategoryEnum.ensureCode(textCategory);
+    if (normalizedCategory == woxListItemTailTextCategoryDefault) {
+      // Default preview tails keep the quiet theme-owned treatment because they
+      // are metadata, not status badges, and should not compete with semantic
+      // category tails.
+      final textColor = fontColor.withValues(alpha: 0.62);
+      return _TailStyle(textColor: textColor, backgroundColor: textColor.withValues(alpha: 0.035), borderColor: splitLineColor.withValues(alpha: 0.42));
+    }
+
     final semanticColor = switch (normalizedCategory) {
-      woxListItemTailTextCategoryDanger => const Color(0xFFE5484D),
-      woxListItemTailTextCategoryWarning => const Color(0xFFF5A524),
-      woxListItemTailTextCategorySuccess => const Color(0xFF30A46C),
+      woxListItemTailTextCategoryDanger => const Color(0xFFB42318),
+      woxListItemTailTextCategoryWarning => const Color(0xFFB54708),
+      woxListItemTailTextCategorySuccess => const Color(0xFF027A48),
       _ => fontColor.withValues(alpha: 0.62),
     };
 
-    // Tails reuse result-row semantic categories, but preview rows need their
-    // own compact chip styling because the surrounding panel has different
-    // background and density from the result list.
-    return _TailStyle(
-      textColor: semanticColor,
-      backgroundColor: semanticColor.withValues(alpha: normalizedCategory == woxListItemTailTextCategoryDefault ? 0.035 : 0.1),
-      borderColor: normalizedCategory == woxListItemTailTextCategoryDefault ? splitLineColor.withValues(alpha: 0.42) : semanticColor.withValues(alpha: 0.28),
-    );
+    // Preview category tails match result-row category tails: a solid semantic
+    // chip with white text. The old text-only tint was too close to some active
+    // and panel backgrounds, so the solid fill keeps status tails legible.
+    return _TailStyle(textColor: Colors.white, backgroundColor: semanticColor, borderColor: semanticColor.withValues(alpha: 0.72));
   }
 }
 

@@ -148,6 +148,16 @@ func TestConverterCurrency(t *testing.T) {
 			SkipReason: "Network connectivity required for exchange rates",
 		},
 		{
+			Name:           "HKD to CNY",
+			Query:          "1000hkd in cny",
+			ExpectedTitle:  "¥",
+			ExpectedAction: "Copy",
+			TitleCheck: func(title string) bool {
+				return len(title) > 1 && strings.HasPrefix(title, "¥") && title[len("¥")] >= '0' && title[len("¥")] <= '9'
+			},
+			Timeout: 30 * time.Second,
+		},
+		{
 			Name:           "complex convert",
 			Query:          "12% of $321 in jpy",
 			ExpectedTitle:  "",
