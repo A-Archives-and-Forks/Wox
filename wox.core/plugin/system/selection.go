@@ -14,6 +14,11 @@ import (
 
 var selectionIcon = common.PluginSelectionIcon
 
+// selectionCommandPreview is the command name that, when used in a selection file
+// query, causes the plugin to return only the file preview result instead of
+// the full set of actions (copy path, open folder, preview, etc.).
+const selectionCommandPreview = "preview"
+
 func init() {
 	plugin.AllSystemPlugin = append(plugin.AllSystemPlugin, &SelectionPlugin{})
 }
@@ -36,11 +41,18 @@ func (i *SelectionPlugin) GetMetadata() plugin.Metadata {
 		Entry:         "",
 		TriggerKeywords: []string{
 			"*",
+			"selection",
 		},
 		SupportedOS: []string{
 			"Windows",
 			"Macos",
 			"Linux",
+		},
+		Commands: []plugin.MetadataCommand{
+			{
+				Command:     selectionCommandPreview,
+				Description: "i18n:plugin_selection_command_preview",
+			},
 		},
 		Features: []plugin.MetadataFeature{
 			{
@@ -63,7 +75,7 @@ func (i *SelectionPlugin) Query(ctx context.Context, query plugin.Query) []plugi
 		return i.queryForSelectionText(ctx, query.Selection.Text)
 	}
 	if query.Selection.Type == selection.SelectionTypeFile {
-		return i.queryForSelectionFile(ctx, query.Selection.FilePaths)
+		return i.queryForSelectionFile(ctx, query, query.Selection.FilePaths)
 	}
 
 	return []plugin.QueryResult{}
@@ -91,7 +103,17 @@ func (i *SelectionPlugin) queryForSelectionText(ctx context.Context, text string
 	return results
 }
 
-func (i *SelectionPlugin) queryForSelectionFile(ctx context.Context, filePaths []string) []plugin.QueryResult {
+func (i *SelectionPlugin) queryForSelectionFile(ctx context.Context, query plugin.Query, filePaths []string) []plugin.QueryResult {
+	// When the preview command is specified, skip all other actions and only
+	// return the preview result for a single selected file. This allows users
+	// to quickly open a file preview without seeing copy/open-folder options.
+	if query.Command == selectionCommandPreview {
+		if len(filePaths) == 1 {
+			return i.queryForFilePreviewOnly(ctx, filePaths[0])
+		}
+		return []plugin.QueryResult{}
+	}
+
 	var results []plugin.QueryResult
 	results = append(results, plugin.QueryResult{
 		Title: i.api.GetTranslation(ctx, "selection_copy_path"),
@@ -173,4 +195,37 @@ func (i *SelectionPlugin) queryForFile(ctx context.Context, filePath string) (re
 	})
 
 	return
+}
+
+// queryForFilePreviewOnly returns only the preview result for a single file,
+// used when the preview command is active to skip copy/open-folder actions.
+func (i *SelectionPlugin) queryForFilePreviewOnly(ctx context.Context, filePath string) []plugin.QueryResult {
+	if !util.IsFileExists(filePath) {
+		return []plugin.QueryResult{}
+	}
+
+	return []plugin.QueryResult{
+		{
+			Title: i.api.GetTranslation(ctx, "selection_preview"),
+			Score: 1000,
+			Icon:  common.PreviewIcon,
+			Actions: []plugin.QueryResultAction{
+				{
+					Name: i.api.GetTranslation(ctx, "selection_preview"),
+					Icon: common.PreviewIcon,
+					Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+					},
+				},
+			},
+			Preview: plugin.WoxPreview{
+				PreviewType: plugin.WoxPreviewTypeFile,
+				PreviewData: filePath,
+				PreviewProperties: map[string]string{
+					i.api.GetTranslation(ctx, "selection_created_at"):  util.GetFileCreatedAt(filePath),
+					i.api.GetTranslation(ctx, "selection_modified_at"): util.GetFileModifiedAt(filePath),
+					i.api.GetTranslation(ctx, "selection_size"):        util.GetFileSize(filePath),
+				},
+			},
+		},
+	}
 }

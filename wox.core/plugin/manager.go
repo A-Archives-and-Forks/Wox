@@ -915,8 +915,15 @@ func (m *Manager) canOperateQuery(ctx context.Context, pluginInstance *Instance,
 	}
 
 	if query.Type == QueryTypeSelection {
-		isPluginSupportSelection := pluginInstance.Metadata.IsSupportFeature(MetadataFeatureQuerySelection)
-		return isPluginSupportSelection
+		// If the selection query carries a trigger keyword (parsed from QueryText),
+		// only route it to the plugin that owns that keyword, so users can configure
+		// a hotkey like "select " to target one specific plugin instead of all.
+		if query.TriggerKeyword != "" {
+			return lo.Contains(pluginInstance.GetTriggerKeywords(), query.TriggerKeyword)
+		}
+		// No trigger keyword: fall back to old behavior - deliver to all plugins
+		// that have declared the querySelection feature.
+		return pluginInstance.Metadata.IsSupportFeature(MetadataFeatureQuerySelection)
 	}
 
 	var validGlobalQuery = lo.Contains(pluginInstance.GetTriggerKeywords(), "*") && query.TriggerKeyword == ""
@@ -2343,12 +2350,17 @@ func (m *Manager) NewQuery(ctx context.Context, plainQuery common.PlainQuery) (Q
 	}
 
 	if plainQuery.QueryType == QueryTypeSelection {
+		// selection query also supports query text for plugins to parse trigger keyword and command
+		parsed, instance := newQueryInputWithPlugins(plainQuery.QueryText, GetPluginManager().GetPluginInstances())
+
 		query := Query{
-			Id:        plainQuery.QueryId,
-			Type:      QueryTypeSelection,
-			RawQuery:  plainQuery.QueryText,
-			Search:    plainQuery.QueryText,
-			Selection: plainQuery.QuerySelection,
+			Id:             plainQuery.QueryId,
+			Type:           QueryTypeSelection,   // override: this is a selection query, not input
+			RawQuery:       plainQuery.QueryText, // keep the original unmodified text
+			TriggerKeyword: parsed.TriggerKeyword,
+			Command:        parsed.Command,
+			Search:         parsed.Search,
+			Selection:      plainQuery.QuerySelection,
 		}
 		query.SessionId = util.GetContextSessionId(ctx)
 		activeWindowSnapshot := m.GetUI().GetActiveWindowSnapshot(ctx)
@@ -2357,7 +2369,8 @@ func (m *Manager) NewQuery(ctx context.Context, plainQuery common.PlainQuery) (Q
 		query.Env.ActiveWindowIcon = activeWindowSnapshot.Icon
 		query.Env.ActiveWindowIsOpenSaveDialog = activeWindowSnapshot.IsOpenSaveDialog
 		query.Env.ActiveBrowserUrl = m.getActiveBrowserUrl(ctx)
-		return query, nil, nil
+
+		return query, instance, nil
 	}
 
 	return Query{}, nil, errors.New("invalid query type")
@@ -2578,34 +2591,73 @@ func (m *Manager) GetResultPreview(ctx context.Context, sessionId string, queryI
 	return preview, nil
 }
 
-func (m *Manager) ReplaceQueryVariable(ctx context.Context, query string) string {
-	if strings.Contains(query, QueryVariableSelectedText) {
+func (m *Manager) ReplaceQueryVariable(ctx context.Context, queryText string) common.PlainQuery {
+	// Track whether {wox:selected_file} was resolved so we can promote the query to
+	// QueryTypeSelection. Plugins that handle file selections expect a Selection context,
+	// not raw file paths embedded in a text query.
+	var resolvedFileSelection *selection.Selection
+
+	if strings.Contains(queryText, QueryVariableSelectedText) {
 		selected, selectedErr := selection.GetSelected(ctx)
 		if selectedErr != nil {
 			logger.Error(ctx, fmt.Sprintf("failed to get selected text: %s", selectedErr.Error()))
 		} else {
 			if selected.Type == selection.SelectionTypeText {
-				query = strings.ReplaceAll(query, QueryVariableSelectedText, selected.Text)
+				queryText = strings.ReplaceAll(queryText, QueryVariableSelectedText, selected.Text)
 			} else {
 				logger.Error(ctx, fmt.Sprintf("selected data is not text, type: %s", selected.Type))
 			}
 		}
 	}
 
-	if strings.Contains(query, QueryVariableActiveBrowserUrl) {
+	// Replace selected file variable. When resolved, capture the selection so the caller
+	// can promote the query to QueryTypeSelection instead of embedding paths as plain text.
+	// Also strip the placeholder from queryText so the remaining text (e.g. a trigger keyword)
+	// is still passed as QueryText and can be used for plugin routing in NewQuery.
+	if strings.Contains(queryText, QueryVariableSelectedFile) {
+		selected, selectedErr := selection.GetSelected(ctx)
+		if selectedErr != nil {
+			logger.Error(ctx, fmt.Sprintf("failed to get selected file: %s", selectedErr.Error()))
+		} else {
+			if selected.Type == selection.SelectionTypeFile {
+				resolvedFileSelection = &selected
+				queryText = strings.ReplaceAll(queryText, QueryVariableSelectedFile, "")
+			} else {
+				logger.Error(ctx, fmt.Sprintf("selected data is not file, type: %s", selected.Type))
+			}
+		}
+	}
+
+	if strings.Contains(queryText, QueryVariableActiveBrowserUrl) {
 		activeBrowserUrl := m.activeBrowserUrl
-		query = strings.ReplaceAll(query, QueryVariableActiveBrowserUrl, activeBrowserUrl)
+		queryText = strings.ReplaceAll(queryText, QueryVariableActiveBrowserUrl, activeBrowserUrl)
 	}
 
 	// Replace file explorer path variable if present
-	if strings.Contains(query, QueryVariableFileExplorerPath) {
+	if strings.Contains(queryText, QueryVariableFileExplorerPath) {
 		startTime := time.Now()
 		explorerPath := m.getActiveFileExplorerPath(ctx)
-		query = strings.ReplaceAll(query, QueryVariableFileExplorerPath, explorerPath)
+		queryText = strings.ReplaceAll(queryText, QueryVariableFileExplorerPath, explorerPath)
 		logger.Debug(ctx, fmt.Sprintf("replaced file explorer path variable in %d ms", time.Since(startTime).Milliseconds()))
 	}
 
-	return query
+	// If {wox:selected_file} was successfully resolved, promote to QueryTypeSelection
+	// so that selection-aware plugins receive a proper file selection context rather
+	// than raw path strings in a text query.
+	// QueryText carries the remainder of the template string (e.g. a trigger keyword like "files")
+	// so that NewQuery can parse it and route the query to the right plugin.
+	if resolvedFileSelection != nil {
+		return common.PlainQuery{
+			QueryType:      QueryTypeSelection,
+			QueryText:      queryText,
+			QuerySelection: *resolvedFileSelection,
+		}
+	}
+
+	return common.PlainQuery{
+		QueryType: QueryTypeInput,
+		QueryText: queryText,
+	}
 }
 
 func (m *Manager) IsHostStarted(ctx context.Context, runtime Runtime) bool {

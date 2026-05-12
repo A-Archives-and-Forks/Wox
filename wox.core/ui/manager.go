@@ -305,12 +305,8 @@ func (m *Manager) triggerSelectionQuery(ctx context.Context, selected selection.
 func (m *Manager) triggerQueryHotkey(ctx context.Context, queryHotkey setting.QueryHotkey) error {
 	queryCtx := util.WithCoreSessionContext(ctx)
 	queryCtx = util.WithShowSourceContext(queryCtx, string(common.ShowSourceQueryHotkey))
-	query := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, queryHotkey.Query)
-	plainQuery := common.PlainQuery{
-		QueryId:   uuid.NewString(),
-		QueryType: plugin.QueryTypeInput,
-		QueryText: query,
-	}
+	plainQuery := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, queryHotkey.Query)
+	plainQuery.QueryId = uuid.NewString()
 
 	m.RefreshActiveWindowSnapshot(queryCtx)
 	q, _, err := plugin.GetPluginManager().NewQuery(queryCtx, plainQuery)
@@ -321,9 +317,9 @@ func (m *Manager) triggerQueryHotkey(ctx context.Context, queryHotkey setting.Qu
 	if queryHotkey.IsSilentExecution {
 		success := plugin.GetPluginManager().QuerySilent(queryCtx, q)
 		if !success {
-			return fmt.Errorf("failed to execute silent query: %s", query)
+			return fmt.Errorf("failed to execute silent query: %s", plainQuery.String())
 		}
-		logger.Info(queryCtx, fmt.Sprintf("silent query executed: %s", query))
+		logger.Info(queryCtx, fmt.Sprintf("silent query executed: %s", plainQuery.String()))
 		return nil
 	}
 
@@ -794,12 +790,10 @@ func (m *Manager) refreshTrayQueryIcons(ctx context.Context) {
 func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQuery, rect tray.ClickRect) {
 	queryCtx := util.WithCoreSessionContext(ctx)
 	queryCtx = util.WithShowSourceContext(queryCtx, string(common.ShowSourceTrayQuery))
-	query := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, trayQuery.Query)
-	plainQuery := common.PlainQuery{
-		QueryId:   uuid.NewString(),
-		QueryType: plugin.QueryTypeInput,
-		QueryText: query,
-	}
+	// ReplaceQueryVariable returns a PlainQuery whose type may be QueryTypeSelection
+	// when {wox:selected_file} was resolved, so we no longer hard-code QueryTypeInput here.
+	plainQuery := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, trayQuery.Query)
+	plainQuery.QueryId = uuid.NewString()
 
 	m.RefreshActiveWindowSnapshot(queryCtx)
 	q, _, err := plugin.GetPluginManager().NewQuery(queryCtx, plainQuery)

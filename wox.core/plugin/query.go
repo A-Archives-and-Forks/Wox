@@ -28,6 +28,7 @@ const (
 
 const (
 	QueryVariableSelectedText     QueryVariable = "{wox:selected_text}"
+	QueryVariableSelectedFile     QueryVariable = "{wox:selected_file}"
 	QueryVariableActiveBrowserUrl QueryVariable = "{wox:active_browser_url}"
 	QueryVariableFileExplorerPath QueryVariable = "{wox:file_explorer_path}"
 )
