@@ -1054,7 +1054,7 @@ bool FlutterWindow::RerouteIgnoredRootKeyUp(HWND hwnd, UINT message, WPARAM wpar
   return true;
 }
 
-void FlutterWindow::FlushPendingChildKeyUps()
+void FlutterWindow::FlushPendingChildKeyUps(bool skipPhysicallyHeld)
 {
   if (pending_child_keydowns_.empty())
   {
@@ -1069,11 +1069,23 @@ void FlutterWindow::FlushPendingChildKeyUps()
   // Flush every still-pending child keydown as a synthetic keyup.
   //
   // This handles two scenarios:
-  //   1. Hide-on-keydown (e.g. Escape): child receives keydown -> Dart hides
-  //      the window immediately -> the real keyup is never delivered through
-  //      Flutter -> HardwareKeyboard keeps the key marked as pressed.
+  //   1. Hide-on-keydown (e.g. Escape, or a hotkey modifier such as Ctrl):
+  //      child receives keydown -> Dart hides the window immediately -> the
+  //      real keyup is delivered to whichever window gains focus next, NOT
+  //      to Flutter -> HardwareKeyboard keeps the key marked as pressed.
   //   2. Defense-in-depth on show: if a previous hide-flush was ineffective
   //      (engine dropped the synthetic keyup), the show-flush retries.
+  //
+  // skipPhysicallyHeld controls how physically-depressed keys are handled:
+  //   true  (show / capture paths): skip keys the OS reports as still held.
+  //         WM_SETFOCUS will re-sync modifier state via GetKeyState, so
+  //         sending an orphan keyup for a held key would confuse Flutter.
+  //   false (hide path): flush unconditionally.  After SW_HIDE the real
+  //         keyup goes to another window, so Flutter will never clear the
+  //         pressed state on its own.  This is the fix for the bug where
+  //         pressing a modifier-key hotkey to dismiss Wox leaves that
+  //         modifier permanently "stuck" in HardwareKeyboard, causing the
+  //         next keypress (e.g. 'A') to be misread as Ctrl+A / Alt+A.
   //
   // Take a snapshot for safe iteration: SendMessage below re-enters
   // ChildWindowProc which calls ClearTrackedChildKeyDown, removing
@@ -1084,10 +1096,9 @@ void FlutterWindow::FlushPendingChildKeyUps()
   {
     const WPARAM vk = KeyboardVirtualKeyFromSignature(signature);
 
-    // Only send a synthetic keyup if the OS says the key is NOT currently
-    // pressed. This avoids incorrectly releasing a key the user is still
-    // holding (e.g. while the window shows via a keyboard shortcut).
-    if ((GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0)
+    // When skipPhysicallyHeld is true, skip keys that are still physically
+    // pressed so that WM_SETFOCUS can re-sync them correctly on the next show.
+    if (skipPhysicallyHeld && (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0)
     {
       continue;
     }
@@ -3078,10 +3089,14 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       blur_guard_active_ = false;
       blur_guard_until_tick_ = 0;
 
-      // Flush before SW_HIDE. After the window is hidden, Windows may deliver
-      // the physical keyup somewhere else (or not through Flutter at all),
-      // which is exactly how Escape ended up stuck in HardwareKeyboard.
-      FlushPendingChildKeyUps();
+      // Flush before SW_HIDE with skipPhysicallyHeld=false so that every
+      // pending keydown — including modifier keys that are still physically
+      // held (e.g. Ctrl/Alt from a hotkey combination) — receives a synthetic
+      // keyup.  After SW_HIDE the real keyup goes to whichever window gains
+      // focus next, not to Flutter, so without this forced flush those modifier
+      // keys would remain permanently "pressed" in HardwareKeyboard and cause
+      // the next keystroke (e.g. 'A') to be misread as a shortcut (Ctrl+A).
+      FlushPendingChildKeyUps(/*skipPhysicallyHeld=*/false);
 
       HWND fg = GetForegroundWindow();
       bool isForeground = (fg == hwnd || fg == GetAncestor(hwnd, GA_ROOT));

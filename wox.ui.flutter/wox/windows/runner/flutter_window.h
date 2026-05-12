@@ -161,7 +161,16 @@ private:
   void ClearTrackedChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam);
   bool HasTrackedChildKeyDown(UINT message, WPARAM wparam, LPARAM lparam) const;
   bool RerouteIgnoredRootKeyUp(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
-  void FlushPendingChildKeyUps();
+  // Sends a synthetic WM_KEYUP/WM_SYSKEYUP to the child window for every
+  // keydown that was tracked but has not yet received a matching keyup.
+  // When skipPhysicallyHeld is true (default) the flush is skipped for keys
+  // that are still physically depressed according to GetAsyncKeyState; this
+  // is appropriate for the show/capture paths where WM_SETFOCUS will re-sync
+  // modifier state.  When skipPhysicallyHeld is false (hide path) every
+  // pending keydown is flushed unconditionally, because after SW_HIDE the real
+  // keyup will be delivered to whichever window gains focus next — not Flutter
+  // — leaving HardwareKeyboard in a permanently "pressed" state.
+  void FlushPendingChildKeyUps(bool skipPhysicallyHeld = true);
   static uint64_t MakeKeyboardMessageSignature(UINT message, WPARAM wparam, LPARAM lparam);
 
   std::unordered_set<uint64_t> pending_child_keydowns_;
