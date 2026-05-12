@@ -82,8 +82,8 @@ func (p *GlancePlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 	p.api = initParams.API
 }
 
-func (p *GlancePlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
-	return []plugin.QueryResult{}
+func (p *GlancePlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
+	return plugin.QueryResponse{}
 }
 
 func (p *GlancePlugin) Glance(ctx context.Context, request plugin.GlanceRequest) plugin.GlanceResponse {

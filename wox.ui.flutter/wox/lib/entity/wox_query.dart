@@ -18,14 +18,21 @@ class PlainQuery {
   late WoxQueryType queryType;
   late String queryText;
   late Selection querySelection;
+  late Map<String, List<String>> queryRefinements;
 
-  PlainQuery({required this.queryId, required this.queryType, required this.queryText, required this.querySelection});
+  PlainQuery({required this.queryId, required this.queryType, required this.queryText, required this.querySelection, Map<String, List<String>>? queryRefinements}) {
+    // Query refinements are opaque plugin-owned values. Keeping them on the
+    // plain query lets future refinement UI send selections without changing
+    // the result-query transport again.
+    this.queryRefinements = queryRefinements ?? <String, List<String>>{};
+  }
 
   PlainQuery.fromJson(Map<String, dynamic> json) {
     queryId = json['QueryId'] ?? "";
     queryType = json['QueryType'];
     queryText = json['QueryText'];
     querySelection = Selection.fromJson(json['QuerySelection']);
+    queryRefinements = ((json['QueryRefinements'] ?? json['queryRefinements']) as Map<String, dynamic>? ?? <String, dynamic>{}).map((key, value) => MapEntry(key, List<String>.from(value ?? [])));
   }
 
   Map<String, dynamic> toJson() {
@@ -34,6 +41,7 @@ class PlainQuery {
     data['QueryType'] = queryType;
     data['QueryText'] = queryText;
     data['QuerySelection'] = querySelection.toJson();
+    data['QueryRefinements'] = queryRefinements;
     return data;
   }
 

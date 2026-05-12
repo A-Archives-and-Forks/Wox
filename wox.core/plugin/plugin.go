@@ -6,7 +6,7 @@ var AllSystemPlugin []SystemPlugin
 
 type Plugin interface {
 	Init(ctx context.Context, initParams InitParams)
-	Query(ctx context.Context, query Query) []QueryResult
+	Query(ctx context.Context, query Query) QueryResponse
 }
 
 type SystemPlugin interface {

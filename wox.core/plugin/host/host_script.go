@@ -101,7 +101,7 @@ func (s *ScriptPlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 	util.GetLogger().Debug(ctx, fmt.Sprintf("Script plugin %s initialized", s.metadata.GetName(ctx)))
 }
 
-func (s *ScriptPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (s *ScriptPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	// Prepare JSON-RPC request
 	request := map[string]interface{}{
 		"jsonrpc": "2.0",
@@ -137,7 +137,7 @@ func (s *ScriptPlugin) Query(ctx context.Context, query plugin.Query) []plugin.Q
 				})
 			}
 			util.GetLogger().Info(ctx, fmt.Sprintf("script plugin %s missing runtime: %s", s.metadata.GetName(ctx), runtimeName))
-			return []plugin.QueryResult{
+			return plugin.NewQueryResponse([]plugin.QueryResult{
 				{
 					Title:    s.metadata.GetName(ctx),
 					SubTitle: fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_script_runtime_missing_subtitle"), displayRuntimeName),
@@ -148,14 +148,14 @@ func (s *ScriptPlugin) Query(ctx context.Context, query plugin.Query) []plugin.Q
 					},
 					Actions: actions,
 				},
-			}
+			})
 		}
 
 		s.api.Notify(ctx, err.Error())
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
-	return results
+	return plugin.NewQueryResponse(results)
 }
 
 // executeScript executes the script with the given JSON-RPC request and returns the results

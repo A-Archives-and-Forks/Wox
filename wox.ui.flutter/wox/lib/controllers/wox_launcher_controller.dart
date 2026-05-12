@@ -1314,6 +1314,7 @@ class WoxLauncherController extends GetxController {
       queryType: query.queryType,
       queryText: query.queryText,
       querySelection: Selection(type: query.querySelection.type, text: query.querySelection.text, filePaths: List<String>.from(query.querySelection.filePaths)),
+      queryRefinements: query.queryRefinements.map((key, value) => MapEntry(key, List<String>.from(value))),
     );
   }
 
@@ -1868,7 +1869,7 @@ class WoxLauncherController extends GetxController {
             traceId: traceId,
             type: WoxMsgTypeEnum.WOX_MSG_TYPE_REQUEST.code,
             method: WoxMsgMethodEnum.WOX_MSG_METHOD_QUERY.code,
-            data: {"queryId": query.queryId, "queryType": query.queryType, "queryText": query.queryText, "querySelection": query.querySelection.toJson()},
+            data: {"queryId": query.queryId, "queryType": query.queryType, "queryText": query.queryText, "querySelection": query.querySelection.toJson(), "queryRefinements": query.queryRefinements},
           ),
         );
       } catch (e) {
@@ -1916,7 +1917,7 @@ class WoxLauncherController extends GetxController {
         traceId: traceId,
         type: WoxMsgTypeEnum.WOX_MSG_TYPE_REQUEST.code,
         method: WoxMsgMethodEnum.WOX_MSG_METHOD_QUERY.code,
-        data: {"queryId": query.queryId, "queryType": query.queryType, "queryText": query.queryText, "querySelection": query.querySelection.toJson()},
+        data: {"queryId": query.queryId, "queryType": query.queryType, "queryText": query.queryText, "querySelection": query.querySelection.toJson(), "queryRefinements": query.queryRefinements},
       ),
     );
   }
@@ -1938,6 +1939,7 @@ class WoxLauncherController extends GetxController {
       queryType: currentQueryValue.queryType,
       queryText: currentQueryValue.queryText,
       querySelection: currentQueryValue.querySelection,
+      queryRefinements: currentQueryValue.queryRefinements.map((key, value) => MapEntry(key, List<String>.from(value))),
     );
 
     // Re-execute the query

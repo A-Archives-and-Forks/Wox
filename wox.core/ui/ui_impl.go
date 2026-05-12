@@ -538,20 +538,43 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	var querySelection selection.Selection
 	json.Unmarshal([]byte(querySelectionJson), &querySelection)
 
+	queryRefinements := map[string][]string{}
+	queryRequestJson, queryRequestMarshalErr := json.Marshal(request.Data)
+	if queryRequestMarshalErr != nil {
+		logger.Error(ctx, queryRequestMarshalErr.Error())
+		responseUIError(ctx, request, queryRequestMarshalErr.Error())
+		return
+	}
+	refinementsData := gjson.GetBytes(queryRequestJson, "queryRefinements")
+	if refinementsData.Exists() {
+		// queryRefinements is optional for compatibility with older UI clients.
+		// When present, keep it opaque and let each plugin interpret its values.
+		if unmarshalRefinementsErr := json.Unmarshal([]byte(refinementsData.Raw), &queryRefinements); unmarshalRefinementsErr != nil {
+			logger.Error(ctx, unmarshalRefinementsErr.Error())
+			responseUIError(ctx, request, unmarshalRefinementsErr.Error())
+			return
+		}
+		if queryRefinements == nil {
+			queryRefinements = map[string][]string{}
+		}
+	}
+
 	var changedQuery common.PlainQuery
 	switch queryType {
 	case plugin.QueryTypeInput:
 		changedQuery = common.PlainQuery{
-			QueryId:   queryId,
-			QueryType: plugin.QueryTypeInput,
-			QueryText: queryText,
+			QueryId:          queryId,
+			QueryType:        plugin.QueryTypeInput,
+			QueryText:        queryText,
+			QueryRefinements: queryRefinements,
 		}
 	case plugin.QueryTypeSelection:
 		changedQuery = common.PlainQuery{
-			QueryId:        queryId,
-			QueryType:      plugin.QueryTypeSelection,
-			QueryText:      queryText,
-			QuerySelection: querySelection,
+			QueryId:          queryId,
+			QueryType:        plugin.QueryTypeSelection,
+			QueryText:        queryText,
+			QuerySelection:   querySelection,
+			QueryRefinements: queryRefinements,
 		}
 	default:
 		logger.Error(ctx, fmt.Sprintf("unsupported query type: %s", queryType))
@@ -593,6 +616,7 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	var startTimestamp = util.GetSystemTimestamp()
 	var firstFlushDelayMs = plugin.GetPluginManager().GetQueryFirstFlushDelayMs(query)
 	var resultFlushBatch int
+	var latestQueryResponse plugin.QueryResponseUI
 	logger.Info(ctx, fmt.Sprintf("query %s: %s, first flush delay: %d ms", query.Type, query.String(), firstFlushDelayMs))
 
 	var resultDebouncer = util.NewDebouncer(firstFlushDelayMs, resultDebounceIntervalMs, func(results []plugin.QueryResultUI, reason string) {
@@ -614,7 +638,11 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 		if util.IsDev() {
 			responseSnapshot = appendQueryDebugTails(ctx, sessionId, queryId, snapshot)
 		}
-		responseUIQueryResults(ctx, request, queryId, responseSnapshot, isFinal)
+		responseUIQueryResponse(ctx, request, queryId, plugin.QueryResponseUI{
+			Results:     responseSnapshot,
+			Refinements: latestQueryResponse.Refinements,
+			Layout:      latestQueryResponse.Layout,
+		}, isFinal)
 	})
 	resultDebouncer.Start(ctx)
 	logger.Info(ctx, fmt.Sprintf("query %s: %s, result flushed (new start)", query.Type, query.String()))
@@ -622,27 +650,34 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	// Once fallback is shown or definitively checked, do not evaluate it again.
 	fallbackHandled := false
 
-	addResults := func(results []plugin.QueryResultUI) {
-		if len(results) == 0 {
+	addResponse := func(response plugin.QueryResponseUI) {
+		// QueryResponse metadata is only meaningful for a single plugin query.
+		// Global queries aggregate many plugins, so keeping result rows only
+		// avoids letting one plugin's refinements control the whole result set.
+		if queryPlugin != nil {
+			latestQueryResponse.Refinements = response.Refinements
+			latestQueryResponse.Layout = response.Layout
+		}
+		if len(response.Results) == 0 {
 			return
 		}
-		lo.ForEach(results, func(_ plugin.QueryResultUI, index int) {
-			results[index].QueryId = queryId
+		lo.ForEach(response.Results, func(_ plugin.QueryResultUI, index int) {
+			response.Results[index].QueryId = queryId
 		})
-		plugin.GetPluginManager().RecordQueryResultQueryElapsed(sessionId, queryId, results, util.GetSystemTimestamp()-startTimestamp)
-		totalResultCount += len(results)
-		resultDebouncer.Add(ctx, results)
+		plugin.GetPluginManager().RecordQueryResultQueryElapsed(sessionId, queryId, response.Results, util.GetSystemTimestamp()-startTimestamp)
+		totalResultCount += len(response.Results)
+		resultDebouncer.Add(ctx, response.Results)
 	}
 	drainPendingResults := func() bool {
 		// Drain queued results first so fallback does not race ahead of already-finished plugins.
 		for {
 			select {
-			case results := <-resultChan:
+			case response := <-resultChan:
 				if !plugin.GetPluginManager().IsCurrentQuery(sessionId, queryId) {
 					resultDebouncer.Done(ctx)
 					return false
 				}
-				addResults(results)
+				addResponse(response)
 			default:
 				return true
 			}
@@ -657,10 +692,10 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 		}
 		fallbackHandled = true
 
-		fallbackResults := plugin.GetPluginManager().QueryFallback(ctx, query, queryPlugin)
-		if len(fallbackResults) > 0 {
-			addResults(fallbackResults)
-			logger.Info(ctx, fmt.Sprintf("no result yet, show %d fallback results", len(fallbackResults)))
+		fallbackResponse := plugin.GetPluginManager().QueryFallback(ctx, query, queryPlugin)
+		if len(fallbackResponse.Results) > 0 {
+			addResponse(fallbackResponse)
+			logger.Info(ctx, fmt.Sprintf("no result yet, show %d fallback results", len(fallbackResponse.Results)))
 			return
 		}
 
@@ -668,12 +703,12 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	}
 	for {
 		select {
-		case results := <-resultChan:
+		case response := <-resultChan:
 			if !plugin.GetPluginManager().IsCurrentQuery(sessionId, queryId) {
 				resultDebouncer.Done(ctx)
 				return
 			}
-			addResults(results)
+			addResponse(response)
 		case <-fallbackReadyChan:
 			if !plugin.GetPluginManager().IsCurrentQuery(sessionId, queryId) {
 				resultDebouncer.Done(ctx)

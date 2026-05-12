@@ -113,15 +113,15 @@ func (ts *TestSuite) RunQueryTest(test QueryTest) (bool, *QueryTestFailure) {
 CollectResults:
 	for {
 		select {
-		case results := <-resultChan:
-			allResults = append(allResults, results...)
+		case response := <-resultChan:
+			allResults = append(allResults, response.Results...)
 		case <-doneChan:
 			// Query completion only means all plugin goroutines have finished.
 			// Drain buffered results to avoid dropping late-collected plugin results.
 			for {
 				select {
-				case results := <-resultChan:
-					allResults = append(allResults, results...)
+				case response := <-resultChan:
+					allResults = append(allResults, response.Results...)
 				default:
 					break CollectResults
 				}

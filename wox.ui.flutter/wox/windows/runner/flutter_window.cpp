@@ -3090,8 +3090,8 @@ void FlutterWindow::HandleWindowManagerMethodCall(
       blur_guard_until_tick_ = 0;
 
       // Flush before SW_HIDE with skipPhysicallyHeld=false so that every
-      // pending keydown — including modifier keys that are still physically
-      // held (e.g. Ctrl/Alt from a hotkey combination) — receives a synthetic
+      // pending keydown, including modifier keys that are still physically
+      // held (e.g. Ctrl/Alt from a hotkey combination), receives a synthetic
       // keyup.  After SW_HIDE the real keyup goes to whichever window gains
       // focus next, not to Flutter, so without this forced flush those modifier
       // keys would remain permanently "pressed" in HardwareKeyboard and cause

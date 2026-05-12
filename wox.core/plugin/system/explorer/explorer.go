@@ -151,16 +151,16 @@ func (c *ExplorerPlugin) Init(ctx context.Context, initParams plugin.InitParams)
 	})
 }
 
-func (c *ExplorerPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (c *ExplorerPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	if !c.shouldHandleQuery(ctx, query) {
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	if strings.EqualFold(query.Command, explorerCommandAdd) {
-		return c.queryAddQuickJumpPath(ctx, query)
+		return plugin.NewQueryResponse(c.queryAddQuickJumpPath(ctx, query))
 	}
 
-	return c.queryExplorerResults(ctx, query)
+	return plugin.NewQueryResponse(c.queryExplorerResults(ctx, query))
 }
 
 func (c *ExplorerPlugin) shouldHandleQuery(ctx context.Context, query plugin.Query) bool {

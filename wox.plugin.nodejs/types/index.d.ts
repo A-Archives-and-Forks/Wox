@@ -55,13 +55,15 @@ export type Platform = "windows" | "darwin" | "linux"
  *     await this.api.Log(ctx, "Info", "Plugin initialized")
  *   }
  *
- *   async query(ctx: Context, query: Query): Promise<Result[]> {
- *     return [{
+ *   async query(ctx: Context, query: Query): Promise<QueryResponse> {
+ *     // QueryResponse requires Wox >= 2.0.4. Return Result[] instead when
+ *     // your plugin must keep running on older Wox releases.
+ *     return { Results: [{
  *       Title: "Hello World",
  *       SubTitle: "My first result",
  *       Icon: { ImageType: "emoji", ImageData: "👋" },
  *       Score: 100
- *     }]
+ *     }] }
  *   }
  * }
  * ```
@@ -101,21 +103,23 @@ export interface Plugin {
    * Query handler that returns results based on user input.
    *
    * Called whenever the user types a query that triggers this plugin.
-   * The plugin should return a list of matching results sorted by relevance.
+   * The plugin should return matching results sorted by relevance.
+   * QueryResponse requires Wox >= 2.0.4; return Result[] directly when the
+   * plugin must support older Wox releases.
    *
    * @param ctx - Request context with trace ID for logging
    * @param query - The query object containing search text, type, environment
-   * @returns Array of results to display to the user
+   * @returns QueryResponse for Wox >= 2.0.4, or Result[] for older-compatible plugins
    *
    * @example
    * ```typescript
-   * async query(ctx: Context, query: Query): Promise<Result[]> {
+   * async query(ctx: Context, query: Query): Promise<QueryResponse> {
    *   if (query.Type === "selection") {
-   *     return this.handleSelection(query.Selection)
+   *     return { Results: this.handleSelection(query.Selection) }
    *   }
    *
    *   const searchTerm = query.Search.toLowerCase()
-   *   return this.items
+   *   const results = this.items
    *     .filter(item => item.name.toLowerCase().includes(searchTerm))
    *     .map(item => ({
    *       Title: item.name,
@@ -132,10 +136,12 @@ export interface Plugin {
    *         }
    *       ]
    *     }))
+   *
+   *   return { Results: results }
    * }
    * ```
    */
-  query: (ctx: Context, query: Query) => Promise<Result[]>
+  query: (ctx: Context, query: Query) => Promise<QueryReturn>
 }
 
 /**
@@ -146,7 +152,7 @@ export interface Plugin {
  *
  * @example
  * ```typescript
- * async query(ctx: Context, query: Query): Promise<Result[]> {
+ * async query(ctx: Context, query: Query): Promise<QueryResponse> {
  *   if (query.Type === "selection") {
  *     const selection = query.Selection
  *     if (selection.Type === "text") {
@@ -155,7 +161,7 @@ export interface Plugin {
  *       console.log("Selected files:", selection.FilePaths)
  *     }
  *   }
- *   return []
+ *   return { Results: [] }
  * }
  * ```
  */
@@ -193,11 +199,11 @@ export interface Selection {
  * @example
  * ```typescript
  * // Show different results based on active window
- * async query(ctx: Context, query: Query): Promise<Result[]> {
+ * async query(ctx: Context, query: Query): Promise<QueryResponse> {
  *   if (query.Env.ActiveWindowTitle.includes("Visual Studio")) {
- *     return this.getVSCodeActions()
+ *     return { Results: this.getVSCodeActions() }
  *   }
- *   return []
+ *   return { Results: [] }
  * }
  * ```
  */
@@ -245,7 +251,7 @@ export interface QueryEnv {
  *
  * @example
  * ```typescript
- * async query(ctx: Context, query: Query): Promise<Result[]> {
+ * async query(ctx: Context, query: Query): Promise<QueryResponse> {
  *   // Handle input query
  *   if (query.Type === "input") {
  *     console.log("Search:", query.Search)
@@ -272,6 +278,14 @@ export interface Query {
    * Pass this ID when calling UpdateResult or PushResults.
    */
   Id: string
+
+  /**
+   * UI session identifier for this query.
+   *
+   * Stable for the lifetime of the Wox UI instance that issued the query.
+   * Use this when query-scoped state must stay tied to one visible session.
+   */
+  SessionId?: string
 
   /**
    * Query type.
@@ -341,12 +355,95 @@ export interface Query {
   Env: QueryEnv
 
   /**
+   * Selected query refinement values keyed by refinement id.
+   *
+   * These values come from the QueryResponse.Refinements controls returned by
+   * the plugin on previous query updates. Wox treats them as opaque strings;
+   * the plugin owns the filtering or sorting semantics.
+   */
+  Refinements?: { [key: string]: string[] }
+
+  /**
    * Check if this is a global query (no trigger keyword).
    *
    * @returns true if triggered globally, false if triggered by keyword
    */
   IsGlobalQuery(): boolean
 }
+
+export type QueryRefinementType = "singleSelect" | "multiSelect" | "toggle" | "sort"
+
+/**
+ * One selectable value inside a query refinement control.
+ */
+export interface QueryRefinementOption {
+  Value: string
+  Title: string
+  Icon?: WoxImage
+  Keywords?: string[]
+  Count?: number
+}
+
+/**
+ * Query-scoped control displayed near the query box or result list.
+ *
+ * Plugins return refinements with QueryResponse, and Wox sends selected values
+ * back through Query.Refinements on the next query.
+ */
+export interface QueryRefinement {
+  Id: string
+  Title: string
+  Type: QueryRefinementType
+  Options: QueryRefinementOption[]
+  DefaultValue?: string[]
+  Hotkey?: string
+  Persist?: boolean
+}
+
+/**
+ * Optional grid presentation hints for the current query response.
+ */
+export interface QueryGridLayout {
+  Columns?: number
+  ImageWidth?: number
+  ImageHeight?: number
+  ItemPadding?: number
+  ItemMargin?: number
+  AspectRatio?: number
+  Commands?: string[]
+}
+
+/**
+ * Optional presentation hints that apply to one query response.
+ */
+export interface QueryLayout {
+  Icon?: WoxImage
+  ResultPreviewWidthRatio?: number
+  GridLayout?: QueryGridLayout
+}
+
+/**
+ * Complete response from plugin.query().
+ *
+ * Requires Wox >= 2.0.4. Set plugin.json MinWoxVersion to at least 2.0.4 when
+ * returning this shape; return Result[] directly if the plugin must support
+ * older Wox releases.
+ */
+export interface QueryResponse {
+  Results: Result[]
+  Refinements?: QueryRefinement[]
+  Layout?: QueryLayout
+}
+
+/**
+ * @deprecated Returning Result[] from query() is still accepted by the host for
+ * compatibility. Use QueryResponse only when plugin.json MinWoxVersion is at
+ * least 2.0.4 so results, refinements, and layout hints stay in one response
+ * object.
+ */
+export type LegacyQueryReturn = Result[]
+
+export type QueryReturn = QueryResponse | LegacyQueryReturn
 
 /**
  * A search result displayed to the user.

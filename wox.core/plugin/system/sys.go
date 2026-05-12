@@ -304,7 +304,8 @@ func (r *SysPlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 	r.api.OnMRURestore(ctx, r.handleMRURestore)
 }
 
-func (r *SysPlugin) Query(ctx context.Context, query plugin.Query) (results []plugin.QueryResult) {
+func (r *SysPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
+	var results []plugin.QueryResult
 	for _, command := range r.commands {
 		translatedTitle := i18n.GetI18nManager().TranslateWox(ctx, command.Title)
 		isTitleMatch, titleScore := plugin.IsStringMatchScore(ctx, translatedTitle, query.Search)
@@ -358,7 +359,7 @@ func (r *SysPlugin) Query(ctx context.Context, query plugin.Query) (results []pl
 		}
 	}
 
-	return
+	return plugin.NewQueryResponse(results)
 }
 
 func (r *SysPlugin) handleMRURestore(ctx context.Context, mruData plugin.MRUData) (*plugin.QueryResult, error) {

@@ -686,16 +686,31 @@ Future<void> waitForWindowHeightToMatchController(
   Duration step = const Duration(milliseconds: 200),
 }) async {
   final deadline = DateTime.now().add(timeout);
+  Size? lastActual;
+  double? lastExpected;
   while (DateTime.now().isBefore(deadline)) {
     await tester.pump(step);
     final actual = await windowManager.getSize();
     final expected = controller.calculateWindowHeight();
+    lastActual = actual;
+    lastExpected = expected;
     if ((actual.height - expected).abs() <= tolerance) {
       return;
     }
   }
 
-  fail('Window height did not match controller.calculateWindowHeight() within $timeout.');
+  // Keep the failing smoke actionable: resize regressions are timing sensitive,
+  // and the last sampled window/controller heights show whether the native
+  // resize never happened, happened too late, or settled outside tolerance.
+  fail(
+    'Window height did not match controller.calculateWindowHeight() within $timeout. '
+    'Last actual: $lastActual, last expected height: $lastExpected, tolerance: $tolerance, '
+    'items: ${controller.activeResultViewController.items.length}, '
+    'preview: ${controller.isShowPreviewPanel.value}, action: ${controller.isShowActionPanel.value}, '
+    'formAction: ${controller.isShowFormActionPanel.value}, grid: ${controller.isInGridMode()}, '
+    'previewType: ${controller.currentPreview.value.previewType}, '
+    'placeholder: ${controller.isShowingPendingResultPlaceholder}.',
+  );
 }
 
 Future<void> pumpUntil(WidgetTester tester, bool Function() condition, {required Duration timeout}) async {

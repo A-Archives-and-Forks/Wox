@@ -57,10 +57,10 @@ func (i *IndicatorPlugin) Init(ctx context.Context, initParams plugin.InitParams
 	i.api.OnMRURestore(ctx, i.handleMRURestore)
 }
 
-func (i *IndicatorPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (i *IndicatorPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	search := strings.TrimSpace(query.Search)
 	if search == "" {
-		return nil
+		return plugin.QueryResponse{}
 	}
 
 	pluginInstances := plugin.GetPluginManager().GetPluginInstances()
@@ -218,7 +218,7 @@ func (i *IndicatorPlugin) Query(ctx context.Context, query plugin.Query) []plugi
 			})
 		}
 	}
-	return results
+	return plugin.NewQueryResponse(results)
 }
 
 func (i *IndicatorPlugin) buildIndicatorUpgradeTails(installedVersion string, storeVersion string, hasStoreVersion bool) []plugin.QueryResultTail {

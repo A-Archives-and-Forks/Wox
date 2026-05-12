@@ -1,6 +1,21 @@
-.PHONY: clean build install help
+.PHONY: clean build install help sdk
 
 HOSTS_DIR := ../wox.core/resource/hosts
+SDK_DIR := ../wox.plugin.nodejs
+
+# GNU Make can run this subdirectory build directly from Windows shells where
+# Git usr/bin is missing, so expose the POSIX helpers used by mkdir/cp/rm here
+# instead of relying on the root Makefile to have normalized PATH first.
+ifeq ($(OS),Windows_NT)
+    GIT_USR_BIN := $(patsubst %/bin/sh.exe,%/usr/bin,$(SHELL))
+    ifneq ($(GIT_USR_BIN),$(SHELL))
+        export PATH := $(GIT_USR_BIN);$(PATH)
+    endif
+endif
+
+# Prefer Corepack because it honors packageManager and keeps the host lockfile
+# on the pnpm version expected by this package instead of a newer global pnpm.
+PNPM ?= $(shell if command -v corepack >/dev/null 2>&1; then echo "corepack pnpm"; elif command -v pnpm >/dev/null 2>&1; then echo pnpm; else echo pnpm; fi)
 
 help:
 	@echo "Available commands:"
@@ -9,13 +24,18 @@ help:
 	@echo "  make install    - Install dependencies"
 
 clean:
-	pnpm run clean
+	$(PNPM) run clean
 
-install: clean
-	pnpm install
+sdk:
+	# The host bundles SDK runtime code, so build the local SDK before pnpm resolves the file dependency and captures its dist output.
+	$(MAKE) -C $(SDK_DIR) build
+
+install: sdk clean
+	# Make recipes are non-interactive, so tell pnpm it may replace an incompatible node_modules layout without prompting.
+	CI=true $(PNPM) install
 
 build: install
-	pnpm run build
+	$(PNPM) run build
 	mkdir -p $(HOSTS_DIR)
 	cp dist/index.js $(HOSTS_DIR)/node-host.js
 	rm -rf dist/

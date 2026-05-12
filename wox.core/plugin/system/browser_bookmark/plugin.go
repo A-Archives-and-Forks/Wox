@@ -94,7 +94,8 @@ func (c *BrowserBookmarkPlugin) Init(ctx context.Context, initParams plugin.Init
 	c.api.OnMRURestore(ctx, c.handleMRURestore)
 }
 
-func (c *BrowserBookmarkPlugin) Query(ctx context.Context, query plugin.Query) (results []plugin.QueryResult) {
+func (c *BrowserBookmarkPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
+	var results []plugin.QueryResult
 	bookmarks := c.getBookmarksSnapshot()
 	for _, b := range bookmarks {
 		var bookmark = b
@@ -148,7 +149,7 @@ func (c *BrowserBookmarkPlugin) Query(ctx context.Context, query plugin.Query) (
 		}
 	}
 
-	return
+	return plugin.NewQueryResponse(results)
 }
 
 func (c *BrowserBookmarkPlugin) reloadBookmarks(ctx context.Context) {

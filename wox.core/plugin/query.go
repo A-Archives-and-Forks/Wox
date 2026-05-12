@@ -15,6 +15,7 @@ type QueryType = string
 type QueryVariable = string
 type QueryResultTailType = string
 type QueryResultTailTextCategory = string
+type QueryRefinementType = string
 
 const (
 	QueryTypeInput     QueryType = "input"     // user input query
@@ -43,6 +44,13 @@ const (
 	QueryResultTailTextCategoryDanger  QueryResultTailTextCategory = "danger"
 	QueryResultTailTextCategoryWarning QueryResultTailTextCategory = "warning"
 	QueryResultTailTextCategorySuccess QueryResultTailTextCategory = "success"
+)
+
+const (
+	QueryRefinementTypeSingleSelect QueryRefinementType = "singleSelect"
+	QueryRefinementTypeMultiSelect  QueryRefinementType = "multiSelect"
+	QueryRefinementTypeToggle       QueryRefinementType = "toggle"
+	QueryRefinementTypeSort         QueryRefinementType = "sort"
 )
 
 // Query from Wox. See "Doc/Query.md" for details.
@@ -87,6 +95,11 @@ type Query struct {
 	// additional query environment data
 	// expose more context env data to plugin, E.g. plugin A only show result when active window title is "Chrome"
 	Env QueryEnv
+
+	// Refinements carries query-scoped UI state selected by the user.
+	// Core intentionally treats these values as opaque so plugins own the
+	// filtering and sorting semantics for each command.
+	Refinements map[string][]string
 }
 
 func (q *Query) IsGlobalQuery() bool {
@@ -112,6 +125,50 @@ type QueryEnv struct {
 	// active browser url when user query
 	// Only available when active window is browser and https://github.com/Wox-launcher/Wox.Chrome.Extension is installed
 	ActiveBrowserUrl string
+}
+
+// QueryResponse is the complete plugin answer for one query execution.
+// The old API returned only []QueryResult, which forced query-scoped UI data
+// such as refinements and layout hints into side channels. Keeping them in one
+// response lets the UI apply the controls and results from the same query id.
+type QueryResponse struct {
+	Results     []QueryResult
+	Refinements []QueryRefinement
+	Layout      QueryLayout
+}
+
+func NewQueryResponse(results []QueryResult) QueryResponse {
+	return QueryResponse{Results: results}
+}
+
+// QueryLayout carries query-scoped presentation hints. It starts as optional
+// metadata so existing result rendering remains unchanged while plugins gain a
+// single response object for future layout customization.
+type QueryLayout struct {
+	Icon                    common.WoxImage
+	ResultPreviewWidthRatio float64
+	GridLayout              *MetadataFeatureParamsGridLayout
+}
+
+// QueryRefinement describes one query-scoped control such as type filters or
+// sort modes. Options are deliberately simple values because plugins, not core,
+// interpret the selected values when the next query is executed.
+type QueryRefinement struct {
+	Id           string
+	Title        string
+	Type         QueryRefinementType
+	Options      []QueryRefinementOption
+	DefaultValue []string
+	Hotkey       string
+	Persist      bool
+}
+
+type QueryRefinementOption struct {
+	Value    string
+	Title    string
+	Icon     common.WoxImage
+	Keywords []string
+	Count    *int
 }
 
 // RefreshQueryParam contains parameters for refreshing a query
@@ -265,6 +322,16 @@ func (q *QueryResult) ToUI() QueryResultUI {
 	}
 }
 
+func (q *QueryResponse) ToUI() QueryResponseUI {
+	return QueryResponseUI{
+		Results: lo.Map(q.Results, func(result QueryResult, index int) QueryResultUI {
+			return result.ToUI()
+		}),
+		Refinements: q.Refinements,
+		Layout:      q.Layout,
+	}
+}
+
 type QueryResultUI struct {
 	QueryId    string
 	Id         string
@@ -278,6 +345,12 @@ type QueryResultUI struct {
 	Tails      []QueryResultTail
 	Actions    []QueryResultActionUI
 	IsGroup    bool
+}
+
+type QueryResponseUI struct {
+	Results     []QueryResultUI
+	Refinements []QueryRefinement
+	Layout      QueryLayout
 }
 
 // PushResultsPayload is used to push additional results to UI for a query.

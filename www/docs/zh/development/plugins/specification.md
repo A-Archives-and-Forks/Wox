@@ -401,6 +401,7 @@ Wox 按以下顺序查找翻译：
 {
   "Id": "emoji-picker-plugin",
   "Name": "Emoji Picker",
+  "MinWoxVersion": "2.0.4",
   "TriggerKeywords": ["emoji"],
   "Features": [
     {
@@ -417,20 +418,22 @@ Wox 按以下顺序查找翻译：
 ```
 
 ```python
-from wox_plugin import Plugin, Context, Query, Result
+from wox_plugin import Plugin, Context, Query, QueryResponse, Result
 
 class EmojiPlugin(Plugin):
-    async def query(self, ctx: Context, query: Query) -> list[Result]:
+    async def query(self, ctx: Context, query: Query) -> QueryResponse:
         emojis = ["😀", "😃", "😄", "😁", "😅", "😂", "🤣", "😊"]
-        return [
+        return QueryResponse(results=[
             Result(
                 title=emoji,
                 icon=f"emoji:{emoji}",
                 group="笑脸"
             )
             for emoji in emojis
-        ]
+        ])
 ```
+
+直接返回 `list[Result]` 已 deprecated。Python host 仍会为了兼容旧版 Wox 继续接受。只有当 `plugin.json` 声明 `MinWoxVersion` >= `2.0.4` 时，才应返回 `QueryResponse`。
 
 ### 分组项目
 

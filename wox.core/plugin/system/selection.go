@@ -76,19 +76,19 @@ func (i *SelectionPlugin) Init(ctx context.Context, initParams plugin.InitParams
 	i.api = initParams.API
 }
 
-func (i *SelectionPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (i *SelectionPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	if query.Type != plugin.QueryTypeSelection {
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	if query.Selection.Type == selection.SelectionTypeText {
-		return i.queryForSelectionText(ctx, query.Selection.Text)
+		return plugin.NewQueryResponse(i.queryForSelectionText(ctx, query.Selection.Text))
 	}
 	if query.Selection.Type == selection.SelectionTypeFile {
-		return i.queryForSelectionFile(ctx, query, query.Selection.FilePaths)
+		return plugin.NewQueryResponse(i.queryForSelectionFile(ctx, query, query.Selection.FilePaths))
 	}
 
-	return []plugin.QueryResult{}
+	return plugin.QueryResponse{}
 }
 
 func (i *SelectionPlugin) queryForSelectionText(ctx context.Context, text string) []plugin.QueryResult {

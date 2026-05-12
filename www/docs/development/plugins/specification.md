@@ -401,6 +401,7 @@ When using grid layout, each result should have:
 {
   "Id": "emoji-picker-plugin",
   "Name": "Emoji Picker",
+  "MinWoxVersion": "2.0.4",
   "TriggerKeywords": ["emoji"],
   "Features": [
     {
@@ -417,20 +418,22 @@ When using grid layout, each result should have:
 ```
 
 ```python
-from wox_plugin import Plugin, Context, Query, Result
+from wox_plugin import Plugin, Context, Query, QueryResponse, Result
 
 class EmojiPlugin(Plugin):
-    async def query(self, ctx: Context, query: Query) -> list[Result]:
+    async def query(self, ctx: Context, query: Query) -> QueryResponse:
         emojis = ["😀", "😃", "😄", "😁", "😅", "😂", "🤣", "😊"]
-        return [
+        return QueryResponse(results=[
             Result(
                 title=emoji,
                 icon=f"emoji:{emoji}",
                 group="Smileys"
             )
             for emoji in emojis
-        ]
+        ])
 ```
+
+Returning `list[Result]` is deprecated. The Python host still accepts it for compatibility with older Wox releases. Use `QueryResponse` only when `plugin.json` declares `MinWoxVersion` >= `2.0.4`.
 
 ### Grouping Items
 

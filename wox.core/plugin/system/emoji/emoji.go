@@ -168,7 +168,7 @@ func (e *EmojiPlugin) loadEmojis(ctx context.Context) {
 	e.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("Loaded %d emojis", len(e.emojis)))
 }
 
-func (e *EmojiPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (e *EmojiPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	var results []plugin.QueryResult
 	search := strings.ToLower(strings.TrimSpace(query.Search))
 
@@ -227,7 +227,7 @@ func (e *EmojiPlugin) Query(ctx context.Context, query plugin.Query) []plugin.Qu
 
 	e.maybeStartAIMatch(ctx, query, search, existingEmojiSet, &results)
 
-	return results
+	return plugin.NewQueryResponse(results)
 }
 
 func (e *EmojiPlugin) maybeStartAIMatch(ctx context.Context, query plugin.Query, search string, existingEmojiSet map[string]bool, results *[]plugin.QueryResult) {

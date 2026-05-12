@@ -385,7 +385,7 @@ func (s *ShellPlugin) queryHistory(ctx context.Context, interpreter string) []pl
 	return results
 }
 
-func (s *ShellPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (s *ShellPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	// Get the configured interpreter
 	interpreter := s.api.GetSetting(ctx, shellInterpreterSettingKey)
 	if interpreter == "" {
@@ -394,7 +394,7 @@ func (s *ShellPlugin) Query(ctx context.Context, query plugin.Query) []plugin.Qu
 
 	// Handle global query - check for shell commands
 	if query.IsGlobalQuery() {
-		return s.queryCommands(ctx, query, interpreter)
+		return plugin.NewQueryResponse(s.queryCommands(ctx, query, interpreter))
 	}
 
 	// Get the command from the query
@@ -402,7 +402,7 @@ func (s *ShellPlugin) Query(ctx context.Context, query plugin.Query) []plugin.Qu
 
 	// If no command entered, show history
 	if command == "" {
-		return s.queryHistory(ctx, interpreter)
+		return plugin.NewQueryResponse(s.queryHistory(ctx, interpreter))
 	}
 
 	// Create context data
@@ -415,7 +415,7 @@ func (s *ShellPlugin) Query(ctx context.Context, query plugin.Query) []plugin.Qu
 	// Build subtitle with interpreter info
 	subtitle := fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_shell_execute_with"), interpreter, command)
 
-	return []plugin.QueryResult{
+	return plugin.NewQueryResponse([]plugin.QueryResult{
 		{
 			Title:    command,
 			SubTitle: subtitle,
@@ -493,7 +493,7 @@ func (s *ShellPlugin) Query(ctx context.Context, query plugin.Query) []plugin.Qu
 				},
 			},
 		},
-	}
+	})
 }
 
 // loadCommands loads configured shell commands from settings

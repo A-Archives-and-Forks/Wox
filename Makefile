@@ -2,6 +2,24 @@
 
 SMOKE_FILTER := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 SQLITE_BUILD_TAGS ?= sqlite_fts5
+
+# GNU Make on Windows may choose Git's sh.exe without exposing Git usr/bin to
+# recipes or $(shell ...) calls. The root build relies on sed/rm/uname before
+# dependency checks run, so normalize PATH here instead of requiring callers to
+# launch from a preconfigured MINGW64 shell.
+ifeq ($(OS),Windows_NT)
+    GIT_USR_BIN := $(patsubst %/bin/sh.exe,%/usr/bin,$(SHELL))
+    ifneq ($(GIT_USR_BIN),$(SHELL))
+        export PATH := $(GIT_USR_BIN);$(PATH)
+    endif
+endif
+
+# Full builds only need pnpm's CLI, and Corepack honors each package's pinned
+# packageManager version. Prefer Corepack so local installs do not rewrite lock
+# files with a globally installed pnpm version that may be newer than the repo.
+PNPM ?= $(shell if command -v corepack >/dev/null 2>&1; then echo "corepack pnpm"; elif command -v pnpm >/dev/null 2>&1; then echo pnpm; else echo pnpm; fi)
+export PNPM
+
 CURRENT_NODEJS_SDK_VERSION := $(shell node -p "require('./wox.plugin.nodejs/package.json').version")
 CURRENT_PYTHON_SDK_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' wox.plugin.python/pyproject.toml)
 NEXT_NODEJS_SDK_VERSION := $(shell node -e "const parts='$(CURRENT_NODEJS_SDK_VERSION)'.split('.').map(Number); if (parts.length !== 3 || parts.some(Number.isNaN)) process.exit(1); parts[2] += 1; console.log(parts.join('.'))")
@@ -62,7 +80,7 @@ _check_deps:
 	@command -v go >/dev/null 2>&1 || { echo "go is required but not installed. Visit https://golang.org/doc/install" >&2; exit 1; }
 	@command -v flutter >/dev/null 2>&1 || { echo "flutter is required but not installed. Visit https://flutter.dev/docs/get-started/install" >&2; exit 1; }
 	@command -v node >/dev/null 2>&1 || { echo "nodejs is required but not installed. Visit https://nodejs.org/" >&2; exit 1; }
-	@command -v pnpm >/dev/null 2>&1 || { echo "pnpm is required but not installed. Run: npm install -g pnpm" >&2; exit 1; }
+	@$(PNPM) --version >/dev/null 2>&1 || { echo "pnpm is required but unavailable. Install pnpm globally or enable Corepack for this Node.js installation." >&2; exit 1; }
 	@command -v uv >/dev/null 2>&1 || { echo "uv is required but not installed. Visit https://github.com/astral-sh/uv" >&2; exit 1; }
 ifeq ($(PLATFORM),linux)
 	@if ! command -v $(APPIMAGE_TOOL) >/dev/null 2>&1 && [ ! -x "$(APPIMAGE_TOOL)" ]; then \
@@ -112,11 +130,8 @@ _update_sdk_versions:
 	cd wox.plugin.python && perl -0pi -e 's/^version = "[^"]+"/version = "$(NEXT_PYTHON_SDK_VERSION)"/m' pyproject.toml
 
 _sync_sdk_versions:
-	@echo "Syncing Node.js SDK version $(SYNC_NODEJS_SDK_VERSION) to Node.js host"
-	# The sync target receives the parent make's computed release version, preventing recursive make from bumping again after SDK files have already been updated.
-	cd wox.plugin.host.nodejs && node -e "const fs=require('fs'); const p='package.json'; const data=JSON.parse(fs.readFileSync(p,'utf8')); data.dependencies['@wox-launcher/wox-plugin']='^$(SYNC_NODEJS_SDK_VERSION)'; fs.writeFileSync(p, JSON.stringify(data, null, 2) + '\n');"
-	@echo "Syncing Python SDK version $(SYNC_PYTHON_SDK_VERSION) to Python host"
-	cd wox.plugin.host.python && perl -0pi -e 's/"wox-plugin==[^"]+"/"wox-plugin==$(SYNC_PYTHON_SDK_VERSION)"/' pyproject.toml
+	@echo "Hosts use local SDK sources; skip syncing published SDK versions into host dependencies."
+	# Hosts intentionally depend on the in-repo SDK packages so protocol changes are compiled and bundled with the matching host before any SDK release is published.
 
 # Ensure required resource directories exist with dummy files for go:embed
 ensure-resources:

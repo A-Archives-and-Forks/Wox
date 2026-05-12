@@ -392,11 +392,11 @@ func (a *ApplicationPlugin) reuseAppFromCache(ctx context.Context, appPath strin
 	return cached, true
 }
 
-func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	// clean cache and reindex apps
 	if query.Command == appCommandReindex {
 		reindexId := uuid.NewString()
-		return []plugin.QueryResult{
+		return plugin.NewQueryResponse([]plugin.QueryResult{
 			{
 				Id:    reindexId,
 				Title: "i18n:plugin_app_reindex",
@@ -428,7 +428,7 @@ func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plu
 					},
 				},
 			},
-		}
+		})
 	}
 
 	isLaunchpadQuery := query.Command == appCommandLaunchpad
@@ -518,7 +518,7 @@ func (a *ApplicationPlugin) Query(ctx context.Context, query plugin.Query) []plu
 		startedAt:  startedAt,
 	})
 
-	return results
+	return plugin.NewQueryResponse(results)
 }
 
 func (a *ApplicationPlugin) buildAppActions(info appInfo, displayName string, contextData map[string]string) []plugin.QueryResultAction {

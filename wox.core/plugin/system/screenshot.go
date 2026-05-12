@@ -107,13 +107,13 @@ func (p *ScreenshotPlugin) Init(ctx context.Context, initParams plugin.InitParam
 	})
 }
 
-func (p *ScreenshotPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (p *ScreenshotPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	if query.Command == screenshotCommandNew {
-		return []plugin.QueryResult{p.newScreenshotResult()}
+		return plugin.NewQueryResponse([]plugin.QueryResult{p.newScreenshotResult()})
 	}
 
 	if query.Command != "" {
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	// The default screenshot query now lists saved captures instead of starting a capture directly.
@@ -122,23 +122,23 @@ func (p *ScreenshotPlugin) Query(ctx context.Context, query plugin.Query) []plug
 	results, err := p.queryScreenshotHistory(query)
 	if err != nil {
 		p.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to query screenshot history: %s", err.Error()))
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	if len(results) > 0 {
-		return results
+		return plugin.NewQueryResponse(results)
 	}
 	if strings.TrimSpace(query.Search) != "" {
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
-	return []plugin.QueryResult{
+	return plugin.NewQueryResponse([]plugin.QueryResult{
 		{
 			Title:    "i18n:plugin_screenshot_history_empty_title",
 			SubTitle: "i18n:plugin_screenshot_history_empty_subtitle",
 			Icon:     screenshotIcon,
 		},
-	}
+	})
 }
 
 type screenshotHistoryItem struct {

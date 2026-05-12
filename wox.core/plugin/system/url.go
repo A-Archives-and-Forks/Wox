@@ -94,7 +94,8 @@ func (r *UrlPlugin) getReg() *regexp.Regexp {
 	return regexp.MustCompile(`^(http://www\.|https://www\.|http://|https://)?([a-z0-9]+([\-\.][a-z0-9]+)*\.[a-z]{2,5}|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))(:[0-9]{1,5})?(/.*)?$`)
 }
 
-func (r *UrlPlugin) Query(ctx context.Context, query plugin.Query) (results []plugin.QueryResult) {
+func (r *UrlPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
+	var results []plugin.QueryResult
 	if len(query.Search) >= 2 {
 		existingUrlHistory := lo.Filter(r.recentUrls, func(item UrlHistory, index int) bool {
 			return strings.Contains(strings.ToLower(item.Url), strings.ToLower(query.Search))
@@ -178,7 +179,7 @@ func (r *UrlPlugin) Query(ctx context.Context, query plugin.Query) (results []pl
 			},
 		})
 	}
-	return
+	return plugin.NewQueryResponse(results)
 }
 
 func (r *UrlPlugin) saveRecentUrl(ctx context.Context, url string) {

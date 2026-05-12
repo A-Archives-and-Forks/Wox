@@ -81,12 +81,12 @@ func (c *ThemePlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 	c.api = initParams.API
 }
 
-func (c *ThemePlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (c *ThemePlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	if query.Command == "ai" {
-		return c.queryAI(ctx, query)
+		return plugin.NewQueryResponse(c.queryAI(ctx, query))
 	}
 	if query.Command == "restore" {
-		return c.queryRestore(ctx, query)
+		return plugin.NewQueryResponse(c.queryRestore(ctx, query))
 	}
 
 	uiManager := plugin.GetPluginManager().GetUI()
@@ -193,7 +193,7 @@ func (c *ThemePlugin) Query(ctx context.Context, query plugin.Query) []plugin.Qu
 		return plugin.QueryResult{}, false
 	})
 
-	return append(results, storeResults...)
+	return plugin.NewQueryResponse(append(results, storeResults...))
 }
 
 func (c *ThemePlugin) queryAI(ctx context.Context, query plugin.Query) []plugin.QueryResult {

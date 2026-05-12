@@ -284,36 +284,36 @@ func (w *WPMPlugin) parseMetadata(ctx context.Context, directory string) (plugin
 	return metadata, nil
 }
 
-func (w *WPMPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (w *WPMPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	if query.Command == "create" {
-		return w.createCommand(ctx, query)
+		return plugin.NewQueryResponse(w.createCommand(ctx, query))
 	}
 
 	if query.Command == "install" {
-		return w.installCommand(ctx, query)
+		return plugin.NewQueryResponse(w.installCommand(ctx, query))
 	}
 
 	if query.Command == "uninstall" {
-		return w.uninstallCommand(ctx, query)
+		return plugin.NewQueryResponse(w.uninstallCommand(ctx, query))
 	}
 
 	if query.Command == "dev.add" {
-		return w.addDevCommand(ctx, query)
+		return plugin.NewQueryResponse(w.addDevCommand(ctx, query))
 	}
 
 	if query.Command == "dev.remove" {
-		return w.removeDevCommand(ctx, query)
+		return plugin.NewQueryResponse(w.removeDevCommand(ctx, query))
 	}
 
 	if query.Command == "dev.reload" {
-		return w.reloadDevCommand(ctx)
+		return plugin.NewQueryResponse(w.reloadDevCommand(ctx))
 	}
 
 	if query.Command == "dev.list" {
-		return w.listDevCommand(ctx)
+		return plugin.NewQueryResponse(w.listDevCommand(ctx))
 	}
 
-	return []plugin.QueryResult{}
+	return plugin.QueryResponse{}
 }
 
 func (w *WPMPlugin) createCommand(ctx context.Context, query plugin.Query) []plugin.QueryResult {

@@ -276,14 +276,15 @@ func (r *WebSearchPlugin) loadWebSearches(ctx context.Context) (webSearches []we
 	return
 }
 
-func (r *WebSearchPlugin) Query(ctx context.Context, query plugin.Query) (results []plugin.QueryResult) {
+func (r *WebSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
+	var results []plugin.QueryResult
 	if query.Type == plugin.QueryTypeSelection {
-		return r.querySelection(ctx, query)
+		return plugin.NewQueryResponse(r.querySelection(ctx, query))
 	}
 
 	queries := strings.Split(query.RawQuery, " ")
 	if len(queries) <= 1 {
-		return
+		return plugin.NewQueryResponse(results)
 	}
 
 	triggerKeyword := queries[0]
@@ -312,7 +313,7 @@ func (r *WebSearchPlugin) Query(ctx context.Context, query plugin.Query) (result
 		}
 	}
 
-	return
+	return plugin.NewQueryResponse(results)
 }
 
 func (r *WebSearchPlugin) QueryFallback(ctx context.Context, query plugin.Query) (results []plugin.QueryResult) {

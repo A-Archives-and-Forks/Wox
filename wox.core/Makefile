@@ -27,6 +27,17 @@ endif
 
 RELEASE_DIR := ../release
 
+# GNU Make on Windows can detect Git's sh.exe while still leaving Git's
+# usr/bin tools out of PATH. The build uses sed/rm and POSIX env assignments, so
+# add the sibling usr/bin directory when that shell is in use instead of
+# requiring every PowerShell session to configure the same PATH manually.
+ifeq ($(OS),Windows_NT)
+    GIT_USR_BIN := $(patsubst %/bin/sh.exe,%/usr/bin,$(SHELL))
+    ifneq ($(GIT_USR_BIN),$(SHELL))
+        export PATH := $(GIT_USR_BIN);$(PATH)
+    endif
+endif
+
 # Extract version string from updater/version.go
 # Expected format: const CURRENT_VERSION = "x.y.z[-prerelease]"
 VERSION := $(shell sed -n 's/^const CURRENT_VERSION = "\(.*\)"/\1/p' updater/version.go)

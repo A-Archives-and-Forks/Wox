@@ -178,16 +178,16 @@ func (c *Plugin) Init(ctx context.Context, initParams plugin.InitParams) {
 	})
 }
 
-func (c *Plugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (c *Plugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	if query.Type == plugin.QueryTypeSelection {
-		return c.querySelection(ctx, query)
+		return plugin.NewQueryResponse(c.querySelection(ctx, query))
 	}
 
 	if query.Command == "" {
-		return c.listAllCommands(ctx, query)
+		return plugin.NewQueryResponse(c.listAllCommands(ctx, query))
 	}
 
-	return c.queryCommand(ctx, query)
+	return plugin.NewQueryResponse(c.queryCommand(ctx, query))
 }
 
 func (c *Plugin) buildAIStreamPreview(ctx context.Context, streamResult common.ChatStreamData, modelLabel string) plugin.WoxPreview {

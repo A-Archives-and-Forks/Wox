@@ -64,7 +64,7 @@ func (p *UpdatePlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 	p.api = initParams.API
 }
 
-func (p *UpdatePlugin) Query(ctx context.Context, query plugin.Query) (results []plugin.QueryResult) {
+func (p *UpdatePlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	info := updater.GetUpdateInfo()
 	autoUpdateEnabled := true
 	if woxSetting := setting.GetSettingManager().GetWoxSetting(ctx); woxSetting != nil {
@@ -78,6 +78,9 @@ func (p *UpdatePlugin) Query(ctx context.Context, query plugin.Query) (results [
 		ScrollPosition:    "",
 	}
 
+	// The update plugin renders one preview row. Keeping it as a local result
+	// avoids the stale slice variable left by the QueryResponse migration while
+	// still returning through NewQueryResponse for the shared plugin contract.
 	result := plugin.QueryResult{
 		Title:   "", // we don't need title in update plugin
 		Icon:    updateIcon,
@@ -85,7 +88,7 @@ func (p *UpdatePlugin) Query(ctx context.Context, query plugin.Query) (results [
 		Actions: p.buildActions(ctx, info, autoUpdateEnabled),
 	}
 
-	return []plugin.QueryResult{result}
+	return plugin.NewQueryResponse([]plugin.QueryResult{result})
 }
 
 func (p *UpdatePlugin) buildPreviewData(info updater.UpdateInfo, autoUpdateEnabled bool) string {

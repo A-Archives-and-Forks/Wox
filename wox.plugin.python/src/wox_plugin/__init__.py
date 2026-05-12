@@ -12,10 +12,13 @@ and actions.
 
 To create a plugin, implement the `Plugin` protocol:
 
+The example below returns `QueryResponse`, so its `plugin.json` should declare
+`MinWoxVersion` >= `2.0.4`. Return `List[Result]` directly when supporting older
+Wox releases.
+
 ```python
-from wox_plugin import Plugin, PluginInitParams, Context, Query, Result
+from wox_plugin import Plugin, PluginInitParams, Context, Query, QueryResponse, Result
 from wox_plugin import WoxImage, QueryType, LogLevel
-from typing import List
 
 class MyPlugin:
     async def init(self, ctx: Context, params: PluginInitParams) -> None:
@@ -25,7 +28,7 @@ class MyPlugin:
         # Log initialization
         await self.api.log(ctx, LogLevel.INFO, "MyPlugin initialized")
 
-    async def query(self, ctx: Context, query: Query) -> List[Result]:
+    async def query(self, ctx: Context, query: Query) -> QueryResponse:
         # Return results based on query
         results = []
 
@@ -38,7 +41,7 @@ class MyPlugin:
                     score=100
                 ))
 
-        return results
+        return QueryResponse(results=results)
 ```
 
 ## Key Components
@@ -85,6 +88,7 @@ Methods for interacting with Wox:
 - `FormActionContext`: Context for form submissions
 - `ResultTail`: Additional visual elements (text or image)
 - `UpdatableResult`: Result that can be updated in UI
+- `QueryResponse`: Structured query response with results, refinements, and layout hints (requires Wox >= 2.0.4)
 
 #### Image Models (`models/image.py`)
 - `WoxImage`: Image model with multiple types
@@ -161,8 +165,13 @@ Plugins must declare metadata in a `plugin.json` file:
    - `query.trigger_keyword = "my"`
    - `query.command = ""`
    - `query.search = "query"`
-3. Plugin returns `List[Result]`
+3. Plugin returns `QueryResponse` when `MinWoxVersion` is at least `2.0.4`
 4. Wox displays results sorted by score
+
+Returning `List[Result]` directly is deprecated. The Python host still accepts it
+for compatibility with older Wox releases. Use `QueryResponse` only when
+`plugin.json` declares `MinWoxVersion` >= `2.0.4` so results, refinements, and
+layout hints are carried together.
 
 ## Actions
 
@@ -230,6 +239,14 @@ from .models.query import (
     Selection,
     SelectionType,
 )
+from .models.query_response import (
+    QueryGridLayout,
+    QueryLayout,
+    QueryRefinement,
+    QueryRefinementOption,
+    QueryRefinementType,
+    QueryResponse,
+)
 from .models.result import (
     ActionContext,
     FormActionContext,
@@ -260,12 +277,13 @@ from .models.toolbar_msg import (
     ToolbarMsgAction,
     ToolbarMsgActionContext,
 )
-from .plugin import Plugin, PluginInitParams
+from .plugin import Plugin, PluginInitParams, QueryReturn
 
 __all__: List[str] = [
     # Plugin
     "Plugin",
     "PluginInitParams",
+    "QueryReturn",
     # API
     "PublicAPI",
     "ChatStreamCallback",
@@ -274,6 +292,12 @@ __all__: List[str] = [
     # Models
     "Context",
     "Query",
+    "QueryResponse",
+    "QueryRefinement",
+    "QueryRefinementOption",
+    "QueryRefinementType",
+    "QueryLayout",
+    "QueryGridLayout",
     "QueryEnv",
     "Selection",
     "Result",

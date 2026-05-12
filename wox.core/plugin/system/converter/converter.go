@@ -344,15 +344,15 @@ func isBaseNumberUnit(unit core.Unit) bool {
 	}
 }
 
-func (c *Converter) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (c *Converter) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	if query.Search == "" {
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	tokens, err := c.tokenizer.Tokenize(ctx, query.Search)
 	if err != nil {
 		// c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("Tokenize error: %v", err))
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("Tokens: %s", strings.Join(lo.Map(tokens, func(t core.Token, _ int) string { return t.String() }), ", ")))
@@ -362,12 +362,12 @@ func (c *Converter) Query(ctx context.Context, query plugin.Query) []plugin.Quer
 	if err != nil {
 		c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("Parse expression error: %v", err))
 		// For invalid expressions, return a search suggestion
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	if len(results) == 0 {
 		c.api.Log(ctx, plugin.LogLevelDebug, "No values parsed from expression")
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("Expression parsed: values=%s, operators=%s, targetUnit=%s", strings.Join(lo.Map(results, func(v core.Result, _ int) string { return v.DisplayValue }), ", "), strings.Join(operators, ", "), targetUnit.Name))
@@ -376,12 +376,12 @@ func (c *Converter) Query(ctx context.Context, query plugin.Query) []plugin.Quer
 	result, err := c.calculateExpression(ctx, results, operators, targetUnit)
 	if err != nil {
 		c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("Calculation  expression error: %v", err))
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	} else {
 		c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("Calculation result: displayValue=%s, rawValue=%s, unit=%s", result.DisplayValue, result.RawValue.String(), result.Unit.Name))
 	}
 
-	return []plugin.QueryResult{
+	return plugin.NewQueryResponse([]plugin.QueryResult{
 		{
 			Title: result.DisplayValue,
 			Icon:  common.PluginConverterIcon,
@@ -396,7 +396,7 @@ func (c *Converter) Query(ctx context.Context, query plugin.Query) []plugin.Quer
 				},
 			},
 		},
-	}
+	})
 }
 
 func (c *Converter) buildCurrencyRateTails(ctx context.Context, result core.Result) []plugin.QueryResultTail {
@@ -461,12 +461,15 @@ func (c *Converter) handleMRURestore(ctx context.Context, mruData plugin.MRUData
 		return nil, fmt.Errorf("empty converter query in context data")
 	}
 
-	// Recalculate using the original query
-	results := c.Query(context.Background(), plugin.Query{
+	// Query now returns a QueryResponse so query-scoped metadata can travel with
+	// results. MRU restore only needs the first restored row, so unwrap Results
+	// here instead of treating the response object like the old result slice.
+	response := c.Query(context.Background(), plugin.Query{
 		Type:     plugin.QueryTypeInput,
 		RawQuery: query,
 		Search:   query,
 	})
+	results := response.Results
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no result for query: %s", query)
 	}

@@ -60,15 +60,15 @@ func (i *PluginInstallerPlugin) Init(ctx context.Context, initParams plugin.Init
 	i.api = initParams.API
 }
 
-func (i *PluginInstallerPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (i *PluginInstallerPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	if query.Type == plugin.QueryTypeSelection &&
 		query.Selection.Type == selection.SelectionTypeFile &&
 		len(query.Selection.FilePaths) == 1 &&
 		strings.HasSuffix(query.Selection.FilePaths[0], ".wox") {
-		return i.queryForSelectionFile(ctx, query.Selection.FilePaths[0])
+		return plugin.NewQueryResponse(i.queryForSelectionFile(ctx, query.Selection.FilePaths[0]))
 	}
 
-	return []plugin.QueryResult{}
+	return plugin.QueryResponse{}
 }
 
 func (i *PluginInstallerPlugin) queryForSelectionFile(ctx context.Context, filePath string) []plugin.QueryResult {

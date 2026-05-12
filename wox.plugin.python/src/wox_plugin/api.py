@@ -81,10 +81,12 @@ class PublicAPI(Protocol):
                 await self.api.on_setting_changed(ctx, self._on_setting_changed)
                 await self.api.on_unload(ctx, self._on_unload)
 
-            async def query(self, ctx: Context, query: Query) -> List[Result]:
+            async def query(self, ctx: Context, query: Query) -> QueryResponse:
+                # QueryResponse requires Wox >= 2.0.4. Return List[Result]
+                # instead when supporting older Wox releases.
                 # Use API methods
                 await self.api.log(ctx, LogLevel.INFO, "Processing query")
-                return results
+                return QueryResponse(results=results)
     """
 
     async def change_query(self, ctx: Context, query: ChangeQueryParam) -> None:
@@ -613,11 +615,13 @@ class PublicAPI(Protocol):
             bool: True if accepted, False if query changed
 
         Example:
-            async def query_with_streaming(ctx: Context, query: Query) -> List[Result]:
+            async def query_with_streaming(ctx: Context, query: Query) -> QueryResponse:
+                # QueryResponse requires Wox >= 2.0.4. Return List[Result]
+                # instead when supporting older Wox releases.
                 # Return initial results immediately
                 initial_results = await get_quick_results(query)
                 asyncio.create_task(fetch_more_results(ctx, query))
-                return initial_results
+                return QueryResponse(results=initial_results)
 
             async def fetch_more_results(ctx: Context, query: Query):
                 # Fetch and push results as they arrive

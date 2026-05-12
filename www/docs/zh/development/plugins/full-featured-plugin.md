@@ -31,10 +31,13 @@ SDK 安装命令：
 
 ## 最小示例
 
+这些示例返回 `QueryResponse`，因此插件的 `plugin.json` 必须将
+`MinWoxVersion` 设置为 `2.0.4` 或更高版本。如果同一个插件构建还要运行在旧版 Wox 上，请直接返回 `list[Result]` 或 `Result[]`。
+
 ### Python
 
 ```python
-from wox_plugin import Plugin, Query, Result, Context, PluginInitParams
+from wox_plugin import Plugin, Query, QueryResponse, Result, Context, PluginInitParams
 from wox_plugin.models.image import WoxImage
 
 class MyPlugin(Plugin):
@@ -42,15 +45,15 @@ class MyPlugin(Plugin):
         self.api = params.api
         self.plugin_dir = params.plugin_directory
 
-    async def query(self, ctx: Context, query: Query) -> list[Result]:
-        return [
+    async def query(self, ctx: Context, query: Query) -> QueryResponse:
+        return QueryResponse(results=[
             Result(
                 title="Hello Wox",
                 sub_title="示例结果",
                 icon=WoxImage.new_emoji("👋"),
                 score=100,
             )
-        ]
+        ])
 
 plugin = MyPlugin()
 ```
@@ -58,7 +61,7 @@ plugin = MyPlugin()
 ### Node.js
 
 ```typescript
-import { Plugin, Query, Result, Context, PluginInitParams } from "@wox-launcher/wox-plugin"
+import { Plugin, Query, QueryResponse, Context, PluginInitParams } from "@wox-launcher/wox-plugin"
 
 class MyPlugin implements Plugin {
   private api!: PluginInitParams["API"]
@@ -69,20 +72,24 @@ class MyPlugin implements Plugin {
     this.pluginDir = params.PluginDirectory
   }
 
-  async query(ctx: Context, query: Query): Promise<Result[]> {
-    return [
-      {
-        Title: "Hello Wox",
-        SubTitle: "示例结果",
-        Icon: { ImageType: "emoji", ImageData: "👋" },
-        Score: 100,
-      },
-    ]
+  async query(ctx: Context, query: Query): Promise<QueryResponse> {
+    return {
+      Results: [
+        {
+          Title: "Hello Wox",
+          SubTitle: "示例结果",
+          Icon: { ImageType: "emoji", ImageData: "👋" },
+          Score: 100,
+        },
+      ],
+    }
   }
 }
 
 export const plugin = new MyPlugin()
 ```
+
+直接返回 `list[Result]` 或 `Result[]` 已 deprecated。Python 和 Node.js host 仍会为了兼容旧版 Wox 继续接受旧写法。只有当 `plugin.json` 声明 `MinWoxVersion` >= `2.0.4` 时，才应返回 `QueryResponse`。
 
 ## `plugin.json` 关键点
 
@@ -100,7 +107,7 @@ export const plugin = new MyPlugin()
   "Description": "Do awesome things",
   "Author": "You",
   "Version": "1.0.0",
-  "MinWoxVersion": "2.0.0",
+  "MinWoxVersion": "2.0.4",
   "Runtime": "NODEJS",
   "Entry": "dist/index.js",
   "TriggerKeywords": ["awesome", "ap"],

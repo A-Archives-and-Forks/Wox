@@ -935,19 +935,19 @@ func (m *Manager) canOperateQuery(ctx context.Context, pluginInstance *Instance,
 	return true
 }
 
-func (m *Manager) queryForPlugin(ctx context.Context, pluginInstance *Instance, query Query) (results []QueryResult) {
+func (m *Manager) queryForPlugin(ctx context.Context, pluginInstance *Instance, query Query) (response QueryResponse) {
 	defer util.GoRecover(ctx, fmt.Sprintf("<%s> query panic", pluginInstance.GetName(ctx)), func(err error) {
 		// if plugin query panic, return error result
 		failedResult := m.GetResultForFailedQuery(ctx, pluginInstance.Metadata, query, err)
-		results = []QueryResult{
+		response.Results = []QueryResult{
 			m.PolishResult(ctx, pluginInstance, query, failedResult),
 		}
 	})
 
 	// if plugin query requirement not met, return requirement result without calling plugin.Query
 	if requirementResult, blocked := m.buildQueryRequirementSettingsResult(ctx, pluginInstance, query); blocked {
-		return []QueryResult{
-			m.PolishResult(ctx, pluginInstance, query, requirementResult),
+		return QueryResponse{
+			Results: []QueryResult{m.PolishResult(ctx, pluginInstance, query, requirementResult)},
 		}
 	}
 
@@ -981,32 +981,32 @@ func (m *Manager) queryForPlugin(ctx context.Context, pluginInstance *Instance, 
 	}
 	query.Env = newEnv
 
-	results = pluginInstance.Plugin.Query(ctx, query)
+	response = pluginInstance.Plugin.Query(ctx, query)
 	pluginQueryCost := util.GetSystemTimestamp() - start
 
 	// Keep the plugin latency EWMA scoped to Plugin.Query itself.
 	// Manager-side polishing is shared overhead layered on top of plugin execution.
 	m.updatePluginQueryLatency(pluginInstance.Metadata.Id, float64(pluginQueryCost))
 
-	for i := range results {
-		defaultActions := m.getDefaultActions(ctx, pluginInstance, query, results[i].Title, results[i].SubTitle)
-		results[i].Actions = append(results[i].Actions, defaultActions...)
-		results[i] = m.PolishResult(ctx, pluginInstance, query, results[i])
+	for i := range response.Results {
+		defaultActions := m.getDefaultActions(ctx, pluginInstance, query, response.Results[i].Title, response.Results[i].SubTitle)
+		response.Results[i].Actions = append(response.Results[i].Actions, defaultActions...)
+		response.Results[i] = m.PolishResult(ctx, pluginInstance, query, response.Results[i])
 	}
 
 	if query.Type == QueryTypeSelection && query.Search != "" {
-		results = lo.Filter(results, func(item QueryResult, _ int) bool {
+		response.Results = lo.Filter(response.Results, func(item QueryResult, _ int) bool {
 			return IsStringMatch(ctx, item.Title, query.Search)
 		})
 	}
 
 	if pluginQueryCost >= 10 {
-		logger.Debug(ctx, fmt.Sprintf("<%s> finish query, result count: %d, cost: %dms, query is slow", pluginInstance.GetName(ctx), len(results), pluginQueryCost))
+		logger.Debug(ctx, fmt.Sprintf("<%s> finish query, result count: %d, cost: %dms, query is slow", pluginInstance.GetName(ctx), len(response.Results), pluginQueryCost))
 	} else {
-		logger.Debug(ctx, fmt.Sprintf("<%s> finish query, result count: %d, cost: %dms", pluginInstance.GetName(ctx), len(results), pluginQueryCost))
+		logger.Debug(ctx, fmt.Sprintf("<%s> finish query, result count: %d, cost: %dms", pluginInstance.GetName(ctx), len(response.Results), pluginQueryCost))
 	}
 
-	return results
+	return response
 }
 
 func (m *Manager) GetResultForFailedQuery(ctx context.Context, pluginMetadata Metadata, query Query, err error) QueryResult {
@@ -2068,8 +2068,8 @@ func (m *Manager) GetUpdatableResult(ctx context.Context, resultId string) *Upda
 	}
 }
 
-func (m *Manager) Query(ctx context.Context, query Query) (resultsChan chan []QueryResultUI, fallbackReadyChan chan bool, doneChan chan bool) {
-	resultsChan = make(chan []QueryResultUI, 10)
+func (m *Manager) Query(ctx context.Context, query Query) (resultsChan chan QueryResponseUI, fallbackReadyChan chan bool, doneChan chan bool) {
+	resultsChan = make(chan QueryResponseUI, 10)
 	fallbackReadyChan = make(chan bool, 1)
 	doneChan = make(chan bool, 1)
 
@@ -2132,7 +2132,7 @@ func (m *Manager) QuerySilent(ctx context.Context, query Query) bool {
 	for {
 		select {
 		case r := <-resultChan:
-			results = append(results, r...)
+			results = append(results, r.Results...)
 		case <-doneChan:
 			logger.Info(ctx, fmt.Sprintf("silent query done, total results: %d, cost %d ms", len(results), util.GetSystemTimestamp()-startTimestamp))
 
@@ -2165,7 +2165,7 @@ func (m *Manager) QuerySilent(ctx context.Context, query Query) bool {
 	}
 }
 
-func (m *Manager) QueryFallback(ctx context.Context, query Query, queryPlugin *Instance) (results []QueryResultUI) {
+func (m *Manager) QueryFallback(ctx context.Context, query Query, queryPlugin *Instance) (response QueryResponseUI) {
 	var queryResults []QueryResult
 	if query.IsGlobalQuery() {
 		for _, pluginInstance := range m.instances {
@@ -2180,7 +2180,7 @@ func (m *Manager) QueryFallback(ctx context.Context, query Query, queryPlugin *I
 		}
 	} else {
 		if query.Command != "" {
-			return results
+			return response
 		}
 
 		// search query commands
@@ -2214,8 +2214,8 @@ func (m *Manager) QueryFallback(ctx context.Context, query Query, queryPlugin *I
 	queryResultsUI := lo.Map(queryResults, func(item QueryResult, index int) QueryResultUI {
 		return item.ToUI()
 	})
-	results = append(results, queryResultsUI...)
-	return results
+	response.Results = append(response.Results, queryResultsUI...)
+	return response
 }
 
 func newQueryTracker(fallbackReady chan bool, done chan bool) *queryTracker {
@@ -2255,12 +2255,13 @@ func (t *queryTracker) notifyIfEmpty() {
 	}
 }
 
-func (m *Manager) queryParallel(ctx context.Context, pluginInstance *Instance, query Query, results chan []QueryResultUI, tracker *queryTracker, blocksFallback bool) {
+func (m *Manager) queryParallel(ctx context.Context, pluginInstance *Instance, query Query, results chan QueryResponseUI, tracker *queryTracker, blocksFallback bool) {
 	util.Go(ctx, fmt.Sprintf("[%s] parallel query", pluginInstance.GetName(ctx)), func() {
-		queryResults := m.queryForPlugin(ctx, pluginInstance, query)
-		results <- lo.Map(queryResults, func(item QueryResult, index int) QueryResultUI {
-			return item.ToUI()
-		})
+		// QueryResponse keeps result rows and query-scoped UI metadata together.
+		// Sending one normalized response through the query pipeline prevents the
+		// UI from applying refinements or layout from a different query execution.
+		queryResponse := m.queryForPlugin(ctx, pluginInstance, query)
+		results <- queryResponse.ToUI()
 		tracker.finish(blocksFallback)
 	}, func() {
 		tracker.finish(blocksFallback)
@@ -2326,6 +2327,13 @@ func (m *Manager) GetQueryFirstFlushDelayMs(query Query) int64 {
 }
 
 func (m *Manager) NewQuery(ctx context.Context, plainQuery common.PlainQuery) (Query, *Instance, error) {
+	refinements := plainQuery.QueryRefinements
+	if refinements == nil {
+		// Query refinements are optional in older UI requests. Normalize nil to
+		// an empty map so external hosts always receive an object, not JSON null.
+		refinements = map[string][]string{}
+	}
+
 	if plainQuery.QueryType == QueryTypeInput {
 		newQuery := plainQuery.QueryText
 		woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
@@ -2340,6 +2348,7 @@ func (m *Manager) NewQuery(ctx context.Context, plainQuery common.PlainQuery) (Q
 		query, instance := newQueryInputWithPlugins(newQuery, GetPluginManager().GetPluginInstances())
 		query.Id = plainQuery.QueryId
 		query.SessionId = util.GetContextSessionId(ctx)
+		query.Refinements = refinements
 		activeWindowSnapshot := m.GetUI().GetActiveWindowSnapshot(ctx)
 		query.Env.ActiveWindowTitle = activeWindowSnapshot.Name
 		query.Env.ActiveWindowPid = activeWindowSnapshot.Pid
@@ -2361,6 +2370,7 @@ func (m *Manager) NewQuery(ctx context.Context, plainQuery common.PlainQuery) (Q
 			Command:        parsed.Command,
 			Search:         parsed.Search,
 			Selection:      plainQuery.QuerySelection,
+			Refinements:    refinements,
 		}
 		query.SessionId = util.GetContextSessionId(ctx)
 		activeWindowSnapshot := m.GetUI().GetActiveWindowSnapshot(ctx)

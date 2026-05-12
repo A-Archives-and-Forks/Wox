@@ -31,10 +31,14 @@ If you use Codex, see [AI Skills For Plugin Development](./ai-skills.md).
 
 ## Minimal examples
 
+These examples return `QueryResponse`, so the plugin's `plugin.json` must set
+`MinWoxVersion` to `2.0.4` or newer. Return `list[Result]` or `Result[]`
+directly if the same plugin build must run on older Wox releases.
+
 ### Python
 
 ```python
-from wox_plugin import Plugin, Query, Result, Context, PluginInitParams
+from wox_plugin import Plugin, Query, QueryResponse, Result, Context, PluginInitParams
 from wox_plugin.models.image import WoxImage
 
 class MyPlugin(Plugin):
@@ -42,15 +46,15 @@ class MyPlugin(Plugin):
         self.api = params.api
         self.plugin_dir = params.plugin_directory
 
-    async def query(self, ctx: Context, query: Query) -> list[Result]:
-        return [
+    async def query(self, ctx: Context, query: Query) -> QueryResponse:
+        return QueryResponse(results=[
             Result(
                 title="Hello Wox",
                 sub_title="This is a sample result",
                 icon=WoxImage.new_emoji("👋"),
                 score=100,
             )
-        ]
+        ])
 
 plugin = MyPlugin()
 ```
@@ -58,7 +62,7 @@ plugin = MyPlugin()
 ### Node.js
 
 ```typescript
-import { Plugin, Query, Result, Context, PluginInitParams } from "@wox-launcher/wox-plugin"
+import { Plugin, Query, QueryResponse, Context, PluginInitParams } from "@wox-launcher/wox-plugin"
 
 class MyPlugin implements Plugin {
   private api!: PluginInitParams["API"]
@@ -69,20 +73,24 @@ class MyPlugin implements Plugin {
     this.pluginDir = params.PluginDirectory
   }
 
-  async query(ctx: Context, query: Query): Promise<Result[]> {
-    return [
-      {
-        Title: "Hello Wox",
-        SubTitle: "This is a sample result",
-        Icon: { ImageType: "emoji", ImageData: "👋" },
-        Score: 100,
-      },
-    ]
+  async query(ctx: Context, query: Query): Promise<QueryResponse> {
+    return {
+      Results: [
+        {
+          Title: "Hello Wox",
+          SubTitle: "This is a sample result",
+          Icon: { ImageType: "emoji", ImageData: "👋" },
+          Score: 100,
+        },
+      ],
+    }
   }
 }
 
 export const plugin = new MyPlugin()
 ```
+
+Returning `list[Result]` or `Result[]` directly is deprecated. Python and Node.js hosts still accept the old shape for compatibility with older Wox releases. Use `QueryResponse` only when `plugin.json` declares `MinWoxVersion` >= `2.0.4`.
 
 ## `plugin.json` essentials
 
@@ -100,7 +108,7 @@ Example:
   "Description": "Do awesome things",
   "Author": "You",
   "Version": "1.0.0",
-  "MinWoxVersion": "2.0.0",
+  "MinWoxVersion": "2.0.4",
   "Runtime": "NODEJS",
   "Entry": "dist/index.js",
   "TriggerKeywords": ["awesome", "ap"],

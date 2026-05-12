@@ -158,17 +158,17 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 	})
 }
 
-func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	queryStartedAt := util.GetSystemTimestamp()
 	diagnostics := fileSearchQueryDiagnostics{}
 
 	// if query is empty, return empty result
 	if query.Search == "" {
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	if c.engine == nil {
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	searchStartedAt := util.GetSystemTimestamp()
@@ -178,7 +178,7 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plug
 		c.logQueryDiagnostics(ctx, query.Search, diagnostics, 0, util.GetSystemTimestamp()-queryStartedAt)
 		c.api.Log(ctx, plugin.LogLevelError, err.Error())
 		c.api.Notify(ctx, err.Error())
-		return []plugin.QueryResult{}
+		return plugin.QueryResponse{}
 	}
 
 	// Split result-materialization timing out from engine search timing because the
@@ -246,7 +246,7 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) []plug
 	diagnostics.buildElapsedMs = util.GetSystemTimestamp() - buildStartedAt
 	c.logQueryDiagnostics(ctx, query.Search, diagnostics, len(queryResults), util.GetSystemTimestamp()-queryStartedAt)
 
-	return queryResults
+	return plugin.NewQueryResponse(queryResults)
 }
 
 func resolveFileSearchResultIcon(ctx context.Context, result filesearch.SearchResult, fileTypeIcons map[string]common.WoxImage, diagnostics *fileSearchQueryDiagnostics) common.WoxImage {

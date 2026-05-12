@@ -358,12 +358,12 @@ func (c *ClipboardPlugin) processClipboardData(ctx context.Context, data clipboa
 	c.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("saved clipboard %s to database", data.GetType()))
 }
 
-func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	var results []plugin.QueryResult
 
 	if c.db == nil {
 		c.api.Log(ctx, plugin.LogLevelError, "database not initialized")
-		return results
+		return plugin.NewQueryResponse(results)
 	}
 
 	if query.Command == "fav" {
@@ -371,14 +371,14 @@ func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) []plugi
 		favorites, err := c.getFavoriteItems(ctx)
 		if err != nil {
 			c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to get favorites: %s", err.Error()))
-			return results
+			return plugin.NewQueryResponse(results)
 		}
 
 		for _, favoriteItem := range favorites {
 			record := c.convertFavoriteToRecord(favoriteItem)
 			results = append(results, c.convertRecordToResult(ctx, record, query))
 		}
-		return results
+		return plugin.NewQueryResponse(results)
 	}
 
 	if query.Search == "" {
@@ -404,7 +404,7 @@ func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) []plugi
 			}
 		}
 
-		return results
+		return plugin.NewQueryResponse(results)
 	}
 
 	// Search in text content
@@ -434,7 +434,7 @@ func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) []plugi
 		results = append(results, c.convertRecordToResult(ctx, record, query))
 	}
 
-	return results
+	return plugin.NewQueryResponse(results)
 }
 
 // isDuplicateContent checks if the content is duplicate by comparing with the most recent record

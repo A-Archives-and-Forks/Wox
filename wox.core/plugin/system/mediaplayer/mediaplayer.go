@@ -75,14 +75,14 @@ func (m *MediaPlayerPlugin) Init(ctx context.Context, initParams plugin.InitPara
 	})
 }
 
-func (m *MediaPlayerPlugin) Query(ctx context.Context, query plugin.Query) []plugin.QueryResult {
+func (m *MediaPlayerPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	var results []plugin.QueryResult
 
 	// Get current media information
 	mediaInfo, err := m.retriever.GetCurrentMedia(ctx)
 	if err != nil {
 		m.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("Failed to get media info: %s", err.Error()))
-		return results
+		return plugin.NewQueryResponse(results)
 	}
 
 	// No media playing
@@ -92,7 +92,7 @@ func (m *MediaPlayerPlugin) Query(ctx context.Context, query plugin.Query) []plu
 			Icon:  mediaIcon,
 		}
 		results = append(results, result)
-		return results
+		return plugin.NewQueryResponse(results)
 	}
 
 	result := plugin.QueryResult{
@@ -119,7 +119,7 @@ func (m *MediaPlayerPlugin) Query(ctx context.Context, query plugin.Query) []plu
 
 	results = append(results, result)
 
-	return results
+	return plugin.NewQueryResponse(results)
 }
 
 func (m *MediaPlayerPlugin) formatProgress(mediaInfo *MediaInfo) string {

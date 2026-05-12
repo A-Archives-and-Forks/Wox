@@ -501,13 +501,13 @@ func runQueryWithSession(ctx context.Context, sessionID string, rawQuery string)
 collect:
 	for {
 		select {
-		case results := <-resultChan:
-			allResults = append(allResults, results...)
+		case response := <-resultChan:
+			allResults = append(allResults, response.Results...)
 		case <-doneChan:
 			for {
 				select {
-				case results := <-resultChan:
-					allResults = append(allResults, results...)
+				case response := <-resultChan:
+					allResults = append(allResults, response.Results...)
 				default:
 					break collect
 				}
