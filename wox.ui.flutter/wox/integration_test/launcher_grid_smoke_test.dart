@@ -49,15 +49,13 @@ void registerLauncherGridSmokeTests() {
       final controller = await launchAndShowLauncher(tester, windowSize: smokeLargeWindowSize);
       const traceId = 'grid-smoke-aspect-ratio';
       const queryId = 'grid-smoke-aspect-ratio-query';
-      final query = PlainQuery(queryId: queryId, queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code, queryText: 'grid smoke', querySelection: Selection.empty());
+      final query = PlainQuery(queryId: queryId, queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code, queryText: 'emoji smoke', querySelection: Selection.empty());
       final params = GridLayoutParams(columns: 4, showTitle: false, itemPadding: 0, itemMargin: 6, aspectRatio: 16 / 9, commands: const []);
 
       controller.currentQuery.value = query;
-      await controller.updateGridLayoutParamsOnQueryChanged(
-        traceId,
-        query,
-        QueryMetadata(icon: WoxImage.empty(), resultPreviewWidthRatio: 0.5, isGridLayout: true, gridLayoutParams: params),
-      );
+      controller.backendQueryContext = QueryContext(isGlobalQuery: false, pluginId: 'grid-smoke');
+      controller.backendQueryContextQueryId = query.queryId;
+      controller.applyQueryLayoutForQuery(traceId, query, QueryLayout(icon: WoxImage.empty(), resultPreviewWidthRatio: 0.5, isGridLayout: true, gridLayoutParams: params));
       await controller.onReceivedQueryResults(traceId, queryId, _buildSyntheticMediaResults(queryId, 4), isFinal: true);
       await pumpUntil(tester, () => find.byType(WoxGridView).evaluate().isNotEmpty, timeout: const Duration(seconds: 10));
       await tester.pump(const Duration(milliseconds: 300));
@@ -87,6 +85,73 @@ void registerLauncherGridSmokeTests() {
       // jump.
       expect(imagesAfterSelectionMove.map((image) => image.width).toList(), equals(widthsBeforeSelectionMove));
       expect(imagesAfterSelectionMove.map((image) => image.height).toList(), equals(heightsBeforeSelectionMove));
+
+      controller.applyQueryLayoutForQuery(
+        traceId,
+        query,
+        QueryLayout(icon: WoxImage.empty(), resultPreviewWidthRatio: 0.0, isGridLayout: false, gridLayoutParams: GridLayoutParams.empty()),
+      );
+
+      // Regression coverage: QueryResponse layout must preserve an explicit
+      // zero preview ratio. Zero means "preview takes the whole result area",
+      // so treating it as an unset fallback would keep the old 0.5 split view.
+      expect(controller.preferredResultPreviewRatio, equals(0.0));
+
+      final pluginIcon = WoxImage(imageType: WoxImageTypeEnum.WOX_IMAGE_TYPE_BASE64.code, imageData: _onePixelPngBase64);
+      controller.applyQueryLayoutForQuery(traceId, query, QueryLayout(icon: pluginIcon, resultPreviewWidthRatio: 0.5, isGridLayout: true, gridLayoutParams: params));
+      controller.prepareQueryLayoutOnQueryChanged(
+        traceId,
+        PlainQuery(
+          queryId: 'grid-smoke-next-plugin-query',
+          queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code,
+          queryText: 'emoji smoke next',
+          querySelection: Selection.empty(),
+        ),
+      );
+
+      // Regression coverage: plugin-shaped queries keep the current plugin icon
+      // until QueryResponse carries the next layout, avoiding a clear-then-set
+      // flicker that the old async metadata request path did not have.
+      expect(controller.queryIcon.value.icon.imageData, equals(pluginIcon.imageData));
+
+      final newerPluginQuery = PlainQuery(
+        queryId: 'grid-smoke-newer-plugin-query',
+        queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code,
+        queryText: 'emoji smoke newer',
+        querySelection: Selection.empty(),
+      );
+      controller.currentQuery.value = newerPluginQuery;
+      expect(controller.applyQueryContextForQueryId(traceId, 'grid-smoke-old-global-query', QueryContext(isGlobalQuery: true, pluginId: '')), isFalse);
+
+      // Bug coverage: QueryContext responses are asynchronous just like result
+      // batches. A stale backend classification must not overwrite the current
+      // query's accessory state.
+      expect(controller.queryIcon.value.icon.imageData, equals(pluginIcon.imageData));
+
+      final backendGlobalQuery = PlainQuery(
+        queryId: 'grid-smoke-backend-global-query',
+        queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code,
+        queryText: 'ui ilwidlksiek',
+        querySelection: Selection.empty(),
+      );
+      controller.currentQuery.value = backendGlobalQuery;
+      expect(controller.applyQueryContextForQueryId(traceId, backendGlobalQuery.queryId, QueryContext(isGlobalQuery: true, pluginId: '')), isTrue);
+
+      // Regression coverage: backend QueryContext owns the final global/plugin
+      // classification. A global query that contains spaces must clear stale
+      // plugin chrome so Glance can occupy the query-box accessory again.
+      expect(controller.isGlobalInputQuery(backendGlobalQuery), isTrue);
+      expect(controller.queryIcon.value.icon.imageData, isEmpty);
+
+      controller.currentQuery.value = query;
+      controller.backendQueryContext = QueryContext(isGlobalQuery: false, pluginId: 'grid-smoke');
+      controller.backendQueryContextQueryId = query.queryId;
+      controller.applyQueryLayoutForQuery(traceId, query, QueryLayout(icon: pluginIcon, resultPreviewWidthRatio: 0.5, isGridLayout: true, gridLayoutParams: params));
+      controller.prepareQueryLayoutOnQueryChanged(
+        traceId,
+        PlainQuery(queryId: 'grid-smoke-global-query', queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code, queryText: 'grid', querySelection: Selection.empty()),
+      );
+      expect(controller.queryIcon.value.icon.imageData, isEmpty);
     });
   });
 }

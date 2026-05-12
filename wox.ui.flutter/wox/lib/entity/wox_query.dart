@@ -32,7 +32,9 @@ class PlainQuery {
     queryType = json['QueryType'];
     queryText = json['QueryText'];
     querySelection = Selection.fromJson(json['QuerySelection']);
-    queryRefinements = ((json['QueryRefinements'] ?? json['queryRefinements']) as Map<String, dynamic>? ?? <String, dynamic>{}).map((key, value) => MapEntry(key, List<String>.from(value ?? [])));
+    queryRefinements = ((json['QueryRefinements'] ?? json['queryRefinements']) as Map<String, dynamic>? ?? <String, dynamic>{}).map(
+      (key, value) => MapEntry(key, List<String>.from(value ?? [])),
+    );
   }
 
   Map<String, dynamic> toJson() {
@@ -561,25 +563,74 @@ class UpdatableResult {
   }
 }
 
-class QueryMetadata {
+/// Query-scoped presentation hints delivered with QueryResponse.
+///
+/// The old query metadata HTTP request used a different shape, so this parser
+/// accepts both field names during the transition. The nullable ratio preserves
+/// the difference between "unset" and an explicit zero preview-only layout.
+class QueryLayout {
   late WoxImage icon;
-  late double resultPreviewWidthRatio;
+  late double? resultPreviewWidthRatio;
   late bool isGridLayout;
   late GridLayoutParams gridLayoutParams;
 
-  QueryMetadata({required this.icon, required this.resultPreviewWidthRatio, required this.isGridLayout, required this.gridLayoutParams});
+  QueryLayout({required this.icon, required this.resultPreviewWidthRatio, required this.isGridLayout, required this.gridLayoutParams});
 
-  QueryMetadata.fromJson(Map<String, dynamic> json) {
-    icon = WoxImage.fromJson(json['Icon']);
-
-    if (json['WidthRatio'] != null) {
-      resultPreviewWidthRatio = json['WidthRatio'].toDouble();
+  QueryLayout.fromJson(Map<String, dynamic> json) {
+    final iconJson = json['Icon'];
+    if (iconJson is Map) {
+      icon = WoxImage.fromJson(Map<String, dynamic>.from(iconJson));
     } else {
-      resultPreviewWidthRatio = 0.5;
+      icon = WoxImage.empty();
     }
 
-    isGridLayout = json['IsGridLayout'] ?? false;
-    gridLayoutParams = GridLayoutParams.fromJson(json['GridLayoutParams'] ?? {});
+    final widthRatio = json['ResultPreviewWidthRatio'] ?? json['WidthRatio'];
+    if (widthRatio != null) {
+      resultPreviewWidthRatio = widthRatio.toDouble();
+    } else {
+      resultPreviewWidthRatio = null;
+    }
+
+    final gridLayoutJson = json['GridLayout'] ?? json['GridLayoutParams'];
+    final hasGridLayoutPayload = gridLayoutJson is Map && gridLayoutJson.isNotEmpty;
+    isGridLayout = json['IsGridLayout'] ?? hasGridLayoutPayload;
+    if (gridLayoutJson is Map) {
+      gridLayoutParams = GridLayoutParams.fromJson(Map<String, dynamic>.from(gridLayoutJson));
+    } else {
+      gridLayoutParams = GridLayoutParams.empty();
+    }
+  }
+
+  QueryLayout.empty() {
+    icon = WoxImage.empty();
+    resultPreviewWidthRatio = null;
+    isGridLayout = false;
+    gridLayoutParams = GridLayoutParams.empty();
+  }
+
+  bool get isEmpty {
+    return icon.imageData.isEmpty && resultPreviewWidthRatio == null && !isGridLayout;
+  }
+}
+
+/// Backend-owned query classification delivered with QueryResponse.
+///
+/// Flutter uses this to correct local trigger-keyword guesses after core has
+/// applied shortcuts and parsed the query against the actual plugin registry.
+class QueryContext {
+  late bool isGlobalQuery;
+  late String pluginId;
+
+  QueryContext({required this.isGlobalQuery, required this.pluginId});
+
+  QueryContext.fromJson(Map<String, dynamic> json) {
+    isGlobalQuery = json['IsGlobalQuery'] ?? false;
+    pluginId = json['PluginId'] ?? '';
+  }
+
+  QueryContext.empty() {
+    isGlobalQuery = false;
+    pluginId = '';
   }
 }
 

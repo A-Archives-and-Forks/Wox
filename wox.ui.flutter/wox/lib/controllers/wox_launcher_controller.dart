@@ -173,6 +173,8 @@ class WoxLauncherController extends GetxController {
   final queryIcon = QueryIconInfo.empty().obs;
   final glanceItems = <GlanceItem>[].obs;
   Timer? glanceRefreshTimer;
+  QueryContext backendQueryContext = QueryContext.empty();
+  String backendQueryContextQueryId = "";
 
   /// The result of the doctor check.
   var doctorCheckPassed = true;
@@ -464,7 +466,83 @@ class WoxLauncherController extends GetxController {
   }
 
   bool isGlobalInputQuery(PlainQuery query) {
-    return query.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code && !query.queryText.contains(" ");
+    if (query.queryType != WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code) {
+      return false;
+    }
+    if (backendQueryContextQueryId == query.queryId) {
+      return backendQueryContext.isGlobalQuery;
+    }
+    final normalizedQuery = expandQueryShortcutForLocalClassification(query.queryText);
+    if (!normalizedQuery.contains(" ")) {
+      return true;
+    }
+    if (!hasLocalPluginTriggerMetadata()) {
+      return false;
+    }
+    return !isKnownPluginInputQueryText(normalizedQuery);
+  }
+
+  bool isLikelyPluginInputQuery(PlainQuery query) {
+    if (query.queryType != WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code) {
+      return false;
+    }
+    final normalizedQuery = expandQueryShortcutForLocalClassification(query.queryText);
+    if (!normalizedQuery.contains(" ")) {
+      return false;
+    }
+    if (!hasLocalPluginTriggerMetadata()) {
+      // Keep plugin-looking queries in an unknown state until plugin metadata is
+      // loaded. Core's QueryContext will correct the surface once a response
+      // arrives, and this avoids clearing a plugin icon on incomplete local data.
+      return true;
+    }
+    return isKnownPluginInputQueryText(normalizedQuery);
+  }
+
+  bool hasLocalPluginTriggerMetadata() {
+    return Get.isRegistered<WoxSettingController>() && Get.find<WoxSettingController>().installedPlugins.isNotEmpty;
+  }
+
+  bool isKnownPluginInputQueryText(String queryText) {
+    final triggerKeyword = queryText.split(" ").first;
+    if (triggerKeyword.isEmpty || !Get.isRegistered<WoxSettingController>()) {
+      return false;
+    }
+    final settingController = Get.find<WoxSettingController>();
+    for (final plugin in settingController.installedPlugins) {
+      final triggerKeywords = plugin.setting.triggerKeywords.isNotEmpty ? plugin.setting.triggerKeywords : plugin.triggerKeywords;
+      if (triggerKeywords.contains(triggerKeyword)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String expandQueryShortcutForLocalClassification(String queryText) {
+    final shortcuts = List<QueryShortcut>.from(WoxSettingUtil.instance.currentSetting.queryShortcuts);
+    shortcuts.sort((a, b) => b.shortcut.length.compareTo(a.shortcut.length));
+    for (final shortcut in shortcuts) {
+      if (shortcut.disabled) {
+        continue;
+      }
+      if (queryText != shortcut.shortcut && !queryText.startsWith("${shortcut.shortcut} ")) {
+        continue;
+      }
+
+      // Local classification mirrors core's shortcut boundary rules so Glance
+      // does not disappear for ordinary global text that merely shares a prefix.
+      if (!shortcut.query.contains("{0}")) {
+        return queryText.replaceFirst(shortcut.shortcut, shortcut.query);
+      }
+
+      final arguments = queryText.replaceFirst(shortcut.shortcut, "").trimLeft().split(" ");
+      var expandedQuery = shortcut.query;
+      for (var index = 0; index < arguments.length; index++) {
+        expandedQuery = expandedQuery.replaceAll("{$index}", arguments[index]);
+      }
+      return expandedQuery;
+    }
+    return queryText;
   }
 
   bool get isShowDoctorCheckInfo => currentQuery.value.isEmpty && !doctorCheckInfo.value.allPassed;
@@ -1754,7 +1832,9 @@ class WoxLauncherController extends GetxController {
     var queryId = const UuidV4().generate();
     currentQuery.value = PlainQuery.emptyInput();
     currentQuery.value.queryId = queryId;
-    updatePluginMetadataOnQueryChanged(traceId, currentQuery.value);
+    backendQueryContext = QueryContext.empty();
+    backendQueryContextQueryId = "";
+    prepareQueryLayoutOnQueryChanged(traceId, currentQuery.value);
 
     try {
       final response = await WoxWebsocketMsgUtil.instance.sendMessage(
@@ -1814,6 +1894,8 @@ class WoxLauncherController extends GetxController {
     }
 
     currentQuery.value = query;
+    backendQueryContext = QueryContext.empty();
+    backendQueryContextQueryId = "";
     isCurrentQueryReturned = false;
     isShowActionPanel.value = false;
     clearQueryResultsTimer.cancel();
@@ -1838,28 +1920,24 @@ class WoxLauncherController extends GetxController {
       isLoading.value = false;
     }
 
-    updatePluginMetadataOnQueryChanged(traceId, query).then((isPluginQuery) {
-      if (!isPluginQuery) return;
-      if (currentQuery.value.queryId != query.queryId) return;
-      // If query has returned (isFinal received or results arrived), don't start loading animation
-      if (isCurrentQueryReturned) return;
-
-      // Logic to prevent starting the timer if results have already arrived (Race Condition Fix)
-      // Check if we currently have results for this query
-      bool hasResults = activeResultViewController.items.isNotEmpty && activeResultViewController.items.first.value.data.queryId == query.queryId;
-
+    prepareQueryLayoutOnQueryChanged(traceId, query);
+    if (!query.isEmpty && currentQuery.value.queryId == query.queryId && !isCurrentQueryReturned) {
+      // Query layout now arrives through QueryResponse instead of a pre-query
+      // metadata HTTP request. Start the delayed loading timer for any backend
+      // query and cancel it when results or a final empty response arrive.
+      final hasResults = activeResultViewController.items.isNotEmpty && activeResultViewController.items.first.value.data.queryId == query.queryId;
       if (!hasResults) {
         loadingTimer = Timer(loadingDelay, () {
           // Double check before showing loading:
           // 1. Query is still the same
           // 2. We still don't have results (or results matching this query)
-          bool stillNoResults = activeResultViewController.items.isEmpty || activeResultViewController.items.first.value.data.queryId != query.queryId;
+          final stillNoResults = activeResultViewController.items.isEmpty || activeResultViewController.items.first.value.data.queryId != query.queryId;
           if (currentQuery.value.queryId == query.queryId && stillNoResults && !isCurrentQueryReturned) {
             isLoading.value = true;
           }
         });
       }
-    });
+    }
 
     if (query.isEmpty) {
       try {
@@ -1869,7 +1947,13 @@ class WoxLauncherController extends GetxController {
             traceId: traceId,
             type: WoxMsgTypeEnum.WOX_MSG_TYPE_REQUEST.code,
             method: WoxMsgMethodEnum.WOX_MSG_METHOD_QUERY.code,
-            data: {"queryId": query.queryId, "queryType": query.queryType, "queryText": query.queryText, "querySelection": query.querySelection.toJson(), "queryRefinements": query.queryRefinements},
+            data: {
+              "queryId": query.queryId,
+              "queryType": query.queryType,
+              "queryText": query.queryText,
+              "querySelection": query.querySelection.toJson(),
+              "queryRefinements": query.queryRefinements,
+            },
           ),
         );
       } catch (e) {
@@ -1917,7 +2001,13 @@ class WoxLauncherController extends GetxController {
         traceId: traceId,
         type: WoxMsgTypeEnum.WOX_MSG_TYPE_REQUEST.code,
         method: WoxMsgMethodEnum.WOX_MSG_METHOD_QUERY.code,
-        data: {"queryId": query.queryId, "queryType": query.queryType, "queryText": query.queryText, "querySelection": query.querySelection.toJson(), "queryRefinements": query.queryRefinements},
+        data: {
+          "queryId": query.queryId,
+          "queryType": query.queryType,
+          "queryText": query.queryText,
+          "querySelection": query.querySelection.toJson(),
+          "queryRefinements": query.queryRefinements,
+        },
       ),
     );
   }
@@ -2075,6 +2165,20 @@ class WoxLauncherController extends GetxController {
       final resultsData = queryResponse['Results'] as List<dynamic>;
       final queryId = queryResponse['QueryId'] as String? ?? "";
       final isFinal = queryResponse['IsFinal'] as bool? ?? false;
+      final contextData = queryResponse['Context'];
+      if (contextData is Map && contextData.isNotEmpty) {
+        // Core owns the final query classification after shortcut expansion
+        // and trigger-keyword parsing. Apply it before layout/results so Glance
+        // and plugin identity do not depend on Flutter's local guess.
+        applyQueryContextForQueryId(msg.traceId, queryId, QueryContext.fromJson(Map<String, dynamic>.from(contextData)));
+      }
+      final layoutData = queryResponse['Layout'];
+      if (layoutData is Map && layoutData.isNotEmpty) {
+        // QueryResponse layout replaces the old /query/metadata side request.
+        // Apply it before results so list/grid switches happen under the same
+        // query id and stale rows cannot be rendered with the new layout.
+        applyQueryLayoutForQueryId(msg.traceId, queryId, QueryLayout.fromJson(Map<String, dynamic>.from(layoutData)));
+      }
 
       var results = <WoxQueryResult>[];
       for (var item in resultsData) {
@@ -3234,45 +3338,71 @@ class WoxLauncherController extends GetxController {
     onQueryChanged(traceId, woxChangeQuery, "user drop files");
   }
 
-  /// Update the plugin metadata based on the query
-  /// E.g. plugin icon, plugin features, etc.
-  Future<bool> updatePluginMetadataOnQueryChanged(String traceId, PlainQuery query) async {
-    var queryMetadata = QueryMetadata(icon: WoxImage.empty(), resultPreviewWidthRatio: 0.5, isGridLayout: false, gridLayoutParams: GridLayoutParams.empty());
-    var isPluginQuery = false;
-
-    if (!query.isEmpty && query.queryText.contains(" ")) {
-      // if there is space in the query, then this  may be a plugin query, fetch metadata
-      try {
-        queryMetadata = await WoxApi.instance.getQueryMetadata(traceId, query);
-        if (queryMetadata.icon.imageData.isNotEmpty) {
-          isPluginQuery = true;
-        }
-        Logger.instance.debug(
-          traceId,
-          "fetched query metadata: isPluginQuery=$isPluginQuery, resultPreviewWidthRatio=${queryMetadata.resultPreviewWidthRatio}, isGridLayout=${queryMetadata.isGridLayout}",
-        );
-      } catch (e) {
-        Logger.instance.error(traceId, "query metadata failed: $e");
-      }
+  void prepareQueryLayoutOnQueryChanged(String traceId, PlainQuery query) {
+    if (isLikelyPluginInputQuery(query)) {
+      // Plugin-query layout now arrives with QueryResponse. Keep the previous
+      // plugin icon/layout visible until the same query id returns its layout,
+      // matching the old metadata request behavior and avoiding an icon clear
+      // followed by an immediate reset.
+      return;
     }
 
-    if (currentQuery.value.queryId != query.queryId) {
-      // Bug fix: metadata requests are asynchronous and can finish after the
-      // user has already typed another query. Applying stale metadata would
-      // switch the icon, preview ratio, or list/grid layout for the wrong
-      // query, so only the still-current query is allowed to update UI state.
-      Logger.instance.debug(traceId, "ignore stale query metadata for queryId=${query.queryId}");
+    // Empty, global, and selection queries have deterministic local layout.
+    // Reset them immediately so stale plugin grid/ratio state does not leak
+    // into non-plugin surfaces while plugin-specific metadata waits for results.
+    applyQueryLayoutForQuery(traceId, query, QueryLayout.empty());
+  }
+
+  bool applyQueryContextForQueryId(String traceId, String queryId, QueryContext queryContext) {
+    if (currentQuery.value.queryId != queryId) {
+      // QueryContext is delivered asynchronously with QueryResponse. Guarding
+      // by query id prevents a late backend classification from changing Glance
+      // visibility or plugin identity for a newer query.
+      Logger.instance.debug(traceId, "ignore stale query context for queryId=$queryId");
       return false;
     }
 
-    updateQueryIconOnQueryChanged(traceId, query, queryMetadata);
-    updateResultPreviewWidthRatioOnQueryChanged(traceId, query, queryMetadata);
-    updateGridLayoutParamsOnQueryChanged(traceId, query, queryMetadata);
-    return isPluginQuery;
+    backendQueryContext = queryContext;
+    backendQueryContextQueryId = queryId;
+    applyQueryContextForQuery(traceId, currentQuery.value, queryContext);
+    return true;
+  }
+
+  void applyQueryContextForQuery(String traceId, PlainQuery query, QueryContext queryContext) {
+    if (queryContext.isGlobalQuery) {
+      // Backend-confirmed global queries should use the global accessory area.
+      // This corrects local trigger-keyword guesses for text that contains
+      // spaces but does not actually target a plugin.
+      applyQueryLayoutForQuery(traceId, query, QueryLayout.empty());
+      return;
+    }
+
+    // Plugin and selection contexts reserve the query-box accessory for their
+    // own identity, so clear cached Glance rows even before layout arrives.
+    glanceItems.clear();
+  }
+
+  bool applyQueryLayoutForQueryId(String traceId, String queryId, QueryLayout queryLayout) {
+    if (currentQuery.value.queryId != queryId) {
+      // Layout is asynchronous just like result batches. Guarding by query id
+      // prevents a late QueryResponse from switching icon, preview ratio, or
+      // list/grid mode after the user has already typed another query.
+      Logger.instance.debug(traceId, "ignore stale query layout for queryId=$queryId");
+      return false;
+    }
+
+    applyQueryLayoutForQuery(traceId, currentQuery.value, queryLayout);
+    return true;
+  }
+
+  void applyQueryLayoutForQuery(String traceId, PlainQuery query, QueryLayout queryLayout) {
+    updateQueryIconOnQueryChanged(traceId, query, queryLayout);
+    updateResultPreviewWidthRatioOnQueryChanged(traceId, query, queryLayout);
+    updateGridLayoutParamsOnQueryChanged(traceId, query, queryLayout);
   }
 
   /// Change the query icon based on the query
-  Future<void> updateQueryIconOnQueryChanged(String traceId, PlainQuery query, QueryMetadata queryMetadata) async {
+  void updateQueryIconOnQueryChanged(String traceId, PlainQuery query, QueryLayout queryLayout) {
     if (query.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_SELECTION.code) {
       glanceItems.clear();
       if (query.querySelection.type == WoxSelectionTypeEnum.WOX_SELECTION_TYPE_FILE.code) {
@@ -3285,21 +3415,19 @@ class WoxLauncherController extends GetxController {
     }
 
     if (query.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code) {
-      // if there is no space in the query, then this must be a global query
-      if (!query.queryText.contains(" ")) {
+      if (isGlobalInputQuery(query)) {
         queryIcon.value = QueryIconInfo.empty();
         if (glanceItems.isEmpty) {
-          // Bug fix: global query text changes used to refresh Glance on every
-          // keystroke, which bypassed the per-item interval and made live
-          // metrics update more often than requested. Only fetch here when the
-          // global slot is empty; the scheduled timer owns steady-state refresh.
+          // Global query classification now uses plugin trigger metadata, not
+          // whitespace. That keeps Glance visible for global text containing
+          // spaces while still avoiding refresh churn when an item is cached.
           unawaited(refreshGlance(traceId, "manualRefresh"));
         }
         return;
       }
 
       glanceItems.clear();
-      queryIcon.value = QueryIconInfo(icon: queryMetadata.icon);
+      queryIcon.value = QueryIconInfo(icon: queryLayout.icon);
       return;
     }
 
@@ -3307,7 +3435,7 @@ class WoxLauncherController extends GetxController {
   }
 
   /// Update the result preview width ratio based on the query
-  Future<void> updateResultPreviewWidthRatioOnQueryChanged(String traceId, PlainQuery query, QueryMetadata queryMetadata) async {
+  void updateResultPreviewWidthRatioOnQueryChanged(String traceId, PlainQuery query, QueryLayout queryLayout) {
     double nextRatio = 0.5;
     if (query.isEmpty) {
       preferredResultPreviewRatio = nextRatio;
@@ -3318,8 +3446,7 @@ class WoxLauncherController extends GetxController {
       }
       return;
     }
-    // if there is no space in the query, then this must be a global query
-    if (!query.queryText.contains(" ")) {
+    if (isGlobalInputQuery(query)) {
       preferredResultPreviewRatio = nextRatio;
       if (isPreviewFullscreen.value) {
         lastResultPreviewRatioBeforePreviewFullscreen = nextRatio;
@@ -3329,8 +3456,8 @@ class WoxLauncherController extends GetxController {
       return;
     }
 
-    Logger.instance.debug(traceId, "update result preview width ratio: ${queryMetadata.resultPreviewWidthRatio}");
-    nextRatio = queryMetadata.resultPreviewWidthRatio;
+    nextRatio = queryLayout.resultPreviewWidthRatio ?? 0.5;
+    Logger.instance.debug(traceId, "update result preview width ratio: $nextRatio");
     if (nextRatio < 0 || nextRatio > 1) {
       nextRatio = 0.5;
     }
@@ -3342,7 +3469,7 @@ class WoxLauncherController extends GetxController {
     }
   }
 
-  Future<void> updateGridLayoutParamsOnQueryChanged(String traceId, PlainQuery query, QueryMetadata queryMetadata) async {
+  void updateGridLayoutParamsOnQueryChanged(String traceId, PlainQuery query, QueryLayout queryLayout) {
     final wasGridLayout = isGridLayout.value;
     if (query.isEmpty) {
       isGridLayout.value = false;
@@ -3352,8 +3479,7 @@ class WoxLauncherController extends GetxController {
       }
       return;
     }
-    // if there is no space in the query, then this must be a global query
-    if (!query.queryText.contains(" ")) {
+    if (isGlobalInputQuery(query)) {
       isGridLayout.value = false;
       gridLayoutParams.value = GridLayoutParams.empty();
       if (wasGridLayout) {
@@ -3362,16 +3488,16 @@ class WoxLauncherController extends GetxController {
       return;
     }
 
-    if (queryMetadata.isGridLayout) {
+    if (queryLayout.isGridLayout) {
       isGridLayout.value = true;
-      gridLayoutParams.value = queryMetadata.gridLayoutParams;
+      gridLayoutParams.value = queryLayout.gridLayoutParams;
     } else {
       isGridLayout.value = false;
       gridLayoutParams.value = GridLayoutParams.empty();
     }
     resultGridViewController.updateGridParams(gridLayoutParams.value);
 
-    Logger.instance.debug(traceId, "update grid layout params: columns=${queryMetadata.gridLayoutParams.columns}");
+    Logger.instance.debug(traceId, "update grid layout params: columns=${queryLayout.gridLayoutParams.columns}");
 
     if (wasGridLayout != isGridLayout.value) {
       clearStaleResultsForLayoutTransition(traceId);

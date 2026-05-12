@@ -135,19 +135,41 @@ type QueryResponse struct {
 	Results     []QueryResult
 	Refinements []QueryRefinement
 	Layout      QueryLayout
+	Context     QueryContext
 }
 
 func NewQueryResponse(results []QueryResult) QueryResponse {
 	return QueryResponse{Results: results}
 }
 
-// QueryLayout carries query-scoped presentation hints. It starts as optional
-// metadata so existing result rendering remains unchanged while plugins gain a
-// single response object for future layout customization.
+// QueryLayout carries query-scoped presentation hints.
+// These fields are pointers because zero is a meaningful value for some hints:
+// ResultPreviewWidthRatio=0 intentionally gives the preview the full result
+// area. The old metadata side request could return that value explicitly; the
+// QueryResponse path must keep the same distinction between unset and zero.
 type QueryLayout struct {
-	Icon                    common.WoxImage
-	ResultPreviewWidthRatio float64
-	GridLayout              *MetadataFeatureParamsGridLayout
+	Icon                    *common.WoxImage                 `json:"Icon,omitempty"`
+	ResultPreviewWidthRatio *float64                         `json:"ResultPreviewWidthRatio,omitempty"`
+	GridLayout              *MetadataFeatureParamsGridLayout `json:"GridLayout,omitempty"`
+}
+
+// QueryContext carries the backend's canonical classification for a query.
+// The UI can make a quick local guess for immediate rendering, but only core
+// has the final parser state after shortcuts and trigger-keyword matching.
+type QueryContext struct {
+	IsGlobalQuery bool   `json:"IsGlobalQuery"`
+	PluginId      string `json:"PluginId"`
+}
+
+// BuildQueryContext centralizes the parser result that the UI cannot reproduce
+// cheaply. In particular, shortcuts and trigger-keyword parsing happen in core,
+// so the response carries the resolved global/plugin classification back.
+func BuildQueryContext(query Query, queryPlugin *Instance) QueryContext {
+	queryContext := QueryContext{IsGlobalQuery: query.IsGlobalQuery()}
+	if !queryContext.IsGlobalQuery && queryPlugin != nil {
+		queryContext.PluginId = queryPlugin.Metadata.Id
+	}
+	return queryContext
 }
 
 // QueryRefinement describes one query-scoped control such as type filters or
@@ -329,6 +351,7 @@ func (q *QueryResponse) ToUI() QueryResponseUI {
 		}),
 		Refinements: q.Refinements,
 		Layout:      q.Layout,
+		Context:     q.Context,
 	}
 }
 
@@ -351,6 +374,7 @@ type QueryResponseUI struct {
 	Results     []QueryResultUI
 	Refinements []QueryRefinement
 	Layout      QueryLayout
+	Context     QueryContext
 }
 
 // PushResultsPayload is used to push additional results to UI for a query.

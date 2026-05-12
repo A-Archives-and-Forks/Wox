@@ -518,7 +518,9 @@ collect:
 	}
 
 	if len(allResults) == 0 {
-		allResults = plugin.GetPluginManager().QueryFallback(ctx, query, queryPlugin)
+		// QueryFallback now uses the QueryResponseUI envelope so layout can
+		// travel with fallback rows; these tests only assert the result rows.
+		allResults = plugin.GetPluginManager().QueryFallback(ctx, query, queryPlugin).Results
 	}
 
 	return allResults, nil

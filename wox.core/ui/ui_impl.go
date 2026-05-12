@@ -617,6 +617,7 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	var firstFlushDelayMs = plugin.GetPluginManager().GetQueryFirstFlushDelayMs(query)
 	var resultFlushBatch int
 	var latestQueryResponse plugin.QueryResponseUI
+	latestQueryResponse.Context = plugin.BuildQueryContext(query, queryPlugin)
 	logger.Info(ctx, fmt.Sprintf("query %s: %s, first flush delay: %d ms", query.Type, query.String(), firstFlushDelayMs))
 
 	var resultDebouncer = util.NewDebouncer(firstFlushDelayMs, resultDebounceIntervalMs, func(results []plugin.QueryResultUI, reason string) {
@@ -642,6 +643,7 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 			Results:     responseSnapshot,
 			Refinements: latestQueryResponse.Refinements,
 			Layout:      latestQueryResponse.Layout,
+			Context:     latestQueryResponse.Context,
 		}, isFinal)
 	})
 	resultDebouncer.Start(ctx)
@@ -651,9 +653,11 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	fallbackHandled := false
 
 	addResponse := func(response plugin.QueryResponseUI) {
-		// QueryResponse metadata is only meaningful for a single plugin query.
-		// Global queries aggregate many plugins, so keeping result rows only
-		// avoids letting one plugin's refinements control the whole result set.
+		// QueryContext is backend-owned and remains valid for both global and
+		// plugin queries. Refinements and layout stay single-plugin only because
+		// global queries aggregate many plugins and one plugin should not control
+		// the whole result surface.
+		latestQueryResponse.Context = response.Context
 		if queryPlugin != nil {
 			latestQueryResponse.Refinements = response.Refinements
 			latestQueryResponse.Layout = response.Layout

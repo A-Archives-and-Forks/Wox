@@ -41,6 +41,7 @@ type QueryResponse struct {
 	Results     []plugin.QueryResultUI   `json:"Results"`
 	Refinements []plugin.QueryRefinement `json:"Refinements"`
 	Layout      plugin.QueryLayout       `json:"Layout"`
+	Context     plugin.QueryContext      `json:"Context"`
 	IsFinal     bool                     `json:"IsFinal"` // indicates if this is the final batch of results
 }
 
@@ -212,6 +213,7 @@ func responseUIQueryResponse(ctx context.Context, request WebsocketMsg, queryId 
 			Results:     response.Results,
 			Refinements: response.Refinements,
 			Layout:      response.Layout,
+			Context:     response.Context,
 			IsFinal:     isFinal,
 		},
 	})

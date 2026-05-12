@@ -106,13 +106,17 @@ class QueryLayout:
     """Optional presentation hints that apply to one query response."""
 
     icon: Optional[WoxImage] = None
-    result_preview_width_ratio: float = 0.0
+    result_preview_width_ratio: Optional[float] = None
     grid_layout: Optional[QueryGridLayout] = None
 
     def to_json(self) -> str:
-        data: Dict[str, Any] = {"ResultPreviewWidthRatio": self.result_preview_width_ratio}
+        data: Dict[str, Any] = {}
         if self.icon is not None:
             data["Icon"] = json.loads(self.icon.to_json())
+        if self.result_preview_width_ratio is not None:
+            # Zero is a valid preview-only ratio. Omitting the field means
+            # unset; sending 0.0 means the plugin intentionally overrides it.
+            data["ResultPreviewWidthRatio"] = self.result_preview_width_ratio
         if self.grid_layout is not None:
             data["GridLayout"] = json.loads(self.grid_layout.to_json())
         return json.dumps(data)

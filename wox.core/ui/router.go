@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -112,7 +111,6 @@ var routers = map[string]func(w http.ResponseWriter, r *http.Request){
 	"/log/clear":             handleLogClear,
 	"/log/open":              handleLogOpen,
 	"/hotkey/available":      handleHotkeyAvailable,
-	"/query/metadata":        handleQueryMetadata,
 	"/glance":                handleGlance,
 	"/glance/action":         handleGlanceAction,
 	"/deeplink":              handleDeeplink,
@@ -1650,79 +1648,6 @@ func handleOnOnboarding(w http.ResponseWriter, r *http.Request) {
 
 	GetUIManager().PostOnOnboarding(ctx, inOnboardingViewResult.Bool())
 	writeSuccessResponse(w, "")
-}
-
-func handleQueryMetadata(w http.ResponseWriter, r *http.Request) {
-	ctx := getTraceContext(r)
-
-	type metadataResponse struct {
-		Icon             common.WoxImage
-		WidthRatio       float64
-		IsGridLayout     bool
-		GridLayoutParams plugin.MetadataFeatureParamsGridLayout
-	}
-	var metadata metadataResponse
-	metadata.WidthRatio = 0.5 // default width ratio
-
-	body, _ := io.ReadAll(r.Body)
-	queryResult := gjson.GetBytes(body, "query")
-	if !queryResult.Exists() {
-		writeErrorResponse(w, "query is empty")
-		return
-	}
-
-	var plainQuery common.PlainQuery
-	unmarshalErr := json.Unmarshal([]byte(queryResult.String()), &plainQuery)
-	if unmarshalErr != nil {
-		logger.Error(ctx, unmarshalErr.Error())
-		writeErrorResponse(w, unmarshalErr.Error())
-		return
-	}
-	query, pluginInstance, err := plugin.GetPluginManager().NewQuery(ctx, plainQuery)
-	if err != nil {
-		logger.Error(ctx, fmt.Sprintf("failed to new query: %s", err.Error()))
-		writeSuccessResponse(w, metadataResponse{})
-		return
-	}
-
-	if pluginInstance == nil {
-		// this query is not for any plugin (now a global query)
-		writeSuccessResponse(w, metadataResponse{})
-		return
-	}
-
-	iconImg, parseErr := common.ParseWoxImage(pluginInstance.Metadata.Icon)
-	if parseErr == nil {
-		metadata.Icon = common.ConvertIcon(ctx, iconImg, pluginInstance.PluginDirectory)
-	} else {
-		logger.Error(ctx, fmt.Sprintf("failed to parse icon: %s", parseErr.Error()))
-	}
-
-	featureParams, isResultPreviewWidthRatioEnabled, err := pluginInstance.Metadata.GetFeatureParamsForResultPreviewWidthRatioCommand(query.Command)
-	if err == nil && isResultPreviewWidthRatioEnabled {
-		// Result preview width ratio can now be scoped by command. The old plugin-wide
-		// lookup was too broad for commands like selection preview, where only that
-		// command should hide the result list while normal selection queries stay split.
-		metadata.WidthRatio = featureParams.WidthRatio
-	} else {
-		if err != nil && !errors.Is(err, plugin.ErrFeatureNotSupported) {
-			logger.Error(ctx, fmt.Sprintf("failed to get feature params for result preview width ratio: %s", err.Error()))
-		}
-	}
-
-	featureParamsGridLayout, err := pluginInstance.Metadata.GetFeatureParamsForGridLayout()
-	if err == nil {
-		if featureParamsGridLayout.IsEnabledForCommand(query.Command) {
-			metadata.IsGridLayout = true
-			metadata.GridLayoutParams = featureParamsGridLayout
-		}
-	} else {
-		if !errors.Is(err, plugin.ErrFeatureNotSupported) {
-			logger.Error(ctx, fmt.Sprintf("failed to get feature params for grid layout: %s", err.Error()))
-		}
-	}
-
-	writeSuccessResponse(w, metadata)
 }
 
 func handleDeeplink(w http.ResponseWriter, r *http.Request) {

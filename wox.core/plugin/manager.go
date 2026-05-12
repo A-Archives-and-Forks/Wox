@@ -935,19 +935,87 @@ func (m *Manager) canOperateQuery(ctx context.Context, pluginInstance *Instance,
 	return true
 }
 
+// buildMetadataBackedQueryLayout converts the static plugin metadata that used
+// to be fetched through /query/metadata into the QueryResponse layout channel.
+// Keeping this in the query pipeline removes the extra UI HTTP request while
+// preserving command-scoped preview ratios and grid layout behavior.
+func (m *Manager) buildMetadataBackedQueryLayout(ctx context.Context, pluginInstance *Instance, query Query) QueryLayout {
+	layout := QueryLayout{}
+	if pluginInstance == nil {
+		return layout
+	}
+
+	iconImg, parseErr := common.ParseWoxImage(pluginInstance.Metadata.Icon)
+	if parseErr == nil {
+		convertedIcon := common.ConvertIcon(ctx, iconImg, pluginInstance.PluginDirectory)
+		layout.Icon = &convertedIcon
+	} else {
+		logger.Error(ctx, fmt.Sprintf("failed to parse icon: %s", parseErr.Error()))
+	}
+
+	defaultWidthRatio := 0.5
+	layout.ResultPreviewWidthRatio = &defaultWidthRatio
+
+	featureParams, isResultPreviewWidthRatioEnabled, err := pluginInstance.Metadata.GetFeatureParamsForResultPreviewWidthRatioCommand(query.Command)
+	if err == nil && isResultPreviewWidthRatioEnabled {
+		// Command-scoped preview width still belongs to the plugin metadata
+		// contract. Moving it into QueryResponse keeps zero-width preview-only
+		// commands working without requiring the UI to race a side request.
+		widthRatio := featureParams.WidthRatio
+		layout.ResultPreviewWidthRatio = &widthRatio
+	} else if err != nil && !errors.Is(err, ErrFeatureNotSupported) {
+		logger.Error(ctx, fmt.Sprintf("failed to get feature params for result preview width ratio: %s", err.Error()))
+	}
+
+	featureParamsGridLayout, isGridLayoutEnabled, err := pluginInstance.Metadata.GetFeatureParamsForGridLayoutCommand(query.Command)
+	if err == nil && isGridLayoutEnabled {
+		layout.GridLayout = &featureParamsGridLayout
+	} else if err != nil && !errors.Is(err, ErrFeatureNotSupported) {
+		logger.Error(ctx, fmt.Sprintf("failed to get feature params for grid layout: %s", err.Error()))
+	}
+
+	return layout
+}
+
+func (m *Manager) mergeQueryLayouts(metadataLayout QueryLayout, responseLayout QueryLayout) QueryLayout {
+	merged := metadataLayout
+
+	if responseLayout.Icon != nil && !responseLayout.Icon.IsEmpty() {
+		merged.Icon = responseLayout.Icon
+	}
+	if responseLayout.ResultPreviewWidthRatio != nil {
+		// QueryResponse layout can override metadata defaults. A nil pointer
+		// means unset, while a non-nil zero is an intentional preview-only ratio.
+		merged.ResultPreviewWidthRatio = responseLayout.ResultPreviewWidthRatio
+	}
+	if responseLayout.GridLayout != nil {
+		merged.GridLayout = responseLayout.GridLayout
+	}
+
+	return merged
+}
+
 func (m *Manager) queryForPlugin(ctx context.Context, pluginInstance *Instance, query Query) (response QueryResponse) {
+	metadataLayout := QueryLayout{}
+	queryContext := BuildQueryContext(query, pluginInstance)
 	defer util.GoRecover(ctx, fmt.Sprintf("<%s> query panic", pluginInstance.GetName(ctx)), func(err error) {
 		// if plugin query panic, return error result
 		failedResult := m.GetResultForFailedQuery(ctx, pluginInstance.Metadata, query, err)
 		response.Results = []QueryResult{
 			m.PolishResult(ctx, pluginInstance, query, failedResult),
 		}
+		response.Layout = metadataLayout
+		response.Context = queryContext
 	})
+
+	metadataLayout = m.buildMetadataBackedQueryLayout(ctx, pluginInstance, query)
 
 	// if plugin query requirement not met, return requirement result without calling plugin.Query
 	if requirementResult, blocked := m.buildQueryRequirementSettingsResult(ctx, pluginInstance, query); blocked {
 		return QueryResponse{
 			Results: []QueryResult{m.PolishResult(ctx, pluginInstance, query, requirementResult)},
+			Layout:  metadataLayout,
+			Context: queryContext,
 		}
 	}
 
@@ -982,6 +1050,8 @@ func (m *Manager) queryForPlugin(ctx context.Context, pluginInstance *Instance, 
 	query.Env = newEnv
 
 	response = pluginInstance.Plugin.Query(ctx, query)
+	response.Layout = m.mergeQueryLayouts(metadataLayout, response.Layout)
+	response.Context = queryContext
 	pluginQueryCost := util.GetSystemTimestamp() - start
 
 	// Keep the plugin latency EWMA scoped to Plugin.Query itself.
@@ -2166,6 +2236,14 @@ func (m *Manager) QuerySilent(ctx context.Context, query Query) bool {
 }
 
 func (m *Manager) QueryFallback(ctx context.Context, query Query, queryPlugin *Instance) (response QueryResponseUI) {
+	response.Context = BuildQueryContext(query, queryPlugin)
+	if queryPlugin != nil {
+		// Fallback command rows are still part of the same plugin query surface.
+		// Attach metadata-backed layout here so early fallback does not erase
+		// the QueryResponse layout sent before the plugin result finishes.
+		response.Layout = m.buildMetadataBackedQueryLayout(ctx, queryPlugin, query)
+	}
+
 	var queryResults []QueryResult
 	if query.IsGlobalQuery() {
 		for _, pluginInstance := range m.instances {

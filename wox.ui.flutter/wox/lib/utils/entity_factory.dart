@@ -6,7 +6,6 @@ import 'package:wox/entity/wox_glance.dart';
 import 'package:wox/entity/wox_lang.dart';
 import 'package:wox/entity/wox_plugin.dart';
 import 'package:wox/entity/wox_preview.dart';
-import 'package:wox/entity/wox_query.dart';
 import 'package:wox/entity/wox_runtime_status.dart';
 import 'package:wox/entity/wox_setting.dart';
 import 'package:wox/entity/wox_theme.dart';
@@ -28,7 +27,6 @@ class EntityFactory {
     'PluginDetail': (json) => PluginDetail.fromJson(json),
     'AIModel': (json) => AIModel.fromJson(json),
     'DoctorCheckResult': (json) => DoctorCheckResult.fromJson(json),
-    'QueryMetadata': (json) => QueryMetadata.fromJson(json),
     'WoxUsageStats': (json) => WoxUsageStats.fromJson(json),
   };
 

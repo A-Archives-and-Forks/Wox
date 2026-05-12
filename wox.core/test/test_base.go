@@ -141,7 +141,9 @@ CollectResults:
 
 	// Try fallback results if no results found
 	if len(allResults) == 0 {
-		allResults = plugin.GetPluginManager().QueryFallback(ts.ctx, query, queryPlugin)
+		// QueryFallback now uses the QueryResponseUI envelope so layout can
+		// travel with fallback rows; this helper only needs the result rows.
+		allResults = plugin.GetPluginManager().QueryFallback(ts.ctx, query, queryPlugin).Results
 	}
 
 	// Verify results
