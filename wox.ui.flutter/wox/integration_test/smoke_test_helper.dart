@@ -102,17 +102,22 @@ Future<void> ensureSmokeWindowReadyForFirstPump() async {
   }
 }
 
-Future<void> startSmokeAppBeforeFirstPump({required Duration timeout}) async {
+Future<void> startSmokeAppBeforeFirstPump({required Duration timeout, Future<void> Function()? beforeRunApp}) async {
   await ensureSmokeWindowReadyForFirstPump();
 
   try {
-    // Bug fix: app.main performs asynchronous startup before runApp. Letting
-    // the first tester.pump race that initialization is fragile on macOS
-    // because a non-frontmost panel can block vsync before the widget tree is
-    // mounted. Await main explicitly so the first pump only runs after runApp
-    // has scheduled a frame, and bound the wait so startup failures report at
-    // the real blocking point.
-    await app.main([WoxTestConfig.serverPort.toString(), '-1', 'true']).timeout(timeout);
+    // Bug fix: onboarding smoke must seed the durable first-run setting before
+    // runApp schedules the /on/ready callback. Calling app.main as one block
+    // let the backend read the previous test's OnboardingFinished value, so
+    // dedicated first-run cases could open the launcher and wait forever for
+    // onboarding. Keeping the production startup order here, with one smoke-only
+    // hook after services are initialized, makes initial backend routing
+    // deterministic without adding a product-only test branch.
+    await app.initialServices([WoxTestConfig.serverPort.toString(), '-1', 'true']).timeout(timeout);
+    await beforeRunApp?.call();
+    await app.initWindow().timeout(timeout);
+    await app.initDeepLink().timeout(timeout);
+    runApp(const app.MyApp());
   } on TimeoutException {
     fail('Wox app main did not complete before the first pump within $timeout.');
   }
@@ -141,8 +146,7 @@ Future<WoxLauncherController> launchLauncherApp(WidgetTester tester, {bool onboa
   // window stops delivering vsync signals, which causes pump() to block.
   // The previous test's tearDown hides the window for backend state cleanup.
   await resetSmokeAppState();
-  await startSmokeAppBeforeFirstPump(timeout: const Duration(seconds: 30));
-  await seedOnboardingFinishedBeforeReady(onboardingFinished);
+  await startSmokeAppBeforeFirstPump(timeout: const Duration(seconds: 30), beforeRunApp: () => seedOnboardingFinishedBeforeReady(onboardingFinished));
 
   final launcherFinder = find.byType(WoxLauncherView);
   await pumpUntil(tester, () => launcherFinder.evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
@@ -157,8 +161,7 @@ Future<SmokeLaunchResult> launchLauncherAppAndMeasureStartup(WidgetTester tester
   await resetSmokeAppState();
 
   final stopwatch = Stopwatch()..start();
-  await startSmokeAppBeforeFirstPump(timeout: timeout);
-  await seedOnboardingFinishedBeforeReady(true);
+  await startSmokeAppBeforeFirstPump(timeout: timeout, beforeRunApp: () => seedOnboardingFinishedBeforeReady(true));
 
   final launcherFinder = find.byType(WoxLauncherView);
   await pumpUntil(tester, () => launcherFinder.evaluate().isNotEmpty, timeout: timeout);
@@ -179,10 +182,17 @@ Future<SmokeLaunchResult> launchLauncherAppAndMeasureStartup(WidgetTester tester
 
 Future<WoxLauncherController> launchOnboardingApp(WidgetTester tester) async {
   await resetSmokeAppState();
-  await startSmokeAppBeforeFirstPump(timeout: const Duration(seconds: 30));
-  await seedOnboardingFinishedBeforeReady(false);
+  await startSmokeAppBeforeFirstPump(timeout: const Duration(seconds: 30), beforeRunApp: () => seedOnboardingFinishedBeforeReady(false));
 
   final onboardingFinder = find.byKey(const ValueKey('onboarding-view'));
+  await tester.pump(const Duration(milliseconds: 500));
+  if (onboardingFinder.evaluate().isEmpty) {
+    // Bug fix: the backend handles /on/ready only once per smoke process, so
+    // onboarding cases cannot depend on startup routing after the startup smoke
+    // has consumed it. Explicitly opening the guide keeps these cases focused
+    // on onboarding behavior in both filtered and full-suite runs.
+    await Get.find<WoxLauncherController>().openOnboarding(const UuidV4().generate());
+  }
   await pumpUntil(tester, () => onboardingFinder.evaluate().isNotEmpty, timeout: const Duration(seconds: 30));
   expect(onboardingFinder, findsOneWidget);
 

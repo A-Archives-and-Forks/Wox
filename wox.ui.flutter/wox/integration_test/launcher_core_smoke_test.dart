@@ -476,6 +476,13 @@ void registerLauncherCoreSmokeTests() {
       // Feature coverage: plugins now use one generic list preview contract for
       // status-oriented rows. This smoke keeps the controller-facing payload
       // explicit so SDK and UI changes cannot drift back to file-only fields.
+      // Bug fix: onReceivedQueryResults intentionally rejects stale query IDs.
+      // The smoke injects controller-facing data directly, so it must first
+      // bind the active query to this synthetic result batch instead of relying
+      // on whatever query a previous smoke case left behind.
+      final query = PlainQuery.text('list preview smoke');
+      query.queryId = queryId;
+      controller.currentQuery.value = query;
       final result = WoxQueryResult(
         queryId: queryId,
         id: 'list-preview-result',
