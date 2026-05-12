@@ -162,6 +162,56 @@ func parseFeatureFloatParam(value any) (float64, error) {
 	}
 }
 
+func parseFeatureStringListParam(value any) []string {
+	items := []string{}
+	if vString, ok := value.(string); ok {
+		if vString != "" {
+			items = strings.Split(vString, ",")
+		}
+	}
+	if vArray, ok := value.([]any); ok {
+		for _, item := range vArray {
+			if itemString, ok := item.(string); ok {
+				items = append(items, itemString)
+			}
+		}
+	}
+	if vArray, ok := value.([]string); ok {
+		// Built-in Go plugins pass feature params directly instead of through JSON decoding.
+		// Accepting []string keeps command-scoped features equivalent for built-in and external plugins.
+		items = append(items, vArray...)
+	}
+
+	for i := range items {
+		items[i] = strings.TrimSpace(items[i])
+	}
+	return items
+}
+
+func isFeatureEnabledForCommand(commands []string, command string) bool {
+	if len(commands) == 0 {
+		return true
+	}
+
+	// A leading ! keeps the existing exclusion-mode contract while centralizing
+	// command matching for metadata features that can be scoped by query command.
+	if strings.HasPrefix(commands[0], "!") {
+		for _, cmd := range commands {
+			if strings.TrimPrefix(cmd, "!") == command {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, cmd := range commands {
+		if cmd == command {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Metadata) GetFeatureParamsForDebounce() (MetadataFeatureParamsDebounce, error) {
 	for _, feature := range m.Features {
 		if strings.EqualFold(feature.Name, MetadataFeatureDebounce) {
@@ -188,37 +238,41 @@ func (m *Metadata) GetFeatureParamsForResultPreviewWidthRatio() (MetadataFeature
 			if v, ok := feature.Params["WidthRatio"]; !ok {
 				return MetadataFeatureParamsResultPreviewWidthRatio{}, errors.New("resultPreviewWidthRatio feature does not have widthRatio param")
 			} else {
-				parsed := false
-				widthRatio := 0.0
-
-				if parsedWidthRatio, ok := v.(float64); ok {
-					widthRatio = parsedWidthRatio
-					parsed = true
-				}
-				if parsedWidthRatioString, ok := v.(string); ok {
-					convertedWidthRatio, convertErr := strconv.ParseFloat(parsedWidthRatioString, 64)
-					if convertErr != nil {
-						return MetadataFeatureParamsResultPreviewWidthRatio{}, fmt.Errorf("resultPreviewWidthRatio feature widthRatio param is not a valid number: %s", convertErr.Error())
-					}
-					widthRatio = convertedWidthRatio
-					parsed = true
-				}
-				if !parsed {
-					return MetadataFeatureParamsResultPreviewWidthRatio{}, fmt.Errorf("resultPreviewWidthRatio feature widthRatio param is not a valid number")
+				widthRatio, err := parseFeatureFloatParam(v)
+				if err != nil {
+					return MetadataFeatureParamsResultPreviewWidthRatio{}, fmt.Errorf("resultPreviewWidthRatio feature widthRatio param is not a valid number: %s", err.Error())
 				}
 
 				if widthRatio < 0 || widthRatio > 1 {
 					return MetadataFeatureParamsResultPreviewWidthRatio{}, fmt.Errorf("resultPreviewWidthRatio feature widthRatio param is not a valid number: %s", "must be between 0 and 1")
 				}
 
+				commands := []string{}
+				if commandValue, ok := feature.Params["Commands"]; ok {
+					// This feature used to apply only at plugin scope. Commands gives plugin
+					// authors the same command-scoped control as gridLayout, so a preview-only
+					// command can use WidthRatio 0 without changing the plugin's normal queries.
+					commands = parseFeatureStringListParam(commandValue)
+				}
+
 				return MetadataFeatureParamsResultPreviewWidthRatio{
 					WidthRatio: widthRatio,
+					Commands:   commands,
 				}, nil
 			}
 		}
 	}
 
 	return MetadataFeatureParamsResultPreviewWidthRatio{}, ErrFeatureNotSupported
+}
+
+func (m *Metadata) GetFeatureParamsForResultPreviewWidthRatioCommand(command string) (MetadataFeatureParamsResultPreviewWidthRatio, bool, error) {
+	params, err := m.GetFeatureParamsForResultPreviewWidthRatio()
+	if err != nil {
+		return MetadataFeatureParamsResultPreviewWidthRatio{}, false, err
+	}
+
+	return params, params.IsEnabledForCommand(command), nil
 }
 
 type MetadataFeatureParamsMRU struct {
@@ -409,6 +463,11 @@ type MetadataFeatureParamsQueryEnv struct {
 
 type MetadataFeatureParamsResultPreviewWidthRatio struct {
 	WidthRatio float64 // [0-1]
+	Commands   []string
+}
+
+func (p MetadataFeatureParamsResultPreviewWidthRatio) IsEnabledForCommand(command string) bool {
+	return isFeatureEnabledForCommand(p.Commands, command)
 }
 
 // MetadataFeatureParamsGridLayout contains parameters for grid layout feature
@@ -435,27 +494,7 @@ func (m *Metadata) GetFeatureParamsForGridLayoutCommand(command string) (Metadat
 }
 
 func (p MetadataFeatureParamsGridLayout) IsEnabledForCommand(command string) bool {
-	if len(p.Commands) == 0 {
-		return true
-	}
-
-	// A leading ! keeps the existing exclusion-mode contract while centralizing
-	// command matching for both metadata responses and result icon polishing.
-	if strings.HasPrefix(p.Commands[0], "!") {
-		for _, cmd := range p.Commands {
-			if strings.TrimPrefix(cmd, "!") == command {
-				return false
-			}
-		}
-		return true
-	}
-
-	for _, cmd := range p.Commands {
-		if cmd == command {
-			return true
-		}
-	}
-	return false
+	return isFeatureEnabledForCommand(p.Commands, command)
 }
 
 func (m *Metadata) GetFeatureParamsForGridLayout() (MetadataFeatureParamsGridLayout, error) {
@@ -515,27 +554,7 @@ func (m *Metadata) GetFeatureParamsForGridLayout() (MetadataFeatureParamsGridLay
 			}
 
 			if v, ok := feature.Params["Commands"]; ok {
-				if vString, ok := v.(string); ok {
-					if vString != "" {
-						params.Commands = strings.Split(vString, ",")
-						for i := range params.Commands {
-							params.Commands[i] = strings.TrimSpace(params.Commands[i])
-						}
-					}
-				}
-				if vArray, ok := v.([]any); ok {
-					for _, item := range vArray {
-						if itemString, ok := item.(string); ok {
-							params.Commands = append(params.Commands, itemString)
-						}
-					}
-				}
-				if vArray, ok := v.([]string); ok {
-					// Built-in Go plugins pass feature params directly instead of through JSON decoding.
-					// Accepting []string keeps command-scoped grid layouts from falling back to the
-					// empty-command meaning, which enables grid mode for every query.
-					params.Commands = append(params.Commands, vArray...)
-				}
+				params.Commands = parseFeatureStringListParam(v)
 			}
 
 			return params, nil

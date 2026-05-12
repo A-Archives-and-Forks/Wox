@@ -1698,11 +1698,14 @@ func handleQueryMetadata(w http.ResponseWriter, r *http.Request) {
 		logger.Error(ctx, fmt.Sprintf("failed to parse icon: %s", parseErr.Error()))
 	}
 
-	featureParams, err := pluginInstance.Metadata.GetFeatureParamsForResultPreviewWidthRatio()
-	if err == nil {
+	featureParams, isResultPreviewWidthRatioEnabled, err := pluginInstance.Metadata.GetFeatureParamsForResultPreviewWidthRatioCommand(query.Command)
+	if err == nil && isResultPreviewWidthRatioEnabled {
+		// Result preview width ratio can now be scoped by command. The old plugin-wide
+		// lookup was too broad for commands like selection preview, where only that
+		// command should hide the result list while normal selection queries stay split.
 		metadata.WidthRatio = featureParams.WidthRatio
 	} else {
-		if !errors.Is(err, plugin.ErrFeatureNotSupported) {
+		if err != nil && !errors.Is(err, plugin.ErrFeatureNotSupported) {
 			logger.Error(ctx, fmt.Sprintf("failed to get feature params for result preview width ratio: %s", err.Error()))
 		}
 	}

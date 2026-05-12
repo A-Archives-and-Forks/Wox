@@ -58,6 +58,16 @@ func (i *SelectionPlugin) GetMetadata() plugin.Metadata {
 			{
 				Name: plugin.MetadataFeatureQuerySelection,
 			},
+			{
+				Name: plugin.MetadataFeatureResultPreviewWidthRatio,
+				Params: map[string]any{
+					// The preview command is intended to behave like Quick Look. A plugin-wide
+					// WidthRatio 0 would also hide the result list for normal selection queries,
+					// so the command-scoped ratio keeps only "selection preview" preview-only.
+					"WidthRatio": 0.0,
+					"Commands":   []string{selectionCommandPreview},
+				},
+			},
 		},
 	}
 }
