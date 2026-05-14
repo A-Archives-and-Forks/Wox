@@ -2297,8 +2297,8 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
     {
       double x = fl_value_get_float(fl_value_lookup_string(args, "x"));
       double y = fl_value_get_float(fl_value_lookup_string(args, "y"));
-      gtk_window_move(window, (int)x, (int)y);
-      log("FLUTTER: setPosition, x: %f, y: %f", x, y);
+    gtk_window_move(window, (int)x, (int)y);
+    log("FLUTTER: setPosition, x: %f, y: %f", x, y);
       response = FL_METHOD_RESPONSE(
           fl_method_success_response_new(fl_value_new_null()));
     }

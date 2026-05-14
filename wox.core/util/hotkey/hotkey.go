@@ -7,6 +7,14 @@ import (
 	"wox/util/keyboard"
 )
 
+// platformHotkeyAvailableCheck is a platform hook that can short-circuit the
+// standard register-test-unregister availability check. If non-nil, it is called
+// first. When the returned `handled` flag is true the returned `available` value
+// is used directly and the standard check is skipped. Platforms that have a
+// fundamentally different hotkey model (e.g. Wayland's portal-based registration)
+// should set this in their init() to avoid incorrect or harmful probe behaviour.
+var platformHotkeyAvailableCheck func(ctx context.Context, hotkeyStr string) (available bool, handled bool)
+
 type Hotkey struct {
 	// combineKey is the original hotkey string used for registration, e.g. "Ctrl+Shift+A".
 	combineKey   string
@@ -68,6 +76,16 @@ func (h *Hotkey) Unregister(ctx context.Context) {
 }
 
 func IsHotkeyAvailable(ctx context.Context, hotkeyStr string) (isAvailable bool) {
+	// Allow platforms to override the availability check with their own logic.
+	// On Wayland the XDG GlobalShortcuts portal does not have a "is this key
+	// taken" concept, so we cannot probe availability the same way we do on X11
+	// or macOS/Windows.
+	if platformHotkeyAvailableCheck != nil {
+		if available, handled := platformHotkeyAvailableCheck(ctx, hotkeyStr); handled {
+			return available
+		}
+	}
+
 	hk := Hotkey{}
 	registerErr := hk.Register(ctx, hotkeyStr, func() {})
 	if registerErr == nil {

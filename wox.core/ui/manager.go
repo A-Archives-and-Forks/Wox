@@ -28,6 +28,7 @@ import (
 	"wox/util/autostart"
 	"wox/util/hotkey"
 	"wox/util/ime"
+	"wox/util/keyboard"
 	"wox/util/screen"
 	"wox/util/selection"
 	"wox/util/shell"
@@ -390,6 +391,28 @@ func (m *Manager) UpdateServerPort(port int) {
 	m.serverPort = port
 }
 
+func (m *Manager) getUILaunchEnvs(ctx context.Context) []string {
+	if !util.IsLinux() {
+		return nil
+	}
+
+	if os.Getenv("GDK_BACKEND") != "" {
+		return nil
+	}
+
+	if os.Getenv("WAYLAND_DISPLAY") == "" || os.Getenv("DISPLAY") == "" {
+		return nil
+	}
+
+	// Bug fix: native Wayland ignores the GTK positioning APIs that Wox uses to
+	// place the launcher window, so the first show falls back to the compositor's
+	// top-left placement. Prefer XWayland for the UI child process when both
+	// Wayland and DISPLAY are present; this keeps the existing X11 move/resize
+	// path working without changing the user's global desktop session.
+	logger.Info(ctx, "start ui with GDK_BACKEND=x11 so Linux launcher positioning uses the X11 path under Wayland")
+	return []string{"GDK_BACKEND=x11"}
+}
+
 func (m *Manager) StartUIApp(ctx context.Context) error {
 	var appPath = util.GetLocation().GetUIAppPath()
 	if fileInfo, statErr := os.Stat(appPath); os.IsNotExist(statErr) {
@@ -409,7 +432,7 @@ func (m *Manager) StartUIApp(ctx context.Context) error {
 	}
 
 	logger.Info(ctx, fmt.Sprintf("start ui, path=%s, port=%d, pid=%d", appPath, m.serverPort, os.Getpid()))
-	cmd, cmdErr := shell.Run(appPath,
+	cmd, cmdErr := shell.RunWithEnv(appPath, m.getUILaunchEnvs(ctx),
 		fmt.Sprintf("%d", m.serverPort),
 		fmt.Sprintf("%d", os.Getpid()),
 		fmt.Sprintf("%t", util.IsDev()),
@@ -1307,6 +1330,18 @@ func (m *Manager) ProcessDeeplink(ctx context.Context, deeplink string) {
 		m.ui.ToggleApp(ctx, common.ShowContext{
 			SelectAll: true,
 		})
+	}
+
+	// wox://gnome-hotkey?binding=<url-encoded-binding>
+	// Invoked when a GNOME custom keybinding fires and the secondary wox
+	// process forwards the deeplink to the already-running instance.
+	// The binding parameter is the GNOME key string (e.g. "<Primary><Shift>k"),
+	// URL-decoded by ProcessDeeplink before it reaches here.
+	if command == "gnome-hotkey" {
+		binding := arguments["binding"]
+		if binding != "" {
+			keyboard.InvokeGnomeHotkeyCallback(binding)
+		}
 	}
 
 	// wox://plugin/{pluginID}?arg1=val1&arg2=val2

@@ -1278,11 +1278,6 @@ class WoxLauncherController extends GetxController {
     forceMaxResultCount = params.maxResultCount;
     forceHideOnBlur = params.hideOnBlur;
 
-    // Handle different position types
-    // on linux, we need to show first and then set position or center it
-    if (Platform.isLinux) {
-      await windowManager.show();
-    }
     final targetHeight = calculateInitialShowWindowHeight(shouldPreserveIncomingQuery);
     final targetWidth = forceWindowWidth != 0 ? forceWindowWidth : WoxSettingUtil.instance.currentSetting.appWidth.toDouble();
     final targetPosition = resolveShowAppPosition(params, targetWidth, targetHeight);
@@ -1290,6 +1285,12 @@ class WoxLauncherController extends GetxController {
       traceId,
       "show app bounds resolved: x=${targetPosition.dx}, y=${targetPosition.dy}, width=$targetWidth, height=$targetHeight, trayAnchorBottom=${params.trayAnchor?.bottom ?? -1}",
     );
+
+    // Handle different position types
+    // on linux, we need to show first and then set position or center it
+    if (Platform.isLinux) {
+      await windowManager.show();
+    }
 
     // Apply position+size together before showing to avoid opening with stale width.
     await windowManager.setBounds(targetPosition, Size(targetWidth, targetHeight));

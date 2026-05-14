@@ -42,6 +42,12 @@ var (
 	waylandPortalSignals       chan *dbus.Signal
 	waylandPortalRegistrations = map[dbus.ObjectPath]*waylandHotkeyRegistration{}
 	waylandPortalCounter       uint64
+
+	// waylandPortalUnavailable is set to true the first time ensureWaylandPortalReady
+	// determines that the XDG GlobalShortcuts portal is not available on this system
+	// (e.g. xdg-desktop-portal-gnome < 47 which lacks the implementation).
+	// Subsequent calls short-circuit immediately instead of repeating the probe.
+	waylandPortalUnavailable bool
 )
 
 func registerGlobalHotkeyLinuxWayland(modifiers Modifier, key Key, callback func()) (HotkeyRegistration, error) {
@@ -136,12 +142,27 @@ func addRawKeyListenerLinuxWayland(handler RawKeyHandler) (RawKeySubscription, e
 	return nil, unsupportedWaylandRawListenerError()
 }
 
+// IsWaylandPortalAvailable returns true when the XDG GlobalShortcuts portal
+// has been successfully initialised at least once. It is safe to call from
+// any goroutine.
+func IsWaylandPortalAvailable() bool {
+	waylandPortalMu.Lock()
+	defer waylandPortalMu.Unlock()
+	return waylandPortalConn != nil
+}
+
 func ensureWaylandPortalReady() (*dbus.Conn, error) {
 	waylandPortalMu.Lock()
 	defer waylandPortalMu.Unlock()
 
 	if waylandPortalConn != nil {
 		return waylandPortalConn, nil
+	}
+
+	// If we already probed and the portal was not available, skip the expensive
+	// D-Bus round-trip and return the cached error immediately.
+	if waylandPortalUnavailable {
+		return nil, fmt.Errorf("wayland global shortcuts portal is not available on this system")
 	}
 
 	conn, err := dbus.ConnectSessionBus()
@@ -153,6 +174,8 @@ func ensureWaylandPortalReady() (*dbus.Conn, error) {
 	versionVariant, err := portalObject.GetProperty(portalGlobalShortcutsIFace + ".version")
 	if err != nil {
 		_ = conn.Close()
+		// Mark the portal as permanently unavailable so we do not re-probe.
+		waylandPortalUnavailable = true
 		return nil, fmt.Errorf("wayland global shortcuts portal is not available: %w", err)
 	}
 

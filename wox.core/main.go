@@ -81,6 +81,45 @@ func run() {
 		util.GetLogger().Info(ctx, fmt.Sprintf("startup pid: %d, executable: <error>, args: %v", os.Getpid(), os.Args))
 	}
 
+	// Check for an existing instance BEFORE doing any heavy initialization (database, analytics,
+	// migrations). When this process is launched as a one-shot deeplink forwarder (e.g. via the
+	// desktop URL-scheme handler on Linux), we just need to forward the request and exit.
+	// Running the full startup sequence in that case wastes time and leaves an orphan process,
+	// because mainthread.Init keeps the main goroutine alive in its event loop even after run()
+	// returns. Using os.Exit(0) is the only reliable way to terminate cleanly here.
+	if existingPort := getExistingInstancePort(ctx); existingPort > 0 {
+		util.GetLogger().Info(ctx, fmt.Sprintf("there is existing instance running, port: %d", existingPort))
+
+		// if args has deeplink, post it to the existing instance and exit immediately
+		for _, arg := range os.Args[1:] {
+			if strings.HasPrefix(arg, "wox://") {
+				_, postDeepLinkErr := util.HttpPost(ctx, fmt.Sprintf("http://127.0.0.1:%d/deeplink", existingPort), map[string]string{
+					"deeplink": arg,
+				})
+				if postDeepLinkErr != nil {
+					util.GetLogger().Error(ctx, fmt.Sprintf("failed to post deeplink to existing instance: %s", postDeepLinkErr.Error()))
+				} else {
+					util.GetLogger().Info(ctx, "post deeplink to existing instance successfully, bye~")
+				}
+				// Exit regardless of success/failure: this process has no further role.
+				os.Exit(0)
+			}
+		}
+
+		// show existing instance if no deeplink is provided
+		_, postShowErr := util.HttpPost(ctx, fmt.Sprintf("http://127.0.0.1:%d/show", existingPort), "")
+		if postShowErr != nil {
+			util.GetLogger().Error(ctx, fmt.Sprintf("failed to show existing instance: %s", postShowErr.Error()))
+		} else {
+			util.GetLogger().Info(ctx, "show existing instance successfully, bye~")
+		}
+		// Exit regardless: the main goroutine is blocked in mainthread's event loop and will
+		// never terminate on its own, so os.Exit is required to avoid a zombie process.
+		os.Exit(0)
+	}
+
+	util.GetLogger().Info(ctx, "no existing instance found, proceeding with full startup")
+
 	if err := database.Init(ctx); err != nil {
 		util.GetLogger().Error(ctx, fmt.Sprintf("failed to initialize database: %s", err.Error()))
 		return
@@ -104,41 +143,9 @@ func run() {
 	ui.GetUIManager().UpdateServerPort(serverPort)
 	common.SetServerPort(serverPort)
 
-	// check if there is existing instance running
-	if existingPort := getExistingInstancePort(ctx); existingPort > 0 {
-		util.GetLogger().Error(ctx, fmt.Sprintf("there is existing instance running, port: %d", existingPort))
-
-		// if args has deeplink, post it to the existing instance
-		if len(os.Args) > 1 {
-			for _, arg := range os.Args {
-				if strings.HasPrefix(arg, "wox://") {
-					_, postDeepLinkErr := util.HttpPost(ctx, fmt.Sprintf("http://127.0.0.1:%d/deeplink", existingPort), map[string]string{
-						"deeplink": arg,
-					})
-					if postDeepLinkErr != nil {
-						util.GetLogger().Error(ctx, fmt.Sprintf("failed to post deeplink to existing instance: %s", postDeepLinkErr.Error()))
-					} else {
-						util.GetLogger().Info(ctx, "post deeplink to existing instance successfully, bye~")
-						return
-					}
-				}
-			}
-		}
-
-		// show existing instance if no deeplink is provided
-		_, postShowErr := util.HttpPost(ctx, fmt.Sprintf("http://127.0.0.1:%d/show", existingPort), "")
-		if postShowErr != nil {
-			util.GetLogger().Error(ctx, fmt.Sprintf("failed to show existing instance: %s", postShowErr.Error()))
-		} else {
-			util.GetLogger().Info(ctx, "show existing instance successfully, bye~")
-		}
-		return
-	} else {
-		util.GetLogger().Info(ctx, "no existing instance found")
-		writeErr := os.WriteFile(util.GetLocation().GetAppLockPath(), []byte(fmt.Sprintf("%d", serverPort)), 0644)
-		if writeErr != nil {
-			util.GetLogger().Error(ctx, fmt.Sprintf("failed to write lock file: %s", writeErr.Error()))
-		}
+	writeErr := os.WriteFile(util.GetLocation().GetAppLockPath(), []byte(fmt.Sprintf("%d", serverPort)), 0644)
+	if writeErr != nil {
+		util.GetLogger().Error(ctx, fmt.Sprintf("failed to write lock file: %s", writeErr.Error()))
 	}
 
 	extractErr := resource.Extract(ctx)
