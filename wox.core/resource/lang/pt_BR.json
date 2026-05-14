@@ -1079,6 +1079,10 @@
   "plugin_clipboard_image_width": "Largura da imagem",
   "plugin_clipboard_image_height": "Altura da imagem",
   "plugin_clipboard_image_size": "Tamanho da imagem",
+  "plugin_clipboard_refinement_type": "Tipo",
+  "plugin_clipboard_refinement_type_all": "Todos",
+  "plugin_clipboard_refinement_type_text": "Texto",
+  "plugin_clipboard_refinement_type_image": "Imagem",
   "plugin_clipboard_keep_text_history": "Manter histórico de texto por",
   "plugin_clipboard_enable_text_history": "Ativar histórico de texto",
   "plugin_clipboard_days": "dias",
@@ -1225,5 +1229,6 @@
   "plugin_converter_rates_updated_seconds_ago": "%d s atrás",
   "plugin_converter_rates_updated_minutes_ago": "%d min atrás",
   "plugin_converter_rates_updated_hours_ago": "%d h atrás",
-  "plugin_converter_rates_fallback": "Taxas ainda não atualizadas, usando taxas de fallback"
+  "plugin_converter_rates_fallback": "Taxas ainda não atualizadas, usando taxas de fallback",
+  "ui_query_refinement_filters": "Filtros"
 }

@@ -1080,6 +1080,10 @@
   "plugin_clipboard_image_width": "Ширина изображения",
   "plugin_clipboard_image_height": "Высота изображения",
   "plugin_clipboard_image_size": "Размер изображения",
+  "plugin_clipboard_refinement_type": "Тип",
+  "plugin_clipboard_refinement_type_all": "Все",
+  "plugin_clipboard_refinement_type_text": "Текст",
+  "plugin_clipboard_refinement_type_image": "Изображение",
   "plugin_clipboard_keep_text_history": "Хранить историю текста",
   "plugin_clipboard_enable_text_history": "Включить историю текста",
   "plugin_clipboard_days": "дней",
@@ -1226,5 +1230,6 @@
   "plugin_converter_rates_updated_seconds_ago": "%d сек. назад",
   "plugin_converter_rates_updated_minutes_ago": "%d мин. назад",
   "plugin_converter_rates_updated_hours_ago": "%d ч назад",
-  "plugin_converter_rates_fallback": "Курсы еще не обновлены, используются резервные курсы"
+  "plugin_converter_rates_fallback": "Курсы еще не обновлены, используются резервные курсы",
+  "ui_query_refinement_filters": "Фильтры"
 }

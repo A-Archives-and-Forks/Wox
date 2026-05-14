@@ -690,6 +690,10 @@
   "plugin_clipboard_image_width": "Image width",
   "plugin_clipboard_image_height": "Image height",
   "plugin_clipboard_image_size": "Image size",
+  "plugin_clipboard_refinement_type": "Type",
+  "plugin_clipboard_refinement_type_all": "All",
+  "plugin_clipboard_refinement_type_text": "Text",
+  "plugin_clipboard_refinement_type_image": "Image",
   "plugin_clipboard_keep_text_history": "Keep text history for",
   "plugin_clipboard_enable_text_history": "Enable text history",
   "plugin_clipboard_days": "days",
@@ -1289,5 +1293,6 @@
   "onboarding_media_app_result": "Applications",
   "onboarding_media_app_result_subtitle": "Open apps and commands",
   "onboarding_media_file_result": "Files",
-  "onboarding_media_file_result_subtitle": "Search local files"
+  "onboarding_media_file_result_subtitle": "Search local files",
+  "ui_query_refinement_filters": "Filters"
 }

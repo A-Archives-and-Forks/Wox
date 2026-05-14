@@ -691,6 +691,10 @@
   "plugin_clipboard_image_width": "图片宽度",
   "plugin_clipboard_image_height": "图片高度",
   "plugin_clipboard_image_size": "图片大小",
+  "plugin_clipboard_refinement_type": "类型",
+  "plugin_clipboard_refinement_type_all": "全部",
+  "plugin_clipboard_refinement_type_text": "文本",
+  "plugin_clipboard_refinement_type_image": "图片",
   "plugin_clipboard_keep_text_history": "保留文本历史记录",
   "plugin_clipboard_enable_text_history": "启用文本历史记录",
   "plugin_clipboard_days": "天",
@@ -1289,5 +1293,6 @@
   "onboarding_media_app_result": "应用",
   "onboarding_media_app_result_subtitle": "打开应用和命令",
   "onboarding_media_file_result": "文件",
-  "onboarding_media_file_result_subtitle": "搜索本地文件"
+  "onboarding_media_file_result_subtitle": "搜索本地文件",
+  "ui_query_refinement_filters": "筛选"
 }

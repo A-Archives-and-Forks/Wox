@@ -211,6 +211,25 @@ func (c *ClipboardDB) GetRecent(ctx context.Context, limit, offset int) ([]Clipb
 	return c.scanRecords(rows)
 }
 
+// GetRecentByType retrieves recent clipboard records for one content type.
+func (c *ClipboardDB) GetRecentByType(ctx context.Context, recordType string, limit, offset int) ([]ClipboardRecord, error) {
+	querySQL := `
+	SELECT id, type, content, file_path, image_hash, icon_data, width, height, file_size, alias, timestamp, is_favorite, created_at
+	FROM clipboard_history
+	WHERE type = ?
+	ORDER BY timestamp DESC
+	LIMIT ? OFFSET ?
+	`
+
+	rows, err := c.db.QueryContext(ctx, querySQL, recordType, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return c.scanRecords(rows)
+}
+
 // SearchText searches for text content in clipboard history
 func (c *ClipboardDB) SearchText(ctx context.Context, searchTerm string, limit int) ([]ClipboardRecord, error) {
 	querySQL := `
@@ -223,6 +242,26 @@ func (c *ClipboardDB) SearchText(ctx context.Context, searchTerm string, limit i
 
 	searchPattern := "%" + searchTerm + "%"
 	rows, err := c.db.QueryContext(ctx, querySQL, string(clipboard.ClipboardTypeText), searchPattern, searchPattern, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return c.scanRecords(rows)
+}
+
+// SearchByType searches clipboard content and aliases inside one content type.
+func (c *ClipboardDB) SearchByType(ctx context.Context, searchTerm string, recordType string, limit int) ([]ClipboardRecord, error) {
+	querySQL := `
+	SELECT id, type, content, file_path, image_hash, icon_data, width, height, file_size, alias, timestamp, is_favorite, created_at
+	FROM clipboard_history
+	WHERE type = ? AND (content LIKE ? OR alias LIKE ?)
+	ORDER BY timestamp DESC
+	LIMIT ?
+	`
+
+	searchPattern := "%" + searchTerm + "%"
+	rows, err := c.db.QueryContext(ctx, querySQL, recordType, searchPattern, searchPattern, limit)
 	if err != nil {
 		return nil, err
 	}

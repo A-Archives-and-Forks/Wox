@@ -41,6 +41,13 @@ var primaryActionValueCopy = "copy"
 var primaryActionValuePaste = "paste"
 var favoritesSettingKey = "favorites"
 
+const (
+	clipboardTypeRefinementKey   = "clipboard_type"
+	clipboardTypeRefinementAll   = "all"
+	clipboardTypeRefinementText  = "text"
+	clipboardTypeRefinementImage = "image"
+)
+
 func init() {
 	plugin.AllSystemPlugin = append(plugin.AllSystemPlugin, &ClipboardPlugin{
 		maxHistoryCount: 5000,
@@ -79,7 +86,9 @@ type ClipboardDBInterface interface {
 	UpdateAlias(ctx context.Context, id string, alias *string) error
 	Delete(ctx context.Context, id string) error
 	GetRecent(ctx context.Context, limit, offset int) ([]ClipboardRecord, error)
+	GetRecentByType(ctx context.Context, recordType string, limit, offset int) ([]ClipboardRecord, error)
 	SearchText(ctx context.Context, searchTerm string, limit int) ([]ClipboardRecord, error)
+	SearchByType(ctx context.Context, searchTerm string, recordType string, limit int) ([]ClipboardRecord, error)
 	GetByID(ctx context.Context, id string) (*ClipboardRecord, error)
 	DeleteExpired(ctx context.Context, textDays, imageDays int) (int64, error)
 	EnforceMaxCount(ctx context.Context, maxCount int) (int64, error)
@@ -358,12 +367,82 @@ func (c *ClipboardPlugin) processClipboardData(ctx context.Context, data clipboa
 	c.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("saved clipboard %s to database", data.GetType()))
 }
 
+func (c *ClipboardPlugin) newClipboardQueryResponse(results []plugin.QueryResult) plugin.QueryResponse {
+	response := plugin.NewQueryResponse(results)
+	response.Refinements = []plugin.QueryRefinement{c.buildClipboardTypeRefinement()}
+	return response
+}
+
+func (c *ClipboardPlugin) buildClipboardTypeRefinement() plugin.QueryRefinement {
+	// Feature addition: clipboard now exposes type filtering through the common
+	// QueryRefinement channel instead of adding another plugin-specific command.
+	// The values stay simple strings because the UI only owns selection state;
+	// the plugin owns the filtering semantics.
+	return plugin.QueryRefinement{
+		Id:           clipboardTypeRefinementKey,
+		Title:        "i18n:plugin_clipboard_refinement_type",
+		Type:         plugin.QueryRefinementTypeSingleSelect,
+		DefaultValue: []string{clipboardTypeRefinementAll},
+		Hotkey:       "cmd+t",
+		Persist:      false,
+		Options: []plugin.QueryRefinementOption{
+			{Value: clipboardTypeRefinementAll, Title: "i18n:plugin_clipboard_refinement_type_all"},
+			{Value: clipboardTypeRefinementText, Title: "i18n:plugin_clipboard_refinement_type_text"},
+			{Value: clipboardTypeRefinementImage, Title: "i18n:plugin_clipboard_refinement_type_image"},
+		},
+	}
+}
+
+func (c *ClipboardPlugin) getSelectedClipboardType(query plugin.Query) string {
+	selectedValues := query.Refinements[clipboardTypeRefinementKey]
+	if len(selectedValues) == 0 {
+		return clipboardTypeRefinementAll
+	}
+
+	switch selectedValues[0] {
+	case clipboardTypeRefinementText:
+		return string(clipboard.ClipboardTypeText)
+	case clipboardTypeRefinementImage:
+		return string(clipboard.ClipboardTypeImage)
+	default:
+		return clipboardTypeRefinementAll
+	}
+}
+
+func clipboardTypeMatches(recordType string, selectedType string) bool {
+	return selectedType == clipboardTypeRefinementAll || recordType == selectedType
+}
+
+func clipboardFavoriteMatchesSearch(favoriteItem FavoriteClipboardItem, search string, selectedType string) bool {
+	if !clipboardTypeMatches(favoriteItem.Type, selectedType) {
+		return false
+	}
+
+	// Preserve the historical "All" search behavior: it searched text history
+	// only. Image search becomes available only when the Image refinement is
+	// explicitly selected, which avoids surprising broad matches on metadata.
+	if selectedType == clipboardTypeRefinementAll && favoriteItem.Type != string(clipboard.ClipboardTypeText) {
+		return false
+	}
+
+	normalizedSearch := strings.ToLower(search)
+	if strings.Contains(strings.ToLower(favoriteItem.Content), normalizedSearch) {
+		return true
+	}
+	if favoriteItem.Alias != nil && strings.Contains(strings.ToLower(*favoriteItem.Alias), normalizedSearch) {
+		return true
+	}
+
+	return false
+}
+
 func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {
 	var results []plugin.QueryResult
+	selectedType := c.getSelectedClipboardType(query)
 
 	if c.db == nil {
 		c.api.Log(ctx, plugin.LogLevelError, "database not initialized")
-		return plugin.NewQueryResponse(results)
+		return c.newClipboardQueryResponse(results)
 	}
 
 	if query.Command == "fav" {
@@ -371,14 +450,17 @@ func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) plugin.
 		favorites, err := c.getFavoriteItems(ctx)
 		if err != nil {
 			c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to get favorites: %s", err.Error()))
-			return plugin.NewQueryResponse(results)
+			return c.newClipboardQueryResponse(results)
 		}
 
 		for _, favoriteItem := range favorites {
+			if !clipboardTypeMatches(favoriteItem.Type, selectedType) {
+				continue
+			}
 			record := c.convertFavoriteToRecord(favoriteItem)
 			results = append(results, c.convertRecordToResult(ctx, record, query))
 		}
-		return plugin.NewQueryResponse(results)
+		return c.newClipboardQueryResponse(results)
 	}
 
 	if query.Search == "" {
@@ -388,15 +470,24 @@ func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) plugin.
 			c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to get favorites: %s", err.Error()))
 		} else {
 			for _, favoriteItem := range favorites {
+				if !clipboardTypeMatches(favoriteItem.Type, selectedType) {
+					continue
+				}
 				record := c.convertFavoriteToRecord(favoriteItem)
 				results = append(results, c.convertRecordToResult(ctx, record, query))
 			}
 		}
 
 		// Get recent non-favorite records from database
-		recent, err := c.db.GetRecent(ctx, 50, 0)
-		if err != nil {
-			c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to get recent records: %s", err.Error()))
+		var recent []ClipboardRecord
+		var recentErr error
+		if selectedType == clipboardTypeRefinementAll {
+			recent, recentErr = c.db.GetRecent(ctx, 50, 0)
+		} else {
+			recent, recentErr = c.db.GetRecentByType(ctx, selectedType, 50, 0)
+		}
+		if recentErr != nil {
+			c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to get recent records: %s", recentErr.Error()))
 		} else {
 			for _, record := range recent {
 				// All records in database are non-favorite now
@@ -404,18 +495,18 @@ func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) plugin.
 			}
 		}
 
-		return plugin.NewQueryResponse(results)
+		return c.newClipboardQueryResponse(results)
 	}
 
-	// Search in text content
+	// Search historical content. The default All path keeps the old text-only
+	// behavior, while explicit type refinements narrow the search to that type.
 	var allResults []ClipboardRecord
 
 	// Search in favorites from settings
 	favorites, err := c.getFavoriteItems(ctx)
 	if err == nil {
 		for _, favoriteItem := range favorites {
-			if favoriteItem.Type == string(clipboard.ClipboardTypeText) &&
-				strings.Contains(strings.ToLower(favoriteItem.Content), strings.ToLower(query.Search)) {
+			if clipboardFavoriteMatchesSearch(favoriteItem, query.Search, selectedType) {
 				record := c.convertFavoriteToRecord(favoriteItem)
 				allResults = append(allResults, record)
 			}
@@ -423,9 +514,14 @@ func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) plugin.
 	}
 
 	// Search in database records
-	searchResults, err := c.db.SearchText(ctx, query.Search, 100)
+	var searchResults []ClipboardRecord
+	if selectedType == clipboardTypeRefinementAll {
+		searchResults, err = c.db.SearchText(ctx, query.Search, 100)
+	} else {
+		searchResults, err = c.db.SearchByType(ctx, query.Search, selectedType, 100)
+	}
 	if err != nil {
-		c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to search text: %s", err.Error()))
+		c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to search clipboard records: %s", err.Error()))
 	} else {
 		allResults = append(allResults, searchResults...)
 	}
@@ -434,7 +530,7 @@ func (c *ClipboardPlugin) Query(ctx context.Context, query plugin.Query) plugin.
 		results = append(results, c.convertRecordToResult(ctx, record, query))
 	}
 
-	return plugin.NewQueryResponse(results)
+	return c.newClipboardQueryResponse(results)
 }
 
 // isDuplicateContent checks if the content is duplicate by comparing with the most recent record

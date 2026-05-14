@@ -8,6 +8,7 @@ import 'launcher_plugin_smoke_test.dart';
 import 'launcher_screenshot_smoke_test.dart';
 import 'launcher_system_plugin_smoke_test.dart';
 import 'launcher_grid_smoke_test.dart';
+import 'launcher_refinement_smoke_test.dart';
 import 'launcher_toolbar_msg_smoke_test.dart';
 import 'launcher_resize_smoke_test.dart';
 
@@ -23,6 +24,7 @@ void main() {
   registerLauncherScreenshotSmokeTests();
   registerSystemPluginSmokeTests();
   registerLauncherGridSmokeTests();
+  registerLauncherRefinementSmokeTests();
   registerLauncherToolbarMsgSmokeTests();
   registerLauncherResizeSmokeTests();
 }

@@ -42,6 +42,7 @@ import 'package:wox/enums/wox_image_type_enum.dart';
 import 'package:wox/enums/wox_msg_method_enum.dart';
 import 'package:wox/enums/wox_msg_type_enum.dart';
 import 'package:wox/enums/wox_position_type_enum.dart';
+import 'package:wox/enums/wox_query_refinement_type_enum.dart';
 import 'package:wox/enums/wox_query_type_enum.dart';
 import 'package:wox/enums/wox_result_action_type_enum.dart';
 import 'package:wox/enums/wox_selection_type_enum.dart';
@@ -90,6 +91,14 @@ class WoxLauncherController extends GetxController {
   // execute once from the repeat fallback and swallow later repeats without widening the
   // workaround to other platforms or other focus handlers.
   bool _hasHandledLinuxQueryBoxSubmitKey = false;
+
+  // Query refinements are query-response scoped controls. They are kept
+  // separate from result rows so late responses can be guarded by query id and
+  // stale plugin filters cannot leak into the next trigger keyword.
+  final queryRefinements = <WoxQueryRefinement>[].obs;
+  final queryRefinementValues = <String, List<String>>{}.obs;
+  final isQueryRefinementBarExpanded = false.obs;
+  String queryRefinementScopeKey = "";
 
   //preview related variables
   final currentPreview = WoxPreview.empty().obs;
@@ -363,6 +372,7 @@ class WoxLauncherController extends GetxController {
     pendingRestoredQueryId = null;
     pendingRestoredQueryWindowHeight = null;
     isGridLayout.value = false;
+    clearQueryRefinements(const UuidV4().generate());
     cancelPendingResultTransitions();
     quickSelectTimer?.cancel();
     isQuickSelectMode.value = false;
@@ -526,6 +536,312 @@ class WoxLauncherController extends GetxController {
     return isKnownPluginInputQueryText(normalizedQuery);
   }
 
+  String getQueryRefinementScopeKey(PlainQuery query) {
+    if (query.queryType != WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code) {
+      return "";
+    }
+
+    final normalizedQuery = expandQueryShortcutForLocalClassification(query.queryText).trimLeft();
+    if (normalizedQuery.isEmpty || !RegExp(r'\s').hasMatch(normalizedQuery)) {
+      return "";
+    }
+
+    return normalizedQuery.split(RegExp(r'\s+')).first;
+  }
+
+  bool shouldPreserveQueryRefinementsForTextChange(PlainQuery currentQueryValue, String nextText) {
+    final currentScope = getQueryRefinementScopeKey(currentQueryValue);
+    if (currentScope.isEmpty) {
+      return false;
+    }
+
+    final nextScope = getQueryRefinementScopeKey(
+      PlainQuery(queryId: "", queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code, queryText: nextText, querySelection: Selection.empty()),
+    );
+    return currentScope == nextScope;
+  }
+
+  Map<String, List<String>> cloneQueryRefinementValues(Map<String, List<String>> values) {
+    return values.map((key, value) => MapEntry(key, List<String>.from(value)));
+  }
+
+  void clearQueryRefinements(String traceId) {
+    if (queryRefinements.isEmpty && queryRefinementValues.isEmpty && queryRefinementScopeKey.isEmpty && !isQueryRefinementBarExpanded.value) {
+      return;
+    }
+
+    // Bug fix: refinement controls are owned by the plugin query that returned
+    // them. Clearing both definitions and selected values prevents filters from
+    // one trigger keyword from silently being sent to another plugin.
+    queryRefinements.clear();
+    queryRefinementValues.clear();
+    isQueryRefinementBarExpanded.value = false;
+    queryRefinementScopeKey = "";
+    unawaited(resizeHeight(traceId: traceId, reason: "query refinements cleared"));
+  }
+
+  void prepareQueryRefinementsOnQueryChanged(String traceId, PlainQuery query) {
+    final nextScopeKey = getQueryRefinementScopeKey(query);
+    queryRefinementValues.assignAll(cloneQueryRefinementValues(query.queryRefinements));
+
+    if (nextScopeKey.isEmpty || (queryRefinementScopeKey.isNotEmpty && queryRefinementScopeKey != nextScopeKey)) {
+      clearQueryRefinements(traceId);
+      return;
+    }
+  }
+
+  List<String> normalizeQueryRefinementSelection(WoxQueryRefinement refinement, List<String> rawValues) {
+    final optionValues = refinement.options.map((option) => option.value).where((value) => value.isNotEmpty).toSet();
+    final allowAnyValue = optionValues.isEmpty;
+
+    List<String> normalizeValues(List<String> values) {
+      final normalized = <String>[];
+      for (final value in values) {
+        if (value.isEmpty || (!allowAnyValue && !optionValues.contains(value)) || normalized.contains(value)) {
+          continue;
+        }
+        normalized.add(value);
+      }
+      return normalized;
+    }
+
+    var normalized = normalizeValues(rawValues);
+    if (normalized.isEmpty) {
+      normalized = normalizeValues(refinement.defaultValue);
+    }
+
+    if ((refinement.type == WoxQueryRefinementTypeEnum.singleSelect.code || refinement.type == WoxQueryRefinementTypeEnum.sort.code) &&
+        normalized.isEmpty &&
+        refinement.options.isNotEmpty) {
+      normalized = [refinement.options.first.value];
+    }
+
+    if (refinement.type == WoxQueryRefinementTypeEnum.singleSelect.code || refinement.type == WoxQueryRefinementTypeEnum.sort.code) {
+      return normalized.take(1).toList();
+    }
+
+    return normalized;
+  }
+
+  Map<String, List<String>> normalizeQueryRefinementValues(List<WoxQueryRefinement> refinements, Map<String, List<String>> selectedValues) {
+    final normalized = <String, List<String>>{};
+    for (final refinement in refinements) {
+      if (refinement.isEmpty) {
+        continue;
+      }
+
+      // Feature addition: response defaults are materialized into the next
+      // query payload so plugins receive a stable object even before the user
+      // changes a control manually.
+      final selected = normalizeQueryRefinementSelection(refinement, selectedValues[refinement.id] ?? const <String>[]);
+      if (selected.isNotEmpty) {
+        normalized[refinement.id] = selected;
+      }
+    }
+    return normalized;
+  }
+
+  bool applyQueryRefinementsForQueryId(String traceId, String queryId, List<WoxQueryRefinement> refinements) {
+    if (currentQuery.value.queryId != queryId) {
+      // QueryResponse arrives asynchronously. Guarding by query id prevents a
+      // late plugin response from replacing controls for the query the user is
+      // currently editing.
+      Logger.instance.debug(traceId, "ignore stale query refinements: response queryId=$queryId, current queryId=${currentQuery.value.queryId}");
+      return false;
+    }
+
+    applyQueryRefinementsForQuery(traceId, currentQuery.value, refinements);
+    return true;
+  }
+
+  void applyQueryRefinementsForQuery(String traceId, PlainQuery query, List<WoxQueryRefinement> refinements) {
+    final validRefinements = refinements.where((refinement) => !refinement.isEmpty).toList();
+    if (validRefinements.isEmpty) {
+      currentQuery.value = cloneQuery(query, queryRefinements: <String, List<String>>{});
+      clearQueryRefinements(traceId);
+      return;
+    }
+
+    final normalizedValues = normalizeQueryRefinementValues(validRefinements, query.queryRefinements);
+    queryRefinements.assignAll(validRefinements);
+    queryRefinementValues.assignAll(normalizedValues);
+    queryRefinementScopeKey = getQueryRefinementScopeKey(query);
+    currentQuery.value = cloneQuery(query, queryRefinements: normalizedValues);
+    unawaited(resizeHeight(traceId: traceId, reason: "query refinements applied"));
+  }
+
+  List<String> getQueryRefinementSelectedValues(String refinementId) {
+    return List<String>.from(queryRefinementValues[refinementId] ?? const <String>[]);
+  }
+
+  void updateQueryRefinementSelection(String traceId, WoxQueryRefinement refinement, List<String> values) {
+    final normalizedValues = normalizeQueryRefinementSelection(refinement, values);
+    final nextRefinements = cloneQueryRefinementValues(currentQuery.value.queryRefinements);
+    if (normalizedValues.isEmpty) {
+      nextRefinements.remove(refinement.id);
+    } else {
+      nextRefinements[refinement.id] = normalizedValues;
+    }
+
+    // Feature addition: changing a refinement is equivalent to changing the
+    // query. Reusing onQueryChanged keeps loading, stale-result clearing, and
+    // websocket payload construction on the same path as text edits.
+    final nextQuery = cloneQuery(currentQuery.value, queryId: const UuidV4().generate(), queryRefinements: nextRefinements);
+    onQueryChanged(traceId, nextQuery, "query refinement changed");
+  }
+
+  List<String> getNextQueryRefinementHotkeyValues(WoxQueryRefinement refinement) {
+    final optionValues = refinement.options.map((option) => option.value).where((value) => value.isNotEmpty).toList();
+    final selectedValues = normalizeQueryRefinementSelection(refinement, getQueryRefinementSelectedValues(refinement.id));
+
+    if (refinement.type == WoxQueryRefinementTypeEnum.toggle.code) {
+      // Feature addition: toggle hotkeys mirror the visible toggle control,
+      // including its fallback value, so keyboard and mouse paths send the same
+      // selected value for minimal toggle definitions.
+      final toggleValue = refinement.defaultValue.firstWhereOrNull((value) => value.isNotEmpty) ?? (optionValues.isNotEmpty ? optionValues.first : "true");
+      if (selectedValues.contains(toggleValue)) {
+        return <String>[];
+      }
+      return [toggleValue];
+    }
+
+    if (refinement.type == WoxQueryRefinementTypeEnum.multiSelect.code) {
+      final allSelected = optionValues.isNotEmpty && optionValues.every(selectedValues.contains);
+      return allSelected ? <String>[] : optionValues;
+    }
+
+    if (optionValues.isEmpty) {
+      return <String>[];
+    }
+
+    final currentValue = selectedValues.isNotEmpty ? selectedValues.first : optionValues.first;
+    final currentIndex = optionValues.indexOf(currentValue);
+    return [optionValues[(currentIndex + 1) % optionValues.length]];
+  }
+
+  bool executeQueryRefinementHotkey(String traceId, HotKey hotkey) {
+    if (!shouldShowQueryRefinementAffordance) {
+      return false;
+    }
+
+    for (final refinement in queryRefinements) {
+      final parsed = WoxHotkey.parseHotkeyFromString(refinement.hotkey);
+      if (parsed == null || !parsed.isNormalHotkey) {
+        continue;
+      }
+
+      if (!WoxHotkey.equals(parsed.normalHotkey, hotkey)) {
+        continue;
+      }
+
+      // Feature addition: refinement hotkeys mutate the selected values without
+      // moving focus away from the query box. This keeps filter changes on the
+      // same keyboard-first path as result actions while still routing the next
+      // query through the normal websocket flow.
+      updateQueryRefinementSelection(traceId, refinement, getNextQueryRefinementHotkeyValues(refinement));
+      return true;
+    }
+
+    return false;
+  }
+
+  String get queryRefinementToggleHotkey => Platform.isMacOS ? "cmd+f" : "alt+f";
+
+  String get queryRefinementToggleHotkeyLabel => Platform.isMacOS ? "Cmd+F" : "Alt+F";
+
+  bool executeQueryRefinementToggleHotkey(String traceId, HotKey hotkey) {
+    if (!shouldShowQueryRefinementAffordance) {
+      return false;
+    }
+
+    final parsed = WoxHotkey.parseHotkeyFromString(queryRefinementToggleHotkey);
+    if (parsed == null || !parsed.isNormalHotkey || !WoxHotkey.equals(parsed.normalHotkey, hotkey)) {
+      return false;
+    }
+
+    toggleQueryRefinementBar(traceId);
+    return true;
+  }
+
+  void toggleQueryRefinementBar(String traceId) {
+    if (!shouldShowQueryRefinementAffordance) {
+      return;
+    }
+
+    // Visual refinement: filters are collapsed by default so normal launcher
+    // scanning stays tight. Toggling only changes chrome visibility; selected
+    // refinement values remain in the query payload either way.
+    isQueryRefinementBarExpanded.value = !isQueryRefinementBarExpanded.value;
+    unawaited(resizeHeight(traceId: traceId, reason: "query refinement bar toggled"));
+  }
+
+  bool isSameQueryRefinementSelection(List<String> left, List<String> right) {
+    if (left.length != right.length) {
+      return false;
+    }
+
+    for (final value in left) {
+      if (!right.contains(value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool isQueryRefinementDefaultSelection(WoxQueryRefinement refinement) {
+    final selectedValues = normalizeQueryRefinementSelection(refinement, getQueryRefinementSelectedValues(refinement.id));
+    final defaultValues = normalizeQueryRefinementSelection(refinement, refinement.defaultValue);
+    return isSameQueryRefinementSelection(selectedValues, defaultValues);
+  }
+
+  List<String> getActiveQueryRefinementLabels({int limit = 2}) {
+    final labels = <String>[];
+    for (final refinement in queryRefinements) {
+      if (isQueryRefinementDefaultSelection(refinement)) {
+        continue;
+      }
+
+      final selectedValues = normalizeQueryRefinementSelection(refinement, getQueryRefinementSelectedValues(refinement.id));
+      for (final selectedValue in selectedValues) {
+        final option = refinement.options.firstWhereOrNull((item) => item.value == selectedValue);
+        labels.add(option == null ? selectedValue : tr(option.title));
+        if (labels.length >= limit) {
+          return labels;
+        }
+      }
+    }
+    return labels;
+  }
+
+  bool get hasActiveQueryRefinements {
+    return getActiveQueryRefinementLabels(limit: 1).isNotEmpty;
+  }
+
+  String getQueryRefinementAffordanceLabel() {
+    final activeLabels = getActiveQueryRefinementLabels(limit: 2);
+    if (activeLabels.isEmpty) {
+      return tr("ui_query_refinement_filters");
+    }
+
+    final hiddenCount = queryRefinements.where((refinement) => !isQueryRefinementDefaultSelection(refinement)).length - activeLabels.length;
+    if (hiddenCount > 0) {
+      return "${activeLabels.join(", ")} +$hiddenCount";
+    }
+    return activeLabels.join(", ");
+  }
+
+  bool get shouldShowQueryRefinementAffordance {
+    return isQueryBoxVisible.value && queryRefinements.isNotEmpty && !isFullscreenPreviewOnly();
+  }
+
+  bool get shouldShowQueryRefinements {
+    return shouldShowQueryRefinementAffordance && isQueryRefinementBarExpanded.value;
+  }
+
+  double getQueryRefinementBarHeight() {
+    return shouldShowQueryRefinements ? WoxInterfaceSizeUtil.instance.current.queryRefinementBarHeight : 0.0;
+  }
+
   bool hasLocalPluginTriggerMetadata() {
     return Get.isRegistered<WoxSettingController>() && Get.find<WoxSettingController>().installedPlugins.isNotEmpty;
   }
@@ -604,9 +920,9 @@ class WoxLauncherController extends GetxController {
 
   String get previewFullscreenHotkeyLabel => "Ctrl+B";
 
-  String get previewSearchHotkey => Platform.isMacOS ? "cmd+f" : "ctrl+f";
+  String get previewSearchHotkey => Platform.isMacOS ? "cmd+shift+f" : "ctrl+shift+f";
 
-  String get previewSearchHotkeyLabel => Platform.isMacOS ? "Cmd+F" : "Ctrl+F";
+  String get previewSearchHotkeyLabel => Platform.isMacOS ? "Cmd+Shift+F" : "Ctrl+Shift+F";
 
   String get previewInspectorHotkey => Platform.isMacOS ? "cmd+alt+i" : "";
   String get previewRefreshHotkey => Platform.isMacOS ? "cmd+r" : "";
@@ -1439,13 +1755,13 @@ class WoxLauncherController extends GetxController {
         WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingBottom;
   }
 
-  PlainQuery cloneQuery(PlainQuery query, {String? queryId}) {
+  PlainQuery cloneQuery(PlainQuery query, {String? queryId, Map<String, List<String>>? queryRefinements}) {
     return PlainQuery(
       queryId: queryId ?? query.queryId,
       queryType: query.queryType,
       queryText: query.queryText,
       querySelection: Selection(type: query.querySelection.type, text: query.querySelection.text, filePaths: List<String>.from(query.querySelection.filePaths)),
-      queryRefinements: query.queryRefinements.map((key, value) => MapEntry(key, List<String>.from(value))),
+      queryRefinements: (queryRefinements ?? query.queryRefinements).map((key, value) => MapEntry(key, List<String>.from(value))),
     );
   }
 
@@ -1872,9 +2188,17 @@ class WoxLauncherController extends GetxController {
       // or show the preview panel
       resizeHeight(traceId: traceId, reason: "selection query text changed");
     } else {
+      final nextQueryRefinements =
+          shouldPreserveQueryRefinementsForTextChange(currentQuery.value, value) ? cloneQueryRefinementValues(currentQuery.value.queryRefinements) : <String, List<String>>{};
       onQueryChanged(
         traceId,
-        PlainQuery(queryId: const UuidV4().generate(), queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code, queryText: value, querySelection: Selection.empty()),
+        PlainQuery(
+          queryId: const UuidV4().generate(),
+          queryType: WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code,
+          queryText: value,
+          querySelection: Selection.empty(),
+          queryRefinements: nextQueryRefinements,
+        ),
         "user input changed",
       );
     }
@@ -1887,6 +2211,7 @@ class WoxLauncherController extends GetxController {
     currentQuery.value.queryId = queryId;
     backendQueryContext = QueryContext.empty();
     backendQueryContextQueryId = "";
+    clearQueryRefinements(traceId);
     prepareQueryLayoutOnQueryChanged(traceId, currentQuery.value);
 
     try {
@@ -1949,6 +2274,7 @@ class WoxLauncherController extends GetxController {
     currentQuery.value = query;
     backendQueryContext = QueryContext.empty();
     backendQueryContextQueryId = "";
+    prepareQueryRefinementsOnQueryChanged(traceId, query);
     isCurrentQueryReturned = false;
     isShowActionPanel.value = false;
     clearQueryResultsTimer.cancel();
@@ -2231,6 +2557,14 @@ class WoxLauncherController extends GetxController {
         // Apply it before results so list/grid switches happen under the same
         // query id and stale rows cannot be rendered with the new layout.
         applyQueryLayoutForQueryId(msg.traceId, queryId, QueryLayout.fromJson(Map<String, dynamic>.from(layoutData)));
+      }
+      if (queryResponse.containsKey('Refinements')) {
+        final refinementsData = queryResponse['Refinements'];
+        final refinements =
+            refinementsData is List
+                ? refinementsData.whereType<Map>().map((item) => WoxQueryRefinement.fromJson(Map<String, dynamic>.from(item))).toList()
+                : <WoxQueryRefinement>[];
+        applyQueryRefinementsForQueryId(msg.traceId, queryId, refinements);
       }
 
       var results = <WoxQueryResult>[];
@@ -2602,7 +2936,8 @@ class WoxLauncherController extends GetxController {
     }
 
     final queryBoxHeight = isQueryBoxVisible.value ? getQueryBoxTotalHeight() : 0.0;
-    var totalHeight = queryBoxHeight + resultHeight;
+    final refinementHeight = getQueryRefinementBarHeight();
+    var totalHeight = queryBoxHeight + refinementHeight + resultHeight;
 
     // On Windows with high DPI, add one pixel to avoid fractional cut-off.
     if (Platform.isWindows) {

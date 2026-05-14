@@ -522,6 +522,64 @@ class QueryIconInfo {
   }
 }
 
+/// QueryRefinement describes one plugin-owned filter or sort control.
+///
+/// The backend already transports refinements with QueryResponse. Flutter keeps
+/// the model close to result/query entities so every launcher view consumes the
+/// same parsed shape instead of re-reading raw websocket maps.
+class WoxQueryRefinement {
+  late String id;
+  late String title;
+  late String type;
+  late List<WoxQueryRefinementOption> options;
+  late List<String> defaultValue;
+  late String hotkey;
+  late bool persist;
+
+  WoxQueryRefinement({required this.id, required this.title, required this.type, required this.options, required this.defaultValue, required this.hotkey, required this.persist});
+
+  WoxQueryRefinement.fromJson(Map<String, dynamic> json) {
+    id = json['Id'] ?? json['id'] ?? "";
+    title = json['Title'] ?? json['title'] ?? "";
+    type = json['Type'] ?? json['type'] ?? "";
+    final rawOptions = json['Options'] ?? json['options'];
+    options =
+        rawOptions is List
+            ? rawOptions.whereType<Map>().map((option) => WoxQueryRefinementOption.fromJson(Map<String, dynamic>.from(option))).toList()
+            : <WoxQueryRefinementOption>[];
+    defaultValue = List<String>.from((json['DefaultValue'] ?? json['defaultValue'] ?? const <dynamic>[]).map((value) => value.toString()));
+    hotkey = json['Hotkey'] ?? json['hotkey'] ?? "";
+    persist = json['Persist'] ?? json['persist'] ?? false;
+  }
+
+  bool get isEmpty => id.isEmpty || type.isEmpty;
+}
+
+/// One option inside a query refinement control.
+///
+/// Count and keywords are optional plugin hints. The first UI pass displays the
+/// count and keeps keywords parsed so later keyboard/search affordances do not
+/// need another transport change.
+class WoxQueryRefinementOption {
+  late String value;
+  late String title;
+  late WoxImage icon;
+  late List<String> keywords;
+  late int? count;
+
+  WoxQueryRefinementOption({required this.value, required this.title, required this.icon, required this.keywords, required this.count});
+
+  WoxQueryRefinementOption.fromJson(Map<String, dynamic> json) {
+    value = json['Value'] ?? json['value'] ?? "";
+    title = json['Title'] ?? json['title'] ?? "";
+    final iconJson = json['Icon'] ?? json['icon'];
+    icon = iconJson is Map ? WoxImage.fromJson(Map<String, dynamic>.from(iconJson)) : WoxImage.empty();
+    keywords = List<String>.from((json['Keywords'] ?? json['keywords'] ?? const <dynamic>[]).map((keyword) => keyword.toString()));
+    final rawCount = json['Count'] ?? json['count'];
+    count = rawCount is int ? rawCount : int.tryParse(rawCount?.toString() ?? "");
+  }
+}
+
 class UpdatableResult {
   late String id;
   String? title;

@@ -141,8 +141,11 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
 
   double _getQueryBoxRightAccessoryWidth(BuildContext context, dynamic currentTheme) {
     final metrics = WoxInterfaceSizeUtil.instance.current;
+    final refinementWidth = _getRefinementAccessoryWidth(context, currentTheme);
+    final accessoryGap = refinementWidth > 0 ? metrics.scaledSpacing(8) : 0.0;
     if (!controller.shouldShowGlance) {
-      return metrics.queryBoxRightAccessoryWidth;
+      final iconSlotWidth = controller.queryIcon.value.icon.imageData.isEmpty ? 0.0 : metrics.queryBoxRightAccessoryWidth;
+      return math.max(metrics.queryBoxRightAccessoryWidth, refinementWidth + accessoryGap + iconSlotWidth);
     }
 
     final visibleItems = controller.glanceItems.take(1).toList();
@@ -150,7 +153,18 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
     final textColor = baseTextColor.withValues(alpha: 0.8);
     final textStyle = TextStyle(color: textColor, fontSize: metrics.queryBoxGlanceFontSize);
     final itemWidth = visibleItems.fold<double>(0, (sum, item) => sum + _getGlanceItemWidth(context, item, textStyle));
-    return metrics.queryBoxGlanceHPadding + itemWidth + math.max(visibleItems.length - 1, 0) * metrics.queryBoxGlanceItemSpacing;
+    return refinementWidth + accessoryGap + metrics.queryBoxGlanceHPadding + itemWidth + math.max(visibleItems.length - 1, 0) * metrics.queryBoxGlanceItemSpacing;
+  }
+
+  double _getRefinementAccessoryWidth(BuildContext context, dynamic currentTheme) {
+    if (!controller.shouldShowQueryRefinementAffordance) {
+      return 0.0;
+    }
+
+    final metrics = WoxInterfaceSizeUtil.instance.current;
+    final textStyle = TextStyle(color: safeFromCssColor(currentTheme.queryBoxFontColor), fontSize: metrics.smallLabelFontSize, fontWeight: FontWeight.w700);
+    final labelWidth = WoxTextMeasureUtil.measureTextWidth(context: context, text: controller.getQueryRefinementAffordanceLabel(), style: textStyle).ceilToDouble();
+    return (metrics.scaledSpacing(28) + labelWidth + metrics.scaledSpacing(14)).clamp(metrics.scaledSpacing(72), metrics.scaledSpacing(150)).toDouble();
   }
 
   double _getGlanceItemWidth(BuildContext context, GlanceItem item, TextStyle textStyle) {
@@ -389,9 +403,20 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                   return KeyEventResult.handled;
                 }
 
+                if (controller.executeQueryRefinementToggleHotkey(traceId, pressedHotkey)) {
+                  return KeyEventResult.handled;
+                }
+
                 // list all actions
                 if (controller.isActionHotkey(pressedHotkey)) {
                   controller.toggleActionPanel(const UuidV4().generate());
+                  return KeyEventResult.handled;
+                }
+
+                // Feature addition: query-level refinement hotkeys sit after
+                // launcher-local shortcuts and before result actions, so filters
+                // stay keyboard-accessible without stealing reserved commands.
+                if (controller.executeQueryRefinementHotkey(traceId, pressedHotkey)) {
                   return KeyEventResult.handled;
                 }
 
@@ -445,30 +470,97 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
     if (controller.isLoading.value) {
       return WoxLoadingIndicator(size: 20, color: safeFromCssColor(currentTheme.queryBoxCursorColor));
     }
+    final accessoryChildren = <Widget>[];
+    if (controller.shouldShowQueryRefinementAffordance) {
+      accessoryChildren.add(_buildRefinementAccessory(currentTheme));
+    }
+
     if (controller.shouldShowGlance) {
       final items = controller.glanceItems.take(1).toList();
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          for (var index = 0; index < items.length; index++) ...[
-            _buildGlanceItem(currentTheme, items[index]),
-            SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(8)),
-          ],
-        ],
+      for (final item in items) {
+        if (accessoryChildren.isNotEmpty) {
+          accessoryChildren.add(SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(12)));
+        }
+        accessoryChildren.add(_buildGlanceItem(currentTheme, item));
+      }
+      return Row(mainAxisAlignment: MainAxisAlignment.end, children: accessoryChildren);
+    }
+
+    if (controller.queryIcon.value.icon.imageData.isNotEmpty) {
+      if (accessoryChildren.isNotEmpty) {
+        accessoryChildren.add(SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(12)));
+      }
+      final metrics = WoxInterfaceSizeUtil.instance.current;
+      accessoryChildren.add(
+        Padding(
+          // Bug fix: preserve the original right-side breathing room without
+          // centering the icon in a wide slot. Centering restored the margin but
+          // created a large left gap between Filters and the plugin icon.
+          padding: EdgeInsets.only(right: (metrics.queryBoxRightAccessoryWidth - metrics.queryBoxIconSize).clamp(0, double.infinity) / 2),
+          child: MouseRegion(
+            cursor: controller.queryIcon.value.action != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
+            child: GestureDetector(
+              onTap: () {
+                controller.queryIcon.value.action?.call();
+                controller.focusQueryBox();
+              },
+              child: WoxImageView(woxImage: controller.queryIcon.value.icon, width: metrics.queryBoxIconSize, height: metrics.queryBoxIconSize),
+            ),
+          ),
+        ),
       );
     }
 
+    return Row(mainAxisAlignment: MainAxisAlignment.end, children: accessoryChildren);
+  }
+
+  Widget _buildRefinementAccessory(dynamic currentTheme) {
+    final metrics = WoxInterfaceSizeUtil.instance.current;
+    final textColor = safeFromCssColor(currentTheme.queryBoxFontColor);
+    final activeColor = safeFromCssColor(currentTheme.queryBoxCursorColor);
+    final isExpanded = controller.isQueryRefinementBarExpanded.value;
+    final isActive = controller.hasActiveQueryRefinements;
+    final label = controller.getQueryRefinementAffordanceLabel();
+    final tint = isExpanded || isActive ? activeColor : textColor;
+
     return MouseRegion(
-      cursor: controller.queryIcon.value.action != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: () {
-          controller.queryIcon.value.action?.call();
+          controller.toggleQueryRefinementBar(const UuidV4().generate());
           controller.focusQueryBox();
         },
-        child: WoxImageView(
-          woxImage: controller.queryIcon.value.icon,
-          width: WoxInterfaceSizeUtil.instance.current.queryBoxIconSize,
-          height: WoxInterfaceSizeUtil.instance.current.queryBoxIconSize,
+        child: Container(
+          height: metrics.scaledSpacing(26),
+          constraints: BoxConstraints(maxWidth: metrics.scaledSpacing(150)),
+          padding: EdgeInsets.only(left: metrics.scaledSpacing(8), right: metrics.scaledSpacing(9)),
+          decoration: BoxDecoration(
+            // Feature addition: a collapsed filter affordance keeps the
+            // launcher default path clean while still making plugin-provided
+            // refinements discoverable next to the query itself.
+            color: tint.withValues(alpha: isExpanded || isActive ? 0.15 : 0.075),
+            borderRadius: BorderRadius.circular(7),
+            border: Border.all(color: tint.withValues(alpha: isExpanded || isActive ? 0.32 : 0.13)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.filter_list_rounded, size: metrics.scaledSpacing(15), color: tint.withValues(alpha: 0.92)),
+              SizedBox(width: metrics.scaledSpacing(5)),
+              Flexible(
+                // Visual refinement: the Filters affordance no longer carries a
+                // hover tooltip because the shortcut is part of the launcher
+                // keyboard model, while expanded controls show their own inline
+                // shortcut hints where users make the filtering choice.
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: textColor.withValues(alpha: isExpanded || isActive ? 0.94 : 0.72), fontSize: metrics.smallLabelFontSize, fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

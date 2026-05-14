@@ -27,6 +27,9 @@ class WoxInterfaceSizeMetrics {
   final double queryBoxGlanceItemSpacing;
   // Width reserved for the right accessory area when no glance chip is visible.
   final double queryBoxRightAccessoryWidth;
+  // Query refinement controls sit between the query box and results, so this
+  // height participates in window geometry just like the query box itself.
+  final double queryRefinementBarHeight;
 
   // ── Result item ───────────────────────────────────────────────────────────
   // resultItemBaseHeight is the content-only height; theme padding is added on
@@ -138,6 +141,7 @@ class WoxInterfaceSizeMetrics {
     required this.queryBoxGlanceIconAndGapWidth,
     required this.queryBoxGlanceItemSpacing,
     required this.queryBoxRightAccessoryWidth,
+    required this.queryRefinementBarHeight,
     // result item
     required this.resultItemBaseHeight,
     required this.resultTitleFontSize,
@@ -233,6 +237,7 @@ class WoxInterfaceSizeMetrics {
       queryBoxGlanceIconAndGapWidth: scaled(21),
       queryBoxGlanceItemSpacing: scaled(8),
       queryBoxRightAccessoryWidth: scaled(68),
+      queryRefinementBarHeight: scaled(44),
       // result item
       resultItemBaseHeight: scaled(RESULT_ITEM_BASE_HEIGHT),
       resultTitleFontSize: scaled(15),
