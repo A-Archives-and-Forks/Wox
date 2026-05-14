@@ -19,6 +19,7 @@ class WoxGridView extends StatelessWidget {
   final VoidCallback? onRowHeightChanged;
 
   static const double focusFrameWidth = 4.0;
+  static const double viewportBottomPadding = focusFrameWidth;
 
   const WoxGridView({
     super.key,
@@ -81,9 +82,17 @@ class WoxGridView extends StatelessWidget {
         final titleHeight = metrics.gridTitleHeight;
         final cellHeight = contentHeight + (itemPadding + itemMargin) * 2 + (showTitle ? titleHeight : 0);
 
-        // Update controller with the calculated row height for scroll calculations
-        final heightChanged = controller.updateRowHeight(cellHeight);
-        if (heightChanged) {
+        // Bug fix: the controller owns window height and keyboard scroll math,
+        // while this widget owns the actual rendered grid. Keep row height,
+        // group-header height, and the final paint spacer synchronized here so
+        // the last row is not hidden by the toolbar when the grid reaches its
+        // capped result height.
+        final layoutMetricsChanged = controller.updateLayoutMetrics(
+          rowHeight: cellHeight,
+          groupHeaderHeight: metrics.gridGroupHeaderHeight,
+          viewportBottomPadding: viewportBottomPadding,
+        );
+        if (layoutMetricsChanged) {
           WidgetsBinding.instance.addPostFrameCallback((_) => onRowHeightChanged?.call());
         }
 
@@ -132,6 +141,8 @@ class WoxGridView extends StatelessWidget {
       }
     }
 
+    rows.add(const SizedBox(height: viewportBottomPadding));
+
     return SingleChildScrollView(
       controller: controller.scrollController,
       physics: const NeverScrollableScrollPhysics(),
@@ -140,18 +151,24 @@ class WoxGridView extends StatelessWidget {
   }
 
   Widget _buildGroupHeader(WoxListItem<WoxQueryResult> item, int index) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: WoxInterfaceSizeUtil.instance.current.gridGroupHeaderPaddingLeft,
-        top: WoxInterfaceSizeUtil.instance.current.gridGroupHeaderPaddingTop,
-        bottom: WoxInterfaceSizeUtil.instance.current.gridGroupHeaderPaddingBottom,
-      ),
-      child: Text(
-        item.title,
-        style: TextStyle(
-          fontSize: WoxInterfaceSizeUtil.instance.current.gridGroupHeaderFontSize,
-          fontWeight: FontWeight.w500,
-          color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor),
+    final metrics = WoxInterfaceSizeUtil.instance.current;
+    return SizedBox(
+      height: metrics.gridGroupHeaderHeight,
+      child: Padding(
+        padding: EdgeInsets.only(left: metrics.gridGroupHeaderPaddingLeft, top: metrics.gridGroupHeaderPaddingTop, bottom: metrics.gridGroupHeaderPaddingBottom),
+        // Bug fix: the grid controller uses this fixed density-aware header
+        // height for both total-height and active-row offset calculations. The
+        // previous controller-side 32px constant could drift from rendered
+        // padding/font metrics and leave bottom rows slightly under-scrolled.
+        child: Text(
+          item.title,
+          style: TextStyle(
+            fontSize: metrics.gridGroupHeaderFontSize,
+            fontWeight: FontWeight.w500,
+            color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemSubTitleColor),
+          ),
+          overflow: TextOverflow.ellipsis,
+          maxLines: 1,
         ),
       ),
     );

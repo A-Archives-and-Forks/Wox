@@ -104,6 +104,10 @@ class WoxInterfaceSizeMetrics {
   // Group header and cell title measurements for the grid result surface.
   // Font sizes are independent from tailHotkeyFontSize even though the numeric
   // base matches today; they may diverge when grid layout requirements change.
+  // Bug fix: grid headers now expose an explicit height so WoxGridController
+  // does not rely on a stale hard-coded 32px value when calculating window
+  // height and active-row scroll offsets.
+  final double gridGroupHeaderHeight;
   final double gridGroupHeaderPaddingLeft;
   final double gridGroupHeaderPaddingTop;
   final double gridGroupHeaderPaddingBottom;
@@ -189,6 +193,7 @@ class WoxInterfaceSizeMetrics {
     required this.previewTextQuoteGlyphOffset,
     required this.previewTextPadding,
     // grid
+    required this.gridGroupHeaderHeight,
     required this.gridGroupHeaderPaddingLeft,
     required this.gridGroupHeaderPaddingTop,
     required this.gridGroupHeaderPaddingBottom,
@@ -283,6 +288,7 @@ class WoxInterfaceSizeMetrics {
       previewTextQuoteGlyphOffset: scaled(22),
       previewTextPadding: scaled(24),
       // grid
+      gridGroupHeaderHeight: scaled(32),
       gridGroupHeaderPaddingLeft: scaled(8),
       gridGroupHeaderPaddingTop: scaled(12),
       gridGroupHeaderPaddingBottom: scaled(4),

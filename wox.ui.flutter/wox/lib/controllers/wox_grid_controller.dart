@@ -10,6 +10,11 @@ class WoxGridController<T> extends WoxBaseListController<T> {
 
   // Row height calculated by the view based on available width and columns
   double rowHeight = 0;
+  // Bug fix: grid scroll offsets need the same group-header height and final
+  // spacer that the widget paints. Keeping them here avoids controller-only
+  // constants drifting from density-scaled rendering.
+  double groupHeaderHeight = 32.0;
+  double viewportBottomPadding = 0.0;
 
   WoxGridController({super.onItemExecuted, super.onItemActive, super.onFilterBoxEscPressed, super.onFilterBoxLostFocus, super.onItemsEmpty});
 
@@ -17,12 +22,21 @@ class WoxGridController<T> extends WoxBaseListController<T> {
     gridLayoutParams = params;
   }
 
-  bool updateRowHeight(double height) {
-    if ((rowHeight - height).abs() < 0.5) {
-      return false;
+  bool updateLayoutMetrics({required double rowHeight, required double groupHeaderHeight, required double viewportBottomPadding}) {
+    var changed = false;
+    if ((this.rowHeight - rowHeight).abs() >= 0.5) {
+      this.rowHeight = rowHeight;
+      changed = true;
     }
-    rowHeight = height;
-    return true;
+    if ((this.groupHeaderHeight - groupHeaderHeight).abs() >= 0.5) {
+      this.groupHeaderHeight = groupHeaderHeight;
+      changed = true;
+    }
+    if ((this.viewportBottomPadding - viewportBottomPadding).abs() >= 0.5) {
+      this.viewportBottomPadding = viewportBottomPadding;
+      changed = true;
+    }
+    return changed;
   }
 
   /// Calculate total height needed for grid view content
@@ -43,7 +57,6 @@ class WoxGridController<T> extends WoxBaseListController<T> {
       return 0;
     }
 
-    const groupHeaderHeight = 32.0;
     double totalHeight = 0;
     int i = 0;
 
@@ -64,6 +77,15 @@ class WoxGridController<T> extends WoxBaseListController<T> {
           totalHeight += rowHeight;
         }
       }
+    }
+
+    if (totalHeight > 0) {
+      // Bug fix: grid rows can be scrolled to the bottom of a capped launcher
+      // result area. The previous height model ended exactly at the final row,
+      // so the toolbar separator could visually cover the active outline. The
+      // view renders the same trailing spacer, keeping window height, scroll
+      // extent, and painted content in one layout contract.
+      totalHeight += viewportBottomPadding;
     }
 
     return totalHeight;
@@ -214,7 +236,7 @@ class WoxGridController<T> extends WoxBaseListController<T> {
 
     final gridRows = _buildGridRows();
     final actualRowHeight = rowHeight;
-    const groupHeaderHeight = 32.0;
+    final actualGroupHeaderHeight = groupHeaderHeight;
 
     double activeItemOffset = 0;
     double precedingGroupHeaderOffset = 0; // offset of the group header before active item's row
@@ -225,7 +247,7 @@ class WoxGridController<T> extends WoxBaseListController<T> {
     while (itemIndex < items.length && !found) {
       if (items[itemIndex].value.isGroup) {
         precedingGroupHeaderOffset = activeItemOffset;
-        activeItemOffset += groupHeaderHeight;
+        activeItemOffset += actualGroupHeaderHeight;
         itemIndex++;
       } else {
         if (visualRowIndex < gridRows.length) {
@@ -248,8 +270,10 @@ class WoxGridController<T> extends WoxBaseListController<T> {
 
     final currentOffset = scrollController.offset;
     final maxOffset = scrollController.position.maxScrollExtent;
+    final activeRowTrailingPadding = visualRowIndex == gridRows.length - 1 ? viewportBottomPadding : 0.0;
+    final activeItemBottom = activeItemOffset + actualRowHeight + activeRowTrailingPadding;
 
-    if (activeItemOffset >= currentOffset && activeItemOffset + actualRowHeight <= currentOffset + viewportHeight) {
+    if (activeItemOffset >= currentOffset && activeItemBottom <= currentOffset + viewportHeight) {
       return;
     }
 
@@ -262,7 +286,11 @@ class WoxGridController<T> extends WoxBaseListController<T> {
         newOffset = activeItemOffset;
       }
     } else {
-      newOffset = activeItemOffset + actualRowHeight - viewportHeight;
+      // Bug fix: when keyboard navigation wraps to the final grid row, scroll
+      // far enough to include the same trailing spacer used by the rendered
+      // scroll view. Without it the last active row was mathematically visible
+      // but painted flush under the toolbar divider.
+      newOffset = activeItemBottom - viewportHeight;
     }
 
     newOffset = newOffset.clamp(0.0, maxOffset);
