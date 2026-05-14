@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
@@ -17,6 +18,7 @@ import 'package:wox/components/onboarding/welcome_onboarding.dart';
 import 'package:wox/components/wox_button.dart';
 import 'package:wox/components/wox_dropdown_button.dart';
 import 'package:wox/components/wox_image_view.dart';
+import 'package:wox/components/wox_platform_focus.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/wox_glance.dart';
@@ -45,6 +47,7 @@ class _OnboardingStep {
 class _WoxOnboardingViewState extends State<WoxOnboardingView> {
   final launcherController = Get.find<WoxLauncherController>();
   final settingController = Get.find<WoxSettingController>();
+  final FocusNode onboardingFocusNode = FocusNode();
   int activeStepIndex = 0;
   bool isGlanceLoading = false;
   bool isGlanceLoadFailed = false;
@@ -135,6 +138,31 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
     hasRequestedGlanceLoad = true;
     unawaited(_loadGlanceChoices());
     _handleStepEntered();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+
+      // Bug fix: onboarding is routed through the shared launcher window, so a
+      // stale launcher query-box focus could keep handling Escape and hide the
+      // guide. Claim a page-level focus target and make Escape a no-op here so
+      // users leave onboarding only through the explicit Skip/Finish actions.
+      onboardingFocusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    onboardingFocusNode.dispose();
+    super.dispose();
+  }
+
+  KeyEventResult _handleOnboardingKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
   }
 
   void _goToStep(int index) {
@@ -223,28 +251,33 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
     return Obx(() {
       final background = getThemeBackgroundColor();
       final accent = activeAccent;
-      return Material(
-        // Onboarding uses InkWell, buttons, and dropdowns outside the normal
-        // launcher/setting subtree. Providing a local Material ancestor prevents
-        // Flutter's debug error surface and gives text the expected app style.
-        key: const ValueKey('onboarding-view'),
-        color: background,
-        // Use DefaultTextStyle.merge so that the fontFamily set by SystemChineseFont
-        // in the MaterialApp theme is preserved. DefaultTextStyle would fully replace
-        // the inherited style, losing the Chinese system font that the setting view
-        // and other views correctly inherit from the Material widget chain.
-        child: DefaultTextStyle.merge(
-          style: TextStyle(color: getThemeTextColor(), fontSize: 13),
-          child: Stack(
-            children: [
-              Positioned.fill(child: _OnboardingBackdrop(accent: accent)),
-              Column(
-                children: [
-                  Expanded(child: Row(children: [_buildSidebar(accent), Expanded(child: _buildStepBody(accent))])),
-                  _buildFooter(accent),
-                ],
-              ),
-            ],
+      return WoxPlatformFocus(
+        focusNode: onboardingFocusNode,
+        autofocus: true,
+        onKeyEvent: _handleOnboardingKeyEvent,
+        child: Material(
+          // Onboarding uses InkWell, buttons, and dropdowns outside the normal
+          // launcher/setting subtree. Providing a local Material ancestor prevents
+          // Flutter's debug error surface and gives text the expected app style.
+          key: const ValueKey('onboarding-view'),
+          color: background,
+          // Use DefaultTextStyle.merge so that the fontFamily set by SystemChineseFont
+          // in the MaterialApp theme is preserved. DefaultTextStyle would fully replace
+          // the inherited style, losing the Chinese system font that the setting view
+          // and other views correctly inherit from the Material widget chain.
+          child: DefaultTextStyle.merge(
+            style: TextStyle(color: getThemeTextColor(), fontSize: 13),
+            child: Stack(
+              children: [
+                Positioned.fill(child: _OnboardingBackdrop(accent: accent)),
+                Column(
+                  children: [
+                    Expanded(child: Row(children: [_buildSidebar(accent), Expanded(child: _buildStepBody(accent))])),
+                    _buildFooter(accent),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       );

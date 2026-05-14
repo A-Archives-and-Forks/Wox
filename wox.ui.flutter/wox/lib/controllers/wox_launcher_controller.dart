@@ -3074,6 +3074,12 @@ class WoxLauncherController extends GetxController {
     final settingController = Get.find<WoxSettingController>();
 
     closeAllDialogsInSetting();
+    // Bug fix: onboarding has its own page-level Escape handling, but the
+    // shared window can still carry focus from the launcher query box or
+    // settings view during the route swap. Drop those old focus owners before
+    // mounting the guide so their Escape-to-hide handlers cannot fire first.
+    queryBoxFocusNode.unfocus();
+    settingController.settingFocusNode.unfocus();
 
     isInSettingView.value = false;
     isInOnboardingView.value = true;
