@@ -546,8 +546,19 @@ func (a *ApplicationPlugin) buildAppActions(info appInfo, displayName string, co
 					}
 				}
 
-				// Launch the application
-				runErr := shell.Open(info.Path)
+				// Bug fix: Linux app indexing now returns .desktop launcher files instead of raw
+				// executables. Launching them through gio preserves the desktop entry's Exec
+				// handling and environment wrappers; xdg-open remains the compatibility fallback.
+				var runErr error
+				if util.IsLinux() && strings.HasSuffix(strings.ToLower(info.Path), ".desktop") {
+					_, runErr = shell.Run("gio", "launch", info.Path)
+					if runErr != nil {
+						a.api.Log(ctx, plugin.LogLevelWarning, fmt.Sprintf("gio launch failed for %s: %s", info.Path, runErr.Error()))
+						runErr = shell.Open(info.Path)
+					}
+				} else {
+					runErr = shell.Open(info.Path)
+				}
 				if runErr != nil {
 					a.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("error opening app %s: %s", info.Path, runErr.Error()))
 					a.api.Notify(ctx, fmt.Sprintf("i18n:plugin_app_open_failed_description: %s", runErr.Error()))
