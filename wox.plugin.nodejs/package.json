@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "pnpm clean && tsc",
-    "clean": "node -e \"var { rmdirSync, existsSync } = require('fs'), path = require('path'); ['./dist'].forEach(fPath => {if (existsSync(path.join(__dirname, fPath))) rmdirSync(path.join(__dirname, fPath), { recursive: true })}); process.exit(0);\"",
+    "clean": "node ./scripts/clean.mjs",
     "clean:all": "npm run clean && (rm -r ./node_modules || true)",
     "lint": "eslint --ext .ts --fix src/**/*.ts",
     "pub": "pnpm build && pnpm publish --no-git-checks --access public"

@@ -41,12 +41,34 @@ func RunDoctorChecks(ctx context.Context) []DoctorCheckResult {
 		results = append(results, checkAccessibilityPermission(ctx))
 	}
 
+	for i := range results {
+		results[i] = translateDoctorCheckResult(ctx, results[i])
+	}
+
 	//sort by status, false first
 	sort.Slice(results, func(i, j int) bool {
 		return !results[i].Passed && results[j].Passed
 	})
 
 	return results
+}
+
+func translateDoctorCheckResult(ctx context.Context, result DoctorCheckResult) DoctorCheckResult {
+	// Bug fix: doctor checks are consumed by both plugin query results and the /doctor/check API.
+	// The query-result path can resolve i18n keys later, but the toolbar renders API descriptions
+	// directly, so normalize every user-visible doctor field before returning the shared result.
+	result.Name = translateDoctorCheckText(ctx, result.Name)
+	result.Description = translateDoctorCheckText(ctx, result.Description)
+	result.ActionName = translateDoctorCheckText(ctx, result.ActionName)
+	return result
+}
+
+func translateDoctorCheckText(ctx context.Context, text string) string {
+	if text == "" {
+		return ""
+	}
+
+	return i18n.GetI18nManager().TranslateWox(ctx, text)
 }
 
 func checkWoxVersion(ctx context.Context) DoctorCheckResult {

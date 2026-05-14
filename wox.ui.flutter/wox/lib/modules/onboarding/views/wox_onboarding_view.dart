@@ -460,30 +460,36 @@ class _WoxOnboardingViewState extends State<WoxOnboardingView> {
           },
         );
       case 'glance':
-        final items = _buildGlanceDropdownItems();
-        final currentRef = settingController.woxSetting.value.primaryGlance;
-        final currentValue = items.any((item) => item.value == currentRef.key) ? currentRef.key : (items.isEmpty ? currentRef.key : items.first.value);
-        return WoxGlanceOnboarding(
-          accent: accent,
-          tr: tr,
-          enabled: settingController.woxSetting.value.enableGlance,
-          isLoading: isGlanceLoading,
-          isLoadFailed: isGlanceLoadFailed,
-          items: items,
-          currentValue: currentValue,
-          label: _currentGlanceLabel(),
-          value: _currentGlanceValue(),
-          icon: _currentGlanceIcon(),
-          onEnableChanged: (value) {
-            // Step extraction: Glance setup is optional and persisted through
-            // the same setting update path as the full settings page.
-            settingController.updateConfig('EnableGlance', value.toString());
-          },
-          onPrimaryGlanceChanged: (encodedRef) {
-            settingController.updateConfig('EnableGlance', 'true');
-            settingController.updateConfig('PrimaryGlance', encodedRef);
-          },
-        );
+        // Bug fix: this step is built from a LayoutBuilder callback, which is
+        // outside the outer Obx dependency tracking. Keep the reactive boundary
+        // beside the setting reads so switch/dropdown changes repaint the active
+        // Glance step without requiring users to navigate away and back.
+        return Obx(() {
+          final items = _buildGlanceDropdownItems();
+          final currentRef = settingController.woxSetting.value.primaryGlance;
+          final currentValue = items.any((item) => item.value == currentRef.key) ? currentRef.key : (items.isEmpty ? currentRef.key : items.first.value);
+          return WoxGlanceOnboarding(
+            accent: accent,
+            tr: tr,
+            enabled: settingController.woxSetting.value.enableGlance,
+            isLoading: isGlanceLoading,
+            isLoadFailed: isGlanceLoadFailed,
+            items: items,
+            currentValue: currentValue,
+            label: _currentGlanceLabel(),
+            value: _currentGlanceValue(),
+            icon: _currentGlanceIcon(),
+            onEnableChanged: (value) {
+              // Step extraction: Glance setup is optional and persisted through
+              // the same setting update path as the full settings page.
+              settingController.updateConfig('EnableGlance', value.toString());
+            },
+            onPrimaryGlanceChanged: (encodedRef) {
+              settingController.updateConfig('EnableGlance', 'true');
+              settingController.updateConfig('PrimaryGlance', encodedRef);
+            },
+          );
+        });
       case 'queryHotkeys':
         return WoxQueryHotkeysOnboarding(accent: accent, tr: tr);
       case 'trayQueries':

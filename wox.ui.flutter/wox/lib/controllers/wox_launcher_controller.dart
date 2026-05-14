@@ -64,6 +64,7 @@ class WoxLauncherController extends GetxController {
   static const String localActionTogglePreviewFullscreenId = "__local_toggle_preview_fullscreen__";
   static const String localActionPreviewSearchId = "__local_preview_search__";
   static const String localActionOpenUpdateId = "__local_open_update__";
+  static const String localActionOpenDoctorId = "__local_open_doctor__";
   static const String localActionOpenWebViewInspectorId = "__local_open_webview_inspector__";
   static const String localActionWebViewRefreshId = "__local_webview_refresh__";
   static const String localActionWebViewBackId = "__local_webview_back__";
@@ -843,15 +844,7 @@ class WoxLauncherController extends GetxController {
       if (updateAction != null) {
         actions.add(updateAction);
       }
-      actions.add(
-        ToolbarActionInfo(
-          name: tr("plugin_doctor_check"),
-          hotkey: "enter",
-          action: () {
-            onQueryChanged(traceId, PlainQuery.text("doctor "), "user click doctor icon");
-          },
-        ),
-      );
+      actions.add(buildDoctorToolbarAction());
 
       toolbar.value = ToolbarInfo(text: doctorCheckInfo.value.message, icon: doctorCheckInfo.value.icon, actions: actions);
     } else {
@@ -876,6 +869,10 @@ class WoxLauncherController extends GetxController {
     onQueryChanged(traceId, PlainQuery.text("update "), "toolbar go to update");
   }
 
+  void openDoctorFromToolbar(String traceId) {
+    onQueryChanged(traceId, PlainQuery.text("doctor "), "toolbar go to doctor");
+  }
+
   ToolbarActionInfo? buildUpdateToolbarAction() {
     if (!shouldShowUpdateActionInToolbar) {
       return null;
@@ -886,6 +883,16 @@ class WoxLauncherController extends GetxController {
       hotkey: "ctrl+u",
       action: () {
         openUpdateFromToolbar(const UuidV4().generate());
+      },
+    );
+  }
+
+  ToolbarActionInfo buildDoctorToolbarAction() {
+    return ToolbarActionInfo(
+      name: tr("plugin_doctor_check"),
+      hotkey: "enter",
+      action: () {
+        openDoctorFromToolbar(const UuidV4().generate());
       },
     );
   }
@@ -903,6 +910,25 @@ class WoxLauncherController extends GetxController {
           emoji: "⬆️",
           handler: (traceId) {
             openUpdateFromToolbar(traceId);
+            return true;
+          },
+        ),
+      );
+    }
+
+    if (!hasVisibleToolbarMsg && currentQuery.value.isEmpty && !doctorCheckInfo.value.allPassed && activeResultViewController.items.isEmpty) {
+      actions.add(
+        WoxResultAction.local(
+          id: localActionOpenDoctorId,
+          name: tr("plugin_doctor_check"),
+          hotkey: "enter",
+          icon: doctorCheckInfo.value.icon,
+          isDefault: true,
+          // Bug fix: the doctor toolbar previously had only a click callback, so Enter rendered
+          // as available but could not execute. Register the same route as a local default action
+          // so keyboard execution and the visible toolbar action use the same action pipeline.
+          handler: (traceId) {
+            openDoctorFromToolbar(traceId);
             return true;
           },
         ),

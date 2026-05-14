@@ -52,13 +52,14 @@ class _InheritedDemoTheme extends InheritedWidget {
 }
 
 class WoxDemoResult {
-  const WoxDemoResult({required this.title, required this.icon, this.subtitle, this.tail, this.selected = false});
+  const WoxDemoResult({required this.title, required this.icon, this.subtitle, this.tail, this.tailColor, this.selected = false});
 
   final String title;
   final String? subtitle;
   final Widget icon;
   final bool selected;
   final String? tail;
+  final Color? tailColor;
 }
 
 class WoxDemoWindow extends StatelessWidget {
@@ -274,20 +275,21 @@ class _MiniResultList extends StatelessWidget {
       itemCount: results.length,
       itemBuilder: (context, index) {
         final result = results[index];
-        return _MiniResultRow(title: result.title, subtitle: result.subtitle, icon: result.icon, selected: result.selected, tail: result.tail);
+        return _MiniResultRow(title: result.title, subtitle: result.subtitle, icon: result.icon, selected: result.selected, tail: result.tail, tailColor: result.tailColor);
       },
     );
   }
 }
 
 class _MiniResultRow extends StatelessWidget {
-  const _MiniResultRow({required this.title, required this.icon, this.subtitle, this.selected = false, this.tail});
+  const _MiniResultRow({required this.title, required this.icon, this.subtitle, this.selected = false, this.tail, this.tailColor});
 
   final String title;
   final String? subtitle;
   final Widget icon;
   final bool selected;
   final String? tail;
+  final Color? tailColor;
 
   @override
   Widget build(BuildContext context) {
@@ -319,10 +321,14 @@ class _MiniResultRow extends StatelessWidget {
         demoTheme != null
             ? (selected ? demoTheme.resultActiveSubtitleColor : demoTheme.resultSubtitleColor)
             : (selected ? woxTheme.resultItemActiveSubTitleColorParsed : woxTheme.resultItemSubTitleColorParsed);
-    final tailColor =
+    final themeTailColor =
         demoTheme != null
             ? (selected ? demoTheme.activeTailColor : demoTheme.tailColor)
             : (selected ? woxTheme.resultItemActiveTailTextColorParsed : woxTheme.resultItemTailTextColorParsed);
+    // Semantic tail override: permission demos need the same warning color as
+    // the real onboarding cards. Callers that do not pass tailColor keep the
+    // production-theme tail color, so existing demos remain unchanged.
+    final effectiveTailColor = tailColor ?? themeTailColor;
     final activeBackground = demoTheme?.resultActiveBackground ?? woxTheme.resultItemActiveBackgroundColorParsed;
 
     Widget content = Container(
@@ -363,12 +369,12 @@ class _MiniResultRow extends StatelessWidget {
                   child: DecoratedBox(
                     decoration: BoxDecoration(
                       color: Colors.transparent,
-                      border: Border.all(color: tailColor.withValues(alpha: selected ? 0.34 : 0.2)),
+                      border: Border.all(color: effectiveTailColor.withValues(alpha: selected ? 0.34 : 0.2)),
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: metrics.resultItemTextTailHPadding, vertical: metrics.resultItemTextTailVPadding),
-                      child: Text(tail!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: tailColor, fontSize: metrics.tailHotkeyFontSize)),
+                      child: Text(tail!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: effectiveTailColor, fontSize: metrics.tailHotkeyFontSize)),
                     ),
                   ),
                 ),
