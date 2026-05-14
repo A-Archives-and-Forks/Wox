@@ -85,20 +85,20 @@
 	"launch": {
 		"version": "0.2.0",
 		"configurations": [
-				{
-					"name": "Run Go",
-					"type": "go",
-					"request": "launch",
-					"mode": "auto",
-					"program": "${workspaceFolder:wox.core}",
-					// Filesearch's SQLite-first index requires FTS5 support at runtime.
-					// Keep the development launch configuration aligned with Makefile builds
-					// so VS Code runs do not start a backend that silently lacks the search schema.
-					"buildFlags": "-tags=sqlite_fts5",
-					"env": {
-						"CGO_ENABLED": "1"
-					}
-				},
+			{
+				"name": "Run Go",
+				"type": "go",
+				"request": "launch",
+				"mode": "auto",
+				"program": "${workspaceFolder:wox.core}",
+				// Filesearch's SQLite-first index requires FTS5 support at runtime.
+				// Keep the development launch configuration aligned with Makefile builds
+				// so VS Code runs do not start a backend that silently lacks the search schema.
+				"buildFlags": "-tags=sqlite_fts5",
+				"env": {
+					"CGO_ENABLED": "1"
+				}
+			},
 			{
 				"name": "Run Flutter",
 				"cwd": "${workspaceFolder:wox.ui.flutter}",
