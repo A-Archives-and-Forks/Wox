@@ -28,7 +28,7 @@ func TestEngineGetStatusKeepsTransientRunIndexingState(t *testing.T) {
 		UpdatedAt: now,
 	})
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	// The toolbar bug happened when a planner-owned run was active but the root
 	// counters still looked idle/error-only. This regression test locks in that
 	// active run state must keep GetStatus() in indexing mode until the run ends.

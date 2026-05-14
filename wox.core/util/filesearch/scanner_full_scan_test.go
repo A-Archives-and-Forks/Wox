@@ -32,7 +32,7 @@ func TestScannerScanAllRootsPersistsDirectorySnapshotsAndFullScanTimestamp(t *te
 	}
 	mustInsertRoot(t, ctx, db, root)
 
-	scanner := NewScanner(db, NewLocalIndexProvider())
+	scanner := NewScanner(db)
 	scanner.scanAllRoots(ctx)
 
 	rootAfter, err := db.FindRootByID(ctx, root.ID)
@@ -106,7 +106,7 @@ func TestScannerScanAllRootsCapturesFreshRootFeedSnapshot(t *testing.T) {
 		FSEventID: 99,
 	})
 
-	scanner := NewScanner(db, NewLocalIndexProvider())
+	scanner := NewScanner(db)
 	scanner.changeFeed = newTestSnapshotChangeFeed(func(root RootRecord) (RootFeedSnapshot, error) {
 		return RootFeedSnapshot{
 			FeedType:   RootFeedTypeFSEvents,
@@ -138,7 +138,7 @@ func TestNewScannerUsesSpecDirtyQueueDefaults(t *testing.T) {
 	db, ctx := openTestFileSearchDB(t)
 	_ = ctx
 
-	scanner := NewScanner(db, NewLocalIndexProvider())
+	scanner := NewScanner(db)
 
 	if scanner.dirtyQueueConfig.SiblingMergeThreshold != 8 {
 		t.Fatalf("expected sibling merge threshold 8, got %d", scanner.dirtyQueueConfig.SiblingMergeThreshold)
@@ -180,7 +180,7 @@ func TestScannerAddWatchForNewDirectoryKeepsRootOnlyFallback(t *testing.T) {
 		t.Fatalf("add root-only watches: %v", err)
 	}
 
-	scanner := NewScanner(db, NewLocalIndexProvider())
+	scanner := NewScanner(db)
 	if err := scanner.addWatchForNewDirectory(watcher, childPath); err != nil {
 		t.Fatalf("add watch for new directory: %v", err)
 	}
@@ -210,20 +210,16 @@ func TestScannerScanAllRootsLeavesExistingSearchResultsAvailableDuringVerificati
 		UpdatedAt: now,
 	})
 
-	localProvider := NewLocalIndexProvider()
-	scanner := NewScanner(db, localProvider)
+	scanner := NewScanner(db)
 	scanner.scanAllRoots(ctx)
 
-	results, err := localProvider.Search(context.Background(), SearchQuery{Raw: "existing"}, 10)
-	if err != nil {
-		t.Fatalf("search local provider after full scan: %v", err)
-	}
+	results := searchSQLiteForTest(t, db, "existing", 10)
 	if len(results) != 1 || results[0].Path != filePath {
-		t.Fatalf("expected provider reload to include %q, got %#v", filePath, results)
+		t.Fatalf("expected sqlite update to include %q, got %#v", filePath, results)
 	}
 }
 
-func TestScannerStartupRestoreLoadsProviderFromDBWithoutFullScanForFreshCursor(t *testing.T) {
+func TestScannerStartupRestoreUsesPersistedSQLiteWithoutFullScanForFreshCursor(t *testing.T) {
 	db, ctx := openTestFileSearchDB(t)
 	now := time.Now()
 	rootPath := filepath.Join(t.TempDir(), "root-startup-restore-fresh")
@@ -250,16 +246,12 @@ func TestScannerStartupRestoreLoadsProviderFromDBWithoutFullScanForFreshCursor(t
 		t.Fatalf("seed root entries for startup restore: %v", err)
 	}
 
-	localProvider := NewLocalIndexProvider()
-	scanner := NewScanner(db, localProvider)
+	scanner := NewScanner(db)
 	scanner.changeFeed = newTestSnapshotChangeFeed(nil)
 
 	scanner.startupRestore(ctx)
 
-	results, err := localProvider.Search(context.Background(), SearchQuery{Raw: "stale"}, 10)
-	if err != nil {
-		t.Fatalf("search local provider after startup restore: %v", err)
-	}
+	results := searchSQLiteForTest(t, db, "stale", 10)
 	if len(results) != 1 || results[0].Path != staleFilePath {
 		t.Fatalf("expected startup restore to load persisted entry %q, got %#v", staleFilePath, results)
 	}
@@ -291,7 +283,7 @@ func TestScannerFullScanUsesGlobalRunProgress(t *testing.T) {
 	mustInsertRoot(t, ctx, db, rootOne)
 	mustInsertRoot(t, ctx, db, rootTwo)
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	scanner.plannerBudgetOverride = &splitBudget{
 		LeafEntryBudget:     3,
 		LeafWriteBudget:     3,
@@ -357,7 +349,7 @@ func TestScannerFullScanReportsAllRunStages(t *testing.T) {
 	root := RootRecord{ID: "root-run-stages", Path: rootPath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now, UpdatedAt: now}
 	mustInsertRoot(t, ctx, db, root)
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	scanner.plannerBudgetOverride = &splitBudget{
 		LeafEntryBudget:     3,
 		LeafWriteBudget:     3,
@@ -411,7 +403,7 @@ func TestScannerFullScanSplitsLargeRootWithoutChangingRootIdentity(t *testing.T)
 	root := RootRecord{ID: "root-split-identity", Path: rootPath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now, UpdatedAt: now}
 	mustInsertRoot(t, ctx, db, root)
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	scanner.plannerBudgetOverride = &splitBudget{
 		LeafEntryBudget:     3,
 		LeafWriteBudget:     3,
@@ -465,7 +457,7 @@ func TestScannerFullScanWideDirectFilesPrunesRemovedFiles(t *testing.T) {
 	root := RootRecord{ID: "root-wide-direct-prune", Path: rootPath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now, UpdatedAt: now}
 	mustInsertRoot(t, ctx, db, root)
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	scanner.plannerBudgetOverride = &splitBudget{
 		LeafEntryBudget:     2,
 		LeafWriteBudget:     2,
@@ -526,24 +518,17 @@ func TestScannerStartupRestoreReconcilesFallbackRoots(t *testing.T) {
 		t.Fatalf("seed stale fallback entries: %v", err)
 	}
 
-	localProvider := NewLocalIndexProvider()
-	scanner := NewScanner(db, localProvider)
+	scanner := NewScanner(db)
 	scanner.changeFeed = newTestSnapshotChangeFeed(nil)
 
 	scanner.startupRestore(ctx)
 
-	results, err := localProvider.Search(context.Background(), SearchQuery{Raw: "actual"}, 10)
-	if err != nil {
-		t.Fatalf("search actual file after fallback startup reconcile: %v", err)
-	}
+	results := searchSQLiteForTest(t, db, "actual", 10)
 	if len(results) != 1 || results[0].Path != actualFilePath {
 		t.Fatalf("expected startup restore to reconcile fallback root to %q, got %#v", actualFilePath, results)
 	}
 
-	results, err = localProvider.Search(context.Background(), SearchQuery{Raw: "stale"}, 10)
-	if err != nil {
-		t.Fatalf("search stale file after fallback startup reconcile: %v", err)
-	}
+	results = searchSQLiteForTest(t, db, "stale", 10)
 	if len(results) != 0 {
 		t.Fatalf("expected stale fallback entry %q to be removed after startup reconcile, got %#v", staleFilePath, results)
 	}

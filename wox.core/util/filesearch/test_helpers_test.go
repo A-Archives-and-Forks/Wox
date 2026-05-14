@@ -72,3 +72,13 @@ func mustInsertEntrySnapshots(t *testing.T, ctx context.Context, db *FileSearchD
 		t.Fatalf("commit entry snapshot tx: %v", err)
 	}
 }
+
+func searchSQLiteForTest(t *testing.T, db *FileSearchDB, raw string, limit int) []SearchResult {
+	t.Helper()
+
+	results, err := NewSQLiteSearchProvider(db).Search(context.Background(), SearchQuery{Raw: raw}, limit)
+	if err != nil {
+		t.Fatalf("search sqlite provider for %q: %v", raw, err)
+	}
+	return results
+}

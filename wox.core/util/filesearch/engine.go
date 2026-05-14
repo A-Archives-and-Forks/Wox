@@ -12,21 +12,8 @@ import (
 	"github.com/google/uuid"
 )
 
-type SearchHandle interface {
-	Cancel()
-}
-
-type searchHandle struct {
-	cancel context.CancelFunc
-}
-
-func (h searchHandle) Cancel() {
-	h.cancel()
-}
-
 type Engine struct {
 	db              *FileSearchDB
-	localProvider   *LocalIndexProvider
 	searchProvider  *SQLiteSearchProvider
 	scanner         *Scanner
 	policy          *policyState
@@ -49,7 +36,7 @@ func NewEngineWithOptions(ctx context.Context, options EngineOptions) (*Engine, 
 		statusListeners: util.NewHashMap[string, func(StatusSnapshot)](),
 	}
 
-	engine.scanner = NewScanner(db, nil)
+	engine.scanner = NewScanner(db)
 	engine.policy = engine.scanner.policy
 	if engine.policy != nil {
 		engine.policy.Set(options.Policy)
@@ -538,90 +525,14 @@ func (e *Engine) SyncUserRoots(ctx context.Context, rootPaths []string) error {
 	return nil
 }
 
-func (e *Engine) SearchStream(ctx context.Context, query SearchQuery, limit int, onUpdate func(SearchUpdate)) SearchHandle {
-	query = normalizeSearchQuery(query)
-	streamCtx, cancel := context.WithCancel(ctx)
-	queryID := uuid.NewString()
-
-	go e.runSearch(streamCtx, queryID, query, limit, onUpdate)
-	return searchHandle{cancel: cancel}
+func (e *Engine) Search(ctx context.Context, query SearchQuery, limit int) ([]SearchResult, error) {
+	// Filesearch now has one SQLite-backed provider, so the engine stays as a
+	// thin owner of lifecycle/policy state and returns the provider result
+	// directly instead of preserving the old stream/aggregation wrapper.
+	return e.searchProvider.Search(ctx, query, limit)
 }
 
-func (e *Engine) SearchOnce(ctx context.Context, query SearchQuery, limit int) ([]SearchResult, error) {
-	query = normalizeSearchQuery(query)
-	if query.Raw == "" {
-		return []SearchResult{}, nil
-	}
-
-	waitCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
-	defer cancel()
-	waitStartedAt := util.GetSystemTimestamp()
-
-	var (
-		lastResults []SearchResult
-		lastErr     error
-		done        = make(chan struct{})
-	)
-
-	e.SearchStream(waitCtx, query, limit, func(update SearchUpdate) {
-		lastResults = update.Results
-		if update.IsFinal {
-			close(done)
-		}
-	})
-
-	select {
-	case <-done:
-		logSearchOnceWait(ctx, query, util.GetSystemTimestamp()-waitStartedAt, false, len(lastResults))
-		return lastResults, lastErr
-	case <-waitCtx.Done():
-		// Record when SearchOnce returns partial results because provider fan-out did not
-		// settle in time; the previous logs only showed provider-local cost, not that the
-		// plugin spent its budget waiting for final aggregation.
-		logSearchOnceWait(ctx, query, util.GetSystemTimestamp()-waitStartedAt, true, len(lastResults))
-		return lastResults, lastErr
-	}
-}
-
-func (e *Engine) runSearch(ctx context.Context, queryID string, query SearchQuery, limit int, onUpdate func(SearchUpdate)) {
-	if query.Raw == "" {
-		onUpdate(SearchUpdate{QueryID: queryID, Stage: SearchStageFinal, Results: []SearchResult{}, IsFinal: true})
-		return
-	}
-
-	searchStartedAt := util.GetSystemTimestamp()
-	aggregator := newResultAggregator(limit)
-	providerStartedAt := util.GetSystemTimestamp()
-	candidates, err := e.searchProvider.Search(ctx, query, limit)
-	providerElapsedMs := util.GetSystemTimestamp() - providerStartedAt
-
-	aggregationStartedAt := util.GetSystemTimestamp()
-	results, changed := aggregator.Add(candidates)
-	aggregationElapsedMs := util.GetSystemTimestamp() - aggregationStartedAt
-	logProviderSearchResponse(ctx, query, e.searchProvider.Name(), providerElapsedMs, aggregationElapsedMs, len(candidates), len(results), changed, err)
-
-	updateCount := 0
-	if changed {
-		updateCount = 1
-		onUpdate(SearchUpdate{
-			QueryID: queryID,
-			Stage:   SearchStagePartial,
-			Results: results,
-			IsFinal: false,
-		})
-	}
-
-	finalResults := aggregator.snapshot()
-	logEngineSearchCompletion(ctx, query, util.GetSystemTimestamp()-searchStartedAt, 1, updateCount, len(finalResults))
-	onUpdate(SearchUpdate{
-		QueryID: queryID,
-		Stage:   SearchStageFinal,
-		Results: finalResults,
-		IsFinal: true,
-	})
-}
-
-func (e *Engine) LocalIndexSnapshotSummary() string {
+func (e *Engine) IndexSnapshotSummary() string {
 	if e == nil || e.db == nil {
 		return formatSQLiteIndexSnapshotSummary("manual", sqliteIndexSnapshot{})
 	}
@@ -632,7 +543,7 @@ func (e *Engine) LocalIndexSnapshotSummary() string {
 	return formatSQLiteIndexSnapshotSummary("manual", snapshot)
 }
 
-func (e *Engine) LocalIndexTopRootsSummary() string {
+func (e *Engine) IndexTopRootsSummary() string {
 	if e == nil || e.db == nil {
 		return ""
 	}
@@ -641,8 +552,4 @@ func (e *Engine) LocalIndexTopRootsSummary() string {
 		return ""
 	}
 	return formatSQLiteIndexTopRoots("manual", snapshot)
-}
-
-func errorsIsCanceled(err error) bool {
-	return err == context.Canceled || err == context.DeadlineExceeded
 }

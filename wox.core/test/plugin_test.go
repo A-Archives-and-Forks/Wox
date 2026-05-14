@@ -16,6 +16,7 @@ import (
 	"unsafe"
 	"wox/common"
 	"wox/plugin"
+	"wox/setting"
 	"wox/ui"
 	"wox/util"
 	"wox/util/filesearch"
@@ -312,6 +313,17 @@ func TestFilePlugin_PathFragmentSearch(t *testing.T) {
 func TestFilePlugin_PinyinInitialSearch(t *testing.T) {
 	suite := NewTestSuite(t)
 	ctx := suite.ctx
+
+	woxSetting := setting.GetSettingManager().GetWoxSetting(ctx)
+	previousUsePinyin := woxSetting.UsePinYin.Get()
+	// File search now honors the global UsePinYin setting, so this pinyin-specific
+	// integration case must opt in explicitly and then restore the shared setting.
+	if err := woxSetting.UsePinYin.Set(true); err != nil {
+		t.Fatalf("failed to enable pinyin setting: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = woxSetting.UsePinYin.Set(previousUsePinyin)
+	})
 
 	rootPath := newStableFileSearchRoot(t, "filesearch-pinyin-root")
 

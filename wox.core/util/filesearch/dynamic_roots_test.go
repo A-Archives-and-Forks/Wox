@@ -111,7 +111,7 @@ func TestScannerRootReconcileDoesNotStealDynamicRootOwnership(t *testing.T) {
 		t.Fatalf("seed dynamic-owned entries: %v", err)
 	}
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	scanner.dirtyQueueConfig = DirtyQueueConfig{
 		DebounceWindow:              defaultDirtyDebounceWindow,
 		SiblingMergeThreshold:       8,
@@ -146,7 +146,7 @@ func TestScannerPromotesHotDirectoryAfterSuccessfulDirtyFlushes(t *testing.T) {
 	parentRoot := RootRecord{ID: "root-promote-parent", Path: rootPath, Kind: RootKindUser, Status: RootStatusIdle, CreatedAt: now.UnixMilli(), UpdatedAt: now.UnixMilli()}
 	mustInsertRoot(t, ctx, db, parentRoot)
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	scanner.dynamicRootConfig = DynamicRootConfig{
 		Enabled:                    true,
 		Window:                     time.Minute,
@@ -205,7 +205,7 @@ func TestScannerDynamicRootCapsPreventPromotion(t *testing.T) {
 	mustInsertRoot(t, ctx, db, parentRoot)
 	mustInsertRoot(t, ctx, db, existingDynamicRoot)
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	scanner.dynamicRootConfig = DynamicRootConfig{
 		Enabled:                    true,
 		Window:                     time.Minute,
@@ -270,7 +270,7 @@ func TestScannerDemotesIdleDynamicRootAndRestoresParentOwnership(t *testing.T) {
 		t.Fatalf("seed dynamic-owned entries: %v", err)
 	}
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	scanner.dynamicRootConfig = DynamicRootConfig{Enabled: true, IdleDemotionAfter: 24 * time.Hour}
 	if err := scanner.demoteIdleDynamicRoots(ctx, now); err != nil {
 		t.Fatalf("demote idle dynamic roots: %v", err)

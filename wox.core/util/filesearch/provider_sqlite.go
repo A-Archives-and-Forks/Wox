@@ -4,10 +4,21 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
+
+	"wox/util"
 )
+
+const sqliteFTSRepairTimeout = 2 * time.Minute
 
 type SQLiteSearchProvider struct {
 	db *FileSearchDB
+	// Stale FTS repair runs asynchronously after a fallback query returns the
+	// current keystroke result; this guard keeps repeated broken FTS reads from
+	// starting overlapping full-table rebuilds.
+	ftsRepairMu      sync.Mutex
+	ftsRepairRunning bool
 }
 
 func NewSQLiteSearchProvider(db *FileSearchDB) *SQLiteSearchProvider {
@@ -18,7 +29,7 @@ func (p *SQLiteSearchProvider) Name() string {
 	return "sqlite-search"
 }
 
-func (p *SQLiteSearchProvider) Search(ctx context.Context, query SearchQuery, limit int) ([]ProviderCandidate, error) {
+func (p *SQLiteSearchProvider) Search(ctx context.Context, query SearchQuery, limit int) ([]SearchResult, error) {
 	query = normalizeSearchQuery(query)
 	if p == nil || p.db == nil || strings.TrimSpace(query.Raw) == "" {
 		return nil, nil
@@ -50,11 +61,10 @@ func (p *SQLiteSearchProvider) Search(ctx context.Context, query SearchQuery, li
 		record := docRecord{
 			Path:           row.Path,
 			IsDir:          row.IsDir,
-			NormalizedName: row.NormalizedName,
 			PinyinFull:     row.PinyinFull,
 			PinyinInitials: row.PinyinInitials,
 		}
-		matched, score := scoreDocAgainstQuery(query, record, 0)
+		matched, score := scoreDocAgainstQuery(query, record)
 		if !matched {
 			continue
 		}
@@ -67,7 +77,7 @@ func (p *SQLiteSearchProvider) Search(ctx context.Context, query SearchQuery, li
 		})
 	}
 
-	return convertResultsToCandidates(sortAndLimitResults(results, limit)), nil
+	return sortAndLimitResults(results, limit), nil
 }
 
 func (p *SQLiteSearchProvider) collectCandidateIDs(ctx context.Context, query SearchQuery, limit int) ([]int64, error) {
@@ -155,7 +165,11 @@ func (p *SQLiteSearchProvider) collectGeneralCandidateIDs(ctx context.Context, q
 	}
 	ids = append(ids, nameIDs...)
 
-	if plan.asciiLettersDigits && len(plan.rawLettersDigits) >= 3 {
+	// The indexed SQLite provider does not go through the generic plugin fuzzy
+	// matcher, so it must also honor SearchQuery.DisablePinyin before touching
+	// pinyin FTS tables. Otherwise disabling pinyin only affected non-file
+	// result filtering while filesearch still recalled pinyin-derived matches.
+	if plan.usePinyin && plan.asciiLettersDigits && len(plan.rawLettersDigits) >= 3 {
 		pinyinFullIDs, err := p.queryFTSLiteralContainsIDs(ctx, "entries_pinyin_full_fts", "pinyin_full", plan.rawLettersDigits, limit)
 		if err != nil {
 			return nil, err
@@ -345,21 +359,135 @@ func (p *SQLiteSearchProvider) queryFTSLiteralContainsIDs(ctx context.Context, t
 }
 
 func (p *SQLiteSearchProvider) queryFTSLikeIDs(ctx context.Context, tableName string, columnName string, pattern string, limit int) ([]int64, error) {
-	return p.queryIDs(ctx, fmt.Sprintf(`
+	ids, err := p.queryIDs(ctx, fmt.Sprintf(`
 		SELECT rowid
 		FROM %s
 		WHERE %s LIKE ?
 		LIMIT ?
 	`, tableName, columnName), pattern, limit)
+	if !isMissingFTSContentRowError(err) {
+		return ids, err
+	}
+
+	p.scheduleFTSRepair(ctx, tableName, err)
+	fallbackIDs, fallbackErr := p.queryFTSLikeFallbackIDs(ctx, tableName, pattern, limit)
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("fallback %s LIKE query after stale FTS row: %w; original query error: %v", tableName, fallbackErr, err)
+	}
+	return fallbackIDs, nil
 }
 
 func (p *SQLiteSearchProvider) queryFTSMatchIDs(ctx context.Context, tableName string, expression string, limit int) ([]int64, error) {
-	return p.queryIDs(ctx, fmt.Sprintf(`
+	ids, err := p.queryIDs(ctx, fmt.Sprintf(`
 		SELECT rowid
 		FROM %s
 		WHERE %s MATCH ?
 		LIMIT ?
 	`, tableName, tableName), expression, limit)
+	if !isMissingFTSContentRowError(err) {
+		return ids, err
+	}
+
+	p.scheduleFTSRepair(ctx, tableName, err)
+	fallbackIDs, fallbackErr := p.queryFTSMatchFallbackIDs(ctx, tableName, expression, limit)
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("fallback %s MATCH query after stale FTS row: %w; original query error: %v", tableName, fallbackErr, err)
+	}
+	return fallbackIDs, nil
+}
+
+func (p *SQLiteSearchProvider) queryFTSLikeFallbackIDs(ctx context.Context, tableName string, pattern string, limit int) ([]int64, error) {
+	columnName, ok := ftsContentColumn(tableName)
+	if !ok {
+		return nil, fmt.Errorf("unsupported FTS fallback table %q", tableName)
+	}
+	return p.queryIDs(ctx, fmt.Sprintf(`
+		SELECT entry_id
+		FROM entries
+		WHERE %s LIKE ?
+		ORDER BY entry_id ASC
+		LIMIT ?
+	`, columnName), pattern, limit)
+}
+
+func (p *SQLiteSearchProvider) queryFTSMatchFallbackIDs(ctx context.Context, tableName string, expression string, limit int) ([]int64, error) {
+	if tableName != "entries_initials_fts" {
+		return nil, fmt.Errorf("unsupported FTS MATCH fallback table %q", tableName)
+	}
+
+	// MATCH is currently only used for prefix searches against pinyin initials.
+	// A bounded range scan preserves that behavior without asking the broken FTS
+	// table to resolve rowids that may no longer exist in the content table.
+	prefix := strings.TrimSuffix(strings.TrimSpace(expression), "*")
+	if prefix == "" {
+		return nil, nil
+	}
+	return p.queryIDs(ctx, `
+		SELECT entry_id
+		FROM entries
+		WHERE pinyin_initials >= ? AND pinyin_initials < ?
+		ORDER BY pinyin_initials ASC, entry_id ASC
+		LIMIT ?
+	`, prefix, nextPrefixUpperBound(prefix), limit)
+}
+
+func ftsContentColumn(tableName string) (string, bool) {
+	switch tableName {
+	case "entries_name_fts":
+		return "normalized_name", true
+	case "entries_path_fts":
+		return "normalized_path", true
+	case "entries_pinyin_full_fts":
+		return "pinyin_full", true
+	case "entries_initials_fts":
+		return "pinyin_initials", true
+	default:
+		return "", false
+	}
+}
+
+func (p *SQLiteSearchProvider) scheduleFTSRepair(ctx context.Context, tableName string, cause error) {
+	if p == nil || p.db == nil {
+		return
+	}
+
+	p.ftsRepairMu.Lock()
+	if p.ftsRepairRunning {
+		p.ftsRepairMu.Unlock()
+		return
+	}
+	p.ftsRepairRunning = true
+	p.ftsRepairMu.Unlock()
+
+	// Stale external-content FTS rows can make SQLite spend longer than the UI's
+	// query wait budget rebuilding derived data. Return fallback candidates from
+	// the entries table immediately, then rebuild FTS once in the background so
+	// later queries regain the fast path without turning this keystroke into an
+	// empty timed-out result.
+	util.GetLogger().Warn(ctx, fmt.Sprintf("filesearch detected stale %s content row, scheduling FTS rebuild: %v", tableName, cause))
+	util.Go(ctx, "filesearch stale fts repair", func() {
+		defer func() {
+			p.ftsRepairMu.Lock()
+			p.ftsRepairRunning = false
+			p.ftsRepairMu.Unlock()
+		}()
+
+		repairCtx, cancel := context.WithTimeout(util.NewTraceContext(), sqliteFTSRepairTimeout)
+		defer cancel()
+		if err := p.db.rebuildFTSTables(repairCtx, false); err != nil {
+			util.GetLogger().Error(repairCtx, fmt.Sprintf("filesearch stale FTS rebuild failed for %s: %v", tableName, err))
+			return
+		}
+		util.GetLogger().Info(repairCtx, fmt.Sprintf("filesearch stale FTS rebuild completed after %s error", tableName))
+	})
+}
+
+func isMissingFTSContentRowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "fts5: missing row") && strings.Contains(message, "content table")
 }
 
 func (p *SQLiteSearchProvider) queryIDs(ctx context.Context, query string, args ...any) ([]int64, error) {

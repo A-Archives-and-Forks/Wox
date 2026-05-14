@@ -165,7 +165,7 @@ func BenchmarkFileSearchJobExecutor(b *testing.B) {
 	}
 	mustInsertBenchmarkRoot(b, ctx, db, root)
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	scanner.plannerBudgetOverride = &splitBudget{
 		LeafEntryBudget:     24,
 		LeafWriteBudget:     24,

@@ -3,9 +3,13 @@ package filesearch
 import "time"
 
 type SearchQuery struct {
-	Raw      string
-	wildcard *wildcardQuery
-	plan     *queryPlan
+	Raw string
+	// DisablePinyin lets callers mirror the global Wox pinyin setting while
+	// preserving the historical default for internal tests and callers that do
+	// not provide setting context.
+	DisablePinyin bool
+	wildcard      *wildcardQuery
+	plan          *queryPlan
 }
 
 type StatusSnapshot struct {
@@ -52,21 +56,6 @@ type SearchResult struct {
 	ParentPath string
 	IsDir      bool
 	Score      int64
-}
-
-type SearchStage string
-
-const (
-	SearchStagePartial SearchStage = "partial"
-	SearchStageUpdated SearchStage = "updated"
-	SearchStageFinal   SearchStage = "final"
-)
-
-type SearchUpdate struct {
-	QueryID string
-	Stage   SearchStage
-	Results []SearchResult
-	IsFinal bool
 }
 
 type DirtySignalKind string
@@ -242,12 +231,4 @@ type SubtreeSnapshotBatch struct {
 	ScopePath   string
 	Directories []DirectoryRecord
 	Entries     []EntryRecord
-}
-
-type ProviderCandidate struct {
-	Path       string
-	Name       string
-	ParentPath string
-	IsDir      bool
-	Score      int64
 }

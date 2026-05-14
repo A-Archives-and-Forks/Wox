@@ -168,7 +168,7 @@ func TestCaptureFileSearchRealIndexForWindowsDevRoot(t *testing.T) {
 	}
 	mustInsertRoot(t, scanCtx, db, root)
 
-	scanner := NewScanner(db, nil)
+	scanner := NewScanner(db)
 	engine := &Engine{db: db, scanner: scanner}
 
 	var (

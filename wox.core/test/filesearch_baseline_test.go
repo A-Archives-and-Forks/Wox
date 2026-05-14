@@ -174,8 +174,8 @@ func TestCaptureFileSearchIndexedOnlyBaseline(t *testing.T) {
 		BaselineKind:           "indexed-only",
 		SteadyStateCPUPercent:  steadyStateCPU,
 		SteadyStateMemoryBytes: steadyStateMemory,
-		IndexSnapshotSummary:   engine.LocalIndexSnapshotSummary(),
-		IndexTopRootsSummary:   engine.LocalIndexTopRootsSummary(),
+		IndexSnapshotSummary:   engine.IndexSnapshotSummary(),
+		IndexTopRootsSummary:   engine.IndexTopRootsSummary(),
 		Queries:                samples,
 	}
 

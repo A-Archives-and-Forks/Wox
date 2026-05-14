@@ -15,53 +15,44 @@ import (
 )
 
 const (
-	defaultScanInterval                = 24 * time.Hour
-	defaultDirtyDebounceWindow         = 750 * time.Millisecond
-	defaultMaxDirtyDebounceWindow      = 3 * time.Minute
-	defaultDirtyBackpressurePathCount  = 64
-	defaultDirtyBackpressureRootCount  = 2
-	defaultRootReloadWorkerIdleTimeout = 30 * time.Second
-	progressBatchSize                  = 256
-	progressUpdateGap                  = 250 * time.Millisecond
+	defaultScanInterval               = 24 * time.Hour
+	defaultDirtyDebounceWindow        = 750 * time.Millisecond
+	defaultMaxDirtyDebounceWindow     = 3 * time.Minute
+	defaultDirtyBackpressurePathCount = 64
+	defaultDirtyBackpressureRootCount = 2
+	progressBatchSize                 = 256
+	progressUpdateGap                 = 250 * time.Millisecond
 )
 
 type Scanner struct {
-	db                          *FileSearchDB
-	localProvider               *LocalIndexProvider
-	policy                      *policyState
-	onStateChange               func(ctx context.Context)
-	stopOnce                    sync.Once
-	stopCh                      chan struct{}
-	requestCh                   chan scanRequest
-	dirtyCh                     chan struct{}
-	runningMu                   sync.Mutex
-	scanRunning                 bool
-	changeFeed                  ChangeFeed
-	dirtyQueue                  *DirtyQueue
-	dirtyQueueConfig            DirtyQueueConfig
-	dynamicRootConfig           DynamicRootConfig
-	dynamicHeat                 *dynamicRootHeatTracker
-	dynamicFlushGeneration      int
-	reconciler                  *Reconciler
-	reloadWorkersMu             sync.Mutex
-	reloadWorkers               map[string]*rootReloadWorker
-	rootReloadWorkerIdleTimeout time.Duration
-	transientRunMu              sync.RWMutex
-	transientRunState           *StatusSnapshot
-	transientRootMu             sync.RWMutex
-	transientRootState          *TransientRootState
-	transientSyncMu             sync.RWMutex
-	transientSyncState          *TransientSyncState
-	dirtyBackpressureMu         sync.Mutex
-	lastDirtyRunElapsed         time.Duration
-	loggedRootBytesMu           sync.Mutex
-	loggedRootBytes             map[string]uint64
+	db                     *FileSearchDB
+	policy                 *policyState
+	onStateChange          func(ctx context.Context)
+	stopOnce               sync.Once
+	stopCh                 chan struct{}
+	requestCh              chan scanRequest
+	dirtyCh                chan struct{}
+	runningMu              sync.Mutex
+	scanRunning            bool
+	changeFeed             ChangeFeed
+	dirtyQueue             *DirtyQueue
+	dirtyQueueConfig       DirtyQueueConfig
+	dynamicRootConfig      DynamicRootConfig
+	dynamicHeat            *dynamicRootHeatTracker
+	dynamicFlushGeneration int
+	reconciler             *Reconciler
+	transientRunMu         sync.RWMutex
+	transientRunState      *StatusSnapshot
+	transientRootMu        sync.RWMutex
+	transientRootState     *TransientRootState
+	transientSyncMu        sync.RWMutex
+	transientSyncState     *TransientSyncState
+	dirtyBackpressureMu    sync.Mutex
+	lastDirtyRunElapsed    time.Duration
 	// Tests override the planner budget so run-based smoke coverage can force
 	// job splitting without manufacturing thousands of files just to cross the
 	// production thresholds.
 	plannerBudgetOverride *splitBudget
-	// Test hook to coordinate root-local provider reload ordering.
-	beforeApplyRootReload func(rootID string, entries []EntryRecord)
 }
 
 type scanRequest struct {
@@ -69,21 +60,11 @@ type scanRequest struct {
 	TraceID string
 }
 
-type rootReloadWorker struct {
-	requests chan rootReloadRequest
-}
-
-type rootReloadRequest struct {
-	traceID  string
-	response chan rootReloadResult
-}
-
-type rootReloadResult struct {
-	rootEntries int
-	err         error
-}
-
-func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
+// NewScanner builds the scanner against the persisted SQLite index only. The
+// previous optional in-memory provider mirrored every scan result and forced the
+// scanner to maintain two reload paths, which no longer fits the single-provider
+// search flow.
+func NewScanner(db *FileSearchDB) *Scanner {
 	dirtyQueueConfig := DirtyQueueConfig{
 		DebounceWindow:            defaultDirtyDebounceWindow,
 		MaxDebounceWindow:         defaultMaxDirtyDebounceWindow,
@@ -101,21 +82,17 @@ func NewScanner(db *FileSearchDB, localProvider *LocalIndexProvider) *Scanner {
 	policy := newPolicyState(Policy{})
 
 	return &Scanner{
-		db:                          db,
-		localProvider:               localProvider,
-		policy:                      policy,
-		stopCh:                      make(chan struct{}),
-		requestCh:                   make(chan scanRequest, 1),
-		dirtyCh:                     make(chan struct{}, 1),
-		changeFeed:                  newPlatformChangeFeed(),
-		dirtyQueueConfig:            dirtyQueueConfig,
-		dirtyQueue:                  NewDirtyQueue(dirtyQueueConfig),
-		dynamicRootConfig:           defaultDynamicRootConfig(),
-		dynamicHeat:                 newDynamicRootHeatTracker(),
-		reconciler:                  NewReconciler(db, policy),
-		reloadWorkers:               map[string]*rootReloadWorker{},
-		loggedRootBytes:             map[string]uint64{},
-		rootReloadWorkerIdleTimeout: defaultRootReloadWorkerIdleTimeout,
+		db:                db,
+		policy:            policy,
+		stopCh:            make(chan struct{}),
+		requestCh:         make(chan scanRequest, 1),
+		dirtyCh:           make(chan struct{}, 1),
+		changeFeed:        newPlatformChangeFeed(),
+		dirtyQueueConfig:  dirtyQueueConfig,
+		dirtyQueue:        NewDirtyQueue(dirtyQueueConfig),
+		dynamicRootConfig: defaultDynamicRootConfig(),
+		dynamicHeat:       newDynamicRootHeatTracker(),
+		reconciler:        NewReconciler(db, policy),
 	}
 }
 
@@ -229,18 +206,6 @@ func (s *Scanner) scanAllRootsWithReason(ctx context.Context, reason string) {
 
 	if err := s.executePlannedRun(ctx, RunKindFull, reason, roots, nil); err != nil {
 		util.GetLogger().Warn(ctx, "filesearch full run failed: "+err.Error())
-		return
-	}
-
-	if s.localProvider != nil {
-		entries, err := s.db.ListEntries(ctx)
-		if err != nil {
-			util.GetLogger().Warn(ctx, "filesearch failed to reload entries: "+err.Error())
-			return
-		}
-		s.localProvider.ReplaceEntries(entries)
-		util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: reason=%s entries=%d", reason, len(entries)))
-		logLocalIndexSnapshot(ctx, "full_scan_complete", s.localProvider.snapshot(), true)
 		return
 	}
 
@@ -1278,16 +1243,7 @@ func (s *Scanner) processDirtyQueue(ctx context.Context, now time.Time) error {
 	}
 	s.recordDirtyRunElapsed(time.Since(runStartedAt))
 
-	if s.localProvider != nil {
-		if _, err := s.reloadLocalProviderFromDB(ctx); err != nil {
-			s.handleIncrementalRunFailure(ctx, runRoots, batches, err)
-			return err
-		}
-	} else {
-		for _, root := range runRoots {
-			s.logRootReloadIndexSnapshot(ctx, root.ID)
-		}
-	}
+	s.logRootReloadIndexSnapshot(ctx)
 	if err := s.handleSuccessfulDirtyFlush(ctx, batches, now); err != nil {
 		// Dynamic-root lifecycle work is opportunistic after the real reconcile
 		// has succeeded. A promotion/demotion failure should not turn an already
@@ -1925,236 +1881,13 @@ func (s *Scanner) loadDirtyQueueContext(ctx context.Context) (map[string]int, ma
 	return rootDirectoryCounts, rootsByID, rootIndexByID, nil
 }
 
-func (s *Scanner) reloadLocalProviderFromDB(ctx context.Context) (int, error) {
-	if s.localProvider == nil {
-		return 0, nil
-	}
-	entries, err := s.db.ListEntries(ctx)
+func (s *Scanner) logRootReloadIndexSnapshot(ctx context.Context) {
+	snapshot, err := s.db.SearchIndexSnapshot(ctx)
 	if err != nil {
-		return 0, err
-	}
-	s.localProvider.ReplaceEntries(entries)
-	util.GetLogger().Debug(ctx, fmt.Sprintf("filesearch local index reloaded from db: entries=%d", len(entries)))
-	return len(entries), nil
-}
-
-func (s *Scanner) reloadLocalProviderRootFromDB(ctx context.Context, rootID string) (int, error) {
-	if s.localProvider == nil {
-		return 0, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if strings.TrimSpace(rootID) == "" {
-		return s.reloadLocalProviderFromDB(ctx)
-	}
-
-	worker := s.ensureRootReloadWorker(rootID)
-	request := rootReloadRequest{
-		traceID:  util.GetContextTraceId(ctx),
-		response: make(chan rootReloadResult, 1),
-	}
-
-	select {
-	case <-s.stopCh:
-		return 0, context.Canceled
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	case worker.requests <- request:
-	}
-
-	select {
-	case <-s.stopCh:
-		return 0, context.Canceled
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	case result := <-request.response:
-		return result.rootEntries, result.err
-	}
-}
-
-func (s *Scanner) ensureRootReloadWorker(rootID string) *rootReloadWorker {
-	s.reloadWorkersMu.Lock()
-	defer s.reloadWorkersMu.Unlock()
-
-	if worker, ok := s.reloadWorkers[rootID]; ok {
-		return worker
-	}
-
-	worker := &rootReloadWorker{
-		requests: make(chan rootReloadRequest, 16),
-	}
-	s.reloadWorkers[rootID] = worker
-
-	util.Go(context.Background(), "filesearch local provider reload worker", func() {
-		s.runRootReloadWorker(rootID, worker)
-	})
-
-	return worker
-}
-
-func (s *Scanner) runRootReloadWorker(rootID string, worker *rootReloadWorker) {
-	idleTimeout := s.rootReloadWorkerIdleTimeout
-	if idleTimeout <= 0 {
-		idleTimeout = defaultRootReloadWorkerIdleTimeout
-	}
-	idleTimer := time.NewTimer(idleTimeout)
-	defer idleTimer.Stop()
-
-	for {
-		var request rootReloadRequest
-		select {
-		case <-s.stopCh:
-			s.releaseRootReloadWorker(rootID, worker)
-			return
-		case <-idleTimer.C:
-			s.releaseRootReloadWorker(rootID, worker)
-			return
-		case request = <-worker.requests:
-		}
-		if !idleTimer.Stop() {
-			select {
-			case <-idleTimer.C:
-			default:
-			}
-		}
-
-		batch := []rootReloadRequest{request}
-	collectPending:
-		for {
-			select {
-			case request = <-worker.requests:
-				batch = append(batch, request)
-			default:
-				break collectPending
-			}
-		}
-
-		traceID := batch[len(batch)-1].traceID
-		reloadCtx := contextWithTraceID(context.Background(), traceID)
-		if len(batch) > 1 {
-			util.GetLogger().Debug(reloadCtx, fmt.Sprintf(
-				"filesearch coalescing local provider root reload requests: root=%s requests=%d",
-				rootID,
-				len(batch),
-			))
-		}
-
-		rootEntries, err := s.reloadLocalProviderRootFromDBOnce(reloadCtx, rootID)
-		result := rootReloadResult{rootEntries: rootEntries, err: err}
-		for _, pending := range batch {
-			pending.response <- result
-		}
-		idleTimer.Reset(idleTimeout)
-	}
-}
-
-func (s *Scanner) releaseRootReloadWorker(rootID string, worker *rootReloadWorker) {
-	s.reloadWorkersMu.Lock()
-	defer s.reloadWorkersMu.Unlock()
-
-	if current, ok := s.reloadWorkers[rootID]; ok && current == worker {
-		delete(s.reloadWorkers, rootID)
-	}
-}
-
-func (s *Scanner) reloadLocalProviderRootFromDBOnce(ctx context.Context, rootID string) (int, error) {
-	if s.localProvider == nil {
-		return 0, nil
-	}
-	currentRootEntries := s.localProvider.SnapshotRootEntries(rootID)
-	entries, err := s.db.ListEntriesByRoot(ctx, rootID)
-	if err != nil {
-		return 0, err
-	}
-	if s.beforeApplyRootReload != nil {
-		s.beforeApplyRootReload(rootID, cloneEntryRecords(entries))
-	}
-
-	delta := diffRootEntries(rootID, currentRootEntries, entries)
-	totalEntries := s.localProvider.ApplyRootEntries(rootID, entries, delta)
-	util.GetLogger().Debug(ctx, fmt.Sprintf(
-		"filesearch local index reloaded from db root: root=%s root_entries=%d total_entries=%d added=%d updated=%d removed=%d rebuild=%t",
-		rootID,
-		len(entries),
-		totalEntries,
-		len(delta.Added),
-		len(delta.Updated),
-		len(delta.Removed),
-		shouldRebuildRootEntries(delta),
-	))
-	s.logRootReloadIndexSnapshot(ctx, rootID)
-	return len(entries), nil
-}
-
-func (s *Scanner) logRootReloadIndexSnapshot(ctx context.Context, rootID string) {
-	if s.localProvider == nil {
-		snapshot, err := s.db.SearchIndexSnapshot(ctx)
-		if err != nil {
-			util.GetLogger().Warn(ctx, "filesearch failed to capture sqlite snapshot after root reload: "+err.Error())
-			return
-		}
-		logSQLiteIndexSnapshot(ctx, "root_reload_complete", snapshot, false)
+		util.GetLogger().Warn(ctx, "filesearch failed to capture sqlite snapshot after root reload: "+err.Error())
 		return
 	}
-
-	snapshot := s.localProvider.snapshot()
-	logLocalIndexSnapshot(ctx, "root_reload_complete", snapshot, false)
-
-	rootSnapshot, previousBytes, shouldPromote := s.recordRootEstimate(snapshot, rootID)
-	if !shouldPromote {
-		return
-	}
-
-	util.GetLogger().Info(ctx, fmt.Sprintf(
-		"filesearch prominent root reload: root=%s docs=%d total_bytes_est=%d previous_total_bytes_est=%d",
-		rootID,
-		rootSnapshot.DocCount,
-		rootSnapshot.TotalBytesEstimate,
-		previousBytes,
-	))
-}
-
-func (s *Scanner) recordRootEstimate(snapshot queryIndexSnapshot, rootID string) (rootIndexSnapshot, uint64, bool) {
-	var current rootIndexSnapshot
-	for _, root := range snapshot.Roots {
-		if root.RootID == rootID {
-			current = root
-			break
-		}
-	}
-	if current.RootID == "" {
-		return rootIndexSnapshot{}, 0, false
-	}
-
-	s.loggedRootBytesMu.Lock()
-	defer s.loggedRootBytesMu.Unlock()
-
-	previousBytes := s.loggedRootBytes[rootID]
-	for _, root := range snapshot.Roots {
-		s.loggedRootBytes[root.RootID] = root.TotalBytesEstimate
-	}
-
-	isTopRoot := false
-	for _, root := range snapshot.TopRoots {
-		if root.RootID == rootID {
-			isTopRoot = true
-			break
-		}
-	}
-
-	if previousBytes == 0 {
-		return current, previousBytes, isTopRoot
-	}
-
-	delta := previousBytes
-	if current.TotalBytesEstimate > previousBytes {
-		delta = current.TotalBytesEstimate - previousBytes
-	} else {
-		delta = previousBytes - current.TotalBytesEstimate
-	}
-
-	return current, previousBytes, isTopRoot || delta*10 >= previousBytes
+	logSQLiteIndexSnapshot(ctx, "root_reload_complete", snapshot, false)
 }
 
 func (s *Scanner) findRootByID(ctx context.Context, rootID string) (RootRecord, bool) {

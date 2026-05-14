@@ -8,16 +8,12 @@ import (
 )
 
 const (
-	maxLoggedPaths                               = 8
-	maxLoggedRoots                               = 5
-	slowFilesearchProviderQueryThresholdMs int64 = 40
-	slowFilesearchAggregationThresholdMs   int64 = 10
-	slowFilesearchEngineQueryThresholdMs   int64 = 60
-	slowFilesearchSearchOnceTimeoutMs      int64 = 200
-	slowFilesearchRunPlannerThresholdMs    int64 = 250
-	slowFilesearchRunExecutionThresholdMs  int64 = 500
-	slowFilesearchJobPhaseThresholdMs      int64 = 150
-	slowFilesearchSQLiteMaintenanceMs      int64 = 250
+	maxLoggedPaths                              = 8
+	maxLoggedRoots                              = 5
+	slowFilesearchRunPlannerThresholdMs   int64 = 250
+	slowFilesearchRunExecutionThresholdMs int64 = 500
+	slowFilesearchJobPhaseThresholdMs     int64 = 150
+	slowFilesearchSQLiteMaintenanceMs     int64 = 250
 )
 
 func summarizeLogPath(path string) string {
@@ -74,99 +70,6 @@ func contextWithTraceID(ctx context.Context, traceID string) context.Context {
 		return ctx
 	}
 	return util.NewTraceContextWith(traceID)
-}
-
-func logProviderSearchResponse(ctx context.Context, query SearchQuery, providerName string, elapsedMs int64, aggregationElapsedMs int64, candidateCount int, resultCount int, changed bool, err error) {
-	// status := "ok"
-	// if err != nil {
-	// 	if errorsIsCanceled(err) {
-	// 		status = "canceled"
-	// 	} else {
-	// 		status = "error"
-	// 	}
-	// }
-
-	// msg := fmt.Sprintf(
-	// 	"filesearch provider query: provider=%s query=%q elapsed=%dms aggregate=%dms candidates=%d results=%d changed=%v status=%s",
-	// 	providerName,
-	// 	query.Raw,
-	// 	elapsedMs,
-	// 	aggregationElapsedMs,
-	// 	candidateCount,
-	// 	resultCount,
-	// 	changed,
-	// 	status,
-	// )
-	// if err != nil && !errorsIsCanceled(err) {
-	// 	msg += " error=" + err.Error()
-	// }
-
-	// if err != nil && !errorsIsCanceled(err) {
-	// 	util.GetLogger().Warn(ctx, msg)
-	// 	return
-	// }
-
-	// if elapsedMs >= slowFilesearchProviderQueryThresholdMs || aggregationElapsedMs >= slowFilesearchAggregationThresholdMs {
-	// 	util.GetLogger().Info(ctx, "filesearch slow provider query: "+msg)
-	// 	return
-	// }
-
-	// util.GetLogger().Debug(ctx, msg)
-}
-
-func logEngineSearchCompletion(ctx context.Context, query SearchQuery, elapsedMs int64, providerCount int, updateCount int, resultCount int) {
-	// msg := fmt.Sprintf(
-	// 	"filesearch engine query complete: query=%q elapsed=%dms providers=%d updates=%d results=%d",
-	// 	query.Raw,
-	// 	elapsedMs,
-	// 	providerCount,
-	// 	updateCount,
-	// 	resultCount,
-	// )
-	// if elapsedMs >= slowFilesearchEngineQueryThresholdMs {
-	// 	util.GetLogger().Info(ctx, "filesearch slow engine query: "+msg)
-	// 	return
-	// }
-
-	// util.GetLogger().Debug(ctx, msg)
-}
-
-func logSearchOnceWait(ctx context.Context, query SearchQuery, elapsedMs int64, timedOut bool, resultCount int) {
-	// msg := fmt.Sprintf(
-	// 	"filesearch search_once wait: query=%q elapsed=%dms timeout=%v results=%d",
-	// 	query.Raw,
-	// 	elapsedMs,
-	// 	timedOut,
-	// 	resultCount,
-	// )
-	// if timedOut {
-	// 	util.GetLogger().Info(ctx, "filesearch partial query return: "+msg)
-	// 	return
-	// }
-
-	// if elapsedMs >= slowFilesearchSearchOnceTimeoutMs {
-	// 	util.GetLogger().Info(ctx, "filesearch slow search_once wait: "+msg)
-	// 	return
-	// }
-
-	// util.GetLogger().Debug(ctx, msg)
-}
-
-func logLocalIndexSnapshot(ctx context.Context, stage string, snapshot queryIndexSnapshot, info bool) {
-	// summary := formatLocalIndexSnapshotSummary(stage, snapshot)
-	// topRoots := formatLocalIndexTopRoots(stage, snapshot)
-	// if info {
-	// 	util.GetLogger().Info(ctx, summary)
-	// 	if topRoots != "" {
-	// 		util.GetLogger().Info(ctx, topRoots)
-	// 	}
-	// 	return
-	// }
-
-	// util.GetLogger().Debug(ctx, summary)
-	// if topRoots != "" {
-	// 	util.GetLogger().Debug(ctx, topRoots)
-	// }
 }
 
 func logSQLiteIndexSnapshot(ctx context.Context, stage string, snapshot sqliteIndexSnapshot, info bool) {
@@ -288,70 +191,6 @@ func logFilesearchSQLiteMaintenance(ctx context.Context, operation string, scope
 	// 	return
 	// }
 	// util.GetLogger().Debug(ctx, msg)
-}
-
-func formatLocalIndexSnapshotSummary(stage string, snapshot queryIndexSnapshot) string {
-	return fmt.Sprintf(
-		"filesearch index snapshot: stage=%s roots=%d docs=%d live_doc_records=%d path_to_doc_keys=%d freed_doc_ids=%d extension_keys=%d extension_refs=%d name_prefix_keys=%d name_prefix_refs=%d name_bigram_keys=%d name_bigram_refs=%d name_trigram_keys=%d name_trigram_refs=%d path_segment_keys=%d path_segment_refs=%d path_trigram_keys=%d path_trigram_refs=%d pinyin_full_bigram_keys=%d pinyin_full_bigram_refs=%d pinyin_full_trigram_keys=%d pinyin_full_trigram_refs=%d pinyin_initial_trie_nodes=%d pinyin_initial_posting_refs=%d doc_bytes_est=%d posting_bytes_est=%d path_key_bytes_est=%d trie_bytes_est=%d total_bytes_est=%d",
-		strings.TrimSpace(stage),
-		snapshot.RootCount,
-		snapshot.DocCount,
-		snapshot.LiveDocRecords,
-		snapshot.PathToDocKeyCount,
-		snapshot.FreedDocIDCount,
-		snapshot.Extension.PostingKeyCount,
-		snapshot.Extension.PostingRefCount,
-		snapshot.NamePrefix.PostingKeyCount,
-		snapshot.NamePrefix.PostingRefCount,
-		snapshot.NameBigram.PostingKeyCount,
-		snapshot.NameBigram.PostingRefCount,
-		snapshot.NameTrigram.PostingKeyCount,
-		snapshot.NameTrigram.PostingRefCount,
-		snapshot.PathSegment.PostingKeyCount,
-		snapshot.PathSegment.PostingRefCount,
-		snapshot.PathTrigram.PostingKeyCount,
-		snapshot.PathTrigram.PostingRefCount,
-		snapshot.PinyinFullBigram.PostingKeyCount,
-		snapshot.PinyinFullBigram.PostingRefCount,
-		snapshot.PinyinFullTrigram.PostingKeyCount,
-		snapshot.PinyinFullTrigram.PostingRefCount,
-		snapshot.PinyinInitials.NodeCount,
-		snapshot.PinyinInitials.PostingRefCount,
-		snapshot.DocBytesEstimate,
-		snapshot.PostingBytesEstimate,
-		snapshot.PathKeyBytesEstimate,
-		snapshot.TrieBytesEstimate,
-		snapshot.TotalBytesEstimate,
-	)
-}
-
-func formatLocalIndexTopRoots(stage string, snapshot queryIndexSnapshot) string {
-	if len(snapshot.TopRoots) == 0 {
-		return ""
-	}
-
-	limit := len(snapshot.TopRoots)
-	if limit > maxLoggedRoots {
-		limit = maxLoggedRoots
-	}
-
-	roots := make([]string, 0, limit)
-	for _, root := range snapshot.TopRoots[:limit] {
-		roots = append(roots, fmt.Sprintf(
-			"%s(docs=%d,total_bytes_est=%d,path_keys=%d,freed_doc_ids=%d)",
-			summarizeLogPath(root.RootID),
-			root.DocCount,
-			root.TotalBytesEstimate,
-			root.PathToDocKeyCount,
-			root.FreedDocIDCount,
-		))
-	}
-
-	return fmt.Sprintf(
-		"filesearch index snapshot roots: stage=%s top_roots=[%s]",
-		strings.TrimSpace(stage),
-		strings.Join(roots, ", "),
-	)
 }
 
 func formatSQLiteIndexSnapshotSummary(stage string, snapshot sqliteIndexSnapshot) string {

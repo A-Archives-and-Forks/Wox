@@ -10,6 +10,7 @@ import (
 	"sync"
 	"wox/common"
 	"wox/plugin"
+	"wox/setting"
 	"wox/setting/definition"
 	"wox/setting/validator"
 	"wox/util"
@@ -172,7 +173,12 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin
 	}
 
 	searchStartedAt := util.GetSystemTimestamp()
-	results, err := c.engine.SearchOnce(ctx, filesearch.SearchQuery{Raw: query.Search}, 100)
+	usePinyin := setting.GetSettingManager().GetWoxSetting(ctx).UsePinYin.Get()
+	// File search uses its own indexed engine instead of plugin.IsStringMatch,
+	// so the global pinyin option must be passed explicitly. Without this bridge,
+	// disabling pinyin in Wox settings still allowed pinyin-derived candidates
+	// such as ASCII "abc..." cache files to appear for mixed Chinese queries.
+	results, err := c.engine.Search(ctx, filesearch.SearchQuery{Raw: query.Search, DisablePinyin: !usePinyin}, 100)
 	diagnostics.searchElapsedMs = util.GetSystemTimestamp() - searchStartedAt
 	if err != nil {
 		c.logQueryDiagnostics(ctx, query.Search, diagnostics, 0, util.GetSystemTimestamp()-queryStartedAt)
@@ -181,9 +187,9 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin
 		return plugin.QueryResponse{}
 	}
 
-	// Split result-materialization timing out from engine search timing because the
-	// previous logs stopped at SearchOnce and could not show when os.Stat/icon setup
-	// made the plugin itself look slow even though the index lookup was fast.
+	// Split result-materialization timing out from engine search timing because
+	// os.Stat/icon setup can make the plugin itself look slow even when the
+	// indexed lookup has already finished.
 	buildStartedAt := util.GetSystemTimestamp()
 	// Cache file-type icons per extension inside one query because the previous
 	// per-result file-icon conversion retried embedded-icon extraction for every
