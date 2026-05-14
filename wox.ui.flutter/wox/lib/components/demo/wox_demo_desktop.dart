@@ -95,8 +95,11 @@ class WoxDemoDesktopBackground extends StatelessWidget {
             Positioned(left: 28, top: 112, child: _DesktopFolderIcon(label: 'Files', accent: const Color(0xFFFACC15))),
           ],
           if (isMac) ...[
+            // UX fix: macOS onboarding previews now omit the Dock because the
+            // launcher is the focus of this simulated desktop. The Dock used to
+            // compete with the Wox window and looked like an unrelated action
+            // target at the bottom of the demo.
             const Positioned(left: 0, right: 0, top: 0, child: _MacMenuBar()),
-            const Positioned(left: 0, right: 0, bottom: 14, child: _MacDock()),
           ] else ...[
             const Positioned(left: 0, right: 0, bottom: 0, child: _WindowsTaskbar()),
           ],
@@ -183,39 +186,6 @@ class _MacMenuBar extends StatelessWidget {
           const SizedBox(width: 12),
           Text('09:41', style: TextStyle(color: getThemeTextColor().withValues(alpha: 0.78), fontSize: 11, fontWeight: FontWeight.w600)),
         ],
-      ),
-    );
-  }
-}
-
-class _MacDock extends StatelessWidget {
-  const _MacDock();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = [const Color(0xFF60A5FA), const Color(0xFF34D399), const Color(0xFFF97316), const Color(0xFFF43F5E), const Color(0xFFA78BFA)];
-    return Center(
-      child: Container(
-        height: 44,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: getThemeBackgroundColor().withValues(alpha: 0.68),
-          border: Border.all(color: getThemeTextColor().withValues(alpha: 0.10)),
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.10), blurRadius: 24, offset: const Offset(0, 10))],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final color in colors)
-              Container(
-                width: 26,
-                height: 26,
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                decoration: BoxDecoration(color: color.withValues(alpha: 0.82), borderRadius: BorderRadius.circular(7)),
-              ),
-          ],
-        ),
       ),
     );
   }

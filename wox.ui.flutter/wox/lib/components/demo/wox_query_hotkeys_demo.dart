@@ -142,7 +142,7 @@ class _WoxQueryHotkeysDemoState extends State<WoxQueryHotkeysDemo> with SingleTi
                   child: Opacity(
                     opacity: ex1,
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(48, 18, 52, 36),
+                      padding: _demoDesktopHintContentPadding(),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -220,7 +220,7 @@ class _WoxQueryHotkeysDemoState extends State<WoxQueryHotkeysDemo> with SingleTi
                   child: Opacity(
                     opacity: ex2,
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(48, 18, 52, 36),
+                      padding: _demoDesktopHintContentPadding(),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [

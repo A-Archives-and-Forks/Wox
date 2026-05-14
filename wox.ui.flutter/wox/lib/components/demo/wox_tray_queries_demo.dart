@@ -67,25 +67,42 @@ class _WoxTrayQueriesDemoState extends State<WoxTrayQueriesDemo> with SingleTick
 
         return LayoutBuilder(
           builder: (context, constraints) {
-            const trayIconSize = 28.0;
+            // Bug fix: the macOS tray affordance lives inside a 28 px simulated
+            // menu bar, so it needs menu-bar-sized geometry. Reusing the 28 px
+            // Windows taskbar button made the icon overflow the bar and look
+            // vertically offset from Finder/search/time.
+            final trayIconSize = isMac ? 18.0 : 28.0;
             const trayWindowGap = 4.0;
-            final trayAnchor = isMac ? Offset(constraints.maxWidth - 84, 17) : Offset(constraints.maxWidth - 120, constraints.maxHeight - 23);
+            final trayAnchor = isMac ? Offset(constraints.maxWidth - 88, 14) : Offset(constraints.maxWidth - 120, constraints.maxHeight - 23);
             final startCursor = Offset(60, constraints.maxHeight - 82);
-            final cursorOffset = Offset.lerp(startCursor, trayAnchor.translate(-4, -8), cursorProgress)!;
+            final cursorTargetOffset = isMac ? trayAnchor.translate(-6, -7) : trayAnchor.translate(-4, -8);
+            final cursorOffset = Offset.lerp(startCursor, cursorTargetOffset, cursorProgress)!;
             final maxWindowWidth = (constraints.maxWidth - 96).clamp(260.0, double.infinity).toDouble();
             final windowWidth = 420.0.clamp(260.0, maxWindowWidth).toDouble();
             final windowHeight = (24 + (WoxThemeUtil.instance.getResultItemHeight() * 3)).clamp(150.0, 240.0).toDouble();
             final maxWindowLeft = (constraints.maxWidth - windowWidth - 48).clamp(48.0, double.infinity).toDouble();
-            final windowLeft = (trayAnchor.dx - windowWidth + trayIconSize).clamp(48.0, maxWindowLeft).toDouble();
+            final windowLeft = (isMac ? trayAnchor.dx - windowWidth + (trayIconSize / 2) : trayAnchor.dx - windowWidth + trayIconSize).clamp(48.0, maxWindowLeft).toDouble();
             final trayIconTop = trayAnchor.dy - (trayIconSize / 2);
             final trayIconBottom = trayAnchor.dy + (trayIconSize / 2);
-            final hintSafeTop = 18 + 66 + 18;
-            final maxWindowTop = (constraints.maxHeight - windowHeight - 52).clamp(hintSafeTop, double.infinity).toDouble();
-            // Feature refinement: the tray query window is anchored to the tray
-            // icon instead of a fixed top offset. The fixed placement looked
-            // disconnected on tall demo scenes, while this keeps the launcher
-            // edge immediately adjacent to the system affordance that opened it.
-            final windowTop = (isMac ? trayIconBottom + trayWindowGap : trayIconTop - windowHeight - trayWindowGap).clamp(hintSafeTop, maxWindowTop).toDouble();
+            const hintCardHeight = 66.0;
+            const hintWindowGap = 12.0;
+            const hintBottomInset = 36.0;
+            final defaultHintTop = _demoDesktopHintTopInset();
+            final hintSafeTop = defaultHintTop + hintCardHeight + 18;
+            final macHintTop = math.max(trayIconBottom + trayWindowGap + windowHeight + hintWindowGap, constraints.maxHeight - hintCardHeight - hintBottomInset);
+            final macMaxWindowTop = (macHintTop - windowHeight - hintWindowGap).clamp(trayIconBottom + trayWindowGap, double.infinity).toDouble();
+            final windowsMaxWindowTop = (constraints.maxHeight - windowHeight - 52).clamp(hintSafeTop, double.infinity).toDouble();
+            // Bug fix: macOS tray queries open from the top menu bar, so Wox must
+            // appear directly below the status icon, while the explanatory hint
+            // belongs near the bottom of the simulated desktop. The old shared
+            // top-hint clamp matched Windows' bottom-taskbar flow and later
+            // middle-stacked the macOS hint under Wox instead of pinning it to
+            // the desktop edge.
+            final windowTop =
+                isMac
+                    ? (trayIconBottom + trayWindowGap).clamp(trayIconBottom + trayWindowGap, macMaxWindowTop).toDouble()
+                    : (trayIconTop - windowHeight - trayWindowGap).clamp(hintSafeTop, windowsMaxWindowTop).toDouble();
+            final hintTop = isMac ? macHintTop : defaultHintTop;
 
             return ClipRRect(
               borderRadius: BorderRadius.circular(8),
@@ -95,7 +112,7 @@ class _WoxTrayQueriesDemoState extends State<WoxTrayQueriesDemo> with SingleTick
                   Positioned(
                     left: 48,
                     right: 52,
-                    top: 18,
+                    top: hintTop,
                     child: WoxDemoHintCard(
                       accent: widget.accent,
                       icon: Icons.ads_click_rounded,
@@ -107,7 +124,7 @@ class _WoxTrayQueriesDemoState extends State<WoxTrayQueriesDemo> with SingleTick
                   Positioned(
                     left: trayAnchor.dx - (trayIconSize / 2),
                     top: trayAnchor.dy - (trayIconSize / 2),
-                    child: _TrayQueryIcon(accent: widget.accent, pressed: _isTrayPressed(), size: trayIconSize),
+                    child: _TrayQueryIcon(accent: widget.accent, pressed: _isTrayPressed(), size: trayIconSize, menuBarStyle: isMac),
                   ),
                   Positioned(left: cursorOffset.dx, top: cursorOffset.dy, child: _DemoCursor(accent: widget.accent)),
                   if (windowProgress > 0.01)

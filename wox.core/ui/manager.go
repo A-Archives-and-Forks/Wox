@@ -1251,7 +1251,7 @@ func (m *Manager) shouldIgnoreHotkeyTrigger(ctx context.Context) bool {
 
 func (m *Manager) isOnboardingViewActive() bool {
 	if impl, ok := m.ui.(*uiImpl); ok {
-		return impl.isInOnboardingView
+		return impl.isInOnboardingView && impl.isVisible
 	}
 	return false
 }

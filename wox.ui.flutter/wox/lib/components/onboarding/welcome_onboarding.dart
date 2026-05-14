@@ -23,7 +23,10 @@ class WoxWelcomeOnboarding extends StatelessWidget {
       content: WoxOnboardingSettingsPanel(
         key: const ValueKey('onboarding-welcome-page'),
         children: [
-          Text(tr('onboarding_welcome_card_body'), style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5)),
+          // Readability fix: the welcome intro is standalone explanatory text,
+          // so it should use the same primary-color, normal-weight style as the
+          // other onboarding descriptions instead of the dim subtitle color.
+          Text(tr('onboarding_welcome_card_body'), style: TextStyle(color: getThemeTextColor(), fontSize: 14, height: 1.5)),
           const SizedBox(height: 20),
           Container(height: 1, color: getThemeSubTextColor().withValues(alpha: 0.14)),
           const SizedBox(height: 18),

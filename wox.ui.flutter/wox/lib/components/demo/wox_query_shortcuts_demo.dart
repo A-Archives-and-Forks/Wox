@@ -67,7 +67,7 @@ class _WoxQueryShortcutsDemoState extends State<WoxQueryShortcutsDemo> with Sing
                   // Wox. This preserves the top/bottom demo rhythm while keeping
                   // the alias mapping visible instead of letting the launcher
                   // overlap the teaching content.
-                  padding: const EdgeInsets.fromLTRB(48, 18, 52, 36),
+                  padding: _demoDesktopHintContentPadding(),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [

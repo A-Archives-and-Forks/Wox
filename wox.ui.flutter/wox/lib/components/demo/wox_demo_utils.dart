@@ -38,3 +38,15 @@ String _demoActionPanelHotkey() {
   // while avoiding a dependency on the onboarding controller.
   return _formatDemoHotkey('', fallback: Platform.isMacOS ? 'cmd+j' : 'alt+j');
 }
+
+double _demoDesktopHintTopInset() {
+  // UX fix: hint cards sit inside the simulated desktop, so macOS needs extra
+  // top clearance for the 28 px menu bar. The old shared 18 px inset let the
+  // hint card overlap Finder/File and made the teaching prompt look attached to
+  // the system chrome instead of the Wox demo content.
+  return Platform.isMacOS ? 42 : 18;
+}
+
+EdgeInsets _demoDesktopHintContentPadding() {
+  return EdgeInsets.fromLTRB(48, _demoDesktopHintTopInset(), 52, 36);
+}

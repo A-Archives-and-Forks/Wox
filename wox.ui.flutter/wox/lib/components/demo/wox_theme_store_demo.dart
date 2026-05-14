@@ -120,7 +120,7 @@ class _ThemeStoreDemoState extends State<_ThemeStoreDemo> with SingleTickerProvi
               Positioned.fill(child: WoxDemoDesktopBackground(accent: widget.accent, isMac: Platform.isMacOS, showDefaultIcons: false)),
               Positioned.fill(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(48, 18, 52, 36),
+                  padding: _demoDesktopHintContentPadding(),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [

@@ -52,7 +52,11 @@ class _HotkeyContent extends StatelessWidget {
   Widget build(BuildContext context) {
     return WoxOnboardingSettingsPanel(
       children: [
-        Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.45)),
+        // Readability fix: this instruction is the main action for the hotkey
+        // steps, not secondary metadata. It uses the primary text color for
+        // contrast, while keeping the default weight so the description style
+        // matches the other onboarding panels.
+        Text(body, style: TextStyle(color: getThemeTextColor(), fontSize: 14, height: 1.45)),
         const SizedBox(height: 26),
         Align(
           alignment: Alignment.centerLeft,

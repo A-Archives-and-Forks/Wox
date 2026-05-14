@@ -74,6 +74,12 @@ class WoxOnboardingInfoPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Readability fix: when an info panel has no separate title, its body text
+    // is the primary instruction for the step. The previous subtitle color made
+    // these standalone descriptions look faded on dark translucent onboarding
+    // panels, especially over the grid backdrop.
+    final standaloneBodyStyle = TextStyle(color: getThemeTextColor(), fontSize: 14, height: 1.5);
+    final detailBodyStyle = TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5);
     final badgeWidget =
         badge != null
             ? Container(
@@ -105,15 +111,12 @@ class WoxOnboardingInfoPanel extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5)),
+                  Text(body, style: detailBodyStyle),
                 ],
               )
               : badgeWidget != null
-              ? Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [Expanded(child: Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5))), const SizedBox(width: 14), badgeWidget],
-              )
-              : Text(body, style: TextStyle(color: getThemeSubTextColor(), fontSize: 14, height: 1.5)),
+              ? Row(crossAxisAlignment: CrossAxisAlignment.center, children: [Expanded(child: Text(body, style: standaloneBodyStyle)), const SizedBox(width: 14), badgeWidget])
+              : Text(body, style: standaloneBodyStyle),
     );
   }
 }

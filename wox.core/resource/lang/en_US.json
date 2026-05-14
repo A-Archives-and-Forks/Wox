@@ -1202,7 +1202,7 @@
   "ui_ai_chat_error": "Error: %s",
   "ui_about_onboarding": "Onboarding",
   "onboarding_title": "Set up Wox",
-  "onboarding_subtitle": "A quick pass through the features that make Wox faster to use.",
+  "onboarding_subtitle": "A quick pass through the features that make Wox faster to use",
   "onboarding_skip": "Skip",
   "onboarding_back": "Back",
   "onboarding_next": "Next",
