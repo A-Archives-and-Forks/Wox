@@ -85,6 +85,11 @@ class WoxLauncherController extends GetxController {
   double queryBoxTextWrapWidth = 0;
   final queryBoxLineCount = 1.obs;
   final queryBoxTextFieldKey = GlobalKey<ExtendedTextFieldState>();
+  // Bug fix: Linux can sometimes surface Enter only as KeyRepeatEvent after the platform/IME
+  // consumed the original KeyDownEvent. The query-box view uses this per-press state to
+  // execute once from the repeat fallback and swallow later repeats without widening the
+  // workaround to other platforms or other focus handlers.
+  bool _hasHandledLinuxQueryBoxSubmitKey = false;
 
   //preview related variables
   final currentPreview = WoxPreview.empty().obs;
@@ -369,9 +374,10 @@ class WoxLauncherController extends GetxController {
   void onInit() {
     super.onInit();
 
-    // On Linux, the IME (IBus/Fcitx) consumes the first ESC KeyDownEvent when the window
-    // gains focus (to cancel any pending composition). Flutter only receives a KeyRepeatEvent.
-    // So we must also handle KeyRepeatEvent for Escape to enable one-press hiding.
+    // On Linux, the IME (IBus/Fcitx) can consume the first keydown after focus gain.
+    // Escape still needs a focus-node fallback because the shared query-box handler only reacts
+    // to KeyDown for hide, while Enter fallback now lives in the query-box view's KeyRepeat path
+    // so the workaround stays attached to the multiline input that would otherwise insert newline.
     if (Platform.isLinux) {
       queryBoxFocusNode.onKeyEvent = (node, event) {
         if ((event is KeyDownEvent || event is KeyRepeatEvent) && event.logicalKey == LogicalKeyboardKey.escape && !WoxHotkey.isAnyModifierPressed()) {
@@ -420,6 +426,9 @@ class WoxLauncherController extends GetxController {
     queryBoxFocusNode.addListener(() {
       updateQueryBoxSelectedTextStyle();
       if (queryBoxFocusNode.hasFocus) {
+        // Reset Linux fallback state whenever focus returns because the launcher can hide before
+        // Flutter delivers the matching KeyUpEvent for Enter.
+        _hasHandledLinuxQueryBoxSubmitKey = false;
         var traceId = const UuidV4().generate();
         final screenshotController = Get.find<WoxScreenshotController>();
         if (screenshotController.isSessionActive.value) {
@@ -464,6 +473,23 @@ class WoxLauncherController extends GetxController {
       style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxTextSelectionColor)),
       enabled: queryBoxFocusNode.hasFocus,
     );
+  }
+
+  void markLinuxQueryBoxSubmitKeyHandled() {
+    _hasHandledLinuxQueryBoxSubmitKey = true;
+  }
+
+  void resetLinuxQueryBoxSubmitKeyHandling() {
+    _hasHandledLinuxQueryBoxSubmitKey = false;
+  }
+
+  bool shouldExecuteLinuxQueryBoxSubmitFromRepeat() {
+    if (_hasHandledLinuxQueryBoxSubmitKey) {
+      return false;
+    }
+
+    _hasHandledLinuxQueryBoxSubmitKey = true;
+    return true;
   }
 
   bool isGlobalInputQuery(PlainQuery query) {

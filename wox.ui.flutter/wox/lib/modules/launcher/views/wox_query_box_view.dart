@@ -24,6 +24,10 @@ import 'package:wox/utils/wox_theme_util.dart';
 class WoxQueryBoxView extends GetView<WoxLauncherController> {
   const WoxQueryBoxView({super.key});
 
+  bool _isSubmitKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter;
+  }
+
   // Helper method to convert LogicalKeyboardKey to number for quick select
   int? getNumberFromKey(LogicalKeyboardKey key) {
     switch (key) {
@@ -276,6 +280,11 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                   controller.stopQuickSelectTimer(traceId);
                 }
 
+                if (Platform.isLinux && event is KeyUpEvent && _isSubmitKey(event.logicalKey)) {
+                  controller.resetLinuxQueryBoxSubmitKeyHandling();
+                  return KeyEventResult.ignored;
+                }
+
                 var isAnyModifierPressed = WoxHotkey.isAnyModifierPressed();
                 if (!isAnyModifierPressed) {
                   if (event is KeyDownEvent) {
@@ -284,11 +293,19 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
                         controller.hideApp(const UuidV4().generate());
                         return KeyEventResult.handled;
                       case LogicalKeyboardKey.enter:
+                      case LogicalKeyboardKey.numpadEnter:
                         var composing = controller.queryBoxTextFieldController.value.composing;
                         var isComposing = composing.start >= 0 && composing.end >= 0;
                         if (isComposing) {
                           return KeyEventResult.ignored;
                         }
+
+                        if (Platform.isLinux) {
+                          // Record the normal KeyDown path so a later Linux KeyRepeatEvent from the same
+                          // physical press is swallowed instead of inserting newline or re-executing.
+                          controller.markLinuxQueryBoxSubmitKeyHandled();
+                        }
+
                         controller.executeDefaultAction(const UuidV4().generate());
                         return KeyEventResult.handled;
                       case LogicalKeyboardKey.arrowDown:
@@ -323,6 +340,24 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
 
                   if (event is KeyRepeatEvent) {
                     switch (event.logicalKey) {
+                      case LogicalKeyboardKey.enter:
+                      case LogicalKeyboardKey.numpadEnter:
+                        if (!Platform.isLinux) {
+                          break;
+                        }
+
+                        // #4410 Linux can generate KeyRepeatEvents without a preceding KeyDownEvent, so also check the composing state to avoid submitting incomplete IME input.
+                        // This is a workaround for the underlying issue of unreliable KeyDown/KeyUp events on Linux, which may require a more robust solution in the future.
+                        var composing = controller.queryBoxTextFieldController.value.composing;
+                        var isComposing = composing.start >= 0 && composing.end >= 0;
+                        if (isComposing) {
+                          return KeyEventResult.ignored;
+                        }
+
+                        if (controller.shouldExecuteLinuxQueryBoxSubmitFromRepeat()) {
+                          controller.executeDefaultAction(const UuidV4().generate());
+                        }
+                        return KeyEventResult.handled;
                       case LogicalKeyboardKey.arrowDown:
                         controller.handleQueryBoxArrowDown();
                         return KeyEventResult.handled;
