@@ -13,9 +13,11 @@ ifeq ($(OS),Windows_NT)
     endif
 endif
 
-# Prefer Corepack because it honors packageManager and keeps the host lockfile
-# on the pnpm version expected by this package instead of a newer global pnpm.
-PNPM ?= $(shell if command -v corepack >/dev/null 2>&1; then echo "corepack pnpm"; elif command -v pnpm >/dev/null 2>&1; then echo pnpm; else echo pnpm; fi)
+# The previous host build preferred Corepack whenever the shim was present, but
+# some local Node/Corepack installs expose `corepack` while `corepack pnpm`
+# still crashes. Prefer a working global pnpm first, then fall back to a
+# working Corepack shim so nested root builds keep using an executable CLI.
+PNPM ?= $(shell if command -v pnpm >/dev/null 2>&1 && pnpm --version >/dev/null 2>&1; then echo pnpm; elif command -v corepack >/dev/null 2>&1 && corepack pnpm --version >/dev/null 2>&1; then echo "corepack pnpm"; else echo pnpm; fi)
 
 help:
 	@echo "Available commands:"

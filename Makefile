@@ -14,10 +14,11 @@ ifeq ($(OS),Windows_NT)
     endif
 endif
 
-# Full builds only need pnpm's CLI, and Corepack honors each package's pinned
-# packageManager version. Prefer Corepack so local installs do not rewrite lock
-# files with a globally installed pnpm version that may be newer than the repo.
-PNPM ?= $(shell if command -v corepack >/dev/null 2>&1; then echo "corepack pnpm"; elif command -v pnpm >/dev/null 2>&1; then echo pnpm; else echo pnpm; fi)
+# The previous build always preferred Corepack when the shim existed, but some
+# Node/Corepack installs expose the command while `corepack pnpm` still fails at
+# runtime. Prefer a working global pnpm first, then fall back to a working
+# Corepack shim so dependency checks and nested builds choose an executable CLI.
+PNPM ?= $(shell if command -v pnpm >/dev/null 2>&1 && pnpm --version >/dev/null 2>&1; then echo pnpm; elif command -v corepack >/dev/null 2>&1 && corepack pnpm --version >/dev/null 2>&1; then echo "corepack pnpm"; else echo pnpm; fi)
 export PNPM
 
 CURRENT_NODEJS_SDK_VERSION := $(shell node -p "require('./wox.plugin.nodejs/package.json').version")
