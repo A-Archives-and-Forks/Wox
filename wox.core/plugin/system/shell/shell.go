@@ -874,6 +874,8 @@ func (s *ShellPlugin) executeCommandInBackground(ctx context.Context, data shell
 }
 
 func (s *ShellPlugin) buildCommand(ctx context.Context, interpreter string, command string) *exec.Cmd {
+	command = prepareShellCommand(interpreter, command)
+
 	switch interpreter {
 	case "powershell":
 		return shellutil.BuildCommandContext(ctx, "powershell", nil, "-Command", command)
@@ -897,8 +899,14 @@ func (s *ShellPlugin) buildCommand(ctx context.Context, interpreter string, comm
 func (s *ShellPlugin) pipeOutputToSession(ctx context.Context, reader io.Reader, state *shellExecutionState) {
 	bufReader := bufio.NewReader(reader)
 	for {
-		line, err := bufReader.ReadString('\n')
-		if line != "" {
+		lineBytes, err := bufReader.ReadBytes('\n')
+		if len(lineBytes) > 0 {
+			// Bug fix: Windows console commands commonly emit bytes in the active
+			// OEM code page instead of UTF-8. Converting those bytes directly to a
+			// string left invalid UTF-8 in terminal state, and JSON serialization
+			// replaced Chinese text with U+FFFD. Decode at the shell boundary so
+			// history, the ring buffer, and live preview all store valid UTF-8.
+			line := decodeShellOutputChunk(lineBytes)
 			state.mutex.Lock()
 			state.summaryOutput = appendSummaryOutput(state.summaryOutput, line, shellOutputSummaryMaxBytes)
 			sessionID := state.sessionID
