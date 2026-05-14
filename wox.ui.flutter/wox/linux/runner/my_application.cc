@@ -2466,6 +2466,24 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
     response =
         FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
   }
+  else if (strcmp(method, "startDragging") == 0)
+  {
+    // Begin window drag on both X11 and Wayland.
+    // gtk_window_begin_move_drag is the cross-backend GTK3 API for this:
+    // it sends a _NET_WM_MOVERESIZE message on X11 and uses the xdg-shell
+    // move request on Wayland, so no special-casing is needed here.
+    GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(window));
+    GdkSeat *seat = gdk_display_get_default_seat(display);
+    GdkDevice *pointer = gdk_seat_get_pointer(seat);
+
+    gint root_x = 0, root_y = 0;
+    gdk_device_get_position(pointer, NULL, &root_x, &root_y);
+
+    log("FLUTTER: startDragging at %d,%d", root_x, root_y);
+    gtk_window_begin_move_drag(window, 1, root_x, root_y, GDK_CURRENT_TIME);
+    response =
+        FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
+  }
   else
   {
     response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
