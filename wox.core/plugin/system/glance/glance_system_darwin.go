@@ -2,103 +2,109 @@
 
 package glance
 
+/*
+#include <mach/mach.h>
+#include <mach/mach_host.h>
+#include <stdint.h>
+
+static int woxDarwinReadCPUTicks(uint64_t *idle, uint64_t *total) {
+	// Mach exposes these counters directly; the Go layer keeps the shared
+	// sampler simple while this wrapper avoids spawning fragile shell commands.
+	host_cpu_load_info_data_t info;
+	mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
+	kern_return_t kr = host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, (host_info_t)&info, &count);
+	if (kr != KERN_SUCCESS) {
+		return (int)kr;
+	}
+
+	uint64_t nextTotal = 0;
+	for (int i = 0; i < CPU_STATE_MAX; i++) {
+		nextTotal += info.cpu_ticks[i];
+	}
+
+	*idle = info.cpu_ticks[CPU_STATE_IDLE];
+	*total = nextTotal;
+	return 0;
+}
+
+static int woxDarwinReadMemory(uint64_t *totalBytes, uint64_t *pageSize, uint64_t *freePages, uint64_t *inactivePages, uint64_t *purgeablePages) {
+	// Keep all Mach memory calls together so the Go calculation receives one
+	// consistent snapshot and does not parse localized vm_stat text.
+	host_t host = mach_host_self();
+
+	host_basic_info_data_t basicInfo;
+	mach_msg_type_number_t basicCount = HOST_BASIC_INFO_COUNT;
+	kern_return_t kr = host_info(host, HOST_BASIC_INFO, (host_info_t)&basicInfo, &basicCount);
+	if (kr != KERN_SUCCESS) {
+		return (int)kr;
+	}
+
+	vm_size_t nativePageSize = 0;
+	kr = host_page_size(host, &nativePageSize);
+	if (kr != KERN_SUCCESS) {
+		return (int)kr;
+	}
+
+	vm_statistics64_data_t vmStats;
+	mach_msg_type_number_t vmCount = HOST_VM_INFO64_COUNT;
+	kr = host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&vmStats, &vmCount);
+	if (kr != KERN_SUCCESS) {
+		return (int)kr;
+	}
+
+	*totalBytes = basicInfo.max_mem;
+	*pageSize = nativePageSize;
+	*freePages = vmStats.free_count;
+	*inactivePages = vmStats.inactive_count;
+	*purgeablePages = vmStats.purgeable_count;
+	return 0;
+}
+*/
+import "C"
 import (
 	"context"
-	"os/exec"
-	"regexp"
-	"strconv"
-	"strings"
 )
 
 func readCPUSample(ctx context.Context) (cpuSample, bool) {
-	output, err := exec.CommandContext(ctx, "sysctl", "-n", "kern.cp_time").Output()
-	if err != nil {
+	_ = ctx
+	var idle C.uint64_t
+	var total C.uint64_t
+	if C.woxDarwinReadCPUTicks(&idle, &total) != 0 || total == 0 {
 		return cpuSample{}, false
 	}
 
-	fields := strings.Fields(string(output))
-	if len(fields) < 5 {
-		return cpuSample{}, false
-	}
-
-	var total uint64
-	values := make([]uint64, 0, len(fields))
-	for _, field := range fields {
-		value, err := strconv.ParseUint(field, 10, 64)
-		if err != nil {
-			return cpuSample{}, false
-		}
-		values = append(values, value)
-		total += value
-	}
-
-	// New feature: CPU Glance uses Darwin's kern.cp_time counters because they
-	// match the shared total/idle delta model and avoid parsing localized UI
-	// output from Activity Monitor-like tools.
-	return cpuSample{idle: values[4], total: total, valid: true}, true
+	// Bug fix: modern macOS no longer exposes kern.cp_time on every machine.
+	// Mach host CPU counters provide the same cumulative idle/total model used
+	// by the shared sampler without spawning a fragile sysctl process.
+	return cpuSample{idle: uint64(idle), total: uint64(total), valid: true}, true
 }
 
 func readMemoryPercent(ctx context.Context) (float64, bool) {
-	totalOutput, err := exec.CommandContext(ctx, "sysctl", "-n", "hw.memsize").Output()
-	if err != nil {
-		return 0, false
-	}
-	totalBytes, err := strconv.ParseUint(strings.TrimSpace(string(totalOutput)), 10, 64)
-	if err != nil || totalBytes == 0 {
-		return 0, false
-	}
-
-	vmStatOutput, err := exec.CommandContext(ctx, "vm_stat").Output()
-	if err != nil {
+	_ = ctx
+	var totalBytes C.uint64_t
+	var pageSize C.uint64_t
+	var freePages C.uint64_t
+	var inactivePages C.uint64_t
+	var purgeablePages C.uint64_t
+	if C.woxDarwinReadMemory(&totalBytes, &pageSize, &freePages, &inactivePages, &purgeablePages) != 0 || totalBytes == 0 || pageSize == 0 {
 		return 0, false
 	}
 
-	pageSize := parseDarwinPageSize(string(vmStatOutput))
-	freePages := parseDarwinVMStatPages(string(vmStatOutput), "Pages free")
-	speculativePages := parseDarwinVMStatPages(string(vmStatOutput), "Pages speculative")
-	if pageSize == 0 {
+	totalPages := uint64(totalBytes) / uint64(pageSize)
+	if totalPages == 0 {
 		return 0, false
 	}
 
-	availableBytes := (freePages + speculativePages) * pageSize
-	if availableBytes > totalBytes {
-		return 0, false
+	// Darwin includes speculative pages in free_count, so adding a separate
+	// speculative field would double-count reclaimable memory.
+	availablePages := uint64(freePages) + uint64(inactivePages) + uint64(purgeablePages)
+	if availablePages > totalPages {
+		availablePages = totalPages
 	}
 
-	// New feature: Memory Glance treats free and speculative pages as available
-	// so the displayed percentage reflects memory pressure better than a raw
-	// "not free" calculation on macOS.
-	return 100 * float64(totalBytes-availableBytes) / float64(totalBytes), true
-}
-
-func parseDarwinPageSize(output string) uint64 {
-	match := regexp.MustCompile(`page size of (\d+) bytes`).FindStringSubmatch(output)
-	if len(match) < 2 {
-		return 0
-	}
-	value, err := strconv.ParseUint(match[1], 10, 64)
-	if err != nil {
-		return 0
-	}
-	return value
-}
-
-func parseDarwinVMStatPages(output string, label string) uint64 {
-	for _, line := range strings.Split(output, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, label+":") {
-			continue
-		}
-		fields := strings.Fields(trimmed)
-		if len(fields) == 0 {
-			return 0
-		}
-		value := strings.TrimRight(fields[len(fields)-1], ".")
-		pages, err := strconv.ParseUint(value, 10, 64)
-		if err != nil {
-			return 0
-		}
-		return pages
-	}
-	return 0
+	// Bug fix: the previous macOS calculation only treated free/speculative
+	// pages as available, so normal inactive cache made Memory look pinned near
+	// 99%. Inactive and purgeable pages are reclaimable, so excluding them from
+	// used memory better matches macOS pressure semantics.
+	return 100 * float64(totalPages-availablePages) / float64(totalPages), true
 }

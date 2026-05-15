@@ -11,6 +11,7 @@ import 'package:wox/components/wox_drag_move_view.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
 import 'package:wox/components/wox_platform_focus.dart';
+import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/entity/wox_glance.dart';
 import 'package:wox/entity/wox_hotkey.dart';
@@ -522,44 +523,48 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
     final isActive = controller.hasActiveQueryRefinements;
     final label = controller.getQueryRefinementAffordanceLabel();
     final tint = isExpanded || isActive ? activeColor : textColor;
+    // Visual refinement: keep the collapsed affordance tooltip because the
+    // visible label can become the active value ("Image", "Text", etc.).
+    // The tooltip preserves the stable Filters command name and shortcut
+    // without adding extra text to the query box chrome.
+    final tooltip = "${controller.tr("ui_query_refinement_filters")} ${controller.queryRefinementToggleHotkeyLabel}";
 
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () {
-          controller.toggleQueryRefinementBar(const UuidV4().generate());
-          controller.focusQueryBox();
-        },
-        child: Container(
-          height: metrics.scaledSpacing(26),
-          constraints: BoxConstraints(maxWidth: metrics.scaledSpacing(150)),
-          padding: EdgeInsets.only(left: metrics.scaledSpacing(8), right: metrics.scaledSpacing(9)),
-          decoration: BoxDecoration(
-            // Feature addition: a collapsed filter affordance keeps the
-            // launcher default path clean while still making plugin-provided
-            // refinements discoverable next to the query itself.
-            color: tint.withValues(alpha: isExpanded || isActive ? 0.15 : 0.075),
-            borderRadius: BorderRadius.circular(7),
-            border: Border.all(color: tint.withValues(alpha: isExpanded || isActive ? 0.32 : 0.13)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.filter_list_rounded, size: metrics.scaledSpacing(15), color: tint.withValues(alpha: 0.92)),
-              SizedBox(width: metrics.scaledSpacing(5)),
-              Flexible(
-                // Visual refinement: the Filters affordance no longer carries a
-                // hover tooltip because the shortcut is part of the launcher
-                // keyboard model, while expanded controls show their own inline
-                // shortcut hints where users make the filtering choice.
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: textColor.withValues(alpha: isExpanded || isActive ? 0.94 : 0.72), fontSize: metrics.smallLabelFontSize, fontWeight: FontWeight.w700),
+    return WoxTooltip(
+      message: tooltip,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () {
+            controller.toggleQueryRefinementBar(const UuidV4().generate());
+            controller.focusQueryBox();
+          },
+          child: Container(
+            height: metrics.scaledSpacing(26),
+            constraints: BoxConstraints(maxWidth: metrics.scaledSpacing(150)),
+            padding: EdgeInsets.only(left: metrics.scaledSpacing(8), right: metrics.scaledSpacing(9)),
+            decoration: BoxDecoration(
+              // Feature addition: a collapsed filter affordance keeps the
+              // launcher default path clean while still making plugin-provided
+              // refinements discoverable next to the query itself.
+              color: tint.withValues(alpha: isExpanded || isActive ? 0.15 : 0.075),
+              borderRadius: BorderRadius.circular(7),
+              border: Border.all(color: tint.withValues(alpha: isExpanded || isActive ? 0.32 : 0.13)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.filter_list_rounded, size: metrics.scaledSpacing(15), color: tint.withValues(alpha: 0.92)),
+                SizedBox(width: metrics.scaledSpacing(5)),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: textColor.withValues(alpha: isExpanded || isActive ? 0.94 : 0.72), fontSize: metrics.smallLabelFontSize, fontWeight: FontWeight.w700),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

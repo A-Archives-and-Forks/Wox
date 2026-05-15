@@ -212,13 +212,28 @@ func (p *GlancePlugin) macOSBatteryGlance(ctx context.Context) (plugin.GlanceIte
 	if err != nil {
 		return plugin.GlanceItem{}, false
 	}
-	match := regexp.MustCompile(`(\d+)%`).FindStringSubmatch(string(output))
+	outputText := string(output)
+	match := regexp.MustCompile(`(\d+)%`).FindStringSubmatch(outputText)
 	if len(match) < 2 {
-		return plugin.GlanceItem{}, false
+		return p.macOSPowerSourceGlance(outputText)
 	}
 	text := match[1] + "%"
-	tooltip := p.macOSBatteryTooltip(text, string(output))
+	tooltip := p.macOSBatteryTooltip(text, outputText)
 	return plugin.GlanceItem{Id: "battery", Text: text, Icon: common.NewWoxImageSvg(glanceBatterySvg), Tooltip: tooltip}, true
+}
+
+func (p *GlancePlugin) macOSPowerSourceGlance(output string) (plugin.GlanceItem, bool) {
+	// Bug fix: desktop Macs and some docks report an AC power source without a
+	// battery percentage. Showing the selected Glance as AC is more useful than
+	// dropping the row and leaving settings with a dash.
+	cleanOutput := strings.TrimSpace(strings.ReplaceAll(output, "\n", " "))
+	if strings.Contains(cleanOutput, "AC Power") {
+		return plugin.GlanceItem{Id: "battery", Text: "AC", Icon: common.NewWoxImageSvg(glancePlugSvg), Tooltip: "Plugged in"}, true
+	}
+	if strings.Contains(cleanOutput, "Battery Power") {
+		return plugin.GlanceItem{Id: "battery", Text: "BAT", Icon: common.NewWoxImageSvg(glanceBatterySvg), Tooltip: "Battery percent unknown"}, true
+	}
+	return plugin.GlanceItem{}, false
 }
 
 func (p *GlancePlugin) macOSBatteryTooltip(text string, output string) string {
