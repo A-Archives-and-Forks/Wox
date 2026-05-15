@@ -60,8 +60,10 @@ type Manager struct {
 	isSystemDark     bool
 	exitOnce         sync.Once
 
-	activeWindowSnapshot common.ActiveWindowSnapshot // cached active window snapshot
-	pendingStartupNotify *common.NotifyMsg
+	activeWindowSnapshot    common.ActiveWindowSnapshot // cached active window snapshot
+	activeWindowSnapshotMu  sync.RWMutex
+	activeWindowSnapshotSeq uint64
+	pendingStartupNotify    *common.NotifyMsg
 }
 
 func GetUIManager() *Manager {
@@ -232,12 +234,14 @@ func (m *Manager) RegisterMainHotkey(ctx context.Context, combineKey string) err
 	managerInstance.mainHotkey = &hotkey.Hotkey{}
 	return m.mainHotkey.Register(ctx, combineKey, func() {
 		triggerCtx := util.NewTraceContext()
+		activationStartedAt := util.GetSystemTimestamp()
 		if m.shouldIgnoreHotkeyTrigger(triggerCtx) {
 			return
 		}
 		m.ui.ToggleApp(triggerCtx, common.ShowContext{
-			SelectAll:  true,
-			ShowSource: common.ShowSourceDefault,
+			SelectAll:           true,
+			ShowSource:          common.ShowSourceDefault,
+			ActivationStartedAt: activationStartedAt,
 		})
 	})
 }
@@ -309,7 +313,10 @@ func (m *Manager) triggerQueryHotkey(ctx context.Context, queryHotkey setting.Qu
 	plainQuery := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, queryHotkey.Query)
 	plainQuery.QueryId = uuid.NewString()
 
-	m.RefreshActiveWindowSnapshot(queryCtx)
+	// Query hotkeys build the plugin query immediately, so they keep the
+	// blocking snapshot path while normal launcher activation can refresh slow
+	// details in the background.
+	m.RefreshActiveWindowSnapshotBlocking(queryCtx)
 	q, _, err := plugin.GetPluginManager().NewQuery(queryCtx, plainQuery)
 	if err != nil {
 		return err
@@ -824,7 +831,9 @@ func (m *Manager) executeTrayQuery(ctx context.Context, trayQuery setting.TrayQu
 	plainQuery := plugin.GetPluginManager().ReplaceQueryVariable(queryCtx, trayQuery.Query)
 	plainQuery.QueryId = uuid.NewString()
 
-	m.RefreshActiveWindowSnapshot(queryCtx)
+	// Tray queries create and execute a plugin query in this call stack, so they
+	// need the fully-populated snapshot instead of the launcher fast path.
+	m.RefreshActiveWindowSnapshotBlocking(queryCtx)
 	q, _, err := plugin.GetPluginManager().NewQuery(queryCtx, plainQuery)
 	if err != nil {
 		logger.Error(queryCtx, fmt.Sprintf("failed to create tray query: %s", err.Error()))
@@ -1215,30 +1224,87 @@ func (m *Manager) ExitApp(ctx context.Context) {
 }
 
 func (m *Manager) GetActiveWindowSnapshot(ctx context.Context) common.ActiveWindowSnapshot {
+	m.activeWindowSnapshotMu.RLock()
+	defer m.activeWindowSnapshotMu.RUnlock()
 	return m.activeWindowSnapshot
 }
 
-// RefreshActiveWindowSnapshot updates the cached active window snapshot
-// It skips updating if the active window is Wox UI itself
+// RefreshActiveWindowSnapshot updates the cached active window snapshot without
+// blocking launcher activation on expensive per-process details. The hotkey path
+// only needs a stable foreground PID before Wox appears; name/icon/dialog state
+// is filled later from that PID so macOS Accessibility calls cannot delay the
+// first launcher frame.
 func (m *Manager) RefreshActiveWindowSnapshot(ctx context.Context) {
-	activeWindowName := window.GetActiveWindowName()
+	m.refreshActiveWindowSnapshot(ctx, false)
+}
+
+// RefreshActiveWindowSnapshotBlocking preserves the old fully-populated snapshot
+// semantics for callers that immediately build or execute a plugin query. Those
+// callers would otherwise read a PID-only snapshot before the background detail
+// refresh has completed.
+func (m *Manager) RefreshActiveWindowSnapshotBlocking(ctx context.Context) {
+	m.refreshActiveWindowSnapshot(ctx, true)
+}
+
+func (m *Manager) refreshActiveWindowSnapshot(ctx context.Context, waitForDetails bool) {
 	activeWindowPid := window.GetActiveWindowPid()
-	if m.isUIWindow(activeWindowName, activeWindowPid) {
+
+	if activeWindowPid <= 0 {
+		m.activeWindowSnapshotMu.Lock()
+		m.activeWindowSnapshotSeq++
+		m.activeWindowSnapshot = common.ActiveWindowSnapshot{}
+		m.activeWindowSnapshotMu.Unlock()
 		return
 	}
 
-	m.activeWindowSnapshot.Name = activeWindowName
-	m.activeWindowSnapshot.Pid = activeWindowPid
-	if icon, err := window.GetActiveWindowIcon(); err == nil {
+	if m.isUIWindow("", activeWindowPid) {
+		return
+	}
+
+	m.activeWindowSnapshotMu.Lock()
+	m.activeWindowSnapshotSeq++
+	snapshotSeq := m.activeWindowSnapshotSeq
+	// Optimization: clear detail fields while keeping the PID immediately
+	// available. Keeping old details with a new PID created mixed snapshots, and
+	// blocking here made every launcher activation wait for icon and AX dialog
+	// probes even when the UI only needed to become visible.
+	m.activeWindowSnapshot = common.ActiveWindowSnapshot{Pid: activeWindowPid}
+	m.activeWindowSnapshotMu.Unlock()
+
+	if waitForDetails {
+		m.refreshActiveWindowSnapshotDetails(activeWindowPid, snapshotSeq)
+		return
+	}
+
+	util.Go(ctx, "refresh active window snapshot details", func() {
+		m.refreshActiveWindowSnapshotDetails(activeWindowPid, snapshotSeq)
+	})
+}
+
+func (m *Manager) refreshActiveWindowSnapshotDetails(activeWindowPid int, snapshotSeq uint64) {
+	activeWindowName := window.GetWindowNameByPid(activeWindowPid)
+
+	activeWindowIcon := common.WoxImage{}
+	if icon, err := window.GetWindowIconByPid(activeWindowPid); err == nil {
 		if woxIcon, convErr := common.NewWoxImage(icon); convErr == nil {
-			m.activeWindowSnapshot.Icon = woxIcon
+			activeWindowIcon = woxIcon
 		}
 	}
-	if isDialog, err := window.IsOpenSaveDialog(); err == nil {
-		m.activeWindowSnapshot.IsOpenSaveDialog = isDialog
-	} else {
-		m.activeWindowSnapshot.IsOpenSaveDialog = false
+
+	activeWindowIsOpenSaveDialog := false
+	if isDialog, err := window.IsOpenSaveDialogByPid(activeWindowPid); err == nil {
+		activeWindowIsOpenSaveDialog = isDialog
 	}
+
+	m.activeWindowSnapshotMu.Lock()
+	if m.activeWindowSnapshotSeq != snapshotSeq || m.activeWindowSnapshot.Pid != activeWindowPid {
+		m.activeWindowSnapshotMu.Unlock()
+		return
+	}
+	m.activeWindowSnapshot.Name = activeWindowName
+	m.activeWindowSnapshot.Icon = activeWindowIcon
+	m.activeWindowSnapshot.IsOpenSaveDialog = activeWindowIsOpenSaveDialog
+	m.activeWindowSnapshotMu.Unlock()
 }
 
 func (m *Manager) shouldIgnoreHotkeyTrigger(ctx context.Context) bool {

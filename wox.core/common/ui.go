@@ -110,6 +110,10 @@ type ShowContext struct {
 	QueryBoxAtBottom bool
 	HideOnBlur       bool
 	ShowSource       ShowSource
+	// ActivationStartedAt carries the original hotkey callback timestamp to the
+	// UI. Go receives the websocket acknowledgement before Flutter actually
+	// shows the native window, so visibility diagnostics must finish in Flutter.
+	ActivationStartedAt int64
 
 	WindowPosition *WindowPosition
 	TrayAnchor     *TrayAnchor

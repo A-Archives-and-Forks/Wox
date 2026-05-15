@@ -11,7 +11,19 @@ func GetActiveWindowIcon() (image.Image, error) {
 	return nil, errors.New("not implemented")
 }
 
+// GetWindowIconByPid is a PID-based companion for asynchronous snapshot detail
+// refreshes; Linux keeps the existing unsupported behavior.
+func GetWindowIconByPid(pid int) (image.Image, error) {
+	return nil, errors.New("not implemented")
+}
+
 func GetActiveWindowName() string {
+	return ""
+}
+
+// GetWindowNameByPid is a PID-based companion for asynchronous snapshot detail
+// refreshes; Linux keeps the existing unsupported behavior.
+func GetWindowNameByPid(pid int) string {
 	return ""
 }
 
@@ -28,6 +40,12 @@ func ActivateWindowByPid(pid int) bool {
 }
 
 func IsOpenSaveDialog() (bool, error) {
+	return false, nil
+}
+
+// IsOpenSaveDialogByPid is a PID-based companion for asynchronous snapshot
+// detail refreshes; Linux keeps the existing unsupported behavior.
+func IsOpenSaveDialogByPid(pid int) (bool, error) {
 	return false, nil
 }
 

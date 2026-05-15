@@ -8,6 +8,8 @@
 #include <string.h>
 #include <wchar.h>
 
+char *getWindowIconByPid(int pid, unsigned char **iconData, int *iconSize, int *width, int *height);
+
 char *getIconData(HICON hIcon, unsigned char **iconData, int *iconSize, int *width, int *height)
 {
     ICONINFO iconinfo;
@@ -90,7 +92,17 @@ char *getActiveWindowIcon(unsigned char **iconData, int *iconSize, int *width, i
     DWORD processId;
     GetWindowThreadProcessId(hwnd, &processId);
 
-    HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processId);
+    return getWindowIconByPid((int)processId, iconData, iconSize, width, height);
+}
+
+char *getWindowIconByPid(int pid, unsigned char **iconData, int *iconSize, int *width, int *height)
+{
+    if (pid <= 0)
+    {
+        return "Invalid pid";
+    }
+
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, (DWORD)pid);
     if (!hProcess)
     {
         return "Unable to open process";
@@ -141,6 +153,67 @@ char *getActiveWindowName()
     int len = WideCharToMultiByte(CP_UTF8, 0, windowTitle, -1, NULL, 0, NULL, NULL);
     char *windowTitleA = (char *)malloc(len);
     WideCharToMultiByte(CP_UTF8, 0, windowTitle, -1, windowTitleA, len, NULL, NULL);
+
+    return windowTitleA;
+}
+
+typedef struct
+{
+    DWORD pid;
+    WCHAR title[1024];
+    BOOL found;
+} WindowTitleByPidData;
+
+static BOOL CALLBACK EnumWindowTitleByPidProc(HWND hwnd, LPARAM lParam)
+{
+    WindowTitleByPidData *data = (WindowTitleByPidData *)lParam;
+    if (!IsWindowVisible(hwnd))
+    {
+        return TRUE;
+    }
+
+    DWORD windowPid = 0;
+    GetWindowThreadProcessId(hwnd, &windowPid);
+    if (windowPid != data->pid)
+    {
+        return TRUE;
+    }
+
+    WCHAR windowTitle[1024];
+    if (GetWindowTextW(hwnd, windowTitle, 1024) == 0)
+    {
+        return TRUE;
+    }
+
+    wcsncpy(data->title, windowTitle, 1023);
+    data->title[1023] = L'\0';
+    data->found = TRUE;
+    return FALSE;
+}
+
+char *getWindowNameByPid(int pid)
+{
+    if (pid <= 0)
+    {
+        char *result = (char *)malloc(1);
+        result[0] = '\0';
+        return result;
+    }
+
+    WindowTitleByPidData data;
+    ZeroMemory(&data, sizeof(data));
+    data.pid = (DWORD)pid;
+    EnumWindows(EnumWindowTitleByPidProc, (LPARAM)&data);
+    if (!data.found)
+    {
+        char *result = (char *)malloc(1);
+        result[0] = '\0';
+        return result;
+    }
+
+    int len = WideCharToMultiByte(CP_UTF8, 0, data.title, -1, NULL, 0, NULL, NULL);
+    char *windowTitleA = (char *)malloc(len);
+    WideCharToMultiByte(CP_UTF8, 0, data.title, -1, windowTitleA, len, NULL, NULL);
 
     return windowTitleA;
 }
@@ -205,10 +278,49 @@ static int isOpenSaveDialogWindow(HWND hwnd)
     return data.found ? 1 : 0;
 }
 
+typedef struct
+{
+    DWORD pid;
+    int found;
+} OpenSaveDialogByPidData;
+
+static BOOL CALLBACK EnumOpenSaveDialogByPidProc(HWND hwnd, LPARAM lParam)
+{
+    OpenSaveDialogByPidData *data = (OpenSaveDialogByPidData *)lParam;
+    DWORD windowPid = 0;
+    GetWindowThreadProcessId(hwnd, &windowPid);
+    if (windowPid != data->pid)
+    {
+        return TRUE;
+    }
+
+    if (isOpenSaveDialogWindow(hwnd))
+    {
+        data->found = 1;
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 int isOpenSaveDialog()
 {
     HWND hwnd = GetForegroundWindow();
     return isOpenSaveDialogWindow(hwnd);
+}
+
+int isOpenSaveDialogByPid(int pid)
+{
+    if (pid <= 0)
+    {
+        return 0;
+    }
+
+    OpenSaveDialogByPidData data;
+    data.pid = (DWORD)pid;
+    data.found = 0;
+    EnumWindows(EnumOpenSaveDialogByPidProc, (LPARAM)&data);
+    return data.found;
 }
 
 static char *dupEmptyString()

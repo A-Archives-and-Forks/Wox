@@ -6,11 +6,14 @@ package window
 #include <stdlib.h>
 
 int getActiveWindowIcon(unsigned char **iconData);
+int getWindowIconByPid(int pid, unsigned char **iconData);
 char* getActiveWindowName();
+char* getWindowNameByPid(int pid);
 char* getProcessBundleIdentifier(int pid);
 int getActiveWindowPid();
 int activateWindowByPid(int pid);
 int isOpenSaveDialog();
+int isOpenSaveDialogByPid(int pid);
 int navigateActiveFileDialog(const char* path);
 int selectInActiveFileDialog(const char* path);
 char* getActiveFileDialogPath();
@@ -49,8 +52,47 @@ func GetActiveWindowIcon() (image.Image, error) {
 	return img, nil
 }
 
+// GetWindowIconByPid resolves the icon from the captured foreground PID instead
+// of the current foreground app, which may already be Wox by the time the
+// asynchronous launcher snapshot detail refresh runs.
+func GetWindowIconByPid(pid int) (image.Image, error) {
+	if pid <= 0 {
+		return nil, errors.New("invalid pid")
+	}
+
+	var iconData *C.uchar
+	length := C.getWindowIconByPid(C.int(pid), &iconData)
+	if length == 0 {
+		return nil, errors.New("failed to get window icon by pid")
+	}
+	defer C.free(unsafe.Pointer(iconData))
+
+	data := C.GoBytes(unsafe.Pointer(iconData), length)
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+
+	return img, nil
+}
+
 func GetActiveWindowName() string {
 	name := C.getActiveWindowName()
+	if name == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(name))
+	return C.GoString(name)
+}
+
+// GetWindowNameByPid mirrors GetActiveWindowName for a captured PID so delayed
+// snapshot updates do not accidentally read Wox after the launcher appears.
+func GetWindowNameByPid(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+
+	name := C.getWindowNameByPid(C.int(pid))
 	if name == nil {
 		return ""
 	}
@@ -83,6 +125,15 @@ func ActivateWindowByPid(pid int) bool {
 
 func IsOpenSaveDialog() (bool, error) {
 	return int(C.isOpenSaveDialog()) == 1, nil
+}
+
+// IsOpenSaveDialogByPid checks the captured process because the active app can
+// change to Wox before the slow Accessibility dialog probe finishes.
+func IsOpenSaveDialogByPid(pid int) (bool, error) {
+	if pid <= 0 {
+		return false, nil
+	}
+	return int(C.isOpenSaveDialogByPid(C.int(pid))) == 1, nil
 }
 
 func NavigateActiveFileDialog(targetPath string) bool {

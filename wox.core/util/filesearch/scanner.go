@@ -284,13 +284,19 @@ func (s *Scanner) scanAllRootsWithReason(ctx context.Context, reason string) {
 		return
 	}
 
-	snapshot, err := s.db.SearchIndexSnapshot(ctx)
-	if err != nil {
-		util.GetLogger().Warn(ctx, "filesearch failed to capture sqlite snapshot after full scan: "+err.Error())
-		return
-	}
-	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: reason=%s entries=%d", reason, snapshot.EntryCount))
-	logSQLiteIndexSnapshot(ctx, "full_scan_complete", snapshot, true)
+	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch scan cycle completed: reason=%s", reason))
+	// Optimization: the full diagnostic snapshot is useful, but it reads FTS vocab
+	// and file-size stats that do not affect search readiness. Capture it in the
+	// background so `scanAllRoots` returns as soon as the searchable index is ready.
+	snapshotCtx := util.NewTraceContext()
+	util.Go(snapshotCtx, "filesearch full scan diagnostic snapshot", func() {
+		snapshot, err := s.db.SearchIndexSnapshot(snapshotCtx)
+		if err != nil {
+			util.GetLogger().Warn(snapshotCtx, "filesearch failed to capture sqlite snapshot after full scan: "+err.Error())
+			return
+		}
+		logSQLiteIndexSnapshot(snapshotCtx, "full_scan_complete", snapshot, true)
+	})
 }
 
 func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason string, roots []RootRecord, batches []ReconcileBatch) error {
@@ -435,10 +441,14 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		// Bug fix: incremental dirty flushes should not restart the platform
 		// change feed. FSEvents replays from the oldest root cursor when a stream
 		// is recreated, so restarting after every small sync can replay the same
-		// event for a quiet root and keep the toolbar stuck in "Syncing file
-		// changes". Full scans update every root cursor first, which makes this
-		// refresh a safe handoff to the newest durable checkpoint.
-		s.refreshChangeFeed(ctx)
+		// event for a quiet root and keep the toolbar stuck in "Syncing file changes".
+		// Full scans already committed the searchable index and root cursors, so the
+		// feed refresh can finish as a background handoff instead of extending the
+		// user-visible index duration measured by the toolbar and real-index smoke.
+		refreshCtx := util.NewTraceContext()
+		util.Go(refreshCtx, "filesearch refresh change feed after full scan", func() {
+			s.refreshChangeFeed(refreshCtx)
+		})
 	}
 	return nil
 }
@@ -451,13 +461,13 @@ func (s *Scanner) emitCompletedFullRunSummary(ctx context.Context, plan RunPlan,
 	fileCount := plan.PreScanTotals.FileCount
 	entryCount := plan.PreScanTotals.IndexableEntryCount
 	if s.db != nil {
-		if snapshot, err := s.db.SearchIndexSnapshot(ctx); err == nil {
+		if countedFiles, countedEntries, err := s.db.SearchIndexCounts(ctx); err == nil {
 			// Bug fix: full scans now use streaming estimates to avoid a duplicate
 			// filesystem walk. Those estimates intentionally do not know the real
-			// file count, so the completion summary must read the final persisted
-			// index instead of reporting the pre-execution placeholder as zero.
-			fileCount = snapshot.FileCount
-			entryCount = snapshot.EntryCount
+			// file count, so the completion summary reads final persisted counts
+			// without paying for a full diagnostic SQLite snapshot.
+			fileCount = countedFiles
+			entryCount = countedEntries
 		} else {
 			util.GetLogger().Warn(ctx, "filesearch failed to count completed full index: "+err.Error())
 		}
@@ -2230,6 +2240,10 @@ type scanPlan struct {
 }
 
 func newEntryRecord(root RootRecord, fullPath string, info os.FileInfo) EntryRecord {
+	return newEntryRecordWithUpdatedAt(root, fullPath, info, util.GetSystemTimestamp())
+}
+
+func newEntryRecordWithUpdatedAt(root RootRecord, fullPath string, info os.FileInfo, updatedAt int64) EntryRecord {
 	pinyinFull, pinyinInitials := buildPinyinFields(info.Name())
 	return EntryRecord{
 		Path:           fullPath,
@@ -2243,7 +2257,7 @@ func newEntryRecord(root RootRecord, fullPath string, info os.FileInfo) EntryRec
 		IsDir:          info.IsDir(),
 		Mtime:          info.ModTime().UnixMilli(),
 		Size:           info.Size(),
-		UpdatedAt:      util.GetSystemTimestamp(),
+		UpdatedAt:      updatedAt,
 	}
 }
 

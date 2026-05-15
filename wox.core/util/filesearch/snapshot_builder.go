@@ -440,6 +440,10 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 	}
 
 	scanTimestamp := time.Now().UnixMilli()
+	// Optimization: a streaming full-run scope can create tens of thousands of
+	// entries. Reusing one update timestamp per scope removes a hot per-entry
+	// clock call while preserving the existing "this scan wrote this row" marker.
+	entryUpdatedAt := scanTimestamp
 	maxRecordsPerBatch := b.directFileBatchSize
 	if maxRecordsPerBatch <= 0 {
 		maxRecordsPerBatch = defaultSplitBudget().DirectFileBatchSize
@@ -501,7 +505,7 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 				LastScanTime: scanTimestamp,
 				Exists:       true,
 			})
-			batch.Entries = append(batch.Entries, newEntryRecord(root, current.path, current.info))
+			batch.Entries = append(batch.Entries, newEntryRecordWithUpdatedAt(root, current.path, current.info, entryUpdatedAt))
 			if current.path == scopePath {
 				return fmt.Errorf("failed to read scope directory %s: %w", current.path, readErr)
 			}
@@ -521,7 +525,7 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 			LastScanTime: scanTimestamp,
 			Exists:       true,
 		})
-		batch.Entries = append(batch.Entries, newEntryRecord(root, current.path, current.info))
+		batch.Entries = append(batch.Entries, newEntryRecordWithUpdatedAt(root, current.path, current.info, entryUpdatedAt))
 		if shouldFlush(batch) {
 			if err := flushBatch(&batch); err != nil {
 				return err
@@ -563,7 +567,7 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 				continue
 			}
 
-			batch.Entries = append(batch.Entries, newEntryRecord(root, childPath, childInfo))
+			batch.Entries = append(batch.Entries, newEntryRecordWithUpdatedAt(root, childPath, childInfo, entryUpdatedAt))
 			if shouldFlush(batch) {
 				if err := flushBatch(&batch); err != nil {
 					return err

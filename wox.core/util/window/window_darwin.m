@@ -6,6 +6,7 @@
 
 static char* copyPathFromAXValue(CFTypeRef value);
 char* getFinderWindowPathByPid(int pid);
+int isOpenSaveDialogByPid(int pid);
 
 static void activateRunningApplication(NSRunningApplication *application) {
     if (application == nil) {
@@ -23,46 +24,81 @@ static void activateRunningApplication(NSRunningApplication *application) {
 #pragma clang diagnostic pop
 }
 
+static int copyApplicationIconPng(NSRunningApplication *application, unsigned char **iconData) {
+    if (!application) {
+        return 0;
+    }
+
+    NSImage *icon = [application icon];
+    if (!icon) {
+        return 0;
+    }
+
+    CGImageRef cgRef = [icon CGImageForProposedRect:NULL context:nil hints:nil];
+    NSBitmapImageRep *newRep = [[NSBitmapImageRep alloc] initWithCGImage:cgRef];
+    [newRep setSize:[icon size]];
+    NSData *pngData = [newRep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    if (!pngData) {
+        return 0;
+    }
+
+    NSUInteger length = [pngData length];
+    void *buffer = malloc(length);
+    if (!buffer) {
+        return 0;
+    }
+    memcpy(buffer, [pngData bytes], length);
+
+    *iconData = buffer;
+    return (int)length;
+}
+
 int getActiveWindowIcon(unsigned char **iconData) {
     @autoreleasepool {
         NSRunningApplication *activeApp = [[NSWorkspace sharedWorkspace] frontmostApplication];
-        if (!activeApp) {
-            return 0;
-        }
-
-        NSImage *icon = [activeApp icon];
-        if (!icon) {
-            return 0;
-        }
-
-        CGImageRef cgRef = [icon CGImageForProposedRect:NULL context:nil hints:nil];
-        NSBitmapImageRep *newRep = [[NSBitmapImageRep alloc] initWithCGImage:cgRef];
-        [newRep setSize:[icon size]];
-        NSData *pngData = [newRep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-        if (!pngData) {
-            return 0;
-        }
-
-        NSUInteger length = [pngData length];
-        void *buffer = malloc(length);
-        if (!buffer) {
-            return 0;
-        }
-        memcpy(buffer, [pngData bytes], length);
-
-        *iconData = buffer;
-        return (int)length;
+        return copyApplicationIconPng(activeApp, iconData);
     }
+}
+
+int getWindowIconByPid(int pid, unsigned char **iconData) {
+    @autoreleasepool {
+        if (pid <= 0) {
+            return 0;
+        }
+
+        NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:(pid_t)pid];
+        return copyApplicationIconPng(app, iconData);
+    }
+}
+
+static char* copyApplicationName(NSRunningApplication *application) {
+    if (!application) {
+        return strdup("");
+    }
+
+    NSString *name = [application localizedName];
+    if (!name || [name length] == 0) {
+        return strdup("");
+    }
+
+    return strdup([name UTF8String]);
 }
 
 char* getActiveWindowName() {
     @autoreleasepool {
         NSRunningApplication *activeApp = [[NSWorkspace sharedWorkspace] frontmostApplication];
-        if (!activeApp) {
-            return "";
+        return copyApplicationName(activeApp);
+    }
+}
+
+char* getWindowNameByPid(int pid) {
+    @autoreleasepool {
+        if (pid <= 0) {
+            return strdup("");
         }
 
-        return strdup([[activeApp localizedName] UTF8String]);
+        NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:(pid_t)pid];
+        return copyApplicationName(app);
     }
 }
 
@@ -522,16 +558,22 @@ static char* copyDirectoryPathFromDialogContext(AXUIElementRef dialogWindow, AXU
 
 int isOpenSaveDialog() {
     @autoreleasepool {
-        if (!AXIsProcessTrusted()) {
-            return 0;
-        }
-
         NSRunningApplication *activeApp = [[NSWorkspace sharedWorkspace] frontmostApplication];
         if (!activeApp) {
             return 0;
         }
 
         pid_t pid = [activeApp processIdentifier];
+        return isOpenSaveDialogByPid((int)pid);
+    }
+}
+
+int isOpenSaveDialogByPid(int pid) {
+    @autoreleasepool {
+        if (!AXIsProcessTrusted() || pid <= 0) {
+            return 0;
+        }
+
         AXUIElementRef appElement = AXUIElementCreateApplication(pid);
         if (!appElement) {
             return 0;

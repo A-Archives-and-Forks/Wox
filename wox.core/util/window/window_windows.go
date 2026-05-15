@@ -9,10 +9,13 @@ package window
 #include <shellapi.h>
 
 char* getActiveWindowIcon(unsigned char **iconData, int *iconSize, int *width, int *height);
+char* getWindowIconByPid(int pid, unsigned char **iconData, int *iconSize, int *width, int *height);
 char* getActiveWindowName();
+char* getWindowNameByPid(int pid);
 int getActiveWindowPid();
 int activateWindowByPid(int pid);
 int isOpenSaveDialog();
+int isOpenSaveDialogByPid(int pid);
 int navigateActiveFileDialog(const char* path);
 char* getActiveFileDialogPath();
 char* getFileDialogPathByPid(int pid);
@@ -77,8 +80,63 @@ func GetActiveWindowIcon() (image.Image, error) {
 	return img, nil
 }
 
+// GetWindowIconByPid resolves the icon from the captured foreground PID instead
+// of the current foreground window, which may already be Wox when the snapshot
+// detail refresh runs in the background.
+func GetWindowIconByPid(pid int) (image.Image, error) {
+	if pid <= 0 {
+		return nil, fmt.Errorf("invalid pid")
+	}
+
+	var iconData *C.uchar
+	var iconSize C.int
+	var width, height C.int
+
+	errMsgC := C.getWindowIconByPid(C.int(pid), &iconData, &iconSize, &width, &height)
+	if errMsgC != nil {
+		errMsg := C.GoString(errMsgC)
+		return nil, fmt.Errorf("failed to get window icon by pid: %s", errMsg)
+	}
+	defer C.free(unsafe.Pointer(iconData))
+
+	data := C.GoBytes(unsafe.Pointer(iconData), iconSize)
+	img := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
+
+	idx := 0
+	for y := 0; y < int(height); y++ {
+		for x := 0; x < int(width); x++ {
+			img.SetRGBA(x, y, color.RGBA{
+				R: data[idx+2],
+				G: data[idx+1],
+				B: data[idx],
+				A: data[idx+3],
+			})
+			idx += 4
+		}
+	}
+
+	return img, nil
+}
+
 func GetActiveWindowName() string {
 	cStr := C.getActiveWindowName()
+	if cStr == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(cStr))
+	length := C.int(C.strlen(cStr))
+	bytes := C.GoBytes(unsafe.Pointer(cStr), length)
+	return string(bytes)
+}
+
+// GetWindowNameByPid finds a visible top-level window for the captured process
+// so delayed snapshot updates do not depend on the current foreground window.
+func GetWindowNameByPid(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+
+	cStr := C.getWindowNameByPid(C.int(pid))
 	if cStr == nil {
 		return ""
 	}
@@ -100,6 +158,16 @@ func ActivateWindowByPid(pid int) bool {
 
 func IsOpenSaveDialog() (bool, error) {
 	result := C.isOpenSaveDialog()
+	return int(result) == 1, nil
+}
+
+// IsOpenSaveDialogByPid checks dialog windows owned by the captured process
+// because the foreground window may change before the slow detail refresh runs.
+func IsOpenSaveDialogByPid(pid int) (bool, error) {
+	if pid <= 0 {
+		return false, nil
+	}
+	result := C.isOpenSaveDialogByPid(C.int(pid))
 	return int(result) == 1, nil
 }
 

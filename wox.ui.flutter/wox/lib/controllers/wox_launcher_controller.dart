@@ -49,6 +49,7 @@ import 'package:wox/enums/wox_selection_type_enum.dart';
 import 'package:wox/enums/wox_show_source_enum.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/utils/consts.dart';
+import 'package:wox/utils/env.dart';
 import 'package:wox/utils/log.dart';
 import 'package:wox/utils/picker.dart';
 import 'package:wox/utils/wox_interface_size_util.dart';
@@ -62,6 +63,7 @@ import 'package:wox/utils/window_flicker_detector.dart';
 import 'package:wox/utils/color_util.dart';
 
 class WoxLauncherController extends GetxController {
+  static const int _slowLauncherActivationWarningThresholdMs = 20;
   static const String localActionTogglePreviewFullscreenId = "__local_toggle_preview_fullscreen__";
   static const String localActionPreviewSearchId = "__local_preview_search__";
   static const String localActionOpenUpdateId = "__local_open_update__";
@@ -71,6 +73,38 @@ class WoxLauncherController extends GetxController {
   static const String localActionWebViewBackId = "__local_webview_back__";
   static const String localActionWebViewForwardId = "__local_webview_forward__";
   static const String localActionWebViewClearStateId = "__local_webview_clear_state__";
+
+  int _captureDevLauncherVisibleActivationCost(ShowAppParams params) {
+    if (!Env.isDev || params.activationStartedAt <= 0) {
+      return -1;
+    }
+
+    // The dev warning is about when the launcher becomes visible, not when the
+    // later focus/input-ready work finishes. Capture this immediately after
+    // windowManager.show() so the toolbar value matches the user's visual boundary.
+    return DateTime.now().millisecondsSinceEpoch - params.activationStartedAt;
+  }
+
+  Future<void> _showDevLauncherActivationWarningIfSlow(String traceId, int visibleActivationCost) async {
+    if (!Env.isDev || visibleActivationCost < 0 || visibleActivationCost <= _slowLauncherActivationWarningThresholdMs) {
+      return;
+    }
+
+    final toolbarMsgId = "dev-launcher-activation-${DateTime.now().microsecondsSinceEpoch}";
+    // Development-only activation diagnostics must be emitted from Flutter after
+    // native show finishes. The Go websocket response only proves that the
+    // request was accepted, and focus timing is tracked separately from visibility.
+    await showToolbarMsg(
+      traceId,
+      ToolbarMsg(id: toolbarMsgId, title: "Dev: hotkey activation took ${visibleActivationCost}ms (>${_slowLauncherActivationWarningThresholdMs}ms)", displaySeconds: 3),
+    );
+
+    Future.delayed(const Duration(seconds: 3), () {
+      if (toolbarMsg.value.id == toolbarMsgId) {
+        unawaited(clearToolbarMsg(traceId, toolbarMsgId));
+      }
+    });
+  }
 
   //query related variables
   final currentQuery = PlainQuery.empty().obs;
@@ -1695,10 +1729,6 @@ class WoxLauncherController extends GetxController {
     final targetHeight = calculateInitialShowWindowHeight(shouldPreserveIncomingQuery);
     final targetWidth = forceWindowWidth != 0 ? forceWindowWidth : WoxSettingUtil.instance.currentSetting.appWidth.toDouble();
     final targetPosition = resolveShowAppPosition(params, targetWidth, targetHeight);
-    Logger.instance.debug(
-      traceId,
-      "show app bounds resolved: x=${targetPosition.dx}, y=${targetPosition.dy}, width=$targetWidth, height=$targetHeight, trayAnchorBottom=${params.trayAnchor?.bottom ?? -1}",
-    );
 
     // Handle different position types
     // on linux, we need to show first and then set position or center it
@@ -1715,6 +1745,7 @@ class WoxLauncherController extends GetxController {
       await windowManager.setAlwaysOnTop(true);
     }
     await windowManager.show();
+    final visibleActivationCost = _captureDevLauncherVisibleActivationCost(params);
     await windowManager.focus();
 
     // Workaround for Windows DWM Acrylic bug:
@@ -1733,6 +1764,7 @@ class WoxLauncherController extends GetxController {
     }
 
     focusQueryBox(selectAll: params.selectAll);
+    unawaited(_showDevLauncherActivationWarningIfSlow(traceId, visibleActivationCost));
     // Bug fix: on Windows the native show/focus call can complete before the
     // Flutter editable text is ready to accept keyboard focus. Retry once after
     // the first visible frame so re-show keeps immediate typing reliable.

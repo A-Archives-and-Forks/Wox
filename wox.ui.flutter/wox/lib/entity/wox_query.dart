@@ -479,6 +479,7 @@ class ShowAppParams {
   late bool queryBoxAtBottom;
   late bool hideOnBlur;
   late String showSource;
+  late int activationStartedAt;
 
   ShowAppParams({
     required this.selectAll,
@@ -494,6 +495,7 @@ class ShowAppParams {
     this.queryBoxAtBottom = false,
     this.hideOnBlur = false,
     this.showSource = 'default',
+    this.activationStartedAt = 0,
   });
 
   ShowAppParams.fromJson(Map<String, dynamic> json) {
@@ -519,6 +521,7 @@ class ShowAppParams {
     queryBoxAtBottom = json['QueryBoxAtBottom'] ?? false;
     hideOnBlur = json['HideOnBlur'] ?? false;
     showSource = json['ShowSource'] ?? 'default';
+    activationStartedAt = (json['ActivationStartedAt'] as num?)?.toInt() ?? 0;
   }
 }
 

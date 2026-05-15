@@ -439,20 +439,21 @@ func getShowAppParams(ctx context.Context, showContext common.ShowContext) map[s
 	}
 
 	params := map[string]any{
-		"SelectAll":        showContext.SelectAll,
-		"IsQueryFocus":     showContext.IsQueryFocus,
-		"HideQueryBox":     showContext.HideQueryBox,
-		"HideToolbar":      hideToolbar,
-		"QueryBoxAtBottom": showContext.QueryBoxAtBottom,
-		"HideOnBlur":       showContext.HideOnBlur,
-		"Position":         position,
-		"TrayAnchor":       showContext.TrayAnchor,
-		"WindowWidth":      windowWidth,
-		"MaxResultCount":   maxResultCount,
-		"QueryHistories":   setting.GetSettingManager().GetLatestQueryHistory(ctx, 10),
-		"LaunchMode":       woxSetting.LaunchMode.Get(),
-		"StartPage":        woxSetting.StartPage.Get(),
-		"ShowSource":       showSource,
+		"SelectAll":           showContext.SelectAll,
+		"IsQueryFocus":        showContext.IsQueryFocus,
+		"HideQueryBox":        showContext.HideQueryBox,
+		"HideToolbar":         hideToolbar,
+		"QueryBoxAtBottom":    showContext.QueryBoxAtBottom,
+		"HideOnBlur":          showContext.HideOnBlur,
+		"Position":            position,
+		"TrayAnchor":          showContext.TrayAnchor,
+		"WindowWidth":         windowWidth,
+		"MaxResultCount":      maxResultCount,
+		"QueryHistories":      setting.GetSettingManager().GetLatestQueryHistory(ctx, 10),
+		"LaunchMode":          woxSetting.LaunchMode.Get(),
+		"StartPage":           woxSetting.StartPage.Get(),
+		"ShowSource":          showSource,
+		"ActivationStartedAt": showContext.ActivationStartedAt,
 	}
 
 	return params
