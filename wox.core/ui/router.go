@@ -1562,6 +1562,19 @@ func handleTestTriggerTrayQuery(w http.ResponseWriter, r *http.Request) {
 
 func handleOnUIReady(w http.ResponseWriter, r *http.Request) {
 	ctx := getTraceContext(r)
+	type uiReadyRequest struct {
+		Pid int
+	}
+	var request uiReadyRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil && err != io.EOF {
+		writeErrorResponse(w, err.Error())
+		return
+	}
+	if request.Pid > 0 {
+		// Dev mode usually starts Flutter outside the core process tree, so the
+		// ready callback is the reliable boundary where core can learn the UI PID.
+		util.SetWoxUIProcessPid(request.Pid)
+	}
 	GetUIManager().PostUIReady(ctx)
 	writeSuccessResponse(w, "")
 }

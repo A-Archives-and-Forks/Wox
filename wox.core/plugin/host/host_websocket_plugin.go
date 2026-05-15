@@ -90,7 +90,7 @@ func (w *WebsocketPlugin) Query(ctx context.Context, query plugin.Query) plugin.
 	if queryRefinements == nil {
 		// External hosts normalize legacy query returns into QueryResponse, so
 		// they also expect selected refinements to arrive as an object.
-		queryRefinements = map[string][]string{}
+		queryRefinements = map[string]string{}
 	}
 	refinementsJson, marshalRefinementsErr := json.Marshal(queryRefinements)
 	if marshalRefinementsErr != nil {

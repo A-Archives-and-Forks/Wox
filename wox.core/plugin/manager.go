@@ -2409,7 +2409,7 @@ func (m *Manager) NewQuery(ctx context.Context, plainQuery common.PlainQuery) (Q
 	if refinements == nil {
 		// Query refinements are optional in older UI requests. Normalize nil to
 		// an empty map so external hosts always receive an object, not JSON null.
-		refinements = map[string][]string{}
+		refinements = map[string]string{}
 	}
 
 	if plainQuery.QueryType == QueryTypeInput {

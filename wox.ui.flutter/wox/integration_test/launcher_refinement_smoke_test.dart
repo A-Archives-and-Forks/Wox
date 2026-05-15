@@ -62,7 +62,7 @@ void registerLauncherRefinementSmokeTests() {
 
       final refinementHotkey = WoxHotkey.parseHotkeyFromString('alt+t')!.normalHotkey!;
       expect(controller.executeQueryRefinementHotkey(const UuidV4().generate(), refinementHotkey), isTrue);
-      expect(controller.currentQuery.value.queryRefinements['type'], equals(const ['text']));
+      expect(controller.currentQuery.value.queryRefinements['type'], equals('text'));
       expect(controller.getQueryRefinementAffordanceLabel(), equals('Text'));
 
       final previousQueryId = controller.currentQuery.value.queryId;
@@ -74,7 +74,7 @@ void registerLauncherRefinementSmokeTests() {
       // real backend clipboard response cannot replace this synthetic payload.
       expect(controller.currentQuery.value.queryId, isNot(previousQueryId));
       expect(controller.currentQuery.value.queryText, equals('cb '));
-      expect(controller.currentQuery.value.queryRefinements['type'], equals(const ['text']));
+      expect(controller.currentQuery.value.queryRefinements['type'], equals('text'));
     });
   });
 }

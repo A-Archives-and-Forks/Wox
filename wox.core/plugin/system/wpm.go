@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"path"
+	"runtime"
 	"sort"
 	"strings"
 	texttmpl "text/template"
@@ -29,6 +30,15 @@ import (
 
 var wpmIcon = common.PluginWPMIcon
 var localPluginDirectoriesKey = "local_plugin_directories"
+
+const (
+	wpmInstallStatusRefinementKey          = "wpm_install_status"
+	wpmInstallStatusRefinementAll          = "all"
+	wpmInstallStatusRefinementInstalled    = "installed"
+	wpmInstallStatusRefinementNotInstalled = "not_installed"
+	wpmInstallStatusRefinementUpgradable   = "upgradable"
+)
+
 var pluginTemplates = []pluginTemplate{
 	{
 		Runtime: plugin.PLUGIN_RUNTIME_NODEJS,
@@ -290,7 +300,9 @@ func (w *WPMPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryR
 	}
 
 	if query.Command == "install" {
-		return plugin.NewQueryResponse(w.installCommand(ctx, query))
+		response := plugin.NewQueryResponse(w.installCommand(ctx, query))
+		response.Refinements = []plugin.QueryRefinement{w.buildInstallStatusRefinement()}
+		return response
 	}
 
 	if query.Command == "uninstall" {
@@ -314,6 +326,61 @@ func (w *WPMPlugin) Query(ctx context.Context, query plugin.Query) plugin.QueryR
 	}
 
 	return plugin.QueryResponse{}
+}
+
+func (w *WPMPlugin) buildInstallStatusRefinement() plugin.QueryRefinement {
+	// Feature addition: WPM install can now narrow store results by install
+	// state through the shared QueryRefinement channel. The default "All"
+	// value preserves the old install search behavior until the user explicitly
+	// chooses a status filter.
+	return plugin.QueryRefinement{
+		Id:           wpmInstallStatusRefinementKey,
+		Title:        "i18n:plugin_wpm_refinement_status",
+		Type:         plugin.QueryRefinementTypeSingleSelect,
+		DefaultValue: []string{wpmInstallStatusRefinementAll},
+		Hotkey:       wpmInstallStatusRefinementHotkey(),
+		Persist:      false,
+		Options: []plugin.QueryRefinementOption{
+			{Value: wpmInstallStatusRefinementAll, Title: "i18n:plugin_wpm_refinement_status_all"},
+			{Value: wpmInstallStatusRefinementInstalled, Title: "i18n:plugin_wpm_refinement_status_installed"},
+			{Value: wpmInstallStatusRefinementNotInstalled, Title: "i18n:plugin_wpm_refinement_status_not_installed"},
+			{Value: wpmInstallStatusRefinementUpgradable, Title: "i18n:plugin_wpm_refinement_status_upgradable"},
+		},
+	}
+}
+
+func wpmInstallStatusRefinementHotkey() string {
+	if runtime.GOOS == "darwin" {
+		return "cmd+s"
+	}
+	return "alt+s"
+}
+
+func selectedWPMInstallStatus(query plugin.Query) string {
+	selectedStatus := query.Refinements[wpmInstallStatusRefinementKey]
+	if selectedStatus == "" {
+		return wpmInstallStatusRefinementAll
+	}
+
+	switch selectedStatus {
+	case wpmInstallStatusRefinementInstalled, wpmInstallStatusRefinementNotInstalled, wpmInstallStatusRefinementUpgradable:
+		return selectedStatus
+	default:
+		return wpmInstallStatusRefinementAll
+	}
+}
+
+func wpmInstallStatusMatches(selectedStatus string, installed bool, upgradable bool) bool {
+	switch selectedStatus {
+	case wpmInstallStatusRefinementInstalled:
+		return installed
+	case wpmInstallStatusRefinementNotInstalled:
+		return !installed
+	case wpmInstallStatusRefinementUpgradable:
+		return upgradable
+	default:
+		return true
+	}
 }
 
 func (w *WPMPlugin) createCommand(ctx context.Context, query plugin.Query) []plugin.QueryResult {
@@ -765,18 +832,28 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 		return pluginManifests[i].GetName(ctx) < pluginManifests[j].GetName(ctx)
 	})
 
-	// get installed plugins once for status checks
-	installed := plugin.GetPluginManager().GetPluginInstances()
+	// Feature addition: build one installed-plugin lookup and use it for both
+	// filtering and row decoration. The previous per-row scans were acceptable
+	// for tails/actions only, but refinement filtering needs the same status
+	// decision to stay consistent across the whole result.
+	installedById := map[string]*plugin.Instance{}
+	for _, installedPlugin := range plugin.GetPluginManager().GetPluginInstances() {
+		installedById[installedPlugin.Metadata.Id] = installedPlugin
+	}
+	selectedStatus := selectedWPMInstallStatus(query)
 
 	for _, pluginManifest := range pluginManifests {
-		installedFlag := lo.ContainsBy(installed, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id })
+		installedPlugin, installedFlag := installedById[pluginManifest.Id]
+		upgradeFlag := installedFlag && plugin.IsVersionUpgradable(installedPlugin.Metadata.Version, pluginManifest.Version)
+		if !wpmInstallStatusMatches(selectedStatus, installedFlag, upgradeFlag) {
+			continue
+		}
 
 		// build tails to indicate installation/upgrade status
 		var tails []plugin.QueryResultTail
-		if inst, ok := lo.Find(installed, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id }); ok {
+		if installedFlag {
 			// plugin is installed, check if upgrade is available
-			upgrade := plugin.IsVersionUpgradable(inst.Metadata.Version, pluginManifest.Version)
-			if upgrade {
+			if upgradeFlag {
 				// show an upgrade icon
 				tails = append(tails, plugin.QueryResultTail{Type: plugin.QueryResultTailTypeImage, Image: common.UpgradeIcon})
 			} else {
@@ -788,10 +865,6 @@ func (w *WPMPlugin) installCommand(ctx context.Context, query plugin.Query) []pl
 		// decide actions based on install/upgrade status
 		var actions []plugin.QueryResultAction
 		if installedFlag {
-			upgradeFlag := false
-			if inst, ok := lo.Find(installed, func(it *plugin.Instance) bool { return it.Metadata.Id == pluginManifest.Id }); ok {
-				upgradeFlag = plugin.IsVersionUpgradable(inst.Metadata.Version, pluginManifest.Version)
-			}
 			if upgradeFlag {
 				// Upgrade is available: show Upgrade + Uninstall actions.
 				actions = []plugin.QueryResultAction{

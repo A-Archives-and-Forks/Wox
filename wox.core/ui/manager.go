@@ -443,10 +443,16 @@ func (m *Manager) StartUIApp(ctx context.Context) error {
 
 	m.uiProcess = cmd.Process
 	pid := cmd.Process.Pid
+	// Debug Glance reads this PID to report combined core + Flutter memory.
+	// Prod launches the UI from core, while dev mode can later replace it with
+	// the PID reported by Flutter's ready callback.
+	util.SetWoxUIProcessPid(pid)
 	util.GetLogger().Info(ctx, fmt.Sprintf("ui app pid: %d", pid))
 
 	util.Go(ctx, "watch ui app", func() {
 		waitErr := cmd.Wait()
+		// Clear only this exited process so a restarted UI keeps its newer PID.
+		util.ClearWoxUIProcessPid(pid)
 		waitCtx := util.NewTraceContext()
 		if waitErr != nil {
 			logger.Warn(waitCtx, fmt.Sprintf("ui app process(%d) exited with error: %s", pid, waitErr.Error()))

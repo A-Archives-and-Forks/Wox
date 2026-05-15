@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:core';
+import 'dart:io' show pid;
 
 import 'package:wox/entity/wox_ai.dart';
 import 'package:wox/entity/wox_backup.dart';
@@ -111,7 +112,9 @@ class WoxApi {
   }
 
   Future<void> onUIReady(String traceId) async {
-    await WoxHttpUtil.instance.postData(traceId, "/on/ready", {});
+    // Dev mode starts Flutter outside the backend process tree, so the ready
+    // callback reports the UI PID for core-side memory diagnostics.
+    await WoxHttpUtil.instance.postData(traceId, "/on/ready", {"Pid": pid});
   }
 
   Future<void> onFocusLost(String traceId) async {

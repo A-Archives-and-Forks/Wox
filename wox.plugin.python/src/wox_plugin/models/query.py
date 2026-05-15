@@ -458,13 +458,14 @@ class Query:
     Example: For ">todo add buy groceries", search = "buy groceries"
     """
 
-    refinements: Dict[str, List[str]] = field(default_factory=dict)
+    refinements: Dict[str, str] = field(default_factory=dict)
     """
     Selected query refinement values keyed by refinement id.
 
     Wox treats these values as opaque strings and sends them back from
     QueryResponse.refinements controls, so each plugin owns the filtering or
-    sorting semantics for its commands.
+    sorting semantics for its commands. Multi-select refinements are
+    comma-separated.
     """
 
     def to_json(self) -> str:
@@ -511,11 +512,19 @@ class Query:
                 refinements_raw = json.loads(refinements_raw)
             except Exception:
                 refinements_raw = {}
-        refinements: Dict[str, List[str]] = {}
+        refinements: Dict[str, str] = {}
         if isinstance(refinements_raw, dict):
             for key, values in refinements_raw.items():
-                if isinstance(key, str) and isinstance(values, list):
-                    refinements[key] = [str(value) for value in values]
+                if not isinstance(key, str):
+                    continue
+                if isinstance(values, list):
+                    # Protocol migration: older hosts sent selected
+                    # refinements as arrays. Join them once at the SDK boundary
+                    # so plugin authors consume a simple dict[str, str].
+                    refinements[key] = ",".join(str(value) for value in values if value is not None and str(value))
+                    continue
+                if values is not None:
+                    refinements[key] = str(values)
 
         return cls(
             id=data.get("QueryId", data.get("Id", "")),

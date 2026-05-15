@@ -18,13 +18,38 @@ class PlainQuery {
   late WoxQueryType queryType;
   late String queryText;
   late Selection querySelection;
-  late Map<String, List<String>> queryRefinements;
+  late Map<String, String> queryRefinements;
 
-  PlainQuery({required this.queryId, required this.queryType, required this.queryText, required this.querySelection, Map<String, List<String>>? queryRefinements}) {
-    // Query refinements are opaque plugin-owned values. Keeping them on the
-    // plain query lets future refinement UI send selections without changing
-    // the result-query transport again.
-    this.queryRefinements = queryRefinements ?? <String, List<String>>{};
+  PlainQuery({required this.queryId, required this.queryType, required this.queryText, required this.querySelection, Map<String, String>? queryRefinements}) {
+    // Query refinements are exposed to plugins as a simple string map. The UI
+    // may keep list selections internally, but the transport mirrors the
+    // plugin-facing API and joins multi-select values at the boundary.
+    this.queryRefinements = queryRefinements ?? <String, String>{};
+  }
+
+  static Map<String, String> parseQueryRefinements(dynamic rawRefinements) {
+    final rawMap = rawRefinements as Map<String, dynamic>? ?? <String, dynamic>{};
+    final parsed = <String, String>{};
+    for (final entry in rawMap.entries) {
+      final rawValue = entry.value;
+      if (rawValue == null) {
+        continue;
+      }
+
+      // Protocol migration: older payloads may still carry selected values as
+      // arrays. Join them here so the rest of the UI and core transport use the
+      // same map[string]string shape.
+      if (rawValue is Iterable) {
+        final encoded = rawValue.map((value) => value.toString()).where((value) => value.isNotEmpty).join(',');
+        if (encoded.isNotEmpty) {
+          parsed[entry.key] = encoded;
+        }
+        continue;
+      }
+
+      parsed[entry.key] = rawValue.toString();
+    }
+    return parsed;
   }
 
   PlainQuery.fromJson(Map<String, dynamic> json) {
@@ -32,9 +57,7 @@ class PlainQuery {
     queryType = json['QueryType'];
     queryText = json['QueryText'];
     querySelection = Selection.fromJson(json['QuerySelection']);
-    queryRefinements = ((json['QueryRefinements'] ?? json['queryRefinements']) as Map<String, dynamic>? ?? <String, dynamic>{}).map(
-      (key, value) => MapEntry(key, List<String>.from(value ?? [])),
-    );
+    queryRefinements = parseQueryRefinements(json['QueryRefinements'] ?? json['queryRefinements']);
   }
 
   Map<String, dynamic> toJson() {

@@ -359,9 +359,10 @@ export interface Query {
    *
    * These values come from the QueryResponse.Refinements controls returned by
    * the plugin on previous query updates. Wox treats them as opaque strings;
-   * the plugin owns the filtering or sorting semantics.
+   * the plugin owns the filtering or sorting semantics. Multi-select
+   * refinements are comma-separated.
    */
-  Refinements?: { [key: string]: string[] }
+  Refinements?: { [key: string]: string }
 
   /**
    * Check if this is a global query (no trigger keyword).

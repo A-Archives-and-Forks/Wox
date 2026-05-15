@@ -394,12 +394,12 @@ func (c *ClipboardPlugin) buildClipboardTypeRefinement() plugin.QueryRefinement 
 }
 
 func (c *ClipboardPlugin) getSelectedClipboardType(query plugin.Query) string {
-	selectedValues := query.Refinements[clipboardTypeRefinementKey]
-	if len(selectedValues) == 0 {
+	selectedType := query.Refinements[clipboardTypeRefinementKey]
+	if selectedType == "" {
 		return clipboardTypeRefinementAll
 	}
 
-	switch selectedValues[0] {
+	switch selectedType {
 	case clipboardTypeRefinementText:
 		return string(clipboard.ClipboardTypeText)
 	case clipboardTypeRefinementImage:

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"strings"
 	"time"
 	"wox/common"
 	"wox/database"
@@ -25,6 +26,47 @@ import (
 // leading to constant window resizing and flickering.
 // we use 32ms here, which is roughly equivalent to 30fps.
 const resultDebounceIntervalMs = 32
+
+func parseQueryRefinementsFromUI(rawJson string) (map[string]string, error) {
+	refinements := map[string]string{}
+	if rawJson == "" {
+		return refinements, nil
+	}
+
+	var rawValues map[string]any
+	if err := json.Unmarshal([]byte(rawJson), &rawValues); err != nil {
+		return nil, err
+	}
+
+	for key, rawValue := range rawValues {
+		switch value := rawValue.(type) {
+		case string:
+			refinements[key] = value
+		case []any:
+			// Protocol migration: older UI builds sent refinement selections as
+			// string arrays. The public plugin API now uses map[string]string, so
+			// the UI boundary joins legacy multi-select values once instead of
+			// forcing every plugin and runtime host to understand both shapes.
+			parts := []string{}
+			for _, item := range value {
+				text := fmt.Sprint(item)
+				if text != "" {
+					parts = append(parts, text)
+				}
+			}
+			joined := strings.Join(parts, ",")
+			if joined != "" {
+				refinements[key] = joined
+			}
+		default:
+			if rawValue != nil {
+				refinements[key] = fmt.Sprint(rawValue)
+			}
+		}
+	}
+
+	return refinements, nil
+}
 
 type uiImpl struct {
 	requestMap         *util.HashMap[string, chan WebsocketMsg]
@@ -538,7 +580,7 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	var querySelection selection.Selection
 	json.Unmarshal([]byte(querySelectionJson), &querySelection)
 
-	queryRefinements := map[string][]string{}
+	queryRefinements := map[string]string{}
 	queryRequestJson, queryRequestMarshalErr := json.Marshal(request.Data)
 	if queryRequestMarshalErr != nil {
 		logger.Error(ctx, queryRequestMarshalErr.Error())
@@ -548,15 +590,15 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	refinementsData := gjson.GetBytes(queryRequestJson, "queryRefinements")
 	if refinementsData.Exists() {
 		// queryRefinements is optional for compatibility with older UI clients.
-		// When present, keep it opaque and let each plugin interpret its values.
-		if unmarshalRefinementsErr := json.Unmarshal([]byte(refinementsData.Raw), &queryRefinements); unmarshalRefinementsErr != nil {
-			logger.Error(ctx, unmarshalRefinementsErr.Error())
-			responseUIError(ctx, request, unmarshalRefinementsErr.Error())
+		// When present, keep the map value shape simple and let each plugin
+		// interpret single or comma-separated multi-select values.
+		parsedRefinements, parseRefinementsErr := parseQueryRefinementsFromUI(refinementsData.Raw)
+		if parseRefinementsErr != nil {
+			logger.Error(ctx, parseRefinementsErr.Error())
+			responseUIError(ctx, request, parseRefinementsErr.Error())
 			return
 		}
-		if queryRefinements == nil {
-			queryRefinements = map[string][]string{}
-		}
+		queryRefinements = parsedRefinements
 	}
 
 	var changedQuery common.PlainQuery
@@ -585,12 +627,21 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	logger.Info(ctx, fmt.Sprintf("start to handle query changed: %s, queryId: %s", changedQuery.String(), queryId))
 
 	if changedQuery.QueryType == plugin.QueryTypeInput && changedQuery.QueryText == "" {
-		plugin.GetPluginManager().HandleQueryLifecycle(ctx, plugin.Query{
+		emptyInputQuery := plugin.Query{
 			Id:        queryId,
 			SessionId: sessionId,
 			Type:      plugin.QueryTypeInput,
-		}, nil)
-		responseUIQueryResults(ctx, request, queryId, []plugin.QueryResultUI{}, true)
+		}
+		plugin.GetPluginManager().HandleQueryLifecycle(ctx, emptyInputQuery, nil)
+		// Bug fix: blank-page empty input still occupies the global query box.
+		// The previous zero-value QueryContext serialized as IsGlobalQuery=false,
+		// so the UI treated a cleared search as plugin/selection context and hid
+		// Glance. Return the same backend-owned classification used by normal
+		// queries so clearing search keeps the global accessory visible.
+		responseUIQueryResponse(ctx, request, queryId, plugin.QueryResponseUI{
+			Results: []plugin.QueryResultUI{},
+			Context: plugin.BuildQueryContext(emptyInputQuery, nil),
+		}, true)
 		return
 	}
 	if changedQuery.QueryType == plugin.QueryTypeSelection && changedQuery.QuerySelection.String() == "" {

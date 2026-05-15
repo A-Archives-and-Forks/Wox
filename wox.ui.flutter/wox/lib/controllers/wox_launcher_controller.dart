@@ -258,6 +258,7 @@ class WoxLauncherController extends GetxController {
 
   Future<void> refreshGlance(String traceId, String reason, {String pluginId = "", List<String> ids = const []}) async {
     glanceRefreshTimer?.cancel();
+    final queryId = currentQuery.value.queryId;
     final setting = WoxSettingUtil.instance.currentSetting;
     if (!setting.enableGlance || !isGlobalInputQuery(currentQuery.value)) {
       // Global Glance must not leak into plugin contexts because the query-box
@@ -277,6 +278,13 @@ class WoxLauncherController extends GetxController {
 
     try {
       final items = await WoxApi.instance.getGlanceItems(traceId, refs, reason);
+      if (currentQuery.value.queryId != queryId || !isGlobalInputQuery(currentQuery.value)) {
+        // Bug fix: Glance refreshes are HTTP requests and can finish after the
+        // user has already cleared or changed the search. Ignore stale replies
+        // so an older query cannot hide or restore the accessory for the current
+        // launcher state.
+        return;
+      }
       final byKey = {for (final item in items) '${item.pluginId}\x00${item.id}': item};
       // Preserve slot order from settings instead of plugin response order so the
       // primary item remains visually stable across refreshes.
@@ -284,7 +292,12 @@ class WoxLauncherController extends GetxController {
       scheduleNextGlanceRefresh(traceId);
     } catch (e) {
       Logger.instance.error(traceId, "refresh glance failed: $e");
-      glanceItems.clear();
+      if (currentQuery.value.queryId == queryId && isGlobalInputQuery(currentQuery.value)) {
+        // Bug fix: only the active query can clear the visible Glance. A failed
+        // request from an older query should not remove the accessory after the
+        // user has already returned to the empty global search box.
+        glanceItems.clear();
+      }
     }
   }
 
@@ -565,6 +578,39 @@ class WoxLauncherController extends GetxController {
     return values.map((key, value) => MapEntry(key, List<String>.from(value)));
   }
 
+  Map<String, String> cloneQueryRefinementPayload(Map<String, String> values) {
+    return Map<String, String>.from(values);
+  }
+
+  List<String> decodeQueryRefinementValue(String value) {
+    if (value.isEmpty) {
+      return const <String>[];
+    }
+    return value.split(',').map((part) => part.trim()).where((part) => part.isNotEmpty).toList();
+  }
+
+  Map<String, List<String>> decodeQueryRefinementPayload(Map<String, String> payload) {
+    return payload.map((key, value) => MapEntry(key, decodeQueryRefinementValue(value)));
+  }
+
+  String encodeQueryRefinementValue(List<String> values) {
+    return values.where((value) => value.isNotEmpty).join(',');
+  }
+
+  Map<String, String> encodeQueryRefinementPayload(Map<String, List<String>> values) {
+    final payload = <String, String>{};
+    for (final entry in values.entries) {
+      // Protocol change: plugins receive refinements as map[string]string for a
+      // simpler API. The UI keeps list selections internally for multi-select
+      // controls, then encodes multi values as comma-separated strings here.
+      final encoded = encodeQueryRefinementValue(entry.value);
+      if (encoded.isNotEmpty) {
+        payload[entry.key] = encoded;
+      }
+    }
+    return payload;
+  }
+
   void clearQueryRefinements(String traceId) {
     if (queryRefinements.isEmpty && queryRefinementValues.isEmpty && queryRefinementScopeKey.isEmpty && !isQueryRefinementBarExpanded.value) {
       return;
@@ -582,7 +628,7 @@ class WoxLauncherController extends GetxController {
 
   void prepareQueryRefinementsOnQueryChanged(String traceId, PlainQuery query) {
     final nextScopeKey = getQueryRefinementScopeKey(query);
-    queryRefinementValues.assignAll(cloneQueryRefinementValues(query.queryRefinements));
+    queryRefinementValues.assignAll(cloneQueryRefinementValues(decodeQueryRefinementPayload(query.queryRefinements)));
 
     if (nextScopeKey.isEmpty || (queryRefinementScopeKey.isNotEmpty && queryRefinementScopeKey != nextScopeKey)) {
       clearQueryRefinements(traceId);
@@ -657,16 +703,16 @@ class WoxLauncherController extends GetxController {
   void applyQueryRefinementsForQuery(String traceId, PlainQuery query, List<WoxQueryRefinement> refinements) {
     final validRefinements = refinements.where((refinement) => !refinement.isEmpty).toList();
     if (validRefinements.isEmpty) {
-      currentQuery.value = cloneQuery(query, queryRefinements: <String, List<String>>{});
+      currentQuery.value = cloneQuery(query, queryRefinements: <String, String>{});
       clearQueryRefinements(traceId);
       return;
     }
 
-    final normalizedValues = normalizeQueryRefinementValues(validRefinements, query.queryRefinements);
+    final normalizedValues = normalizeQueryRefinementValues(validRefinements, decodeQueryRefinementPayload(query.queryRefinements));
     queryRefinements.assignAll(validRefinements);
     queryRefinementValues.assignAll(normalizedValues);
     queryRefinementScopeKey = getQueryRefinementScopeKey(query);
-    currentQuery.value = cloneQuery(query, queryRefinements: normalizedValues);
+    currentQuery.value = cloneQuery(query, queryRefinements: encodeQueryRefinementPayload(normalizedValues));
     unawaited(resizeHeight(traceId: traceId, reason: "query refinements applied"));
   }
 
@@ -676,7 +722,7 @@ class WoxLauncherController extends GetxController {
 
   void updateQueryRefinementSelection(String traceId, WoxQueryRefinement refinement, List<String> values) {
     final normalizedValues = normalizeQueryRefinementSelection(refinement, values);
-    final nextRefinements = cloneQueryRefinementValues(currentQuery.value.queryRefinements);
+    final nextRefinements = cloneQueryRefinementValues(decodeQueryRefinementPayload(currentQuery.value.queryRefinements));
     if (normalizedValues.isEmpty) {
       nextRefinements.remove(refinement.id);
     } else {
@@ -686,7 +732,7 @@ class WoxLauncherController extends GetxController {
     // Feature addition: changing a refinement is equivalent to changing the
     // query. Reusing onQueryChanged keeps loading, stale-result clearing, and
     // websocket payload construction on the same path as text edits.
-    final nextQuery = cloneQuery(currentQuery.value, queryId: const UuidV4().generate(), queryRefinements: nextRefinements);
+    final nextQuery = cloneQuery(currentQuery.value, queryId: const UuidV4().generate(), queryRefinements: encodeQueryRefinementPayload(nextRefinements));
     onQueryChanged(traceId, nextQuery, "query refinement changed");
   }
 
@@ -1755,13 +1801,13 @@ class WoxLauncherController extends GetxController {
         WoxThemeUtil.instance.currentTheme.value.resultContainerPaddingBottom;
   }
 
-  PlainQuery cloneQuery(PlainQuery query, {String? queryId, Map<String, List<String>>? queryRefinements}) {
+  PlainQuery cloneQuery(PlainQuery query, {String? queryId, Map<String, String>? queryRefinements}) {
     return PlainQuery(
       queryId: queryId ?? query.queryId,
       queryType: query.queryType,
       queryText: query.queryText,
       querySelection: Selection(type: query.querySelection.type, text: query.querySelection.text, filePaths: List<String>.from(query.querySelection.filePaths)),
-      queryRefinements: (queryRefinements ?? query.queryRefinements).map((key, value) => MapEntry(key, List<String>.from(value))),
+      queryRefinements: cloneQueryRefinementPayload(queryRefinements ?? query.queryRefinements),
     );
   }
 
@@ -2189,7 +2235,7 @@ class WoxLauncherController extends GetxController {
       resizeHeight(traceId: traceId, reason: "selection query text changed");
     } else {
       final nextQueryRefinements =
-          shouldPreserveQueryRefinementsForTextChange(currentQuery.value, value) ? cloneQueryRefinementValues(currentQuery.value.queryRefinements) : <String, List<String>>{};
+          shouldPreserveQueryRefinementsForTextChange(currentQuery.value, value) ? cloneQueryRefinementPayload(currentQuery.value.queryRefinements) : <String, String>{};
       onQueryChanged(
         traceId,
         PlainQuery(
@@ -2408,7 +2454,7 @@ class WoxLauncherController extends GetxController {
       queryType: currentQueryValue.queryType,
       queryText: currentQueryValue.queryText,
       querySelection: currentQueryValue.querySelection,
-      queryRefinements: currentQueryValue.queryRefinements.map((key, value) => MapEntry(key, List<String>.from(value))),
+      queryRefinements: cloneQueryRefinementPayload(currentQueryValue.queryRefinements),
     );
 
     // Re-execute the query
@@ -3811,10 +3857,11 @@ class WoxLauncherController extends GetxController {
     if (query.queryType == WoxQueryTypeEnum.WOX_QUERY_TYPE_INPUT.code) {
       if (isGlobalInputQuery(query)) {
         queryIcon.value = QueryIconInfo.empty();
-        if (glanceItems.isEmpty) {
+        if (glanceItems.isEmpty || query.queryText.isEmpty) {
           // Global query classification now uses plugin trigger metadata, not
-          // whitespace. That keeps Glance visible for global text containing
-          // spaces while still avoiding refresh churn when an item is cached.
+          // whitespace. Empty global input gets an explicit refresh because
+          // clearing a search can otherwise leave a stale in-flight refresh as
+          // the last Glance update and make the accessory disappear.
           unawaited(refreshGlance(traceId, "manualRefresh"));
         }
         return;

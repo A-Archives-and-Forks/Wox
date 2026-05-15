@@ -20,10 +20,10 @@ type PlainQuery struct {
 	QueryType      string // see plugin.QueryType
 	QueryText      string
 	QuerySelection selection.Selection
-	// QueryRefinements carries selected secondary controls from the UI.
-	// Common owns the plain transport shape so plugin.NewQuery can build the
-	// richer plugin.Query without tying this package to plugin refinement types.
-	QueryRefinements map[string][]string
+	// QueryRefinements carries selected secondary controls from the UI. The
+	// public transport stays a simple string map; multi-select refinements use a
+	// comma-separated value that plugins can decode with shared helpers.
+	QueryRefinements map[string]string
 }
 
 var DefaultSettingWindowContext = SettingWindowContext{Path: "/"}

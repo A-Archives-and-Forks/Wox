@@ -96,10 +96,10 @@ type Query struct {
 	// expose more context env data to plugin, E.g. plugin A only show result when active window title is "Chrome"
 	Env QueryEnv
 
-	// Refinements carries query-scoped UI state selected by the user.
-	// Core intentionally treats these values as opaque so plugins own the
-	// filtering and sorting semantics for each command.
-	Refinements map[string][]string
+	// Refinements carries query-scoped UI state selected by the user. Values are
+	// strings to keep the plugin-facing API close to Env-style key/value data;
+	// multi-select refinements are encoded as comma-separated strings.
+	Refinements map[string]string
 }
 
 func (q *Query) IsGlobalQuery() bool {
