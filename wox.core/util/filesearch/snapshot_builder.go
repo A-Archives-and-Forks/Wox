@@ -406,6 +406,175 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 	return batch, nil
 }
 
+// StreamSubtreeJobBatches walks one recursive subtree once and emits bounded
+// batches to the caller. Full indexing no longer performs an exact pre-scan, so
+// this streaming path is the primary large-root traversal instead of a second
+// copy of the planner's earlier walk.
+func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root RootRecord, job Job, onBatch func(SubtreeSnapshotBatch) error) error {
+	if onBatch == nil {
+		return fmt.Errorf("subtree batch callback is required")
+	}
+	if job.Kind != JobKindSubtree {
+		return fmt.Errorf("stream subtree requires kind %q, got %q", JobKindSubtree, job.Kind)
+	}
+
+	scopePath := filepath.Clean(job.ScopePath)
+	info, err := b.validateScopePath(root, scopePath)
+	if err != nil {
+		return err
+	}
+	if info == nil {
+		return onBatch(SubtreeSnapshotBatch{RootID: root.ID, ScopePath: scopePath})
+	}
+	if !info.IsDir() {
+		return onBatch(SubtreeSnapshotBatch{
+			RootID:    root.ID,
+			ScopePath: scopePath,
+			Entries:   []EntryRecord{newEntryRecord(root, scopePath, info)},
+		})
+	}
+
+	type queueItem struct {
+		path string
+		info os.FileInfo
+	}
+
+	scanTimestamp := time.Now().UnixMilli()
+	maxRecordsPerBatch := b.directFileBatchSize
+	if maxRecordsPerBatch <= 0 {
+		maxRecordsPerBatch = defaultSplitBudget().DirectFileBatchSize
+	}
+	if maxRecordsPerBatch <= 0 {
+		maxRecordsPerBatch = 1024
+	}
+
+	newBatch := func() SubtreeSnapshotBatch {
+		return SubtreeSnapshotBatch{
+			RootID:    root.ID,
+			ScopePath: scopePath,
+		}
+	}
+	flushBatch := func(batch *SubtreeSnapshotBatch) error {
+		if batch == nil {
+			return nil
+		}
+		if len(batch.Directories) == 0 && len(batch.Entries) == 0 {
+			return nil
+		}
+		if err := onBatch(*batch); err != nil {
+			return err
+		}
+		*batch = newBatch()
+		return nil
+	}
+	shouldFlush := func(batch SubtreeSnapshotBatch) bool {
+		return len(batch.Directories)+len(batch.Entries) >= maxRecordsPerBatch
+	}
+
+	queue := []queueItem{{path: scopePath, info: info}}
+	batch := newBatch()
+	for len(queue) > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		current := queue[0]
+		queue = queue[1:]
+		if current.path != scopePath && b.isExcludedPath(root.ID, current.path) {
+			continue
+		}
+
+		dirEntries, readErr := os.ReadDir(current.path)
+		if readErr != nil {
+			if errors.Is(readErr, os.ErrNotExist) {
+				if current.path == scopePath {
+					return nil
+				}
+				continue
+			}
+			batch.Directories = append(batch.Directories, DirectoryRecord{
+				Path:         current.path,
+				RootID:       root.ID,
+				ParentPath:   filepath.Dir(current.path),
+				LastScanTime: scanTimestamp,
+				Exists:       true,
+			})
+			batch.Entries = append(batch.Entries, newEntryRecord(root, current.path, current.info))
+			if current.path == scopePath {
+				return fmt.Errorf("failed to read scope directory %s: %w", current.path, readErr)
+			}
+			util.GetLogger().Warn(ctx, "filesearch skipped unreadable directory "+current.path+": "+readErr.Error())
+			if shouldFlush(batch) {
+				if err := flushBatch(&batch); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
+		batch.Directories = append(batch.Directories, DirectoryRecord{
+			Path:         current.path,
+			RootID:       root.ID,
+			ParentPath:   filepath.Dir(current.path),
+			LastScanTime: scanTimestamp,
+			Exists:       true,
+		})
+		batch.Entries = append(batch.Entries, newEntryRecord(root, current.path, current.info))
+		if shouldFlush(batch) {
+			if err := flushBatch(&batch); err != nil {
+				return err
+			}
+		}
+
+		for _, dirEntry := range dirEntries {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
+			childPath := filepath.Join(current.path, dirEntry.Name())
+			isDir, childInfo, infoErr := strictDirEntryType(current.path, dirEntry)
+			if infoErr != nil {
+				continue
+			}
+			if isDir && b.isExcludedPath(root.ID, childPath) {
+				continue
+			}
+			if shouldSkipSystemPath(childPath, isDir) {
+				continue
+			}
+			if !b.shouldIndexPath(root, childPath, isDir) {
+				continue
+			}
+			if childInfo == nil {
+				childInfo, infoErr = strictDirEntryInfo(current.path, dirEntry)
+				if infoErr != nil {
+					continue
+				}
+			}
+			if isDir {
+				queue = append(queue, queueItem{
+					path: childPath,
+					info: childInfo,
+				})
+				continue
+			}
+
+			batch.Entries = append(batch.Entries, newEntryRecord(root, childPath, childInfo))
+			if shouldFlush(batch) {
+				if err := flushBatch(&batch); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return flushBatch(&batch)
+}
+
 func (b *SnapshotBuilder) validateScopePath(root RootRecord, scopePath string) (os.FileInfo, error) {
 	if root.ID == "" {
 		return nil, fmt.Errorf("root id is required")

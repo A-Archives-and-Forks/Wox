@@ -650,6 +650,126 @@ func (d *FileSearchDB) ApplyDirectFilesJobStream(ctx context.Context, root RootR
 	return tx.Commit()
 }
 
+func (d *FileSearchDB) ApplySubtreeJobStream(ctx context.Context, root RootRecord, job Job, snapshot *SnapshotBuilder) error {
+	if job.Kind != JobKindSubtree {
+		return fmt.Errorf("apply subtree stream requires kind %q, got %q", JobKindSubtree, job.Kind)
+	}
+	if snapshot == nil {
+		return fmt.Errorf("subtree stream requires a snapshot builder")
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	lockedRoot, err := lockRootForSubtreeSnapshot(ctx, tx, root.ID)
+	if err != nil {
+		return err
+	}
+	if !pathWithinScope(lockedRoot.Path, job.ScopePath) {
+		return fmt.Errorf("subtree job scope path %q is outside root path %q", job.ScopePath, lockedRoot.Path)
+	}
+
+	directoryStmt, err := prepareDirectoryUpsertStmtTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	defer directoryStmt.Close()
+
+	if d.bulkSyncFullRunRootFresh(root.ID) {
+		entryStmt, err := prepareEntryFactUpsertNoReturningStmtTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		defer entryStmt.Close()
+
+		// Optimization: a fresh full-index root has no stale facts to diff or
+		// prune. Stream batches straight into the fact tables and let EndBulkSync
+		// rebuild FTS/bigram artifacts once, removing both the planner's duplicate
+		// walk and the temp-stage copy for first-time large roots.
+		insertedEntries := 0
+		if err := snapshot.StreamSubtreeJobBatches(ctx, *lockedRoot, job, func(batch SubtreeSnapshotBatch) error {
+			if err := validateJobSnapshotBatch(job, batch); err != nil {
+				return err
+			}
+			for _, directory := range batch.Directories {
+				if _, err := directoryStmt.ExecContext(
+					ctx,
+					directory.Path,
+					directory.RootID,
+					directory.ParentPath,
+					directory.LastScanTime,
+					boolToInt(directory.Exists),
+				); err != nil {
+					return err
+				}
+			}
+			if err := upsertEntryFactsNoReturningWithStmtTx(ctx, entryStmt, batch.Entries); err != nil {
+				return err
+			}
+			insertedEntries += len(batch.Entries)
+			return nil
+		}); err != nil {
+			return err
+		}
+		logFilesearchSQLiteMaintenance(ctx, "subtree_stream_fresh_insert", job.ScopePath, 0, insertedEntries)
+		return tx.Commit()
+	}
+
+	stageStmt, err := prepareEntryStageInsertStmtTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	defer stageStmt.Close()
+
+	maxScanTime := int64(0)
+	stagedEntries := 0
+	if err := snapshot.StreamSubtreeJobBatches(ctx, *lockedRoot, job, func(batch SubtreeSnapshotBatch) error {
+		if err := validateJobSnapshotBatch(job, batch); err != nil {
+			return err
+		}
+		if scanTime := subtreeBatchScanTime(batch); scanTime > maxScanTime {
+			maxScanTime = scanTime
+		}
+		for _, directory := range batch.Directories {
+			if _, err := directoryStmt.ExecContext(
+				ctx,
+				directory.Path,
+				directory.RootID,
+				directory.ParentPath,
+				directory.LastScanTime,
+				boolToInt(directory.Exists),
+			); err != nil {
+				return err
+			}
+		}
+		if err := stageEntryRecordsWithStmtTx(ctx, stageStmt, batch.Entries); err != nil {
+			return err
+		}
+		stagedEntries += len(batch.Entries)
+		return nil
+	}); err != nil {
+		return err
+	}
+	logFilesearchSQLiteMaintenance(ctx, "subtree_stream_stage_entries", job.ScopePath, 0, stagedEntries)
+
+	tombstoneStartedAt := util.GetSystemTimestamp()
+	if err := tombstoneScopedDirectories(tx, ctx, job.RootID, job.ScopePath, maxScanTime); err != nil {
+		return err
+	}
+	logFilesearchSQLiteMaintenance(ctx, "subtree_stream_tombstone_directories", job.ScopePath, util.GetSystemTimestamp()-tombstoneStartedAt, 1)
+
+	replaceStartedAt := util.GetSystemTimestamp()
+	if err := d.replaceSubtreeEntriesFromStageTx(ctx, tx, job.RootID, job.ScopePath); err != nil {
+		return err
+	}
+	logFilesearchSQLiteMaintenance(ctx, "subtree_stream_replace_entries", job.ScopePath, util.GetSystemTimestamp()-replaceStartedAt, stagedEntries)
+
+	return tx.Commit()
+}
+
 func (d *FileSearchDB) ApplySubtreeJob(ctx context.Context, job Job, batch SubtreeSnapshotBatch) error {
 	if job.Kind != JobKindSubtree {
 		return fmt.Errorf("apply subtree job requires kind %q, got %q", JobKindSubtree, job.Kind)

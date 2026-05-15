@@ -15,8 +15,9 @@ const estimatedPlannerEntryBytes int64 = 256
 // RunPlanner builds one sealed full-run workload in memory before execution.
 // The previous root-centric flow discovered and executed work as the same loop,
 // which made huge roots hold too much state at once and left progress totals
-// unstable. This planner splits the work first, counts it exactly, then seals
-// the immutable job list that later execution will consume.
+// unstable. The current planner seals ownership boundaries first, then lets
+// streaming execution do the only recursive walk so large roots avoid a duplicate
+// planning traversal.
 type RunPlanner struct {
 	policy         *policyState
 	budget         splitBudget
@@ -34,7 +35,7 @@ type RunPlanner struct {
 
 // RunPlannerProgress reports the planner-owned stages before execution starts.
 // Execution progress is reported elsewhere, so this lightweight callback only
-// exists to surface planning and pre-scan as first-class, monotonic phases.
+// exists to surface planning as a first-class phase before streaming execution.
 type RunPlannerProgress struct {
 	Stage     RunStage
 	Root      RootRecord
@@ -95,36 +96,29 @@ func (p *RunPlanner) PlanFullRun(ctx context.Context, roots []RootRecord) (RunPl
 		p.policy = newPolicyState(Policy{})
 	}
 
-	budget := normalizeSplitBudget(p.budget)
-
 	// Phase 1: planning. The old root-centric loop only knew about one whole
-	// root at execution time. We first build a structural frontier so the later
-	// pre-scan can split huge roots without changing persisted root identity.
+	// root at execution time. We still build the structural frontier here, but
+	// leave recursive counting to the streaming executor so large roots are not
+	// walked twice before search results become available.
 	rootBuffers, err := p.planRoots(ctx, roots)
 	if err != nil {
 		return RunPlan{}, err
 	}
 	p.planningRootBuffers = rootBuffers
 
-	// Phase 2: pre-scan. Version 1 deliberately performs exact metadata reads
-	// here without constructing EntryRecord slices. The extra metadata I/O is
-	// accepted so progress denominators stay monotonic and truthful once the run
-	// starts executing.
-	for index, rootBuffer := range p.planningRootBuffers {
-		p.emitProgress(RunPlannerProgress{
-			Stage:     RunStagePreScan,
-			Root:      rootBuffer.root,
-			RootIndex: index + 1,
-			RootTotal: len(p.planningRootBuffers),
-			ScopePath: filepath.Clean(rootBuffer.root.Path),
-		})
-		if err := p.preScanRoot(ctx, rootBuffer, budget, index+1, len(p.planningRootBuffers)); err != nil {
-			p.planningRootBuffers = nil
-			return RunPlan{}, wrapRunPlannerRootError(rootBuffer.root.ID, err)
+	for _, rootBuffer := range p.planningRootBuffers {
+		if rootBuffer == nil || rootBuffer.rootScope == nil {
+			continue
 		}
+		// Optimization: full indexing used to walk every large root once in
+		// pre-scan to compute exact totals, then walk it again during execution.
+		// Real ~/Projects captures showed that this duplicate traversal alone can
+		// dominate the run, so full scans now keep one root-level streaming job and
+		// accept approximate progress totals.
+		rootBuffer.rootScope.totals = streamingFullRunEstimatedTotals()
 	}
 
-	// Phase 3: seal. We convert the planner-owned buffers into immutable plan
+	// Phase 2: seal. We convert the planner-owned buffers into immutable plan
 	// structs, deep-copy them with RunPlan.Seal, then drop the planner buffers so
 	// execution does not keep the same giant scope tree alive twice.
 	draft, err := p.buildDraftPlan(RunKindFull, "full-plan", "full-run")
@@ -138,6 +132,32 @@ func (p *RunPlanner) PlanFullRun(ctx context.Context, roots []RootRecord) (RunPl
 	return sealed, nil
 }
 
+func streamingFullRunEstimatedTotals() PlanTotals {
+	return PlanTotals{
+		DirectoryCount:      1,
+		IndexableEntryCount: 1,
+		PlannedScanUnits:    1,
+		PlannedWriteUnits:   1,
+	}
+}
+
+func applyStreamingEstimatedTotals(scope *runPlannerScopeBuffer) PlanTotals {
+	if scope == nil {
+		return PlanTotals{}
+	}
+	if len(scope.children) == 0 {
+		scope.totals = streamingFullRunEstimatedTotals()
+		return scope.totals
+	}
+
+	totals := PlanTotals{}
+	for _, child := range scope.children {
+		totals = mergePlanTotals(totals, applyStreamingEstimatedTotals(child))
+	}
+	scope.totals = totals
+	return totals
+}
+
 func (p *RunPlanner) PlanIncrementalRun(ctx context.Context, roots []RootRecord, batches []ReconcileBatch) (RunPlan, error) {
 	if p == nil {
 		p = NewRunPlanner(nil)
@@ -146,25 +166,20 @@ func (p *RunPlanner) PlanIncrementalRun(ctx context.Context, roots []RootRecord,
 		p.policy = newPolicyState(Policy{})
 	}
 
-	budget := normalizeSplitBudget(p.budget)
 	rootBuffers, err := p.planIncrementalRoots(ctx, roots, batches)
 	if err != nil {
 		return RunPlan{}, err
 	}
 	p.planningRootBuffers = rootBuffers
 
-	for index, rootBuffer := range p.planningRootBuffers {
-		p.emitProgress(RunPlannerProgress{
-			Stage:     RunStagePreScan,
-			Root:      rootBuffer.root,
-			RootIndex: index + 1,
-			RootTotal: len(p.planningRootBuffers),
-			ScopePath: filepath.Clean(rootBuffer.root.Path),
-		})
-		if err := p.preScanRoot(ctx, rootBuffer, budget, index+1, len(p.planningRootBuffers)); err != nil {
-			p.planningRootBuffers = nil
-			return RunPlan{}, wrapRunPlannerRootError(rootBuffer.root.ID, err)
+	for _, rootBuffer := range p.planningRootBuffers {
+		if rootBuffer == nil || rootBuffer.rootScope == nil {
+			continue
 		}
+		// Optimization: incremental indexing also skips exact planning. Dirty
+		// scopes are already the caller's best available boundary, so walking them
+		// once to count work and again to apply work only delays reconciliation.
+		applyStreamingEstimatedTotals(rootBuffer.rootScope)
 	}
 
 	draft, err := p.buildDraftPlan(RunKindIncremental, "incremental-plan", "incremental-run")

@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 	"wox/util"
-
-	"github.com/fsnotify/fsnotify"
 )
 
 const (
@@ -326,6 +324,9 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 	executor := NewJobExecutor(snapshotBuilder)
 	executor.SetDirectFilesStreamFunc(func(runCtx context.Context, root RootRecord, job Job, snapshot *SnapshotBuilder) error {
 		return s.db.ApplyDirectFilesJobStream(runCtx, root, job, snapshot)
+	})
+	executor.SetSubtreeStreamFunc(func(runCtx context.Context, root RootRecord, job Job, snapshot *SnapshotBuilder) error {
+		return s.db.ApplySubtreeJobStream(runCtx, root, job, snapshot)
 	})
 	if kind == RunKindFull {
 		// Full runs are the only place where we deliberately coalesce multiple
@@ -2194,45 +2195,6 @@ func newEntryRecord(root RootRecord, fullPath string, info os.FileInfo) EntryRec
 		Size:           info.Size(),
 		UpdatedAt:      util.GetSystemTimestamp(),
 	}
-}
-
-func addWatchRecursive(watcher *fsnotify.Watcher, root string) error {
-	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !info.IsDir() {
-			return nil
-		}
-		if shouldSkipSystemPath(path, true) {
-			return filepath.SkipDir
-		}
-		return watcher.Add(path)
-	})
-}
-
-func addRootOnlyWatches(watcher *fsnotify.Watcher, roots []RootRecord) error {
-	var watchErrs []string
-
-	for _, root := range roots {
-		if err := watcher.Add(root.Path); err != nil {
-			watchErrs = append(watchErrs, fmt.Sprintf("%s: %s", root.Path, err.Error()))
-		}
-	}
-
-	if len(watchErrs) == len(roots) && len(watchErrs) > 0 {
-		return fmt.Errorf("%s", strings.Join(watchErrs, "; "))
-	}
-
-	for _, watchErr := range watchErrs {
-		util.GetLogger().Warn(context.Background(), "filesearch skipped root watcher: "+watchErr)
-	}
-
-	return nil
-}
-
-func (s *Scanner) addWatchForNewDirectory(watcher *fsnotify.Watcher, directory string) error {
-	return nil
 }
 
 func buildDirectorySnapshotRecords(root RootRecord, plan scanPlan, scanTimestamp int64) []DirectoryRecord {

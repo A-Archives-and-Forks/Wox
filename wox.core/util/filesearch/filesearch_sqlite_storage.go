@@ -1191,6 +1191,18 @@ func (d *FileSearchDB) replaceSubtreeEntriesTx(ctx context.Context, tx *sql.Tx, 
 	return applyChangedEntrySetsTx(ctx, tx, batch.ScopePath, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled(), nil)
 }
 
+func (d *FileSearchDB) replaceSubtreeEntriesFromStageTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) error {
+	staleRows, changedOldRows, changedOrNewRows, err := collectChangedEntrySetsTx(ctx, tx, rootID, scopePath)
+	if err != nil {
+		return err
+	}
+
+	// Streaming subtree jobs stage rows incrementally, then reuse the same scoped
+	// diff/replay contract as materialized subtree batches. This keeps delete and
+	// rename correctness for non-fresh roots while removing the planner pre-walk.
+	return applyChangedEntrySetsTx(ctx, tx, scopePath, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled(), nil)
+}
+
 func hasPersistedDirectFilesEntriesTx(ctx context.Context, tx *sql.Tx, rootID string, scopePath string) (bool, error) {
 	row := tx.QueryRowContext(ctx, `
 		SELECT 1
@@ -1556,6 +1568,59 @@ func newEntryFactMutatorTx(ctx context.Context, tx *sql.Tx) (*entryFactMutatorTx
 	}
 
 	return mutator, nil
+}
+
+func prepareEntryFactUpsertNoReturningStmtTx(ctx context.Context, tx *sql.Tx) (*sql.Stmt, error) {
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO entries (
+			path, root_id, parent_path, name, normalized_name, name_key, normalized_path,
+			pinyin_full, pinyin_initials, extension, is_dir, mtime, size, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
+			root_id = excluded.root_id,
+			parent_path = excluded.parent_path,
+			name = excluded.name,
+			normalized_name = excluded.normalized_name,
+			name_key = excluded.name_key,
+			normalized_path = excluded.normalized_path,
+			pinyin_full = excluded.pinyin_full,
+			pinyin_initials = excluded.pinyin_initials,
+			extension = excluded.extension,
+			is_dir = excluded.is_dir,
+			mtime = excluded.mtime,
+			size = excluded.size,
+			updated_at = excluded.updated_at
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("prepare entry upsert without returning: %w", err)
+	}
+	return stmt, nil
+}
+
+func upsertEntryFactsNoReturningWithStmtTx(ctx context.Context, stmt *sql.Stmt, entries []EntryRecord) error {
+	for _, entry := range entries {
+		row := buildStoredEntryRecord(entry)
+		if _, err := stmt.ExecContext(
+			ctx,
+			row.Path,
+			row.RootID,
+			row.ParentPath,
+			row.Name,
+			row.NormalizedName,
+			row.NameKey,
+			row.NormalizedPath,
+			row.PinyinFull,
+			row.PinyinInitials,
+			row.Extension,
+			boolToInt(row.IsDir),
+			row.Mtime,
+			row.Size,
+			row.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("upsert entry without returning %q: %w", row.Path, err)
+		}
+	}
+	return nil
 }
 
 func (m *entryFactMutatorTx) Close() {

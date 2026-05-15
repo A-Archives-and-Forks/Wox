@@ -8,8 +8,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/fsnotify/fsnotify"
 )
 
 func TestScannerScanAllRootsPersistsDirectorySnapshotsAndFullScanTimestamp(t *testing.T) {
@@ -148,49 +146,6 @@ func TestNewScannerUsesSpecDirtyQueueDefaults(t *testing.T) {
 	}
 	if scanner.dirtyQueueConfig.RootEscalationDirectoryRatio != 0 {
 		t.Fatalf("expected root escalation directory ratio 0, got %f", scanner.dirtyQueueConfig.RootEscalationDirectoryRatio)
-	}
-}
-
-func TestScannerAddWatchForNewDirectoryKeepsRootOnlyFallback(t *testing.T) {
-	db, ctx := openTestFileSearchDB(t)
-	now := time.Now().UnixMilli()
-	rootPath := filepath.Join(t.TempDir(), "root-watch-list")
-	childPath := filepath.Join(rootPath, "child")
-
-	mustMkdirAll(t, childPath)
-	mustInsertRoot(t, ctx, db, RootRecord{
-		ID:        "root-watch-list",
-		Path:      rootPath,
-		Kind:      RootKindUser,
-		Status:    RootStatusIdle,
-		CreatedAt: now,
-		UpdatedAt: now,
-	})
-
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		t.Fatalf("new watcher: %v", err)
-	}
-	defer watcher.Close()
-
-	if err := addRootOnlyWatches(watcher, []RootRecord{{
-		ID:   "root-watch-list",
-		Path: rootPath,
-	}}); err != nil {
-		t.Fatalf("add root-only watches: %v", err)
-	}
-
-	scanner := NewScanner(db)
-	if err := scanner.addWatchForNewDirectory(watcher, childPath); err != nil {
-		t.Fatalf("add watch for new directory: %v", err)
-	}
-
-	watchList := watcher.WatchList()
-	if len(watchList) != 1 {
-		t.Fatalf("expected root-only fallback to keep exactly one watch, got %d: %#v", len(watchList), watchList)
-	}
-	if watchList[0] != rootPath {
-		t.Fatalf("expected root-only watch list to contain only %q, got %#v", rootPath, watchList)
 	}
 }
 
@@ -338,7 +293,7 @@ func TestScannerFullScanUsesGlobalRunProgress(t *testing.T) {
 	}
 }
 
-func TestScannerFullScanReportsAllRunStages(t *testing.T) {
+func TestScannerFullScanReportsStreamingRunStages(t *testing.T) {
 	db, ctx := openTestFileSearchDB(t)
 	now := time.Now().UnixMilli()
 	rootPath := filepath.Join(t.TempDir(), "root-run-stages")
@@ -368,12 +323,12 @@ func TestScannerFullScanReportsAllRunStages(t *testing.T) {
 		if status.ActiveStage != "" {
 			stageSeen[status.ActiveStage] = true
 		}
-		if status.ActiveStage == RunStagePlanning || status.ActiveStage == RunStagePreScan {
+		if status.ActiveStage == RunStagePlanning {
 			if status.ActiveProgressTotal <= 0 {
-				t.Fatalf("expected planner stages to expose a stable denominator, got %d", status.ActiveProgressTotal)
+				t.Fatalf("expected planner stage to expose a stable denominator, got %d", status.ActiveProgressTotal)
 			}
 			if strings.TrimSpace(status.ActiveRootPath) == "" || strings.TrimSpace(status.ActiveScopePath) == "" {
-				t.Fatalf("expected planner stages to expose active root and scope paths, got root=%q scope=%q", status.ActiveRootPath, status.ActiveScopePath)
+				t.Fatalf("expected planner stage to expose active root and scope paths, got root=%q scope=%q", status.ActiveRootPath, status.ActiveScopePath)
 			}
 			sawPlannerActivityContext = true
 		}
@@ -381,17 +336,20 @@ func TestScannerFullScanReportsAllRunStages(t *testing.T) {
 
 	scanner.scanAllRoots(ctx)
 
-	for _, stage := range []RunStage{RunStagePlanning, RunStagePreScan, RunStageExecuting, RunStageFinalizing} {
+	for _, stage := range []RunStage{RunStagePlanning, RunStageExecuting, RunStageFinalizing} {
 		if !stageSeen[stage] {
 			t.Fatalf("expected full scan to report stage %q, got %#v", stage, stageSeen)
 		}
 	}
+	if stageSeen[RunStagePreScan] {
+		t.Fatalf("expected streaming full scan to skip pre-scan stage, got %#v", stageSeen)
+	}
 	if !sawPlannerActivityContext {
-		t.Fatal("expected planner stages to publish root/scope activity context")
+		t.Fatal("expected planner stage to publish root/scope activity context")
 	}
 }
 
-func TestScannerFullScanSplitsLargeRootWithoutChangingRootIdentity(t *testing.T) {
+func TestScannerFullScanStreamsLargeRootWithoutChangingRootIdentity(t *testing.T) {
 	db, ctx := openTestFileSearchDB(t)
 	now := time.Now().UnixMilli()
 	rootPath := filepath.Join(t.TempDir(), "root-split-identity")
@@ -439,8 +397,11 @@ func TestScannerFullScanSplitsLargeRootWithoutChangingRootIdentity(t *testing.T)
 	if rootsAfter[0].ID != root.ID {
 		t.Fatalf("expected persisted root identity %q, got %q", root.ID, rootsAfter[0].ID)
 	}
-	if len(scopeSet) < 2 {
-		t.Fatalf("expected large root execution to span multiple scopes, got %#v", scopeSet)
+	if len(scopeSet) != 1 {
+		t.Fatalf("expected streaming large root execution to stay on one scope, got %#v", scopeSet)
+	}
+	if _, ok := scopeSet[filepath.Clean(rootPath)]; !ok {
+		t.Fatalf("expected streaming scope to stay at root path %q, got %#v", rootPath, scopeSet)
 	}
 }
 

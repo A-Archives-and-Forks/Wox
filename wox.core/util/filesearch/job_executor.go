@@ -11,6 +11,7 @@ type JobExecutor struct {
 	apply              func(context.Context, RootRecord, Job, *SubtreeSnapshotBatch) error
 	applySubtreeBatch  func(context.Context, RootRecord, []SubtreeSnapshotBatch) error
 	streamDirectFiles  func(context.Context, RootRecord, Job, *SnapshotBuilder) error
+	streamSubtree      func(context.Context, RootRecord, Job, *SnapshotBuilder) error
 	subtreeBatchConfig subtreeApplyBatchConfig
 }
 
@@ -99,6 +100,13 @@ func (e *JobExecutor) SetDirectFilesStreamFunc(stream func(context.Context, Root
 		return
 	}
 	e.streamDirectFiles = stream
+}
+
+func (e *JobExecutor) SetSubtreeStreamFunc(stream func(context.Context, RootRecord, Job, *SnapshotBuilder) error) {
+	if e == nil {
+		return
+	}
+	e.streamSubtree = stream
 }
 
 func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []RootRecord, onSnapshot func(StatusSnapshot, Job)) (Run, []Job, error) {
@@ -276,6 +284,22 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 			// building cost from SQLite write cost when one scope becomes hot.
 			streamStartedAt := util.GetSystemTimestamp()
 			if err := e.streamDirectFiles(ctx, root, *job, e.snapshot); err != nil {
+				logFilesearchJobPhase(ctx, root, *job, "stream_apply", util.GetSystemTimestamp()-streamStartedAt)
+				err = &runRootError{RootID: job.RootID, Err: err}
+				job.Status = JobStatusFailed
+				run.Status = RunStatusFailed
+				run.LastError = err.Error()
+				emitJobExecutorSnapshot(run, plan, rootOrder, *job, onSnapshot)
+				return run, jobs, err
+			}
+			logFilesearchJobPhase(ctx, root, *job, "stream_apply", util.GetSystemTimestamp()-streamStartedAt)
+		} else if job.Kind == JobKindSubtree && e.streamSubtree != nil {
+			// Full-run subtree jobs can now own a large root without an exact
+			// pre-scan. Streaming the recursive snapshot directly into SQLite keeps
+			// the old scoped replace semantics while removing the planner's duplicate
+			// filesystem traversal.
+			streamStartedAt := util.GetSystemTimestamp()
+			if err := e.streamSubtree(ctx, root, *job, e.snapshot); err != nil {
 				logFilesearchJobPhase(ctx, root, *job, "stream_apply", util.GetSystemTimestamp()-streamStartedAt)
 				err = &runRootError{RootID: job.RootID, Err: err}
 				job.Status = JobStatusFailed

@@ -1,6 +1,14 @@
-.PHONY: clean build help woxmr-build
+.PHONY: clean build help woxmr-build filesearch-real-index
 
 SQLITE_BUILD_TAGS ?= sqlite_fts5
+FILESEARCH_REAL_INDEX_ROOT ?= ~/Projects
+FILESEARCH_REAL_INDEX_KEYWORD ?= default-cover
+FILESEARCH_REAL_INDEX_ARTIFACT ?=
+FILESEARCH_REAL_INDEX_TAGS := $(strip $(SQLITE_BUILD_TAGS) filesearch_real_index)
+FILESEARCH_REAL_INDEX_ARGS := -filesearch-real-index -filesearch-real-index-root "$(FILESEARCH_REAL_INDEX_ROOT)" -filesearch-real-index-keyword "$(FILESEARCH_REAL_INDEX_KEYWORD)"
+ifneq ($(strip $(FILESEARCH_REAL_INDEX_ARTIFACT)),)
+FILESEARCH_REAL_INDEX_ARGS += -filesearch-real-index-artifact "$(FILESEARCH_REAL_INDEX_ARTIFACT)"
+endif
 
 # Determine the current platform
 ifeq ($(OS),Windows_NT)
@@ -46,6 +54,7 @@ help:
 	@echo "Available commands:"
 	@echo "  make clean         - Clean build artifacts"
 	@echo "  make build         - Build Flutter UI for current platform ($(PLATFORM))"
+	@echo "  make filesearch-real-index - Capture local filesearch/fd/rg comparison for $(FILESEARCH_REAL_INDEX_ROOT), keyword $(FILESEARCH_REAL_INDEX_KEYWORD)"
 	@echo "  make woxmr-build   - Build and install WoxMR.bundle for current platform ($(PLATFORM))"
 
 clean:
@@ -69,6 +78,14 @@ endif
 ifeq ($(PLATFORM),macos)
 	CGO_ENABLED=1 GOOS=darwin GOARCH=$(GOARCH) CGO_CFLAGS="-mmacosx-version-min=10.15" CGO_LDFLAGS="-mmacosx-version-min=10.15 -Wl,-no_warn_duplicate_libraries" go build -tags "$(SQLITE_BUILD_TAGS)" -ldflags "-s -w -X 'wox/util.ProdEnv=true'" -o $(RELEASE_DIR)/wox-mac-$(GOARCH)
 endif
+
+# Feature addition: real-root filesearch comparisons are intentionally exposed
+# through a local Make target instead of the normal test surface, so CI keeps
+# running deterministic tests while developers can opt into the expensive
+# workstation-sized scan with one command and a Makefile-controlled root.
+filesearch-real-index:
+	@echo "Capturing filesearch real-index comparison for $(FILESEARCH_REAL_INDEX_ROOT) with keyword $(FILESEARCH_REAL_INDEX_KEYWORD)"
+	go test -tags "$(FILESEARCH_REAL_INDEX_TAGS)" ./util/filesearch -run TestCaptureFileSearchRealIndexForProjectsRoot -count=1 -v -args $(FILESEARCH_REAL_INDEX_ARGS)
 
 # -----------------------------
 # MediaRemote XS (Perl) builder

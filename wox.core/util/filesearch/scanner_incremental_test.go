@@ -573,6 +573,7 @@ func TestRunPlannerIncrementalFailureKeepsActualFailedRootID(t *testing.T) {
 	rootBPath := filepath.Join(t.TempDir(), "root-planner-failure-b")
 	rootAFilePath := filepath.Join(rootAPath, "ok.txt")
 	rootBFilePath := filepath.Join(rootBPath, "bad.txt")
+	rootBOutsidePath := filepath.Join(filepath.Dir(rootBPath), "outside")
 
 	mustWriteTestFile(t, rootAFilePath, "ok")
 	mustWriteTestFile(t, rootBFilePath, "bad")
@@ -589,11 +590,11 @@ func TestRunPlannerIncrementalFailureKeepsActualFailedRootID(t *testing.T) {
 		{
 			RootID: rootB.ID,
 			Mode:   ReconcileModeSubtree,
-			Paths:  []string{rootBFilePath},
+			Paths:  []string{rootBOutsidePath},
 		},
 	})
 	if err == nil {
-		t.Fatal("expected incremental planner failure for file-scoped subtree path")
+		t.Fatal("expected incremental planner failure for out-of-root subtree path")
 	}
 
 	var rootErr *runRootError

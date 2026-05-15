@@ -190,14 +190,14 @@ func TestRunPlannerBuildsSingleRootPlan(t *testing.T) {
 	if rootPlan.ScopeTree == nil {
 		t.Fatal("expected sealed scope tree")
 	}
-	if got, want := rootPlan.Totals.DirectoryCount, int64(2); got != want {
-		t.Fatalf("unexpected directory count: got %d want %d", got, want)
+	if got, want := rootPlan.Totals.DirectoryCount, int64(1); got != want {
+		t.Fatalf("unexpected estimated directory count: got %d want %d", got, want)
 	}
-	if got, want := rootPlan.Totals.FileCount, int64(2); got != want {
-		t.Fatalf("unexpected file count: got %d want %d", got, want)
+	if got, want := rootPlan.Totals.FileCount, int64(0); got != want {
+		t.Fatalf("unexpected estimated file count: got %d want %d", got, want)
 	}
-	if got, want := rootPlan.Totals.IndexableEntryCount, int64(4); got != want {
-		t.Fatalf("unexpected indexable entry count: got %d want %d", got, want)
+	if got, want := rootPlan.Totals.IndexableEntryCount, int64(1); got != want {
+		t.Fatalf("unexpected estimated indexable entry count: got %d want %d", got, want)
 	}
 	if got, want := len(plan.Jobs), 2; got != want {
 		t.Fatalf("unexpected job count: got %d want %d", got, want)
@@ -214,12 +214,15 @@ func TestRunPlannerBuildsSingleRootPlan(t *testing.T) {
 	if got, want := len(rootPlan.Jobs), 2; got != want {
 		t.Fatalf("unexpected root job refs: got %d want %d", got, want)
 	}
+	if got, want := plan.TotalWorkUnits, int64(3); got != want {
+		t.Fatalf("unexpected approximate total work units: got %d want %d", got, want)
+	}
 	if planner.planningRootBuffers != nil {
 		t.Fatal("expected planner buffers to be released after sealing")
 	}
 }
 
-func TestRunPlannerSplitsLargeRootIntoLeafJobs(t *testing.T) {
+func TestRunPlannerKeepsLargeRootAsOneStreamingJob(t *testing.T) {
 	rootPath := filepath.Join(t.TempDir(), "segmented-root")
 	mustWriteTestFile(t, filepath.Join(rootPath, "huge", "leaf-a", "a-1.txt"), "a1")
 	mustWriteTestFile(t, filepath.Join(rootPath, "huge", "leaf-a", "a-2.txt"), "a2")
@@ -242,55 +245,30 @@ func TestRunPlannerSplitsLargeRootIntoLeafJobs(t *testing.T) {
 	}
 
 	rootPlan := plan.RootPlans[0]
-	if got, want := rootPlan.Strategy, RootPlanStrategySegmented; got != want {
+	if got, want := rootPlan.Strategy, RootPlanStrategySingle; got != want {
 		t.Fatalf("unexpected root strategy: got %s want %s", got, want)
 	}
 	if rootPlan.ScopeTree == nil {
 		t.Fatal("expected sealed scope tree")
 	}
-	if got, want := rootPlan.Totals.DirectoryCount, int64(4); got != want {
-		t.Fatalf("unexpected directory count: got %d want %d", got, want)
+	if got, want := len(plan.Jobs), 2; got != want {
+		t.Fatalf("expected one streaming subtree job plus finalize, got %d jobs", got)
 	}
-	if got, want := rootPlan.Totals.FileCount, int64(4); got != want {
-		t.Fatalf("unexpected file count: got %d want %d", got, want)
+	if got, want := plan.Jobs[0].Kind, JobKindSubtree; got != want {
+		t.Fatalf("expected large root to be one streaming subtree job, got %s", got)
 	}
-	if got, want := rootPlan.Totals.IndexableEntryCount, int64(8); got != want {
-		t.Fatalf("unexpected indexable entry count: got %d want %d", got, want)
+	if got, want := plan.Jobs[0].ScopePath, rootPath; got != want {
+		t.Fatalf("unexpected streaming job scope: got %q want %q", got, want)
 	}
-	if len(plan.Jobs) < 4 {
-		t.Fatalf("expected multiple leaf jobs plus finalize, got %d jobs", len(plan.Jobs))
-	}
-	if plan.Jobs[len(plan.Jobs)-1].Kind != JobKindFinalizeRoot {
-		t.Fatalf("expected final job to finalize root, got %s", plan.Jobs[len(plan.Jobs)-1].Kind)
-	}
-
-	subtreeScopeA := filepath.Join(rootPath, "huge", "leaf-a")
-	subtreeScopeB := filepath.Join(rootPath, "huge", "leaf-b")
-	sawLeafA := false
-	sawLeafB := false
-	for _, job := range plan.Jobs[:len(plan.Jobs)-1] {
-		if job.PlannedTotalUnits > 6 {
-			t.Fatalf("expected split leaf job to stay bounded, got planned total %d for %s", job.PlannedTotalUnits, job.ScopePath)
-		}
-		if job.Kind != JobKindDirectFiles && job.Kind != JobKindSubtree {
-			t.Fatalf("unexpected leaf job kind: %s", job.Kind)
-		}
-		if job.ScopePath == subtreeScopeA {
-			sawLeafA = true
-		}
-		if job.ScopePath == subtreeScopeB {
-			sawLeafB = true
-		}
-	}
-	if !sawLeafA || !sawLeafB {
-		t.Fatalf("expected split plan to create leaf subtree jobs for %q and %q", subtreeScopeA, subtreeScopeB)
+	if plan.Jobs[1].Kind != JobKindFinalizeRoot {
+		t.Fatalf("expected final job to finalize root, got %s", plan.Jobs[1].Kind)
 	}
 	if planner.planningRootBuffers != nil {
 		t.Fatal("expected planner buffers to be released after sealing")
 	}
 }
 
-func TestRunPlannerReusesImmediateChildTotalsWithoutRescanningLeafChildren(t *testing.T) {
+func TestRunPlannerFullRunDoesNotPreScanSubtrees(t *testing.T) {
 	rootPath := filepath.Join(t.TempDir(), "planner-root")
 	mustWriteTestFile(t, filepath.Join(rootPath, "child-a", "a.txt"), "a")
 	mustWriteTestFile(t, filepath.Join(rootPath, "child-b", "nested", "b.txt"), "b")
@@ -316,8 +294,8 @@ func TestRunPlannerReusesImmediateChildTotalsWithoutRescanningLeafChildren(t *te
 		t.Fatalf("plan full run: %v", err)
 	}
 
-	if got, want := scanCounts[rootPath], 1; got != want {
-		t.Fatalf("expected root subtree to be scanned once, got %d want %d", got, want)
+	if got, want := scanCounts[rootPath], 0; got != want {
+		t.Fatalf("expected full run planner to avoid subtree pre-scan, got %d scans", got)
 	}
 	childAPath := filepath.Join(rootPath, "child-a")
 	childBPath := filepath.Join(rootPath, "child-b")
@@ -329,24 +307,18 @@ func TestRunPlannerReusesImmediateChildTotalsWithoutRescanningLeafChildren(t *te
 	}
 
 	rootPlan := plan.RootPlans[0]
-	if got, want := rootPlan.Strategy, RootPlanStrategySegmented; got != want {
+	if got, want := rootPlan.Strategy, RootPlanStrategySingle; got != want {
 		t.Fatalf("unexpected root strategy: got %s want %s", got, want)
 	}
 	if rootPlan.ScopeTree == nil {
 		t.Fatal("expected sealed scope tree")
 	}
-	if got, want := rootPlan.Totals.DirectoryCount, int64(4); got != want {
-		t.Fatalf("unexpected directory count: got %d want %d", got, want)
-	}
-	if got, want := rootPlan.Totals.FileCount, int64(3); got != want {
-		t.Fatalf("unexpected file count: got %d want %d", got, want)
-	}
-	if got, want := rootPlan.Totals.IndexableEntryCount, int64(7); got != want {
-		t.Fatalf("unexpected indexable entry count: got %d want %d", got, want)
+	if got, want := len(plan.Jobs), 2; got != want {
+		t.Fatalf("expected one streaming subtree job plus finalize, got %d jobs", got)
 	}
 }
 
-func TestRunPlannerKeepsWideDirectFilesInOneJob(t *testing.T) {
+func TestRunPlannerKeepsWideRootAsStreamingSubtreeJob(t *testing.T) {
 	rootPath := filepath.Join(t.TempDir(), "wide-root")
 	for i := 0; i < 5; i++ {
 		mustWriteTestFile(t, filepath.Join(rootPath, filepath.Base(rootPath)+"-"+time.Unix(int64(i+1), 0).Format("150405")+".txt"), "wide")
@@ -372,34 +344,23 @@ func TestRunPlannerKeepsWideDirectFilesInOneJob(t *testing.T) {
 		t.Fatalf("unexpected root strategy: got %s want %s", got, want)
 	}
 	if got, want := rootPlan.Totals.DirectoryCount, int64(1); got != want {
-		t.Fatalf("unexpected directory count: got %d want %d", got, want)
+		t.Fatalf("unexpected estimated directory count: got %d want %d", got, want)
 	}
-	if got, want := rootPlan.Totals.FileCount, int64(5); got != want {
-		t.Fatalf("unexpected file count: got %d want %d", got, want)
+	if got, want := rootPlan.Totals.FileCount, int64(0); got != want {
+		t.Fatalf("unexpected estimated file count: got %d want %d", got, want)
 	}
-	if got, want := rootPlan.Totals.IndexableEntryCount, int64(6); got != want {
-		t.Fatalf("unexpected indexable entry count: got %d want %d", got, want)
+	if got, want := rootPlan.Totals.IndexableEntryCount, int64(1); got != want {
+		t.Fatalf("unexpected estimated indexable entry count: got %d want %d", got, want)
 	}
 
-	directFileJobs := 0
-	for _, job := range plan.Jobs[:len(plan.Jobs)-1] {
-		if job.Kind != JobKindDirectFiles {
-			t.Fatalf("expected wide root to keep only direct-files jobs before finalize, got %s", job.Kind)
-		}
-		if job.ScopePath != rootPath {
-			t.Fatalf("expected direct-files job to stay on the root scope, got %q want %q", job.ScopePath, rootPath)
-		}
-		if job.PlannedScanUnits != 6 || job.PlannedWriteUnits != 6 {
-			t.Fatalf(
-				"expected wide direct-files job to own the whole directory scope, got scan=%d write=%d",
-				job.PlannedScanUnits,
-				job.PlannedWriteUnits,
-			)
-		}
-		directFileJobs++
+	if got, want := len(plan.Jobs), 2; got != want {
+		t.Fatalf("expected one streaming subtree job plus finalize, got %d jobs", got)
 	}
-	if directFileJobs != 1 {
-		t.Fatalf("expected one direct-files job for the wide root scope, got %d", directFileJobs)
+	if got, want := plan.Jobs[0].Kind, JobKindSubtree; got != want {
+		t.Fatalf("expected wide root to use a streaming subtree job, got %s", got)
+	}
+	if got, want := plan.Jobs[0].ScopePath, rootPath; got != want {
+		t.Fatalf("expected streaming job to stay on root scope, got %q want %q", got, want)
 	}
 	if got, want := plan.Jobs[len(plan.Jobs)-1].Kind, JobKindFinalizeRoot; got != want {
 		t.Fatalf("unexpected finalize job kind: got %s want %s", got, want)
@@ -409,7 +370,7 @@ func TestRunPlannerKeepsWideDirectFilesInOneJob(t *testing.T) {
 	}
 }
 
-func TestRunPlannerSkipsUnreadableChildDirectory(t *testing.T) {
+func TestRunPlannerFullRunDefersUnreadableChildHandlingToStreamingExecution(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission-based unreadable directories are not stable on Windows test hosts")
 	}
@@ -444,20 +405,18 @@ func TestRunPlannerSkipsUnreadableChildDirectory(t *testing.T) {
 	if len(plan.RootPlans) != 1 {
 		t.Fatalf("expected one root plan, got %d", len(plan.RootPlans))
 	}
-	if got := plan.RootPlans[0].Totals.SkippedCount; got <= 0 {
-		t.Fatalf("expected unreadable child directory to increase skipped count, got %d", got)
+	if got := plan.RootPlans[0].Totals.SkippedCount; got != 0 {
+		t.Fatalf("expected planner not to inspect unreadable children, got skipped count %d", got)
 	}
-	for _, job := range plan.Jobs {
-		if job.Kind == JobKindFinalizeRoot {
-			continue
-		}
-		if filepath.Clean(job.ScopePath) == filepath.Clean(unreadableDir) {
-			t.Fatalf("expected unreadable child directory %q to be skipped instead of planned as a job", unreadableDir)
-		}
+	if got, want := len(plan.Jobs), 2; got != want {
+		t.Fatalf("expected one streaming subtree job plus finalize, got %d", got)
+	}
+	if got, want := filepath.Clean(plan.Jobs[0].ScopePath), filepath.Clean(rootPath); got != want {
+		t.Fatalf("expected streaming job to stay on root scope, got %q want %q", got, want)
 	}
 }
 
-func TestRunPlannerIncrementalScopesAreRebuiltFresh(t *testing.T) {
+func TestRunPlannerIncrementalKeepsDirtyScopeAsStreamingBoundary(t *testing.T) {
 	rootPath := filepath.Join(t.TempDir(), "incremental-root")
 	scopePath := filepath.Join(rootPath, "scope")
 	leafAPath := filepath.Join(scopePath, "leaf-a")
@@ -496,24 +455,18 @@ func TestRunPlannerIncrementalScopesAreRebuiltFresh(t *testing.T) {
 		t.Fatalf("plan second incremental run: %v", err)
 	}
 
-	firstSawLeafB := false
-	for _, job := range firstPlan.Jobs {
-		if job.ScopePath == leafBPath {
-			firstSawLeafB = true
-		}
+	if got, want := firstPlan.Jobs[0].ScopePath, scopePath; got != want {
+		t.Fatalf("expected first incremental plan to keep dirty scope boundary, got %q want %q", got, want)
 	}
-	if firstSawLeafB {
-		t.Fatalf("expected first incremental plan to exclude later subtree %q", leafBPath)
+	if got, want := firstPlan.Jobs[0].Kind, JobKindSubtree; got != want {
+		t.Fatalf("expected dirty directory to become streaming subtree job, got %s", got)
 	}
 
-	secondSawLeafB := false
-	for _, job := range secondPlan.Jobs {
-		if job.ScopePath == leafBPath {
-			secondSawLeafB = true
-		}
+	if got, want := secondPlan.Jobs[0].ScopePath, scopePath; got != want {
+		t.Fatalf("expected second incremental plan to keep dirty scope boundary, got %q want %q", got, want)
 	}
-	if !secondSawLeafB {
-		t.Fatalf("expected second incremental plan to rebuild fresh scopes and include %q", leafBPath)
+	if got, want := len(secondPlan.Jobs), 2; got != want {
+		t.Fatalf("expected one streaming subtree job plus finalize, got %d", got)
 	}
 }
 
