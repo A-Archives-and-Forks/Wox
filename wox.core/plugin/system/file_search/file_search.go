@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"wox/common"
 	"wox/plugin"
 	"wox/setting"
@@ -31,11 +32,12 @@ const fileIgnorePatternsSettingKey = "ignorePatterns"
 const fileSearchToolbarMsgID = "file-search-status"
 
 const (
-	slowFileSearchQueryThresholdMs  int64 = 40
-	slowFileSearchStageThresholdMs  int64 = 15
-	toolbarActivityPathMaxChars           = 42
-	fileSearchResultLimit                 = 100
-	fileSearchRefinedCandidateLimit       = 300
+	slowFileSearchQueryThresholdMs   int64 = 40
+	slowFileSearchStageThresholdMs   int64 = 15
+	fullIndexCompletionToolbarHoldMs int64 = 1000 * 5
+	toolbarActivityPathMaxChars            = 42
+	fileSearchResultLimit                  = 100
+	fileSearchRefinedCandidateLimit        = 300
 )
 
 const (
@@ -64,12 +66,14 @@ func init() {
 }
 
 type FileSearchPlugin struct {
-	api                     plugin.API
-	engine                  *filesearch.Engine
-	indexPolicy             *fileSearchIndexPolicy
-	unsubscribeStatusChange func()
-	toolbarMsgStateMu       sync.Mutex
-	lastToolbarMsgSignature string
+	api                      plugin.API
+	engine                   *filesearch.Engine
+	indexPolicy              *fileSearchIndexPolicy
+	unsubscribeStatusChange  func()
+	toolbarMsgStateMu        sync.Mutex
+	lastToolbarMsgSignature  string
+	completionHoldUntilMs    int64
+	completionHoldGeneration int64
 }
 
 type fileSearchQueryDiagnostics struct {
@@ -669,8 +673,17 @@ func (c *FileSearchPlugin) syncToolbarMsg(ctx context.Context, includeReady bool
 }
 
 func (c *FileSearchPlugin) syncToolbarMsgWithStatus(ctx context.Context, status filesearch.StatusSnapshot, includeReady bool) {
+	completionSummary := isFullIndexCompletionSummary(status)
 	toolbarMsg, found := c.buildToolbarMsgFromStatus(ctx, status, includeReady)
 	if !found {
+		// Bug fix: a full-index completion summary is followed immediately by an
+		// idle status snapshot after the scanner clears its transient run state.
+		// Keep that summary visible briefly instead of letting the idle snapshot
+		// clear it within a single UI frame.
+		if c.shouldHoldCompletionToolbar() {
+			return
+		}
+		c.cancelCompletionToolbarHold()
 		// Avoid repeating the same clear request on every identical idle snapshot.
 		// The previous implementation always cleared and re-sent status updates, which
 		// produced long runs of duplicate file-search and UI bridge logs without any
@@ -690,6 +703,13 @@ func (c *FileSearchPlugin) syncToolbarMsgWithStatus(ctx context.Context, status 
 		return
 	}
 
+	if completionSummary {
+		c.scheduleCompletionToolbarClear(ctx, c.armCompletionToolbarHold())
+	} else {
+		// Any live progress/error toolbar replaces the completion summary and must
+		// invalidate its delayed clear so a new index run is not cleared by an old timer.
+		c.cancelCompletionToolbarHold()
+	}
 	c.logToolbarStatusSnapshot(ctx, status)
 	c.api.ShowToolbarMsg(ctx, toolbarMsg)
 }
@@ -893,6 +913,64 @@ func (c *FileSearchPlugin) resetToolbarMsgState() {
 	defer c.toolbarMsgStateMu.Unlock()
 
 	c.lastToolbarMsgSignature = ""
+	c.completionHoldUntilMs = 0
+	c.completionHoldGeneration++
+}
+
+func (c *FileSearchPlugin) shouldHoldCompletionToolbar() bool {
+	c.toolbarMsgStateMu.Lock()
+	defer c.toolbarMsgStateMu.Unlock()
+
+	return c.completionHoldUntilMs > util.GetSystemTimestamp()
+}
+
+func (c *FileSearchPlugin) armCompletionToolbarHold() int64 {
+	c.toolbarMsgStateMu.Lock()
+	defer c.toolbarMsgStateMu.Unlock()
+
+	// Bug fix: the scanner reports the completion summary and then clears its
+	// transient run state immediately. Store an explicit hold window in the
+	// plugin layer because this is display policy, not indexer state.
+	c.completionHoldGeneration++
+	c.completionHoldUntilMs = util.GetSystemTimestamp() + fullIndexCompletionToolbarHoldMs
+	return c.completionHoldGeneration
+}
+
+func (c *FileSearchPlugin) cancelCompletionToolbarHold() {
+	c.toolbarMsgStateMu.Lock()
+	defer c.toolbarMsgStateMu.Unlock()
+
+	if c.completionHoldUntilMs == 0 {
+		return
+	}
+	c.completionHoldUntilMs = 0
+	c.completionHoldGeneration++
+}
+
+func (c *FileSearchPlugin) clearCompletionToolbarIfCurrent(ctx context.Context, generation int64) {
+	c.toolbarMsgStateMu.Lock()
+	defer c.toolbarMsgStateMu.Unlock()
+
+	if c.completionHoldGeneration != generation || c.completionHoldUntilMs == 0 || c.completionHoldUntilMs > util.GetSystemTimestamp() {
+		return
+	}
+	// Keep the generation check and clear request under the same lock. Otherwise
+	// a new index run could publish progress with the same toolbar id in the tiny
+	// gap between validating the old timer and sending ClearToolbarMsg.
+	c.completionHoldUntilMs = 0
+	c.completionHoldGeneration++
+	c.lastToolbarMsgSignature = ""
+	c.api.ClearToolbarMsg(ctx, fileSearchToolbarMsgID)
+}
+
+func (c *FileSearchPlugin) scheduleCompletionToolbarClear(ctx context.Context, generation int64) {
+	clearCtx := util.NewTraceContext()
+	util.Go(clearCtx, "filesearch completion toolbar clear", func() {
+		time.Sleep(time.Duration(fullIndexCompletionToolbarHoldMs) * time.Millisecond)
+		// The generation check prevents a delayed completion clear from removing
+		// toolbar progress for a newer index run that reused the same toolbar id.
+		c.clearCompletionToolbarIfCurrent(clearCtx, generation)
+	})
 }
 
 func (c *FileSearchPlugin) logToolbarStatusSnapshot(ctx context.Context, status filesearch.StatusSnapshot) {
