@@ -298,11 +298,28 @@ func (a *MacRetriever) getPrefPaneIconBytes(prefPanePath string) (*C.uchar, C.si
 	return bytesPtr, length
 }
 
-func (a *MacRetriever) savePrefPaneIconToCache(ctx context.Context, prefPanePath string, iconBytes *C.uchar, length C.size_t) (string, error) {
-	// Create a cache path similar to fileicon
-	cachePath := filepath.Join(util.GetLocation().GetCacheDirectory(), "images", fmt.Sprintf("prefpane_%s.png", filepath.Base(prefPanePath)))
+func (a *MacRetriever) getPrefPaneIconCachePath(prefPanePath string) string {
+	return filepath.Join(util.GetLocation().GetCacheDirectory(), "images", fmt.Sprintf("prefpane_%s.png", filepath.Base(prefPanePath)))
+}
 
+func (a *MacRetriever) getCachedPrefPaneIconPath(prefPanePath string) (string, bool) {
+	cachePath := a.getPrefPaneIconCachePath(prefPanePath)
 	if _, err := os.Stat(cachePath); err == nil {
+		return cachePath, true
+	}
+	return cachePath, false
+}
+
+func (a *MacRetriever) savePrefPaneIconToCache(ctx context.Context, prefPanePath string, iconBytes *C.uchar, length C.size_t) (string, error) {
+	if iconBytes != nil {
+		defer C.free(unsafe.Pointer(iconBytes))
+	}
+	if iconBytes == nil || length == 0 {
+		return "", errors.New("empty preference pane icon bytes")
+	}
+
+	cachePath, exists := a.getCachedPrefPaneIconPath(prefPanePath)
+	if exists {
 		return cachePath, nil
 	}
 
@@ -311,8 +328,6 @@ func (a *MacRetriever) savePrefPaneIconToCache(ctx context.Context, prefPanePath
 	}
 
 	data := C.GoBytes(unsafe.Pointer(iconBytes), C.int(length))
-	C.free(unsafe.Pointer(iconBytes))
-
 	if err := os.WriteFile(cachePath, data, 0644); err != nil {
 		return "", err
 	}
@@ -412,9 +427,14 @@ func (a *MacRetriever) getSystemSettingsApps(ctx context.Context) []appInfo {
 		}
 
 		var icon common.WoxImage
-		if iconBytes, iconLen := a.generateSFSymbolIconBytes(info.SFSymbol, info.BackgroundColor, iconStyle); iconLen > 0 {
-			// Use key as cache file name to avoid conflicts
-			cacheKey := "virtual_" + key + ".prefPane"
+		// Optimization: the previous flow generated every SF Symbol icon before
+		// checking the disk cache, which left large native CG image allocations in
+		// the core process on every startup. Check the stable cache key first so
+		// cached System Settings entries do not touch AppKit image rendering.
+		cacheKey := "virtual_" + key + ".prefPane"
+		if iconPath, exists := a.getCachedPrefPaneIconPath(cacheKey); exists {
+			icon = common.NewWoxImageAbsolutePath(iconPath)
+		} else if iconBytes, iconLen := a.generateSFSymbolIconBytes(info.SFSymbol, info.BackgroundColor, iconStyle); iconLen > 0 {
 			if iconPath, err := a.savePrefPaneIconToCache(ctx, cacheKey, iconBytes, iconLen); err == nil {
 				icon = common.NewWoxImageAbsolutePath(iconPath)
 			}

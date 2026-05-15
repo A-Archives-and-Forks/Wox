@@ -47,7 +47,10 @@ static const unsigned char *RenderIconAsPNG(NSImage *icon, int targetPixels, siz
 
     [rep setSize:NSMakeSize(targetPixels, targetPixels)];
     NSGraphicsContext *context = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
-    if (!context) return NULL;
+    if (!context) {
+        [rep release];
+        return NULL;
+    }
 
     [NSGraphicsContext saveGraphicsState];
     [NSGraphicsContext setCurrentContext:context];
@@ -61,11 +64,18 @@ static const unsigned char *RenderIconAsPNG(NSImage *icon, int targetPixels, siz
     [NSGraphicsContext restoreGraphicsState];
 
     NSData *pngData = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-    if (!pngData) return NULL;
+    if (!pngData) {
+        [rep release];
+        return NULL;
+    }
 
     *length = [pngData length];
     unsigned char *bytes = (unsigned char *)malloc(*length);
     memcpy(bytes, [pngData bytes], *length);
+    // Bug fix: the Objective-C helper is not built with ARC. Release the
+    // explicit bitmap rep after copying PNG bytes so icon extraction does not
+    // retain native CG image memory beyond the cache write.
+    [rep release];
     return bytes;
 }
 

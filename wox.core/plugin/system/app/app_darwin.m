@@ -134,6 +134,10 @@ const unsigned char *GenerateSFSymbolIcon(const char *symbolName, const char *co
             *length = [pngData length];
             unsigned char *bytes = (unsigned char *)malloc(*length);
             memcpy(bytes, [pngData bytes], *length);
+            // Bug fix: this file is compiled without ARC, so the rendered image
+            // must be released after the PNG bytes are copied. Keeping it alive
+            // retained native CG image memory in the core process after startup.
+            [icon release];
             
             return bytes;
         }
@@ -148,6 +152,7 @@ const unsigned char *GetPrefPaneIcon(const char *prefPanePath, size_t *length) {
         NSString *path = [NSString stringWithUTF8String:prefPanePath];
 
         NSImage *icon = nil;
+        NSImage *ownedIcon = nil;
 
         // NOTE: SF Symbol-based icons are now generated via GenerateSFSymbolIcon called from Go.
         // This function only handles traditional icon loading from plist/resources.
@@ -168,6 +173,7 @@ const unsigned char *GetPrefPaneIcon(const char *prefPanePath, size_t *length) {
                     iconPath = [iconPath stringByAppendingPathExtension:@"icns"];
                 }
                 icon = [[NSImage alloc] initWithContentsOfFile:iconPath];
+                ownedIcon = icon;
             }
         }
 
@@ -223,6 +229,13 @@ const unsigned char *GetPrefPaneIcon(const char *prefPanePath, size_t *length) {
         *length = [pngData length];
         unsigned char *bytes = (unsigned char *)malloc(*length);
         memcpy(bytes, [pngData bytes], *length);
+        // Bug fix: manual retain/release is used here. Release owned native
+        // images after rendering so cached preference-pane icons do not leave
+        // decoded CG images resident in wox.core.
+        [renderedIcon release];
+        if (ownedIcon != nil) {
+            [ownedIcon release];
+        }
 
         return bytes;
     }
