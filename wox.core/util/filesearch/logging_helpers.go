@@ -8,13 +8,13 @@ import (
 )
 
 const (
-	maxLoggedPaths                              = 8
-	maxLoggedRoots                              = 5
-	fileSearchDiagnosticLoggingEnabled          = true // Turn this off after file-index latency traces are no longer needed.
-	slowFilesearchRunPlannerThresholdMs   int64 = 250
-	slowFilesearchRunExecutionThresholdMs int64 = 500
-	slowFilesearchJobPhaseThresholdMs     int64 = 150
-	slowFilesearchSQLiteMaintenanceMs     int64 = 250
+	maxLoggedPaths                                = 8
+	maxLoggedRoots                                = 5
+	fileSearchDiagnosticLoggingEnabled            = true // Turn this off after file-index latency traces are no longer needed.
+	slowFilesearchRunPreparationThresholdMs int64 = 250
+	slowFilesearchRunExecutionThresholdMs   int64 = 500
+	slowFilesearchJobPhaseThresholdMs       int64 = 150
+	slowFilesearchSQLiteMaintenanceMs       int64 = 250
 )
 
 func summarizeLogPath(path string) string {
@@ -126,21 +126,21 @@ func logFilesearchRunStage(ctx context.Context, kind RunKind, stage RunStage, ro
 	}
 }
 
-func logFilesearchRunPlanner(ctx context.Context, kind RunKind, elapsedMs int64, rootCount int, jobCount int, totalUnits int64) {
+func logFilesearchRunPreparation(ctx context.Context, kind RunKind, elapsedMs int64, rootCount int, jobCount int, totalUnits int64) {
 	if !fileSearchDiagnosticLoggingEnabled {
 		return
 	}
 
 	msg := fmt.Sprintf(
-		"filesearch run planner: kind=%s elapsed=%dms roots=%d jobs=%d total_units=%d",
+		"filesearch run preparation: kind=%s elapsed=%dms roots=%d jobs=%d total_units=%d",
 		kind,
 		elapsedMs,
 		rootCount,
 		jobCount,
 		totalUnits,
 	)
-	if elapsedMs >= slowFilesearchRunPlannerThresholdMs {
-		util.GetLogger().Info(ctx, "filesearch slow run planner: "+msg)
+	if elapsedMs >= slowFilesearchRunPreparationThresholdMs {
+		util.GetLogger().Info(ctx, "filesearch slow run preparation: "+msg)
 		return
 	}
 	util.GetLogger().Debug(ctx, msg)
@@ -228,10 +228,11 @@ func logFilesearchSQLiteMaintenance(ctx context.Context, operation string, scope
 
 func formatSQLiteIndexSnapshotSummary(stage string, snapshot sqliteIndexSnapshot) string {
 	return fmt.Sprintf(
-		"filesearch sqlite snapshot: stage=%s roots=%d entries=%d bigram_rows=%d name_fts_vocab=%d path_fts_vocab=%d pinyin_full_fts_vocab=%d initials_fts_vocab=%d fact_bytes_est=%d fts_source_bytes_est=%d bigram_bytes_est=%d total_bytes_est=%d db_main_file_bytes=%d db_wal_file_bytes=%d db_shm_file_bytes=%d db_total_file_bytes=%d",
+		"filesearch sqlite snapshot: stage=%s roots=%d entries=%d files=%d bigram_rows=%d name_fts_vocab=%d path_fts_vocab=%d pinyin_full_fts_vocab=%d initials_fts_vocab=%d fact_bytes_est=%d fts_source_bytes_est=%d bigram_bytes_est=%d total_bytes_est=%d db_main_file_bytes=%d db_wal_file_bytes=%d db_shm_file_bytes=%d db_total_file_bytes=%d",
 		strings.TrimSpace(stage),
 		snapshot.RootCount,
 		snapshot.EntryCount,
+		snapshot.FileCount,
 		snapshot.BigramRowCount,
 		snapshot.NameFTSVocab,
 		snapshot.PathFTSVocab,

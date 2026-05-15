@@ -341,15 +341,16 @@ func (c *FileSearchPlugin) indexFilesFromScratch(ctx context.Context) {
 
 	c.api.Notify(ctx, "i18n:plugin_file_index_files_started")
 	util.Go(ctx, "filesearch reset index", func() {
-		// Feature addition: the visible action intentionally clears persisted
-		// index facts before scanning. A plain RequestRescan would still serve old
-		// results until replacement finished and would keep hidden dynamic roots
-		// from the previous run.
-		if err := c.engine.ResetIndex(ctx); err != nil {
+		// Feature addition: the visible action now rebuilds the filesearch storage
+		// directory instead of only clearing tables inside the open database. Roots
+		// are then synced from the current plugin settings so the action always
+		// indexes the user's latest configured/default search locations.
+		if err := c.engine.RebuildIndex(ctx); err != nil {
 			c.api.Log(ctx, plugin.LogLevelError, "Failed to reset file search index: "+err.Error())
 			c.api.Notify(ctx, "i18n:plugin_file_index_files_failed")
 			return
 		}
+		c.syncUserRoots(ctx)
 		c.syncToolbarMsg(ctx, true)
 	})
 }
@@ -683,7 +684,7 @@ func (c *FileSearchPlugin) syncToolbarMsgWithStatus(ctx context.Context, status 
 
 	signature := buildToolbarMsgSignature(toolbarMsg)
 	// Only push toolbar updates when the rendered snapshot changes. The status
-	// listener can emit many identical planner snapshots, and forwarding each one
+	// listener can emit many identical preparation snapshots, and forwarding each one
 	// forced redundant ShowToolbarMsg round-trips plus duplicate debug logs.
 	if !c.takeToolbarMsgUpdate(signature) {
 		return
@@ -702,8 +703,7 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 		}, true
 	}
 
-	hasPendingDirty := status.PendingDirtyRootCount > 0 || status.PendingDirtyPathCount > 0
-	if !includeReady && !status.IsIndexing && status.ErrorRootCount == 0 && !hasPendingDirty {
+	if !includeReady && !status.IsIndexing && status.ErrorRootCount == 0 {
 		return plugin.ToolbarMsg{}, false
 	}
 
@@ -713,11 +713,11 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 	indeterminate := false
 	hasPermissionError := util.IsMacOS() && isFileAccessPermissionError(status.LastError)
 	if status.ActiveStage == filesearch.RunStagePlanning || status.ActiveStage == filesearch.RunStagePreScan {
-		// The planner now owns the pre-execution phases because one persisted root
-		// can fan out into many jobs. Version 1 keeps a root-level denominator
+		// The preparation phase owns pre-execution progress because one persisted
+		// root can fan out into many jobs. Version 1 keeps a root-level denominator
 		// here because recursive split discovery can still grow the scope frontier
 		// mid-pass, but the active root/scope suffix tells users exactly which
-		// part of the filesystem the planner is currently measuring.
+		// part of the filesystem is currently being measured.
 		title = c.api.GetTranslation(ctx, "plugin_file_status_preparing")
 		icon = fileIcon
 		if progressValue, ok := resolveToolbarProgressPercent(status.ActiveProgressCurrent, status.ActiveProgressTotal); ok {
@@ -780,14 +780,6 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 		}
 	} else if status.IsIndexing {
 		title = c.api.GetTranslation(ctx, "plugin_file_status_indexing")
-		icon = fileIcon
-		indeterminate = true
-	} else if hasPendingDirty {
-		// Keep the toolbar visible while the dirty queue is waiting for its debounce
-		// window. Previously the completed run cleared the message even though queued
-		// FSEvents were about to start another incremental run, which made the toolbar
-		// disappear and reappear between adjacent file-search updates.
-		title = c.buildSyncingToolbarTitle(ctx, status)
 		icon = fileIcon
 		indeterminate = true
 	} else if hasPermissionError {

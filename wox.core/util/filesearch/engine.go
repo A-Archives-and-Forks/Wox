@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"wox/util"
 
@@ -13,6 +14,9 @@ import (
 )
 
 type Engine struct {
+	mu              sync.RWMutex
+	resetMu         sync.Mutex
+	closed          bool
 	db              *FileSearchDB
 	searchProvider  *SQLiteSearchProvider
 	scanner         *Scanner
@@ -30,17 +34,15 @@ func NewEngineWithOptions(ctx context.Context, options EngineOptions) (*Engine, 
 		return nil, err
 	}
 
+	policyState := newPolicyState(options.Policy)
 	engine := &Engine{
 		db:              db,
 		searchProvider:  NewSQLiteSearchProvider(db),
+		policy:          policyState,
 		statusListeners: util.NewHashMap[string, func(StatusSnapshot)](),
 	}
 
-	engine.scanner = NewScanner(db)
-	engine.policy = engine.scanner.policy
-	if engine.policy != nil {
-		engine.policy.Set(options.Policy)
-	}
+	engine.scanner = newScannerWithPolicyState(db, policyState)
 	engine.scanner.SetStateChangeHandler(engine.notifyStatusChanged)
 
 	// Keep the built-in file engine focused on the persisted SQLite search index.
@@ -68,7 +70,13 @@ func (e *Engine) logInitSnapshotAsync(ctx context.Context) {
 		snapshotCtx, cancel := context.WithTimeout(util.NewTraceContext(), 30*time.Second)
 		defer cancel()
 
+		e.mu.RLock()
+		if e.closed || e.db == nil {
+			e.mu.RUnlock()
+			return
+		}
 		snapshot, err := e.db.SearchIndexSnapshot(snapshotCtx)
+		e.mu.RUnlock()
 		if err != nil {
 			util.GetLogger().Warn(snapshotCtx, "filesearch failed to capture sqlite snapshot during init: "+err.Error())
 			return
@@ -84,41 +92,143 @@ func (e *Engine) UpdatePolicy(policy Policy) {
 	if e.policy != nil {
 		e.policy.Set(policy)
 	}
-	if e.scanner != nil {
-		e.scanner.RequestRescan(util.NewTraceContext())
+
+	e.mu.RLock()
+	scanner := e.scanner
+	e.mu.RUnlock()
+	if scanner != nil {
+		scanner.RequestRescan(util.NewTraceContext())
 	}
 }
 
 func (e *Engine) ResetIndex(ctx context.Context) error {
-	if e == nil || e.db == nil {
+	if e == nil {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if e.scanner != nil {
-		// Feature addition: full index resets need scanner-loop ordering so a
-		// running scan cannot repopulate rows after the manual clear. The scanner
-		// resets SQLite first and then immediately performs the fresh full scan.
-		return e.scanner.RequestResetRescan(ctx)
+
+	e.mu.RLock()
+	if e.closed || e.db == nil {
+		e.mu.RUnlock()
+		return nil
 	}
-	if err := e.db.ResetIndex(ctx); err != nil {
+	scanner := e.scanner
+	db := e.db
+	e.mu.RUnlock()
+
+	if scanner != nil {
+		return scanner.RequestResetRescan(ctx)
+	}
+	if db != nil {
+		return db.ResetIndex(ctx)
+	}
+	return nil
+}
+
+func (e *Engine) RebuildIndex(ctx context.Context) error {
+	if e == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	e.resetMu.Lock()
+	defer e.resetMu.Unlock()
+
+	e.mu.RLock()
+	if e.closed {
+		e.mu.RUnlock()
+		return fmt.Errorf("filesearch engine closed")
+	}
+	oldScanner := e.scanner
+	e.mu.RUnlock()
+
+	if oldScanner != nil {
+		oldScanner.StopAndWait()
+	}
+
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return fmt.Errorf("filesearch engine closed")
+	}
+
+	oldDB := e.db
+	e.db = nil
+	e.searchProvider = nil
+	e.scanner = nil
+	if oldDB != nil {
+		if err := oldDB.Close(); err != nil {
+			e.mu.Unlock()
+			return fmt.Errorf("close old filesearch database: %w", err)
+		}
+	}
+
+	fileSearchDir := util.GetLocation().GetFileSearchDirectory()
+	// Feature addition: "Index Files" is now a true rebuild. The previous reset
+	// deleted rows inside the live SQLite database, which left WAL/SHM files,
+	// old pragmas, and any corrupted side tables in place. Close SQLite first,
+	// remove the whole storage directory, then open a fresh database before
+	// writing configured roots and starting the scan.
+	if err := os.RemoveAll(fileSearchDir); err != nil {
+		e.mu.Unlock()
+		return fmt.Errorf("remove filesearch directory: %w", err)
+	}
+
+	newDB, err := NewFileSearchDB(ctx)
+	if err != nil {
+		e.mu.Unlock()
+		return err
+	}
+	newScanner := newScannerWithPolicyState(newDB, e.policy)
+	newScanner.SetStateChangeHandler(e.notifyStatusChanged)
+	newProvider := NewSQLiteSearchProvider(newDB)
+
+	e.db = newDB
+	e.searchProvider = newProvider
+	e.scanner = newScanner
+	e.mu.Unlock()
+
+	newScanner.Start(util.NewTraceContext())
+	util.GetLogger().Info(ctx, fmt.Sprintf("filesearch storage rebuilt: directory=%s", fileSearchDir))
+	return nil
+}
+
+func (e *Engine) Close() error {
+	if e == nil {
+		return nil
+	}
+
+	e.resetMu.Lock()
+	defer e.resetMu.Unlock()
+
+	e.mu.RLock()
+	scanner := e.scanner
+	e.mu.RUnlock()
+	if scanner != nil {
+		scanner.StopAndWait()
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.closed = true
+	if e.db != nil {
+		err := e.db.Close()
+		e.db = nil
+		e.searchProvider = nil
+		e.scanner = nil
 		return err
 	}
 	return nil
 }
 
-func (e *Engine) Close() error {
-	if e.scanner != nil {
-		e.scanner.Stop()
-	}
-	if e.db != nil {
-		return e.db.Close()
-	}
-	return nil
-}
-
 func (e *Engine) AddRoot(ctx context.Context, rootPath string) error {
+	if e == nil {
+		return nil
+	}
 	cleaned := filepath.Clean(rootPath)
 	info, err := os.Stat(cleaned)
 	if err != nil {
@@ -126,6 +236,12 @@ func (e *Engine) AddRoot(ctx context.Context, rootPath string) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("filesearch root is not a directory: %s", cleaned)
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed || e.db == nil {
+		return fmt.Errorf("filesearch engine closed")
 	}
 
 	existing, err := e.db.FindRootByPath(ctx, cleaned)
@@ -161,12 +277,23 @@ func (e *Engine) AddRoot(ctx context.Context, rootPath string) error {
 		}
 	}
 
-	e.scanner.RequestRescan(ctx)
+	if e.scanner != nil {
+		e.scanner.RequestRescan(ctx)
+	}
 	return nil
 }
 
 func (e *Engine) RemoveRoot(ctx context.Context, rootPath string) error {
+	if e == nil {
+		return nil
+	}
 	cleaned := filepath.Clean(rootPath)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed || e.db == nil {
+		return fmt.Errorf("filesearch engine closed")
+	}
+
 	root, err := e.db.FindRootByPath(ctx, cleaned)
 	if err != nil {
 		return err
@@ -179,11 +306,22 @@ func (e *Engine) RemoveRoot(ctx context.Context, rootPath string) error {
 		return err
 	}
 
-	e.scanner.RequestRescan(ctx)
+	if e.scanner != nil {
+		e.scanner.RequestRescan(ctx)
+	}
 	return nil
 }
 
 func (e *Engine) ListRoots(ctx context.Context) ([]RootRecord, error) {
+	if e == nil {
+		return nil, nil
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.closed || e.db == nil {
+		return nil, fmt.Errorf("filesearch engine closed")
+	}
+
 	roots, err := e.db.ListRoots(ctx)
 	if err != nil {
 		return nil, err
@@ -192,6 +330,15 @@ func (e *Engine) ListRoots(ctx context.Context) ([]RootRecord, error) {
 }
 
 func (e *Engine) GetStatus(ctx context.Context) (StatusSnapshot, error) {
+	if e == nil {
+		return StatusSnapshot{}, nil
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.closed || e.db == nil {
+		return StatusSnapshot{}, fmt.Errorf("filesearch engine closed")
+	}
+
 	allRoots, err := e.db.ListRoots(ctx)
 	if err != nil {
 		return StatusSnapshot{}, err
@@ -290,7 +437,7 @@ func (e *Engine) GetStatus(ctx context.Context) (StatusSnapshot, error) {
 		}
 	}
 
-	// Planner/executor runs own the live indexing state. The previous code
+	// Run preparation/execution owns the live indexing state. The previous code
 	// merged the active run and then immediately overwrote IsIndexing from the
 	// persisted root counters, which made the toolbar treat a live pre-scan as
 	// "not indexing" whenever another root was already in error.
@@ -315,7 +462,7 @@ func mergeTransientRunStatus(status *StatusSnapshot, activeRun StatusSnapshot) {
 	// Run-scoped progress now owns the user-facing denominator because one
 	// logical root can expand into many jobs. The legacy root counters remain in
 	// the snapshot as diagnostics, but active status/progress should prefer the
-	// sealed run state whenever a planner/executor run is in flight.
+	// sealed run state whenever a preparation/execution run is in flight.
 	status.ProgressCurrent = activeRun.ProgressCurrent
 	status.ProgressTotal = activeRun.ProgressTotal
 	status.ActiveRootStatus = activeRun.ActiveRootStatus
@@ -464,6 +611,25 @@ func activeRootStatusPriority(status RootStatus) int {
 }
 
 func (e *Engine) SyncUserRoots(ctx context.Context, rootPaths []string) error {
+	if e == nil {
+		return nil
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed || e.db == nil {
+		return fmt.Errorf("filesearch engine closed")
+	}
+
+	_, err := syncUserRootsToDB(ctx, e.db, e.scanner, rootPaths, true)
+	return err
+}
+
+func syncUserRootsToDB(ctx context.Context, db *FileSearchDB, scanner *Scanner, rootPaths []string, requestRescan bool) (bool, error) {
+	if db == nil {
+		return false, fmt.Errorf("filesearch database is not open")
+	}
+
 	desiredRoots := map[string]struct{}{}
 	for _, rootPath := range rootPaths {
 		cleaned := strings.TrimSpace(rootPath)
@@ -485,9 +651,9 @@ func (e *Engine) SyncUserRoots(ctx context.Context, rootPaths []string) error {
 		desiredRoots[cleaned] = struct{}{}
 	}
 
-	roots, err := e.db.ListRoots(ctx)
+	roots, err := db.ListRoots(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	existingUserRoots := map[string]RootRecord{}
@@ -505,8 +671,8 @@ func (e *Engine) SyncUserRoots(ctx context.Context, rootPaths []string) error {
 		if _, ok := desiredRoots[existingPath]; ok {
 			continue
 		}
-		if err := e.db.DeleteRoot(ctx, root.ID); err != nil {
-			return err
+		if err := db.DeleteRoot(ctx, root.ID); err != nil {
+			return false, err
 		}
 		changed = true
 		removedCount++
@@ -526,8 +692,8 @@ func (e *Engine) SyncUserRoots(ctx context.Context, rootPaths []string) error {
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
-		if err := e.db.UpsertRoot(ctx, root); err != nil {
-			return err
+		if err := db.UpsertRoot(ctx, root); err != nil {
+			return false, err
 		}
 		changed = true
 		addedCount++
@@ -541,14 +707,24 @@ func (e *Engine) SyncUserRoots(ctx context.Context, rootPaths []string) error {
 		removedCount,
 		changed,
 	))
-	if changed && e.scanner != nil {
-		e.scanner.RequestRescan(ctx)
+	if requestRescan && changed && scanner != nil {
+		scanner.RequestRescan(ctx)
 	}
 
-	return nil
+	return changed, nil
 }
 
 func (e *Engine) Search(ctx context.Context, query SearchQuery, limit int) ([]SearchResult, error) {
+	if e == nil {
+		return nil, nil
+	}
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.closed || e.searchProvider == nil {
+		return nil, fmt.Errorf("filesearch engine closed")
+	}
+
 	// Filesearch now has one SQLite-backed provider, so the engine stays as a
 	// thin owner of lifecycle/policy state and returns the provider result
 	// directly instead of preserving the old stream/aggregation wrapper.
@@ -556,7 +732,13 @@ func (e *Engine) Search(ctx context.Context, query SearchQuery, limit int) ([]Se
 }
 
 func (e *Engine) IndexSnapshotSummary() string {
-	if e == nil || e.db == nil {
+	if e == nil {
+		return formatSQLiteIndexSnapshotSummary("manual", sqliteIndexSnapshot{})
+	}
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.closed || e.db == nil {
 		return formatSQLiteIndexSnapshotSummary("manual", sqliteIndexSnapshot{})
 	}
 	snapshot, err := e.db.SearchIndexSnapshot(context.Background())
@@ -567,7 +749,13 @@ func (e *Engine) IndexSnapshotSummary() string {
 }
 
 func (e *Engine) IndexTopRootsSummary() string {
-	if e == nil || e.db == nil {
+	if e == nil {
+		return ""
+	}
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.closed || e.db == nil {
 		return ""
 	}
 	snapshot, err := e.db.SearchIndexSnapshot(context.Background())

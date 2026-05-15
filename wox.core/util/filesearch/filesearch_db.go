@@ -41,7 +41,15 @@ type bulkSyncFullRunRootState struct {
 }
 
 func NewFileSearchDB(ctx context.Context) (*FileSearchDB, error) {
-	dbPath := filepath.Join(util.GetLocation().GetFileSearchDirectory(), "filesearch.db")
+	fileSearchDir := util.GetLocation().GetFileSearchDirectory()
+	// Bug fix: manual full rebuilds remove the whole filesearch directory after
+	// closing SQLite. Recreate the directory at DB-open time so both startup and
+	// reset paths have one durable owner for the storage location.
+	if err := util.GetLocation().EnsureDirectoryExist(fileSearchDir); err != nil {
+		return nil, err
+	}
+
+	dbPath := filepath.Join(fileSearchDir, "filesearch.db")
 	dsn := dbPath + "?" +
 		"_journal_mode=WAL&" +
 		"_synchronous=NORMAL&" +
@@ -265,7 +273,7 @@ func (d *FileSearchDB) ResetIndex(ctx context.Context) error {
 	// Feature addition: manual "Index Files" must start from a clean search
 	// index, not just enqueue another full scan. Keep user roots because they
 	// are configuration, but drop all indexed facts and hidden dynamic roots so
-	// the next planner run rebuilds ownership and search artifacts from scratch.
+	// the next preparation run rebuilds ownership and search artifacts from scratch.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM directories`); err != nil {
 		return fmt.Errorf("reset directories: %w", err)
 	}
@@ -687,7 +695,7 @@ func (d *FileSearchDB) ApplySubtreeJobStream(ctx context.Context, root RootRecor
 
 		// Optimization: a fresh full-index root has no stale facts to diff or
 		// prune. Stream batches straight into the fact tables and let EndBulkSync
-		// rebuild FTS/bigram artifacts once, removing both the planner's duplicate
+		// rebuild FTS/bigram artifacts once, removing both the duplicate preparation
 		// walk and the temp-stage copy for first-time large roots.
 		insertedEntries := 0
 		if err := snapshot.StreamSubtreeJobBatches(ctx, *lockedRoot, job, func(batch SubtreeSnapshotBatch) error {

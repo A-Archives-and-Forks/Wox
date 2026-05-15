@@ -25,10 +25,13 @@ type DirtyQueue struct {
 }
 
 type DirtyQueueStats struct {
-	RootCount      int
-	PathCount      int
-	LatestSignal   time.Time
-	EarliestSignal time.Time
+	RootCount int
+	// Bug fix: keep root-level signals separate from roots that only contain
+	// ordinary path changes, so debounce backpressure can treat them differently.
+	RootSignalCount int
+	PathCount       int
+	LatestSignal    time.Time
+	EarliestSignal  time.Time
 }
 
 func NewDirtyQueue(config DirtyQueueConfig) *DirtyQueue {
@@ -108,6 +111,7 @@ func (q *DirtyQueue) statsLocked() DirtyQueueStats {
 		}
 
 		stats.RootCount++
+		hasRootSignal := false
 		for _, signal := range signals {
 			if stats.LatestSignal.IsZero() || signal.At.After(stats.LatestSignal) {
 				stats.LatestSignal = signal.At
@@ -115,10 +119,17 @@ func (q *DirtyQueue) statsLocked() DirtyQueueStats {
 			if stats.EarliestSignal.IsZero() || signal.At.Before(stats.EarliestSignal) {
 				stats.EarliestSignal = signal.At
 			}
+			if signal.Kind == DirtySignalKindRoot {
+				hasRootSignal = true
+				continue
+			}
 			if signal.Kind != DirtySignalKindPath || signal.Path == "" {
 				continue
 			}
 			pathSet[signal.Path] = struct{}{}
+		}
+		if hasRootSignal {
+			stats.RootSignalCount++
 		}
 	}
 

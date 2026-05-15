@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	defaultScanInterval               = 24 * time.Hour
-	defaultDirtyDebounceWindow        = 30 * time.Second
+	defaultScanInterval = 24 * time.Hour
+	// Bug fix: small interactive edits should reconcile quickly. Burst
+	// backpressure below still protects generated-output storms.
+	defaultDirtyDebounceWindow        = 2 * time.Second
 	defaultDirtyPressureLowWindow     = 2 * time.Minute
 	defaultDirtyPressureHighWindow    = 5 * time.Minute
 	defaultMaxDirtyDebounceWindow     = 15 * time.Minute
@@ -29,6 +31,7 @@ type Scanner struct {
 	policy                 *policyState
 	onStateChange          func(ctx context.Context)
 	stopOnce               sync.Once
+	wg                     sync.WaitGroup
 	stopCh                 chan struct{}
 	requestCh              chan scanRequest
 	dirtyCh                chan struct{}
@@ -49,7 +52,7 @@ type Scanner struct {
 	transientSyncState     *TransientSyncState
 	dirtyBackpressureMu    sync.Mutex
 	lastDirtyRunElapsed    time.Duration
-	// Tests override the planner budget so run-based smoke coverage can force
+	// Tests override the preparation budget so run-based smoke coverage can force
 	// job splitting without manufacturing thousands of files just to cross the
 	// production thresholds.
 	plannerBudgetOverride *splitBudget
@@ -62,11 +65,19 @@ type scanRequest struct {
 	ResetReady chan error
 }
 
-// NewScanner builds the scanner against the persisted SQLite index only. The
-// previous optional in-memory provider mirrored every scan result and forced the
-// scanner to maintain two reload paths, which no longer fits the single-provider
-// search flow.
 func NewScanner(db *FileSearchDB) *Scanner {
+	return newScannerWithPolicyState(db, newPolicyState(Policy{}))
+}
+
+// newScannerWithPolicyState keeps the engine policy object stable while the
+// scanner and database are rebuilt. A full storage reset closes and replaces the
+// SQLite database, and reusing the policy state avoids losing plugin-owned
+// ignore rules during that handoff.
+func newScannerWithPolicyState(db *FileSearchDB, policy *policyState) *Scanner {
+	if policy == nil {
+		policy = newPolicyState(Policy{})
+	}
+
 	dirtyQueueConfig := DirtyQueueConfig{
 		DebounceWindow:            defaultDirtyDebounceWindow,
 		MaxDebounceWindow:         defaultMaxDirtyDebounceWindow,
@@ -80,8 +91,6 @@ func NewScanner(db *FileSearchDB) *Scanner {
 		RootEscalationPathThreshold:  0,
 		RootEscalationDirectoryRatio: 0,
 	}
-
-	policy := newPolicyState(Policy{})
 
 	return &Scanner{
 		db:                db,
@@ -103,11 +112,15 @@ func (s *Scanner) SetStateChangeHandler(handler func(ctx context.Context)) {
 }
 
 func (s *Scanner) Start(ctx context.Context) {
+	s.wg.Add(1)
 	util.Go(ctx, "filesearch change feed loop", func() {
+		defer s.wg.Done()
 		s.changeFeedLoop(ctx)
 	})
 
+	s.wg.Add(1)
 	util.Go(ctx, "filesearch scan loop", func() {
+		defer s.wg.Done()
 		util.GetLogger().Info(ctx, "filesearch scanner started")
 		s.startupRestore(ctx)
 
@@ -178,6 +191,19 @@ func (s *Scanner) Stop() {
 	s.stopOnce.Do(func() {
 		close(s.stopCh)
 	})
+}
+
+func (s *Scanner) StopAndWait() {
+	if s == nil {
+		return
+	}
+
+	// Bug fix: callers that need to remove the filesearch directory must wait for
+	// the scanner goroutines to leave before closing SQLite. Stop alone only
+	// signals the loops, which could leave a scan or change-feed refresh still
+	// using the database while the reset deletes its files.
+	s.Stop()
+	s.wg.Wait()
 }
 
 func (s *Scanner) RequestRescan(ctx context.Context) {
@@ -279,7 +305,7 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 	}
 	// Dynamic roots are hidden but still own entries under their promoted path.
 	// The production path must inject the same per-parent exclusions into both
-	// planner and snapshot execution; otherwise a parent reconcile can generate
+	// run preparation and snapshot execution; otherwise a parent reconcile can generate
 	// a batch that SQLite upserts back over the dynamic root's path ownership.
 	rootExclusions := buildDynamicRootExclusions(allRoots)
 	planner := NewRunPlanner(s.policy)
@@ -288,7 +314,7 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		planner.budget = *s.plannerBudgetOverride
 	}
 	planner.SetProgressCallback(func(progress RunPlannerProgress) {
-		s.setTransientRunState(buildPlannerStatusSnapshot(progress, kind))
+		s.setTransientRunState(buildPreparationStatusSnapshot(progress, kind))
 		s.emitStateChange(ctx)
 		logFilesearchRunStage(ctx, kind, progress.Stage, progress.Root, Job{}, progress.RootIndex, progress.RootTotal, 0, int64(progress.RootTotal))
 	})
@@ -297,7 +323,7 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		plan RunPlan
 		err  error
 	)
-	plannerStartedAt := util.GetSystemTimestamp()
+	preparationStartedAt := util.GetSystemTimestamp()
 	switch kind {
 	case RunKindIncremental:
 		plan, err = planner.PlanIncrementalRun(ctx, roots, batches)
@@ -308,16 +334,16 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		s.clearTransientRunState()
 		return err
 	}
-	// Planner and pre-scan can traverse large trees before execution starts, but
+	// Run preparation and pre-scan can traverse large trees before execution starts, but
 	// the old logs only showed coarse stage labels. Record the sealed workload
 	// timing so slow runs reveal whether the stall starts before any SQLite write.
-	logFilesearchRunPlanner(ctx, kind, util.GetSystemTimestamp()-plannerStartedAt, len(plan.RootPlans), len(plan.Jobs), plan.TotalWorkUnits)
+	logFilesearchRunPreparation(ctx, kind, util.GetSystemTimestamp()-preparationStartedAt, len(plan.RootPlans), len(plan.Jobs), plan.TotalWorkUnits)
 
 	snapshotBuilder := NewSnapshotBuilder(s.policy)
 	snapshotBuilder.SetRootExclusions(rootExclusions)
 	if s.plannerBudgetOverride != nil && s.plannerBudgetOverride.DirectFileBatchSize > 0 {
 		// Tests and local tuning already override the direct-files batch budget.
-		// The planner now keeps one direct-files job per directory, so this value
+		// Run preparation now keeps one direct-files job per directory, so this value
 		// only caps the internal staging batch size of that single job.
 		snapshotBuilder.SetDirectFileBatchSize(s.plannerBudgetOverride.DirectFileBatchSize)
 	}
@@ -332,7 +358,7 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		// Full runs are the only place where we deliberately coalesce multiple
 		// small subtree snapshots into one SQLite transaction. Incremental work
 		// keeps its per-batch apply boundary so dirty-path retries and deletes
-		// continue to map 1:1 to the planner-owned reconcile scopes.
+		// continue to map 1:1 to the prepared reconcile scopes.
 		executor.SetSubtreeBatchConfig(defaultFullRunSubtreeApplyBatchConfig())
 		executor.SetSubtreeBatchApplyFunc(func(runCtx context.Context, _ RootRecord, batches []SubtreeSnapshotBatch) error {
 			return s.db.ReplaceSubtreeSnapshots(runCtx, batches)
@@ -380,7 +406,7 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		// settle, so log the boundary explicitly instead of hiding that cost in a
 		// generic "scan cycle completed" message.
 		logFilesearchSQLiteMaintenance(ctx, "bulk_finalize", string(kind), util.GetSystemTimestamp()-bulkFinalizeStartedAt, len(filesearchFTSTables))
-		// The planner, execution, and deferred bulk finalize all belong to one
+		// Run preparation, execution, and deferred bulk finalize all belong to one
 		// user-visible full-index attempt. Record that outer elapsed time here,
 		// after bulk finalize succeeds, so later optimizations can compare one
 		// stable end-to-end metric instead of manually summing phase logs.
@@ -422,6 +448,21 @@ func (s *Scanner) emitCompletedFullRunSummary(ctx context.Context, plan RunPlan,
 		return
 	}
 
+	fileCount := plan.PreScanTotals.FileCount
+	entryCount := plan.PreScanTotals.IndexableEntryCount
+	if s.db != nil {
+		if snapshot, err := s.db.SearchIndexSnapshot(ctx); err == nil {
+			// Bug fix: full scans now use streaming estimates to avoid a duplicate
+			// filesystem walk. Those estimates intentionally do not know the real
+			// file count, so the completion summary must read the final persisted
+			// index instead of reporting the pre-execution placeholder as zero.
+			fileCount = snapshot.FileCount
+			entryCount = snapshot.EntryCount
+		} else {
+			util.GetLogger().Warn(ctx, "filesearch failed to count completed full index: "+err.Error())
+		}
+	}
+
 	// Feature addition: the toolbar should receive one final full-index summary
 	// after SQLite bulk maintenance has completed. The executor's completed
 	// snapshot fires before deferred FTS rebuild/optimize work, so emitting this
@@ -435,8 +476,8 @@ func (s *Scanner) emitCompletedFullRunSummary(ctx context.Context, plan RunPlan,
 		ActiveRunKind:       RunKindFull,
 		RunProgressCurrent:  plan.TotalWorkUnits,
 		RunProgressTotal:    plan.TotalWorkUnits,
-		ActiveRunFileCount:  plan.PreScanTotals.FileCount,
-		ActiveRunEntryCount: plan.PreScanTotals.IndexableEntryCount,
+		ActiveRunFileCount:  fileCount,
+		ActiveRunEntryCount: entryCount,
 		ActiveRunElapsedMs:  elapsedMs,
 		IsIndexing:          false,
 	})
@@ -521,7 +562,7 @@ func (s *Scanner) handleRunFailure(ctx context.Context, run Run, roots []RootRec
 	s.emitStateChange(ctx)
 }
 
-func buildPlannerStatusSnapshot(progress RunPlannerProgress, kind RunKind) StatusSnapshot {
+func buildPreparationStatusSnapshot(progress RunPlannerProgress, kind RunKind) StatusSnapshot {
 	current := int64(progress.RootIndex)
 	total := int64(progress.RootTotal)
 	if total <= 0 {
@@ -541,17 +582,17 @@ func buildPlannerStatusSnapshot(progress RunPlannerProgress, kind RunKind) Statu
 		ActiveRootIndex:       progress.RootIndex,
 		ActiveRootTotal:       progress.RootTotal,
 		ActiveRootPath:        filepath.Clean(progress.Root.Path),
-		ActiveRunStatus:       runStatusForPlannerStage(progress.Stage),
+		ActiveRunStatus:       runStatusForPreparationStage(progress.Stage),
 		ActiveRunKind:         kind,
 		ActiveStage:           progress.Stage,
-		ActiveScopePath:       activePlannerScopePath(progress),
+		ActiveScopePath:       activePreparationScopePath(progress),
 		RunProgressCurrent:    0,
 		RunProgressTotal:      0,
 		IsIndexing:            true,
 	}
 }
 
-func activePlannerScopePath(progress RunPlannerProgress) string {
+func activePreparationScopePath(progress RunPlannerProgress) string {
 	scopePath := filepath.Clean(progress.ScopePath)
 	if strings.TrimSpace(scopePath) == "" {
 		return filepath.Clean(progress.Root.Path)
@@ -559,7 +600,7 @@ func activePlannerScopePath(progress RunPlannerProgress) string {
 	return scopePath
 }
 
-func runStatusForPlannerStage(stage RunStage) RunStatus {
+func runStatusForPreparationStage(stage RunStage) RunStatus {
 	switch stage {
 	case RunStagePlanning:
 		return RunStatusPlanning
@@ -969,7 +1010,7 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 			}
 
 			if isDir {
-				// Planner only uses the directory list and child counts to size jobs.
+				// Preparation only uses the directory list and child counts to size jobs.
 				// The previous build kept loading and copying .gitignore patterns here,
 				// but nothing in planning or execution consumed them, so we drop that
 				// dead work to reduce per-directory I/O and allocations.
@@ -1543,7 +1584,7 @@ func (s *Scanner) handleIncrementalRunFailure(ctx context.Context, roots []RootR
 		cause.Error(),
 	))
 
-	// Incremental job boundaries are planner-owned execution metadata, not
+	// Incremental job boundaries are preparation-owned execution metadata, not
 	// durable state. After a failure we retry the failed batch at its original
 	// scoped paths when possible, then requeue untouched roots as-is so unrelated
 	// scopes keep their existing debounce granularity.
@@ -1878,11 +1919,15 @@ func (s *Scanner) dirtyBackpressureWindow(stats DirtyQueueStats, baseWindow time
 	rootThreshold := s.dirtyQueue.config.BackpressureRootThreshold
 
 	pathPressureMax := pathThreshold > 0 && stats.PathCount >= pathThreshold*8
-	rootPressureMax := rootThreshold > 0 && stats.RootCount >= rootThreshold*4
+	rootPressureMax := rootThreshold > 0 && stats.RootSignalCount >= rootThreshold*4
 	pathPressureHigh := pathThreshold > 0 && stats.PathCount >= pathThreshold*2
-	rootPressureHigh := rootThreshold > 0 && stats.RootCount >= rootThreshold*2
+	rootPressureHigh := rootThreshold > 0 && stats.RootSignalCount >= rootThreshold*2
 	pathPressureLow := pathThreshold > 0 && stats.PathCount >= pathThreshold
-	rootPressureLow := rootThreshold > 0 && stats.RootCount >= rootThreshold
+	// Bug fix: RootCount includes ordinary path dirties grouped by root. A Desktop
+	// rename plus a small project edit can therefore look like "two roots" and
+	// incorrectly trigger minute-scale backpressure, so root pressure must only
+	// consider explicit root-level signals while path pressure handles file bursts.
+	rootPressureLow := rootThreshold > 0 && stats.RootSignalCount >= rootThreshold
 
 	if pathPressureMax || rootPressureMax {
 		window = maxDuration(window, maxWindow)
@@ -1896,11 +1941,16 @@ func (s *Scanner) dirtyBackpressureWindow(stats DirtyQueueStats, baseWindow time
 		window = maxDuration(window, minDuration(defaultDirtyPressureLowWindow, maxWindow))
 	}
 
-	lastElapsed := s.lastDirtyRunDuration()
-	if lastElapsed >= 15*time.Second {
-		window = maxDuration(window, minDuration(defaultDirtyPressureHighWindow, maxWindow))
-	} else if lastElapsed >= 5*time.Second {
-		window = maxDuration(window, minDuration(defaultDirtyPressureLowWindow, maxWindow))
+	if pathPressureLow || rootPressureLow {
+		// Bug fix: a slow previous dirty run used to push even tiny follow-up
+		// queues into minute-scale waits. Apply elapsed-time backpressure only
+		// when the current queue is already large enough to be considered pressure.
+		lastElapsed := s.lastDirtyRunDuration()
+		if lastElapsed >= 15*time.Second {
+			window = maxDuration(window, minDuration(defaultDirtyPressureHighWindow, maxWindow))
+		} else if lastElapsed >= 5*time.Second {
+			window = maxDuration(window, minDuration(defaultDirtyPressureLowWindow, maxWindow))
+		}
 	}
 
 	if window > maxWindow {

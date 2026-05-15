@@ -141,9 +141,24 @@ type realIndexExecutionStats struct {
 	JobCount                   int                  `json:"job_count"`
 	SubtreeApplyTotalP50Millis int64                `json:"subtree_apply_total_p50_millis"`
 	SubtreeApplyTotalP95Millis int64                `json:"subtree_apply_total_p95_millis"`
+	StreamApplyP50Millis       int64                `json:"stream_apply_p50_millis"`
+	StreamApplyP95Millis       int64                `json:"stream_apply_p95_millis"`
 	ApplySnapshotP50Millis     int64                `json:"apply_snapshot_p50_millis"`
 	ApplySnapshotP95Millis     int64                `json:"apply_snapshot_p95_millis"`
+	OperationMetrics           []realIndexOperation `json:"operation_metrics"`
 	SlowestScopes              []realIndexSlowScope `json:"slowest_scopes"`
+}
+
+type realIndexOperation struct {
+	Name              string `json:"name"`
+	Count             int    `json:"count"`
+	TotalMillis       int64  `json:"total_millis"`
+	P50Millis         int64  `json:"p50_millis"`
+	P95Millis         int64  `json:"p95_millis"`
+	MaxMillis         int64  `json:"max_millis"`
+	TotalWorkCount    int64  `json:"total_work_count,omitempty"`
+	MaxWorkCount      int    `json:"max_work_count,omitempty"`
+	AverageWorkMillis int64  `json:"average_work_millis,omitempty"`
 }
 
 type realIndexSlowScope struct {
@@ -162,8 +177,8 @@ type realIndexTimelineEvent struct {
 }
 
 var (
-	realIndexApplySnapshotPattern = regexp.MustCompile(`phase=apply_snapshot elapsed=(\d+)ms .* scope=(.+) units=\d+$`)
-	realIndexSubtreeApplyPattern  = regexp.MustCompile(`operation=subtree_apply_total scope=.* elapsed=(\d+)ms work_count=\d+$`)
+	realIndexJobPhasePattern          = regexp.MustCompile(`filesearch job phase: phase=([^ ]+) elapsed=(\d+)ms .* scope=(.+) units=\d+$`)
+	realIndexSQLiteMaintenancePattern = regexp.MustCompile(`filesearch sqlite maintenance: operation=([^ ]+) scope=.* elapsed=(\d+)ms work_count=(\d+)$`)
 )
 
 // realIndexBenchmarkIgnoredSegments mirrors the plugin's default segment-level
@@ -232,6 +247,9 @@ func TestSummarizeRealIndexExecutionLog(t *testing.T) {
 	}
 	if stats.ApplySnapshotP95Millis != 27 {
 		t.Fatalf("expected apply snapshot p95 27ms, got %d", stats.ApplySnapshotP95Millis)
+	}
+	if len(stats.OperationMetrics) == 0 {
+		t.Fatal("expected operation metrics")
 	}
 	if len(stats.SlowestScopes) != 3 {
 		t.Fatalf("expected 3 unique slow scopes, got %d", len(stats.SlowestScopes))
@@ -913,8 +931,12 @@ func realIndexArtifactPath() string {
 func summarizeRealIndexExecutionLog(logContent string) realIndexExecutionStats {
 	lines := strings.Split(logContent, "\n")
 	subtreeApplyTotals := make([]int64, 0)
+	streamApplies := make([]int64, 0)
 	applySnapshots := make([]int64, 0)
 	slowestScopeByPath := map[string]int64{}
+	operationSamples := map[string][]int64{}
+	operationWorkCounts := map[string][]int{}
+	jobPhaseCount := 0
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -922,26 +944,46 @@ func summarizeRealIndexExecutionLog(logContent string) realIndexExecutionStats {
 			continue
 		}
 
-		if matches := realIndexSubtreeApplyPattern.FindStringSubmatch(line); len(matches) == 2 {
-			subtreeApplyTotals = append(subtreeApplyTotals, mustParseRealIndexMillis(matches[1]))
-		}
-
-		if matches := realIndexApplySnapshotPattern.FindStringSubmatch(line); len(matches) == 3 {
-			elapsed := mustParseRealIndexMillis(matches[1])
-			scope := strings.TrimSpace(matches[2])
-			applySnapshots = append(applySnapshots, elapsed)
+		if matches := realIndexJobPhasePattern.FindStringSubmatch(line); len(matches) == 4 {
+			jobPhaseCount++
+			phase := strings.TrimSpace(matches[1])
+			elapsed := mustParseRealIndexMillis(matches[2])
+			scope := strings.TrimSpace(matches[3])
+			metricName := "job_phase:" + phase
+			operationSamples[metricName] = append(operationSamples[metricName], elapsed)
+			if phase == "stream_apply" {
+				streamApplies = append(streamApplies, elapsed)
+			}
+			if phase == "apply_snapshot" {
+				applySnapshots = append(applySnapshots, elapsed)
+			}
 			if elapsed > slowestScopeByPath[scope] {
 				slowestScopeByPath[scope] = elapsed
+			}
+		}
+
+		if matches := realIndexSQLiteMaintenancePattern.FindStringSubmatch(line); len(matches) == 4 {
+			operation := strings.TrimSpace(matches[1])
+			elapsed := mustParseRealIndexMillis(matches[2])
+			workCount := mustParseRealIndexInt(matches[3])
+			metricName := "sqlite:" + operation
+			operationSamples[metricName] = append(operationSamples[metricName], elapsed)
+			operationWorkCounts[metricName] = append(operationWorkCounts[metricName], workCount)
+			if operation == "subtree_apply_total" {
+				subtreeApplyTotals = append(subtreeApplyTotals, elapsed)
 			}
 		}
 	}
 
 	stats := realIndexExecutionStats{
-		JobCount:                   len(applySnapshots),
+		JobCount:                   jobPhaseCount,
 		SubtreeApplyTotalP50Millis: percentileMillis(subtreeApplyTotals, 0.50),
 		SubtreeApplyTotalP95Millis: percentileMillis(subtreeApplyTotals, 0.95),
+		StreamApplyP50Millis:       percentileMillis(streamApplies, 0.50),
+		StreamApplyP95Millis:       percentileMillis(streamApplies, 0.95),
 		ApplySnapshotP50Millis:     percentileMillis(applySnapshots, 0.50),
 		ApplySnapshotP95Millis:     percentileMillis(applySnapshots, 0.95),
+		OperationMetrics:           buildRealIndexOperationMetrics(operationSamples, operationWorkCounts),
 	}
 
 	slowestScopes := make([]realIndexSlowScope, 0, len(slowestScopeByPath))
@@ -966,10 +1008,70 @@ func summarizeRealIndexExecutionLog(logContent string) realIndexExecutionStats {
 	return stats
 }
 
+func buildRealIndexOperationMetrics(samples map[string][]int64, workCounts map[string][]int) []realIndexOperation {
+	metrics := make([]realIndexOperation, 0, len(samples))
+	for name, values := range samples {
+		if len(values) == 0 {
+			continue
+		}
+		metric := realIndexOperation{
+			Name:        name,
+			Count:       len(values),
+			TotalMillis: sumRealIndexMillis(values),
+			P50Millis:   percentileMillis(values, 0.50),
+			P95Millis:   percentileMillis(values, 0.95),
+			MaxMillis:   maxRealIndexMillis(values),
+		}
+		for _, workCount := range workCounts[name] {
+			metric.TotalWorkCount += int64(workCount)
+			if workCount > metric.MaxWorkCount {
+				metric.MaxWorkCount = workCount
+			}
+		}
+		if metric.Count > 0 {
+			metric.AverageWorkMillis = metric.TotalMillis / int64(metric.Count)
+		}
+		metrics = append(metrics, metric)
+	}
+	sort.Slice(metrics, func(left int, right int) bool {
+		if metrics[left].TotalMillis == metrics[right].TotalMillis {
+			return metrics[left].Name < metrics[right].Name
+		}
+		return metrics[left].TotalMillis > metrics[right].TotalMillis
+	})
+	return metrics
+}
+
+func sumRealIndexMillis(values []int64) int64 {
+	total := int64(0)
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+func maxRealIndexMillis(values []int64) int64 {
+	maximum := int64(0)
+	for _, value := range values {
+		if value > maximum {
+			maximum = value
+		}
+	}
+	return maximum
+}
+
 func mustParseRealIndexMillis(value string) int64 {
 	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 	if err != nil {
 		panic(fmt.Sprintf("parse real index millis %q: %v", value, err))
+	}
+	return parsed
+}
+
+func mustParseRealIndexInt(value string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		panic(fmt.Sprintf("parse real index int %q: %v", value, err))
 	}
 	return parsed
 }

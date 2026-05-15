@@ -46,8 +46,12 @@ type storedEntryRecord struct {
 }
 
 type sqliteIndexSnapshot struct {
-	RootCount              int
-	EntryCount             int64
+	RootCount  int
+	EntryCount int64
+	// Bug fix: the full-index completion summary needs a real file-only count.
+	// EntryCount includes directories, while streaming full-scan estimates no
+	// longer count files before execution.
+	FileCount              int64
 	BigramRowCount         int64
 	FactBytesEstimate      int64
 	FTSSourceBytesEstimate int64
@@ -660,6 +664,9 @@ func (d *FileSearchDB) SearchIndexSnapshot(ctx context.Context) (sqliteIndexSnap
 	if err := d.db.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&snapshot.EntryCount); err != nil {
 		return sqliteIndexSnapshot{}, err
 	}
+	if err := d.db.QueryRowContext(ctx, `SELECT count(*) FROM entries WHERE is_dir = 0`).Scan(&snapshot.FileCount); err != nil {
+		return sqliteIndexSnapshot{}, err
+	}
 	if err := d.db.QueryRowContext(ctx, `SELECT count(*) FROM entries_bigram`).Scan(&snapshot.BigramRowCount); err != nil {
 		return sqliteIndexSnapshot{}, err
 	}
@@ -1199,7 +1206,7 @@ func (d *FileSearchDB) replaceSubtreeEntriesFromStageTx(ctx context.Context, tx 
 
 	// Streaming subtree jobs stage rows incrementally, then reuse the same scoped
 	// diff/replay contract as materialized subtree batches. This keeps delete and
-	// rename correctness for non-fresh roots while removing the planner pre-walk.
+	// rename correctness for non-fresh roots while removing the duplicate pre-walk.
 	return applyChangedEntrySetsTx(ctx, tx, scopePath, staleRows, changedOldRows, changedOrNewRows, !d.isBulkSyncEnabled(), nil)
 }
 
