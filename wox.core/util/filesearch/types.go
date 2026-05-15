@@ -55,7 +55,12 @@ type SearchResult struct {
 	Name       string
 	ParentPath string
 	IsDir      bool
-	Score      int64
+	// Refinement sorting needs indexed metadata in the result envelope so the
+	// File Search plugin can sort already-recalled candidates without adding a
+	// second database lookup for every visible row.
+	Mtime int64
+	Size  int64
+	Score int64
 }
 
 type DirtySignalKind string

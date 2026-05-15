@@ -122,6 +122,9 @@ func TestFilePlugin_CustomRoots(t *testing.T) {
 	if filePlugin == nil {
 		t.Fatal("file plugin instance not found")
 	}
+	t.Cleanup(func() {
+		cleanupFileSearchRoots(t, ctx, filePlugin, "custom roots test")
+	})
 
 	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
 		t.Fatalf("file search root did not become ready: %v", err)
@@ -138,6 +141,114 @@ func TestFilePlugin_CustomRoots(t *testing.T) {
 	}
 
 	t.Fatalf("expected custom root to be searchable, got %d result(s)", len(results))
+}
+
+func TestFilePlugin_RefinementsTypeAndSort(t *testing.T) {
+	suite := NewTestSuite(t)
+	ctx := suite.ctx
+
+	rootPath := newStableFileSearchRoot(t, "filesearch-refinement-root")
+	stamp := time.Now().UnixNano()
+	typePrefix := fmt.Sprintf("refinement-type-%d", stamp)
+	sortPrefix := fmt.Sprintf("refinement-sort-%d", stamp)
+
+	typeFileName := typePrefix + ".txt"
+	typeFilePath := filepath.Join(rootPath, typeFileName)
+	if err := os.WriteFile(typeFilePath, []byte("file"), 0644); err != nil {
+		t.Fatalf("failed to create type file: %v", err)
+	}
+
+	typeFolderName := typePrefix + "-folder"
+	typeFolderPath := filepath.Join(rootPath, typeFolderName)
+	if err := os.MkdirAll(typeFolderPath, 0755); err != nil {
+		t.Fatalf("failed to create type folder: %v", err)
+	}
+
+	oldFileName := sortPrefix + "-old.txt"
+	oldFilePath := filepath.Join(rootPath, oldFileName)
+	if err := os.WriteFile(oldFilePath, []byte("old"), 0644); err != nil {
+		t.Fatalf("failed to create old sort file: %v", err)
+	}
+
+	newFileName := sortPrefix + "-new.txt"
+	newFilePath := filepath.Join(rootPath, newFileName)
+	if err := os.WriteFile(newFilePath, []byte("new"), 0644); err != nil {
+		t.Fatalf("failed to create new sort file: %v", err)
+	}
+
+	oldTime := time.Now().Add(-2 * time.Hour)
+	newTime := time.Now()
+	if err := os.Chtimes(oldFilePath, oldTime, oldTime); err != nil {
+		t.Fatalf("failed to set old sort file time: %v", err)
+	}
+	if err := os.Chtimes(newFilePath, newTime, newTime); err != nil {
+		t.Fatalf("failed to set new sort file time: %v", err)
+	}
+
+	rootSetting, err := json.Marshal([]map[string]string{
+		{"Path": rootPath},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal file search roots setting: %v", err)
+	}
+
+	filePlugin := findPluginInstance("979d6363-025a-4f51-88d3-0b04e9dc56bf")
+	if filePlugin == nil {
+		t.Fatal("file plugin instance not found")
+	}
+	t.Cleanup(func() {
+		cleanupFileSearchRoots(t, ctx, filePlugin, "refinement test")
+	})
+
+	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
+		t.Fatalf("file search root did not become ready: %v", err)
+	}
+
+	if err := waitForFileSearchResult(ctx, "f "+typePrefix, typeFileName, typeFilePath, 30*time.Second); err != nil {
+		t.Fatalf("type file did not become searchable: %v", err)
+	}
+	if err := waitForFileSearchResult(ctx, "f "+typePrefix, typeFolderName, typeFolderPath, 30*time.Second); err != nil {
+		t.Fatalf("type folder did not become searchable: %v", err)
+	}
+
+	defaultResults, refinements, err := runQueryWithRefinements(ctx, "f "+typePrefix, nil)
+	if err != nil {
+		t.Fatalf("failed to query default file refinements: %v", err)
+	}
+	if len(defaultResults) == 0 {
+		t.Fatal("expected default file search results")
+	}
+	if !hasQueryRefinement(refinements, "file_type") || !hasQueryRefinement(refinements, "file_sort") {
+		t.Fatalf("expected file type and sort refinements, got %#v", refinements)
+	}
+
+	folderResults, _, err := runQueryWithRefinements(ctx, "f "+typePrefix, map[string]string{"file_type": "folder"})
+	if err != nil {
+		t.Fatalf("failed to query folder refinement: %v", err)
+	}
+	if !hasFileSearchResult(folderResults, typeFolderName, typeFolderPath) {
+		t.Fatalf("folder refinement should include folder %q, got %#v", typeFolderPath, folderResults)
+	}
+	if hasFileSearchResult(folderResults, typeFileName, typeFilePath) {
+		t.Fatalf("folder refinement should exclude file %q", typeFilePath)
+	}
+
+	if err := waitForFileSearchResult(ctx, "f "+sortPrefix, oldFileName, oldFilePath, 30*time.Second); err != nil {
+		t.Fatalf("old sort file did not become searchable: %v", err)
+	}
+	if err := waitForFileSearchResult(ctx, "f "+sortPrefix, newFileName, newFilePath, 30*time.Second); err != nil {
+		t.Fatalf("new sort file did not become searchable: %v", err)
+	}
+
+	modifiedResults, _, err := runQueryWithRefinements(ctx, "f "+sortPrefix, map[string]string{"file_sort": "modified"})
+	if err != nil {
+		t.Fatalf("failed to query modified sort refinement: %v", err)
+	}
+	newIndex := fileSearchResultIndex(modifiedResults, newFileName, newFilePath)
+	oldIndex := fileSearchResultIndex(modifiedResults, oldFileName, oldFilePath)
+	if newIndex < 0 || oldIndex < 0 || newIndex > oldIndex {
+		t.Fatalf("modified sort should put newest file before old file, newIndex=%d oldIndex=%d results=%#v", newIndex, oldIndex, modifiedResults)
+	}
 }
 
 func TestFilePlugin_CustomRootsExcludeOutsidePaths(t *testing.T) {
@@ -428,12 +539,7 @@ func TestFilePlugin_CustomRootsIncrementalSync(t *testing.T) {
 		if _, err := runQueryWithSession(ctx, sessionID, ""); err != nil {
 			t.Errorf("failed to clear incremental sync query session: %v", err)
 		}
-		filePlugin.API.SaveSetting(ctx, "roots", "[]", false)
-		if err := waitForFileSearchUserRoots(ctx, nil, 30*time.Second); err != nil {
-			t.Errorf("file search roots did not reset after incremental sync test: %v", err)
-		} else if err := waitForFileSearchIdle(ctx, 30*time.Second); err != nil {
-			t.Errorf("file search engine did not settle after incremental sync test: %v", err)
-		}
+		cleanupFileSearchRoots(t, ctx, filePlugin, "incremental sync test")
 	})
 
 	if err := saveFileSearchRootsAndWaitReady(ctx, filePlugin, string(rootSetting), rootPath, 30*time.Second); err != nil {
@@ -494,48 +600,89 @@ func runQuery(ctx context.Context, rawQuery string) ([]plugin.QueryResultUI, err
 }
 
 func runQueryWithSession(ctx context.Context, sessionID string, rawQuery string) ([]plugin.QueryResultUI, error) {
+	results, _, err := runQueryWithRefinementsAndSession(ctx, sessionID, rawQuery, nil)
+	return results, err
+}
+
+func runQueryWithRefinements(ctx context.Context, rawQuery string, refinements map[string]string) ([]plugin.QueryResultUI, []plugin.QueryRefinement, error) {
+	return runQueryWithRefinementsAndSession(ctx, "", rawQuery, refinements)
+}
+
+func runQueryWithRefinementsAndSession(ctx context.Context, sessionID string, rawQuery string, refinements map[string]string) ([]plugin.QueryResultUI, []plugin.QueryRefinement, error) {
 	if sessionID != "" {
 		ctx = util.WithSessionContext(ctx, sessionID)
 	}
 
 	query, queryPlugin, err := plugin.GetPluginManager().NewQuery(ctx, common.PlainQuery{
-		QueryType: plugin.QueryTypeInput,
-		QueryText: rawQuery,
+		QueryType:        plugin.QueryTypeInput,
+		QueryText:        rawQuery,
+		QueryRefinements: refinements,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	plugin.GetPluginManager().HandleQueryLifecycle(ctx, query, queryPlugin)
 	resultChan, _, doneChan := plugin.GetPluginManager().Query(ctx, query)
 	var allResults []plugin.QueryResultUI
+	var queryRefinements []plugin.QueryRefinement
 
 collect:
 	for {
 		select {
 		case response := <-resultChan:
 			allResults = append(allResults, response.Results...)
+			if len(response.Refinements) > 0 {
+				queryRefinements = response.Refinements
+			}
 		case <-doneChan:
 			for {
 				select {
 				case response := <-resultChan:
 					allResults = append(allResults, response.Results...)
+					if len(response.Refinements) > 0 {
+						queryRefinements = response.Refinements
+					}
 				default:
 					break collect
 				}
 			}
 		case <-time.After(5 * time.Second):
-			return nil, context.DeadlineExceeded
+			return nil, nil, context.DeadlineExceeded
 		}
 	}
 
 	if len(allResults) == 0 {
 		// QueryFallback now uses the QueryResponseUI envelope so layout can
 		// travel with fallback rows; these tests only assert the result rows.
-		allResults = plugin.GetPluginManager().QueryFallback(ctx, query, queryPlugin).Results
+		fallback := plugin.GetPluginManager().QueryFallback(ctx, query, queryPlugin)
+		allResults = fallback.Results
+		queryRefinements = fallback.Refinements
 	}
 
-	return allResults, nil
+	return allResults, queryRefinements, nil
+}
+
+func hasQueryRefinement(refinements []plugin.QueryRefinement, id string) bool {
+	for _, refinement := range refinements {
+		if refinement.Id == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFileSearchResult(results []plugin.QueryResultUI, title string, path string) bool {
+	return fileSearchResultIndex(results, title, path) >= 0
+}
+
+func fileSearchResultIndex(results []plugin.QueryResultUI, title string, path string) int {
+	for index, result := range results {
+		if result.Title == title && result.SubTitle == path {
+			return index
+		}
+	}
+	return -1
 }
 
 func pollUntil(timeout time.Duration, interval time.Duration, check func() (bool, error)) error {
@@ -635,7 +782,7 @@ func waitForFileSearchRootReady(ctx context.Context, rootPath string, timeout ti
 }
 
 func waitForFileSearchUserRoots(ctx context.Context, expectedPaths []string, timeout time.Duration) error {
-	engine, err := getFileSearchEngine()
+	engine, err := waitForFileSearchEngine(timeout)
 	if err != nil {
 		return err
 	}
@@ -691,7 +838,7 @@ func waitForFileSearchUserRoots(ctx context.Context, expectedPaths []string, tim
 }
 
 func waitForFileSearchIdle(ctx context.Context, timeout time.Duration) error {
-	engine, err := getFileSearchEngine()
+	engine, err := waitForFileSearchEngine(timeout)
 	if err != nil {
 		return err
 	}
@@ -720,12 +867,45 @@ func waitForFileSearchIdle(ctx context.Context, timeout time.Duration) error {
 	)
 }
 
+func cleanupFileSearchRoots(t *testing.T, ctx context.Context, filePlugin *plugin.Instance, scenario string) {
+	t.Helper()
+
+	// Test isolation: File Search roots live in the shared plugin setting for
+	// the whole integration-test process. Resetting them after custom-root
+	// scenarios keeps later tests from reading stale indexed roots.
+	filePlugin.API.SaveSetting(ctx, "roots", "[]", false)
+	if err := waitForFileSearchUserRoots(ctx, nil, 30*time.Second); err != nil {
+		t.Errorf("file search roots did not reset after %s: %v", scenario, err)
+	} else if err := waitForFileSearchIdle(ctx, 30*time.Second); err != nil {
+		t.Errorf("file search engine did not settle after %s: %v", scenario, err)
+	}
+}
+
 func saveFileSearchRootsAndWaitReady(ctx context.Context, filePlugin *plugin.Instance, rootsSetting string, rootPath string, timeout time.Duration) error {
 	// File search root updates arrive through asynchronous setting callbacks and one shared
 	// engine instance backs the package. Wait for the configured root set to settle before
 	// asserting query results so test expectations do not race the background reindex.
 	filePlugin.API.SaveSetting(ctx, "roots", rootsSetting, false)
 	return waitForFileSearchRootReady(ctx, rootPath, timeout)
+}
+
+func waitForFileSearchEngine(timeout time.Duration) (*filesearch.Engine, error) {
+	// Test hardening: plugin initialization exposes the File Search instance before
+	// Init has finished assigning its engine. Polling keeps smoke tests focused on
+	// search behavior instead of racing that startup boundary.
+	var engine *filesearch.Engine
+	var lastErr error
+	err := pollUntil(timeout, 100*time.Millisecond, func() (bool, error) {
+		engine, lastErr = getFileSearchEngine()
+		return lastErr == nil, nil
+	})
+	if err != nil {
+		if lastErr != nil {
+			return nil, fmt.Errorf("%w; last engine state: %v", err, lastErr)
+		}
+		return nil, err
+	}
+	return engine, nil
 }
 
 func getFileSearchEngine() (*filesearch.Engine, error) {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"wox/common"
@@ -28,9 +30,24 @@ const fileRootsSettingKey = "roots"
 const fileSearchToolbarMsgID = "file-search-status"
 
 const (
-	slowFileSearchQueryThresholdMs int64 = 40
-	slowFileSearchStageThresholdMs int64 = 15
-	toolbarActivityPathMaxChars          = 42
+	slowFileSearchQueryThresholdMs  int64 = 40
+	slowFileSearchStageThresholdMs  int64 = 15
+	toolbarActivityPathMaxChars           = 42
+	fileSearchResultLimit                 = 100
+	fileSearchRefinedCandidateLimit       = 300
+)
+
+const (
+	fileSearchTypeRefinementKey    = "file_type"
+	fileSearchTypeRefinementAll    = "all"
+	fileSearchTypeRefinementFile   = "file"
+	fileSearchTypeRefinementFolder = "folder"
+
+	fileSearchSortRefinementKey       = "file_sort"
+	fileSearchSortRefinementRelevance = "relevance"
+	fileSearchSortRefinementName      = "name"
+	fileSearchSortRefinementModified  = "modified"
+	fileSearchSortRefinementSize      = "size"
 )
 
 type fileRootSetting struct {
@@ -178,7 +195,16 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin
 	// so the global pinyin option must be passed explicitly. Without this bridge,
 	// disabling pinyin in Wox settings still allowed pinyin-derived candidates
 	// such as ASCII "abc..." cache files to appear for mixed Chinese queries.
-	results, err := c.engine.Search(ctx, filesearch.SearchQuery{Raw: query.Search, DisablePinyin: !usePinyin}, 100)
+	selectedType := selectedFileSearchType(query)
+	selectedSort := selectedFileSearchSort(query)
+	searchLimit := fileSearchResultLimit
+	if selectedType != fileSearchTypeRefinementAll || selectedSort != fileSearchSortRefinementRelevance {
+		// Feature addition: type filters and non-relevance sorting need a wider
+		// candidate window before plugin-side refinement. Keeping the old limit
+		// for the default path preserves the fast historical relevance search.
+		searchLimit = fileSearchRefinedCandidateLimit
+	}
+	results, err := c.engine.Search(ctx, filesearch.SearchQuery{Raw: query.Search, DisablePinyin: !usePinyin}, searchLimit)
 	diagnostics.searchElapsedMs = util.GetSystemTimestamp() - searchStartedAt
 	if err != nil {
 		c.logQueryDiagnostics(ctx, query.Search, diagnostics, 0, util.GetSystemTimestamp()-queryStartedAt)
@@ -186,6 +212,7 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin
 		c.api.Notify(ctx, err.Error())
 		return plugin.QueryResponse{}
 	}
+	results = refineFileSearchResults(results, selectedType, selectedSort, fileSearchResultLimit)
 
 	// Split result-materialization timing out from engine search timing because
 	// os.Stat/icon setup can make the plugin itself look slow even when the
@@ -252,7 +279,122 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin
 	diagnostics.buildElapsedMs = util.GetSystemTimestamp() - buildStartedAt
 	c.logQueryDiagnostics(ctx, query.Search, diagnostics, len(queryResults), util.GetSystemTimestamp()-queryStartedAt)
 
-	return plugin.NewQueryResponse(queryResults)
+	response := plugin.NewQueryResponse(queryResults)
+	response.Refinements = c.buildFileSearchRefinements()
+	return response
+}
+
+func (c *FileSearchPlugin) buildFileSearchRefinements() []plugin.QueryRefinement {
+	return []plugin.QueryRefinement{
+		c.buildFileSearchTypeRefinement(),
+		c.buildFileSearchSortRefinement(),
+	}
+}
+
+func (c *FileSearchPlugin) buildFileSearchTypeRefinement() plugin.QueryRefinement {
+	// Feature addition: type filtering belongs in QueryRefinement instead of
+	// command syntax so users can keep typing the same file query while quickly
+	// narrowing results to files or folders from the keyboard.
+	return plugin.QueryRefinement{
+		Id:           fileSearchTypeRefinementKey,
+		Title:        "i18n:plugin_file_refinement_type",
+		Type:         plugin.QueryRefinementTypeSingleSelect,
+		DefaultValue: []string{fileSearchTypeRefinementAll},
+		Hotkey:       fileSearchPlatformHotkey("t"),
+		Persist:      false,
+		Options: []plugin.QueryRefinementOption{
+			{Value: fileSearchTypeRefinementAll, Title: "i18n:plugin_file_refinement_type_all"},
+			{Value: fileSearchTypeRefinementFile, Title: "i18n:plugin_file_refinement_type_file"},
+			{Value: fileSearchTypeRefinementFolder, Title: "i18n:plugin_file_refinement_type_folder"},
+		},
+	}
+}
+
+func (c *FileSearchPlugin) buildFileSearchSortRefinement() plugin.QueryRefinement {
+	// Feature addition: sort stays plugin-owned because the indexed engine owns
+	// the metadata used for modified-time and size ordering. Relevance remains
+	// the default so the existing search ranking is unchanged until selected.
+	return plugin.QueryRefinement{
+		Id:           fileSearchSortRefinementKey,
+		Title:        "i18n:plugin_file_refinement_sort",
+		Type:         plugin.QueryRefinementTypeSort,
+		DefaultValue: []string{fileSearchSortRefinementRelevance},
+		Hotkey:       fileSearchPlatformHotkey("s"),
+		Persist:      false,
+		Options: []plugin.QueryRefinementOption{
+			{Value: fileSearchSortRefinementRelevance, Title: "i18n:plugin_file_refinement_sort_relevance"},
+			{Value: fileSearchSortRefinementName, Title: "i18n:plugin_file_refinement_sort_name"},
+			{Value: fileSearchSortRefinementModified, Title: "i18n:plugin_file_refinement_sort_modified"},
+			{Value: fileSearchSortRefinementSize, Title: "i18n:plugin_file_refinement_sort_size"},
+		},
+	}
+}
+
+func fileSearchPlatformHotkey(key string) string {
+	if runtime.GOOS == "darwin" {
+		return "cmd+" + key
+	}
+	return "alt+" + key
+}
+
+func selectedFileSearchType(query plugin.Query) string {
+	switch query.Refinements[fileSearchTypeRefinementKey] {
+	case fileSearchTypeRefinementFile, fileSearchTypeRefinementFolder:
+		return query.Refinements[fileSearchTypeRefinementKey]
+	default:
+		return fileSearchTypeRefinementAll
+	}
+}
+
+func selectedFileSearchSort(query plugin.Query) string {
+	switch query.Refinements[fileSearchSortRefinementKey] {
+	case fileSearchSortRefinementName, fileSearchSortRefinementModified, fileSearchSortRefinementSize:
+		return query.Refinements[fileSearchSortRefinementKey]
+	default:
+		return fileSearchSortRefinementRelevance
+	}
+}
+
+func refineFileSearchResults(results []filesearch.SearchResult, selectedType string, selectedSort string, limit int) []filesearch.SearchResult {
+	refined := make([]filesearch.SearchResult, 0, len(results))
+	for _, result := range results {
+		switch selectedType {
+		case fileSearchTypeRefinementFile:
+			if result.IsDir {
+				continue
+			}
+		case fileSearchTypeRefinementFolder:
+			if !result.IsDir {
+				continue
+			}
+		}
+		refined = append(refined, result)
+	}
+
+	switch selectedSort {
+	case fileSearchSortRefinementName:
+		sort.SliceStable(refined, func(i, j int) bool {
+			leftName := strings.ToLower(refined[i].Name)
+			rightName := strings.ToLower(refined[j].Name)
+			if leftName == rightName {
+				return refined[i].Path < refined[j].Path
+			}
+			return leftName < rightName
+		})
+	case fileSearchSortRefinementModified:
+		sort.SliceStable(refined, func(i, j int) bool {
+			return refined[i].Mtime > refined[j].Mtime
+		})
+	case fileSearchSortRefinementSize:
+		sort.SliceStable(refined, func(i, j int) bool {
+			return refined[i].Size > refined[j].Size
+		})
+	}
+
+	if limit > 0 && len(refined) > limit {
+		return append([]filesearch.SearchResult(nil), refined[:limit]...)
+	}
+	return refined
 }
 
 func resolveFileSearchResultIcon(ctx context.Context, result filesearch.SearchResult, fileTypeIcons map[string]common.WoxImage, diagnostics *fileSearchQueryDiagnostics) common.WoxImage {

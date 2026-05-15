@@ -73,6 +73,8 @@ func (p *SQLiteSearchProvider) Search(ctx context.Context, query SearchQuery, li
 			Name:       row.Name,
 			ParentPath: row.ParentPath,
 			IsDir:      row.IsDir,
+			Mtime:      row.Mtime,
+			Size:       row.Size,
 			Score:      score,
 		})
 	}
