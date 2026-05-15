@@ -523,7 +523,12 @@ func (m *Manager) loadSystemPlugins(ctx context.Context) {
 			defer m.systemPluginsWg.Done()
 
 			metadata := plugin.GetMetadata()
-			metadata.LoadSystemI18nFromDirectory(ctx)
+			// System plugins use Wox's central i18n keys directly. The old path
+			// flattened every central language file into every system plugin metadata,
+			// which duplicated the same translation maps across all system plugins.
+			// Metadata.translate already falls back to TranslateWox, so keeping the
+			// central translations owned by the i18n manager preserves behavior while
+			// avoiding the per-plugin live heap copy.
 			instance := &Instance{
 				Metadata:              metadata,
 				Plugin:                plugin,

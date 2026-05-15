@@ -14,7 +14,6 @@ import (
 	"sync"
 	"wox/common"
 	"wox/i18n"
-	"wox/resource"
 	"wox/setting/definition"
 	"wox/setting/validator"
 	"wox/util"
@@ -81,7 +80,9 @@ type Metadata struct {
 	SettingDefinitions definition.PluginSettingDefinitions
 	QueryRequirements  MetadataQueryRequirements
 
-	// I18n holds inline translations for the plugin.
+	// I18n holds plugin-local translations.
+	// Wox central translations stay in the i18n manager so system plugins do not
+	// duplicate the same flattened language maps in every Metadata instance.
 	// Map structure: langCode -> key -> translatedValue
 	// Example: {"en_US": {"title": "Hello"}, "zh_CN": {"title": "你好"}}
 	I18n map[string]map[string]string
@@ -614,26 +615,6 @@ func (m *Metadata) translate(ctx context.Context, text common.I18nString) string
 	translated := i18n.GetI18nManager().TranslateWox(ctx, rawText)
 	m.translateCache.Store(cacheKey, translated)
 	return translated
-}
-
-// LoadSystemI18nFromDirectory merges translations from Wox's central lang files into Metadata.I18n.
-func (m *Metadata) LoadSystemI18nFromDirectory(ctx context.Context) {
-	// System plugins share Wox's central lang files instead of a per-plugin lang folder.
-	for _, lang := range i18n.GetSupportedLanguages() {
-		langJson, err := resource.GetLangJson(ctx, string(lang.Code))
-		if err != nil {
-			util.GetLogger().Warn(ctx, fmt.Sprintf("failed to read wox lang %s: %s", lang.Code, err.Error()))
-			continue
-		}
-
-		translations, parseErr := flattenI18nJSON(langJson)
-		if parseErr != nil {
-			util.GetLogger().Warn(ctx, fmt.Sprintf("failed to parse wox lang %s: %s", lang.Code, parseErr.Error()))
-			continue
-		}
-
-		m.mergeI18n(string(lang.Code), translations)
-	}
 }
 
 // LoadPluginI18nFromDirectory merges translations from lang files into Metadata.I18n.
