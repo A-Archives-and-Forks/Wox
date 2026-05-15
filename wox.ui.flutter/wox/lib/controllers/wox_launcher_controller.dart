@@ -115,6 +115,11 @@ class WoxLauncherController extends GetxController {
     selectedTextStyle: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.queryBoxTextSelectionColor)),
     enableSelectedTextStyle: false,
   );
+  // Bug fix: launcher show uses a delayed focus retry for Windows, but that
+  // retry must not re-apply SelectAll after the user has already typed into the
+  // newly visible query box. This token scopes each visible-launcher focus
+  // sequence so stale retries from an older show/hide cycle cannot touch input.
+  int _visibleLauncherFocusToken = 0;
   final queryBoxScrollController = ScrollController(initialScrollOffset: 0.0);
   // Stores the current editable text width so query box height can follow visual wrapping.
   double queryBoxTextWrapWidth = 0;
@@ -1763,12 +1768,8 @@ class WoxLauncherController extends GetxController {
       });
     }
 
-    focusQueryBox(selectAll: params.selectAll);
+    unawaited(_focusQueryBoxAfterLauncherShow(selectAll: params.selectAll));
     unawaited(_showDevLauncherActivationWarningIfSlow(traceId, visibleActivationCost));
-    // Bug fix: on Windows the native show/focus call can complete before the
-    // Flutter editable text is ready to accept keyboard focus. Retry once after
-    // the first visible frame so re-show keeps immediate typing reliable.
-    unawaited(Future.delayed(const Duration(milliseconds: 100), () => focusQueryBox(selectAll: params.selectAll)));
 
     if (params.isQueryFocus) {
       Logger.instance.debug(traceId, "need to auto focus to chat input on show app (query focus)");
@@ -1899,6 +1900,11 @@ class WoxLauncherController extends GetxController {
       return;
     }
 
+    // Bug fix: hide invalidates pending visible-launcher focus retries. Without
+    // this guard, a retry scheduled by the previous show cycle can run after the
+    // next window transition and unexpectedly re-select query text.
+    _visibleLauncherFocusToken++;
+
     // hide first to avoid the potential delay caused by some heavy operations in onHide callback
     // E.g. on tray query mode, hideActionPanel will call resize height, which may cause a noticeable
     // resize animation if the window is still visible while resizing, so we hide the window first and then do the rest of the operations
@@ -2014,7 +2020,7 @@ class WoxLauncherController extends GetxController {
     }
   }
 
-  Future<void> focusQueryBox({bool selectAll = false}) async {
+  Future<void> focusQueryBox({bool selectAll = false, bool Function()? shouldSelectAll}) async {
     final screenshotController = Get.find<WoxScreenshotController>();
     if (screenshotController.isSessionActive.value) {
       // Screenshot capture owns the shared window while the annotation workspace is visible. The
@@ -2045,9 +2051,62 @@ class WoxLauncherController extends GetxController {
     final editableTextState = queryBoxTextFieldKey.currentState?.editableTextKey.currentState;
     editableTextState?.requestKeyboard();
 
-    // by default requestFocus will select all text, if selectAll is false, then restore to the previously stored cursor position
-    if (selectAll) {
+    // SelectAll is explicit: launcher activation may select the old query for
+    // overwrite, while ordinary refocus should preserve the editor's current
+    // selection/cursor.
+    // Bug fix: some show-time focus requests finish after the user has already
+    // typed the first character. Evaluate the optional SelectAll guard at the
+    // last moment so those late completions can recover keyboard focus without
+    // replacing the user's in-progress query selection.
+    final canSelectAll = shouldSelectAll?.call() ?? true;
+    if (selectAll && canSelectAll) {
       queryBoxTextFieldController.selection = TextSelection(baseOffset: 0, extentOffset: queryBoxTextFieldController.text.length);
+    }
+  }
+
+  bool _shouldSelectAllForVisibleLauncherFocus({required bool selectAll, required int focusToken, required String textBeforeFocusSequence}) {
+    if (!selectAll) {
+      return false;
+    }
+    if (focusToken != _visibleLauncherFocusToken) {
+      return false;
+    }
+
+    // Bug fix: SelectAll belongs to the launcher activation snapshot. If text
+    // changed after the window became visible, the user has already started the
+    // next query, so a delayed focus retry should only recover keyboard focus
+    // and must not select text that the user just typed.
+    return queryBoxTextFieldController.text == textBeforeFocusSequence;
+  }
+
+  Future<void> _focusQueryBoxAfterLauncherShow({required bool selectAll}) async {
+    final focusToken = ++_visibleLauncherFocusToken;
+    final textBeforeFocusSequence = queryBoxTextFieldController.text;
+
+    await focusQueryBox(
+      selectAll: selectAll,
+      shouldSelectAll: () => _shouldSelectAllForVisibleLauncherFocus(selectAll: selectAll, focusToken: focusToken, textBeforeFocusSequence: textBeforeFocusSequence),
+    );
+    if (focusToken != _visibleLauncherFocusToken) {
+      return;
+    }
+
+    // Bug fix: on Windows the native show/focus call can complete before the
+    // Flutter editable text is ready to accept keyboard focus. Retry once after
+    // the first visible frame, but gate SelectAll against the original text so
+    // early user input such as "qianlifeng" cannot lose its first character.
+    if (Platform.isWindows) {
+      unawaited(
+        Future.delayed(const Duration(milliseconds: 100), () async {
+          if (focusToken != _visibleLauncherFocusToken) {
+            return;
+          }
+          await focusQueryBox(
+            selectAll: selectAll,
+            shouldSelectAll: () => _shouldSelectAllForVisibleLauncherFocus(selectAll: selectAll, focusToken: focusToken, textBeforeFocusSequence: textBeforeFocusSequence),
+          );
+        }),
+      );
     }
   }
 
@@ -3505,8 +3564,7 @@ class WoxLauncherController extends GetxController {
     // focus has finished. Await the first focus request so callers and smoke
     // tests observe the real postcondition, then keep the delayed retry for
     // platforms that report window focus before the launcher text field rebuilds.
-    await focusQueryBox(selectAll: true);
-    unawaited(Future.delayed(const Duration(milliseconds: 100), () => focusQueryBox(selectAll: true)));
+    await _focusQueryBoxAfterLauncherShow(selectAll: true);
   }
 
   Future<void> openOnboarding(String traceId) async {

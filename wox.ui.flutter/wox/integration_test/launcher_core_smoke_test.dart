@@ -17,6 +17,7 @@ import 'package:wox/enums/wox_query_type_enum.dart';
 import 'package:wox/enums/wox_result_tail_text_category_enum.dart';
 import 'package:wox/enums/wox_result_tail_type_enum.dart';
 import 'package:wox/enums/wox_selection_type_enum.dart';
+import 'package:wox/enums/wox_start_page_enum.dart';
 import 'package:wox/modules/launcher/views/wox_launcher_view.dart';
 import 'package:wox/modules/setting/views/wox_setting_view.dart';
 import 'package:wox/utils/windows/window_manager.dart';
@@ -144,6 +145,35 @@ void registerLauncherCoreSmokeTests() {
       expect(await windowManager.isVisible(), isTrue);
       expect(controller.queryBoxFocusNode.hasFocus, isTrue);
       expect(controller.isInSettingView.value, isFalse);
+    });
+
+    testWidgets('T2-07a: Re-show focus retry does not select text typed during startup', (tester) async {
+      final controller = await launchLauncherApp(tester);
+      await updateSettingDirect('LangCode', 'en_US');
+      await updateSettingDirect('LaunchMode', WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code);
+      await updateSettingDirect('StartPage', WoxStartPageEnum.WOX_START_PAGE_BLANK.code);
+
+      await controller.showApp(
+        const UuidV4().generate(),
+        ShowAppParams(
+          selectAll: true,
+          position: Position(type: WoxPositionTypeEnum.POSITION_TYPE_LAST_LOCATION.code, x: 200, y: 200),
+          queryHistories: [],
+          launchMode: WoxLaunchModeEnum.WOX_LAUNCH_MODE_FRESH.code,
+          startPage: WoxStartPageEnum.WOX_START_PAGE_BLANK.code,
+        ),
+      );
+
+      controller.queryBoxTextFieldController.value = const TextEditingValue(text: 'q', selection: TextSelection.collapsed(offset: 1));
+      controller.onQueryBoxTextChanged('q');
+      await tester.pump(const Duration(milliseconds: 150));
+
+      // Regression coverage: the delayed Windows focus retry must not re-apply
+      // SelectAll after the user has already typed the first character. Doing
+      // so selects "q", and the next key replaces it, producing "ianlifeng".
+      expect(controller.queryBoxTextFieldController.text, equals('q'));
+      expect(controller.queryBoxTextFieldController.selection.isCollapsed, isTrue);
+      expect(controller.queryBoxTextFieldController.selection.baseOffset, equals(1));
     });
 
     testWidgets('T2-08: Fresh launch clears stale query when shown from the default source', (tester) async {
