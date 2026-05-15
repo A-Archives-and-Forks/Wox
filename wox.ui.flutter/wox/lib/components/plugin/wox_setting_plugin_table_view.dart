@@ -6,6 +6,7 @@ import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/components/wox_button.dart';
 import 'package:wox/components/wox_image_view.dart';
+import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/components/wox_tooltip_icon_view.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/setting/wox_plugin_setting_select.dart';
@@ -244,7 +245,9 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Flexible(
-          child: Tooltip(
+          // Table cells often truncate text, so keep the full value discoverable
+          // through WoxTooltip instead of mixing in Material Tooltip overlays.
+          child: WoxTooltip(
             message: translatedLabel,
             child: Text(
               translatedLabel,
@@ -432,7 +435,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                 snapshot.connectionState == ConnectionState.waiting
                     ? const Icon(Icons.circle, color: Colors.grey)
                     : snapshot.error != null
-                    ? Tooltip(message: snapshot.error?.toString() ?? "", child: const Icon(Icons.circle, color: Colors.red))
+                    ? WoxTooltip(message: snapshot.error?.toString() ?? "", child: const Icon(Icons.circle, color: Colors.red))
                     : const Icon(Icons.circle, color: Colors.green),
           );
         },
@@ -455,8 +458,8 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                 snapshot.connectionState == ConnectionState.waiting
                     ? const Icon(Icons.circle, color: Colors.grey)
                     : snapshot.error != null
-                    ? Tooltip(message: snapshot.error?.toString() ?? "", child: const Icon(Icons.circle, color: Colors.red))
-                    : Tooltip(
+                    ? WoxTooltip(message: snapshot.error?.toString() ?? "", child: const Icon(Icons.circle, color: Colors.red))
+                    : WoxTooltip(
                       message: snapshot.data?.map((e) => e.name).join("\n") ?? "",
                       child: Text("${snapshot.data?.length ?? 0} tools", style: TextStyle(color: safeFromCssColor(WoxThemeUtil.instance.currentTheme.value.resultItemTitleColor))),
                     ),
@@ -466,7 +469,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
     }
     if (column.type == PluginSettingValueType.pluginSettingValueTableColumnTypeAISelectMCPServerTools) {
       final toolNames = value as List<dynamic>;
-      return Tooltip(
+      return WoxTooltip(
         message: toolNames.join("\n"),
         child: columnWidth(
           column: column,
@@ -578,7 +581,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
                 await _showEditRowDialog(context, row);
               },
             ),
-            Tooltip(
+            WoxTooltip(
               message: isDeleteDisabled ? deleteDisabledMessage : "",
               child: WoxButton.text(
                 text: '',
@@ -651,7 +654,7 @@ class WoxSettingPluginTable extends WoxSettingPluginItem {
       column: operationColumn,
       isHeader: true,
       isOperation: true,
-      child: Tooltip(
+      child: WoxTooltip(
         message: tr("ui_operation"),
         child: Text(
           tr("ui_operation"),

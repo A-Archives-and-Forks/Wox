@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_image_view.dart';
+import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/controllers/wox_screenshot_controller.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/entity/screenshot_session.dart';
@@ -2049,10 +2050,10 @@ class _ToolButton extends StatelessWidget {
       return button;
     }
 
-    // The screenshot toolbox is icon-only. Adding tooltips at the shared button wrapper keeps hover
+    // The screenshot toolbox is icon-only. Adding WoxTooltip at the shared button wrapper keeps hover
     // help consistent for drawing tools, session actions, and disabled actions without duplicating
-    // Tooltip wiring at every call site.
-    return Tooltip(message: tooltip!, waitDuration: const Duration(milliseconds: 350), child: button);
+    // overlay wiring at every call site. The delay preserves the old dense-toolbar hover timing.
+    return WoxTooltip(message: tooltip!, waitDuration: const Duration(milliseconds: 350), child: button);
   }
 }
 
@@ -2128,7 +2129,7 @@ class _MosaicBrushSizeButton extends StatelessWidget {
     final visualRadius = (4 + radius / maxRadius * 6).clamp(4.0, 10.0).toDouble();
     final color = selected ? const Color(0xFF29FF72) : Colors.white70;
 
-    return Tooltip(
+    return WoxTooltip(
       message: tooltip,
       waitDuration: const Duration(milliseconds: 350),
       child: InkWell(
@@ -2182,7 +2183,7 @@ class _EditActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
+    return WoxTooltip(
       message: tooltip,
       waitDuration: const Duration(milliseconds: 350),
       child: InkWell(

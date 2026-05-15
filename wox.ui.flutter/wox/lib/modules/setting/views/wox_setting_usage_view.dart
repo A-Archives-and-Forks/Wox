@@ -13,6 +13,7 @@ import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_image_view.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
 import 'package:wox/components/wox_panel.dart';
+import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/wox_usage_stats.dart';
 import 'package:wox/utils/colors.dart';
@@ -364,7 +365,10 @@ class _WoxSettingUsageViewState extends State<WoxSettingUsageView> {
                               final isActive = (hoveredIndex ?? highlightIndex) == i && value > 0;
                               final tooltipLabel = i < tooltipLabels.length ? tooltipLabels[i] : labels[i];
                               return Expanded(
-                                child: Tooltip(
+                                // Usage chart bars keep their short hover delay, but
+                                // render through WoxTooltip so chart hints match other
+                                // text overlays and remain selectable when needed.
+                                child: WoxTooltip(
                                   message: '$tooltipLabel · $value',
                                   waitDuration: const Duration(milliseconds: 180),
                                   child: MouseRegion(

@@ -5,6 +5,7 @@ import 'package:uuid/v4.dart';
 import 'package:wox/api/wox_api.dart';
 import 'package:wox/components/demo/wox_demo.dart';
 import 'package:wox/components/onboarding/wox_onboarding_step_layout.dart';
+import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/utils/colors.dart';
 
 class WoxPermissionsOnboarding extends StatelessWidget {
@@ -141,7 +142,9 @@ class WoxPermissionsOnboarding extends StatelessWidget {
     // Completed permissions do not need another action. A green check keeps the
     // row aligned with actionable states while avoiding a redundant "Ready"
     // badge that competes with the permission title.
-    return Tooltip(
+    // Tooltip styling is centralized in WoxTooltip so onboarding status affordances
+    // do not drift from the launcher and settings hover overlays.
+    return WoxTooltip(
       message: tr('onboarding_permission_ready'),
       child: Container(
         width: 32,

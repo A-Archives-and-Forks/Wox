@@ -2,6 +2,7 @@ import 'package:chinese_font_library/chinese_font_library.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wox/components/wox_checkbox.dart';
+import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/utils/colors.dart';
 import 'package:wox/utils/wox_setting_focus_util.dart';
 
@@ -561,7 +562,9 @@ class _WoxDropdownButtonState<T> extends State<WoxDropdownButton<T>> {
                   : Text(item.label),
         ),
         if (hasTrailing) ...[const SizedBox(width: 12), item.trailing!],
-        if (hasTooltip) Tooltip(message: item.tooltip!, child: Icon(Icons.info_outline, size: 16, color: activeTextColor)),
+        // Dropdown help icons use WoxTooltip so menu rows and the rest of Wox share
+        // one overlay behavior instead of mixing Material Tooltip semantics here.
+        if (hasTooltip) WoxTooltip(message: item.tooltip!, child: Icon(Icons.info_outline, size: 16, color: activeTextColor)),
       ],
     );
   }

@@ -581,7 +581,10 @@ class WoxQueryBoxView extends GetView<WoxLauncherController> {
 
     // Glance is auxiliary status, so the default state is fully transparent and
     // visually merges with the query box; hover is only a light affordance.
-    return Tooltip(
+    // Glance items are the launcher chrome shown in the screenshot. Using
+    // WoxTooltip here keeps plugin/system glance hints visually aligned with
+    // other launcher overlays instead of falling back to Material Tooltip.
+    return WoxTooltip(
       message: item.tooltip.isNotEmpty ? item.tooltip : item.text,
       child: StatefulBuilder(
         builder: (context, setHovered) {

@@ -8,6 +8,7 @@ import 'package:wox/components/wox_list_view.dart';
 import 'package:wox/components/wox_markdown.dart';
 import 'package:wox/components/wox_platform_focus.dart';
 import 'package:wox/components/wox_preview_top_status_bar.dart';
+import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/controllers/wox_ai_chat_controller.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
@@ -157,56 +158,64 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
                               children: [
                                 // Tool configuration button - opens chat select panel
                                 Obx(
-                                  () => IconButton(
-                                    tooltip: tr('ui_ai_chat_configure_tools'),
-                                    icon: Icon(
-                                      Icons.build,
-                                      size: _metrics.scaledSpacing(18),
-                                      color: controller.selectedTools.isNotEmpty ? getThemeTextColor() : getThemeTextColor().withAlpha(128),
+                                  () => WoxTooltip(
+                                    // IconButton.tooltip would create a Material tooltip, so
+                                    // chat toolbar icons use the shared WoxTooltip wrapper.
+                                    message: tr('ui_ai_chat_configure_tools'),
+                                    child: IconButton(
+                                      icon: Icon(
+                                        Icons.build,
+                                        size: _metrics.scaledSpacing(18),
+                                        color: controller.selectedTools.isNotEmpty ? getThemeTextColor() : getThemeTextColor().withAlpha(128),
+                                      ),
+                                      color: safeFromCssColor(woxTheme.actionItemActiveBackgroundColor),
+                                      onPressed: () {
+                                        controller.showToolsPanel();
+                                      },
+                                      padding: EdgeInsets.zero,
+                                      constraints: BoxConstraints(minWidth: _metrics.scaledSpacing(32), minHeight: _metrics.scaledSpacing(32)),
                                     ),
-                                    color: safeFromCssColor(woxTheme.actionItemActiveBackgroundColor),
-                                    onPressed: () {
-                                      controller.showToolsPanel();
-                                    },
-                                    padding: EdgeInsets.zero,
-                                    constraints: BoxConstraints(minWidth: _metrics.scaledSpacing(32), minHeight: _metrics.scaledSpacing(32)),
                                   ),
                                 ),
                                 // Agent selection button
                                 Obx(
-                                  () => IconButton(
-                                    tooltip: tr('ui_ai_chat_select_agent'),
-                                    icon: Icon(
-                                      Icons.smart_toy,
-                                      size: _metrics.scaledSpacing(18),
-                                      color:
-                                          (controller.aiChatData.value.agentName != null && controller.aiChatData.value.agentName!.isNotEmpty)
-                                              ? getThemeTextColor()
-                                              : getThemeTextColor().withAlpha(128),
+                                  () => WoxTooltip(
+                                    message: tr('ui_ai_chat_select_agent'),
+                                    child: IconButton(
+                                      icon: Icon(
+                                        Icons.smart_toy,
+                                        size: _metrics.scaledSpacing(18),
+                                        color:
+                                            (controller.aiChatData.value.agentName != null && controller.aiChatData.value.agentName!.isNotEmpty)
+                                                ? getThemeTextColor()
+                                                : getThemeTextColor().withAlpha(128),
+                                      ),
+                                      color: safeFromCssColor(woxTheme.actionItemActiveBackgroundColor),
+                                      onPressed: () {
+                                        controller.showAgentsPanel();
+                                      },
+                                      padding: EdgeInsets.zero,
+                                      constraints: BoxConstraints(minWidth: _metrics.scaledSpacing(32), minHeight: _metrics.scaledSpacing(32)),
                                     ),
-                                    color: safeFromCssColor(woxTheme.actionItemActiveBackgroundColor),
-                                    onPressed: () {
-                                      controller.showAgentsPanel();
-                                    },
-                                    padding: EdgeInsets.zero,
-                                    constraints: BoxConstraints(minWidth: _metrics.scaledSpacing(32), minHeight: _metrics.scaledSpacing(32)),
                                   ),
                                 ),
                                 // Model selection button
                                 Obx(
-                                  () => IconButton(
-                                    tooltip: tr('ui_ai_chat_select_model_title'),
-                                    icon: Icon(
-                                      Icons.model_training,
-                                      size: _metrics.scaledSpacing(18),
-                                      color: controller.aiChatData.value.model.value.name.isNotEmpty ? getThemeTextColor() : getThemeTextColor().withAlpha(128),
+                                  () => WoxTooltip(
+                                    message: tr('ui_ai_chat_select_model_title'),
+                                    child: IconButton(
+                                      icon: Icon(
+                                        Icons.model_training,
+                                        size: _metrics.scaledSpacing(18),
+                                        color: controller.aiChatData.value.model.value.name.isNotEmpty ? getThemeTextColor() : getThemeTextColor().withAlpha(128),
+                                      ),
+                                      color: safeFromCssColor(woxTheme.actionItemActiveBackgroundColor),
+                                      onPressed: () {
+                                        controller.showModelsPanel();
+                                      },
+                                      padding: EdgeInsets.zero,
+                                      constraints: BoxConstraints(minWidth: _metrics.scaledSpacing(32), minHeight: _metrics.scaledSpacing(32)),
                                     ),
-                                    color: safeFromCssColor(woxTheme.actionItemActiveBackgroundColor),
-                                    onPressed: () {
-                                      controller.showModelsPanel();
-                                    },
-                                    padding: EdgeInsets.zero,
-                                    constraints: BoxConstraints(minWidth: _metrics.scaledSpacing(32), minHeight: _metrics.scaledSpacing(32)),
                                   ),
                                 ),
                                 // Model Name Display
@@ -494,7 +503,9 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
         break;
     }
 
-    return Tooltip(message: tooltip, child: Icon(icon, size: _metrics.scaledSpacing(14), color: color));
+    // Tool-call status hints are hover-only metadata, so use WoxTooltip to keep
+    // chat details consistent with launcher and settings tooltip overlays.
+    return WoxTooltip(message: tooltip, child: Icon(icon, size: _metrics.scaledSpacing(14), color: color));
   }
 
   Widget _buildToolCallDetails(ToolCallInfo info) {
@@ -543,7 +554,7 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
       mainAxisSize: MainAxisSize.min,
       children: [
         // Copy button
-        Tooltip(
+        WoxTooltip(
           message: tr('ui_ai_chat_copy_message'),
           child: InkWell(
             onTap: () => controller.copyMessageContent(message),
@@ -553,7 +564,7 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
         SizedBox(width: _metrics.scaledSpacing(8)),
         // Refresh button (only for AI messages) or Edit button (only for user messages)
         if (!isUser)
-          Tooltip(
+          WoxTooltip(
             message: tr('ui_ai_chat_regenerate_response'),
             child: InkWell(
               onTap: () => controller.regenerateAIResponse(message.id),
@@ -561,7 +572,7 @@ class WoxAIChatView extends GetView<WoxAIChatController> {
             ),
           ),
         if (isUser)
-          Tooltip(
+          WoxTooltip(
             message: tr('ui_ai_chat_edit_message'),
             child: InkWell(
               onTap: () => controller.editUserMessage(message),

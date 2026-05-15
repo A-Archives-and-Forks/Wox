@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wox/components/wox_button.dart';
 import 'package:wox/components/wox_image_view.dart';
+import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/controllers/wox_setting_controller.dart';
 import 'package:wox/entity/wox_image.dart';
 import 'package:wox/enums/wox_image_type_enum.dart';
@@ -601,7 +602,9 @@ class EmojiPickerDialogState extends State<EmojiPickerDialog> {
                 Row(
                   children: [
                     Expanded(child: Text(widget.tr("ui_select_emoji"), style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: textColor))),
-                    IconButton(onPressed: () => Navigator.pop(context), tooltip: widget.tr("ui_cancel"), icon: Icon(Icons.close_rounded, color: subTextColor)),
+                    // Dialog chrome also uses WoxTooltip so close affordances do not
+                    // fall back to the platform Material tooltip style.
+                    WoxTooltip(message: widget.tr("ui_cancel"), child: IconButton(onPressed: () => Navigator.pop(context), icon: Icon(Icons.close_rounded, color: subTextColor))),
                   ],
                 ),
                 const SizedBox(height: 8),

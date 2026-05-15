@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/entity/wox_theme.dart';
 import 'package:wox/utils/color_util.dart';
 import 'package:wox/utils/wox_interface_size_util.dart';
@@ -40,19 +41,23 @@ class WoxPreviewTopStatusBar extends StatelessWidget {
           Expanded(child: title),
           if (trailing != null) ...[trailing!, SizedBox(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(6))],
           ...actions.map((action) {
+            final button = IconButton(
+              onPressed: action.onPressed,
+              icon: action.icon,
+              iconSize: WoxInterfaceSizeUtil.instance.current.scaledSpacing(18),
+              color: action.color ?? fontColor,
+              padding: EdgeInsets.zero,
+              constraints: BoxConstraints.tightFor(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(28), height: WoxInterfaceSizeUtil.instance.current.scaledSpacing(28)),
+              splashRadius: WoxInterfaceSizeUtil.instance.current.scaledSpacing(14),
+              visualDensity: VisualDensity.compact,
+            );
+
             return Padding(
               padding: EdgeInsets.only(left: WoxInterfaceSizeUtil.instance.current.scaledSpacing(2)),
-              child: IconButton(
-                tooltip: action.tooltip,
-                onPressed: action.onPressed,
-                icon: action.icon,
-                iconSize: WoxInterfaceSizeUtil.instance.current.scaledSpacing(18),
-                color: action.color ?? fontColor,
-                padding: EdgeInsets.zero,
-                constraints: BoxConstraints.tightFor(width: WoxInterfaceSizeUtil.instance.current.scaledSpacing(28), height: WoxInterfaceSizeUtil.instance.current.scaledSpacing(28)),
-                splashRadius: WoxInterfaceSizeUtil.instance.current.scaledSpacing(14),
-                visualDensity: VisualDensity.compact,
-              ),
+              // Top status-bar actions are reused by AI chat and terminal preview,
+              // so this shared wrapper removes IconButton's Material tooltip path
+              // for every consumer at once.
+              child: WoxTooltip(message: action.tooltip ?? "", child: button),
             );
           }),
         ],

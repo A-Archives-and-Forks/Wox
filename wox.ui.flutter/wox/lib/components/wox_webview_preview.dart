@@ -9,6 +9,7 @@ import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/v4.dart';
 import 'package:wox/components/wox_loading_indicator.dart';
+import 'package:wox/components/wox_tooltip.dart';
 import 'package:wox/controllers/wox_launcher_controller.dart';
 import 'package:wox/entity/wox_preview_webview_data.dart';
 import 'package:wox/utils/windows/window_manager.dart';
@@ -291,17 +292,22 @@ class _WoxWebViewPreviewState extends State<WoxWebViewPreview> {
   Widget _buildToolbarButton({required IconData icon, required String tooltip, required Color iconColor, required VoidCallback onPressed, bool? enabled}) {
     final isEnabled = enabled ?? true;
 
-    return IconButton(
-      tooltip: tooltip,
-      onPressed: isEnabled ? onPressed : null,
-      icon: Icon(icon),
-      iconSize: _scaled(20),
-      color: iconColor,
-      disabledColor: iconColor.withValues(alpha: 0.28),
-      padding: EdgeInsets.zero,
-      constraints: BoxConstraints.tightFor(width: _scaled(32), height: _scaled(32)),
-      splashRadius: _scaled(16),
-      visualDensity: VisualDensity.compact,
+    // The floating webview toolbar used IconButton.tooltip before, which made
+    // its hover help use Material's overlay while the rest of Wox used WoxTooltip.
+    // Wrapping the button keeps the same click target and centralizes tooltip UI.
+    return WoxTooltip(
+      message: tooltip,
+      child: IconButton(
+        onPressed: isEnabled ? onPressed : null,
+        icon: Icon(icon),
+        iconSize: _scaled(20),
+        color: iconColor,
+        disabledColor: iconColor.withValues(alpha: 0.28),
+        padding: EdgeInsets.zero,
+        constraints: BoxConstraints.tightFor(width: _scaled(32), height: _scaled(32)),
+        splashRadius: _scaled(16),
+        visualDensity: VisualDensity.compact,
+      ),
     );
   }
 
