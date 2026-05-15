@@ -486,6 +486,7 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 		return PlanTotals{}, nil, fmt.Errorf("read direct-files scope %q: %w", scopePath, err)
 	}
 
+	policyContext := p.policy.newTraversalContext(root, scopePath)
 	for _, dirEntry := range dirEntries {
 		select {
 		case <-ctx.Done():
@@ -515,7 +516,7 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 			continue
 		}
 		if isDir {
-			if shouldSkipSystemPath(childPath, true) || !p.policy.shouldIndexPath(root, childPath, true) {
+			if shouldSkipSystemPath(childPath, true) || !policyContext.ShouldIndexPath(childPath, true) {
 				totals.SkippedCount++
 			}
 			continue
@@ -524,7 +525,7 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 			totals.SkippedCount++
 			continue
 		}
-		if !p.policy.shouldIndexPath(root, childPath, false) {
+		if !policyContext.ShouldIndexPath(childPath, false) {
 			totals.SkippedCount++
 			continue
 		}
@@ -567,12 +568,13 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 	type queueItem struct {
 		path       string
 		childScope string
+		policy     TraversalPolicyContext
 	}
 
 	totals := PlanTotals{}
 	rootChildOrder := make([]string, 0)
 	rootChildTotals := make(map[string]PlanTotals)
-	queue := []queueItem{{path: scopePath}}
+	queue := []queueItem{{path: scopePath, policy: p.policy.newTraversalContext(root, scopePath)}}
 
 	for len(queue) > 0 {
 		select {
@@ -678,7 +680,7 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 				}
 				continue
 			}
-			if !p.policy.shouldIndexPath(root, childPath, isDir) {
+			if !current.policy.ShouldIndexPath(childPath, isDir) {
 				totals.SkippedCount++
 				if current.childScope != "" {
 					childTotals := rootChildTotals[current.childScope]
@@ -699,6 +701,7 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 				queue = append(queue, queueItem{
 					path:       childPath,
 					childScope: childScope,
+					policy:     current.policy.Descend(childPath),
 				})
 				continue
 			}

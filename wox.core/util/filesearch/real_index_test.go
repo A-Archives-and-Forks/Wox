@@ -392,30 +392,29 @@ func realIndexBenchmarkPolicy() (Policy, realIndexPolicyArtifact, *indexpolicy.D
 	diagnostics := indexpolicy.NewDiagnostics()
 	pluginPolicy.SetDiagnostics(diagnostics)
 
-	// Benchmark policy: the real-index capture now uses the same plugin-owned
-	// ignore matcher as production. The old segment-only mirror under-reported
-	// full-index cost because it skipped configured glob rules and ancestor
-	// .gitignore evaluation, which are exactly the paths this benchmark needs to
-	// expose.
-	shouldIndex := func(root RootRecord, path string, isDir bool) bool {
-		return pluginPolicy.ShouldIndexPath(root.Path, root.PolicyRootPath, path, isDir)
+	newTraversalContext := func(root RootRecord, scopePath string) TraversalPolicyContext {
+		// Benchmark alignment: production full indexing carries ignore state
+		// through traversal, so the benchmark exposes that path directly instead
+		// of keeping a second per-path matcher alive.
+		return realIndexTraversalPolicyContext{inner: pluginPolicy.NewTraversalContext(root.Path, root.PolicyRootPath, scopePath)}
 	}
 
 	ignoredPatterns := indexpolicy.DefaultIgnorePatterns()
 	sort.Strings(ignoredPatterns)
 	policy := Policy{
-		ShouldIndexPath: shouldIndex,
+		NewTraversalContext: newTraversalContext,
 		ShouldProcessChange: func(root RootRecord, change ChangeSignal) bool {
-			if strings.TrimSpace(change.Path) == "" {
+			cleanPath := filepath.Clean(strings.TrimSpace(change.Path))
+			if cleanPath == "" || cleanPath == "." || cleanPath == filepath.Clean(root.Path) {
 				return true
 			}
 			isDir := change.PathIsDir
 			if !change.PathTypeKnown {
-				if info, err := os.Stat(change.Path); err == nil {
+				if info, err := os.Stat(cleanPath); err == nil {
 					isDir = info.IsDir()
 				}
 			}
-			return shouldIndex(root, change.Path, isDir)
+			return newTraversalContext(root, filepath.Dir(cleanPath)).ShouldIndexPath(cleanPath, isDir)
 		},
 	}
 	artifact := realIndexPolicyArtifact{
@@ -425,6 +424,26 @@ func realIndexBenchmarkPolicy() (Policy, realIndexPolicyArtifact, *indexpolicy.D
 		DiagnosticsEnabled:  true,
 	}
 	return policy, artifact, diagnostics
+}
+
+type realIndexTraversalPolicyContext struct {
+	inner *indexpolicy.TraversalContext
+}
+
+func (c realIndexTraversalPolicyContext) ShouldIndexPath(path string, isDir bool) bool {
+	if c.inner == nil {
+		return true
+	}
+	return c.inner.ShouldIndexPath(path, isDir)
+}
+
+func (c realIndexTraversalPolicyContext) Descend(directoryPath string) TraversalPolicyContext {
+	if c.inner == nil {
+		return c
+	}
+	// Benchmark adapter mirrors the production plugin wrapper so the real-index
+	// capture exercises the same traversal policy contract as the app.
+	return realIndexTraversalPolicyContext{inner: c.inner.Descend(directoryPath)}
 }
 
 func shouldCaptureRealIndex() bool {

@@ -973,7 +973,8 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 	}
 
 	queue := []scanState{{
-		path: rootPath,
+		path:   rootPath,
+		policy: s.policy.newTraversalContext(root, rootPath),
 	}}
 	plannedDirectories := make([]plannedDirectory, 0, 64)
 	discoveredDirectories := 1
@@ -1005,6 +1006,7 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 		plannedDirectories = append(plannedDirectories, plannedDirectory{
 			path:       state.path,
 			childCount: len(dirEntries),
+			policy:     state.policy,
 		})
 		totalItems += int64(len(dirEntries))
 		processedDirectories++
@@ -1015,17 +1017,17 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 			if shouldSkipSystemPath(fullPath, isDir) {
 				continue
 			}
-			if !s.shouldIndexPath(root, fullPath, isDir) {
+			if !state.policy.ShouldIndexPath(fullPath, isDir) {
 				continue
 			}
 
 			if isDir {
-				// Preparation only uses the directory list and child counts to size jobs.
-				// The previous build kept loading and copying .gitignore patterns here,
-				// but nothing in planning or execution consumed them, so we drop that
-				// dead work to reduce per-directory I/O and allocations.
+				// Optimization: the legacy scanner path now carries traversal policy
+				// state like the run planner. The older per-path policy callback kept
+				// this fallback path on the expensive ancestor-rebuild matcher.
 				queue = append(queue, scanState{
-					path: fullPath,
+					path:   fullPath,
+					policy: state.policy.Descend(fullPath),
 				})
 				discoveredDirectories++
 			}
@@ -1105,7 +1107,7 @@ func (s *Scanner) collectEntries(ctx context.Context, root RootRecord, plan scan
 				}
 				continue
 			}
-			if !s.shouldIndexPath(root, fullPath, isDir) {
+			if !plannedDirectory.policy.ShouldIndexPath(fullPath, isDir) {
 				processedItems++
 				count++
 				if count%progressBatchSize == 0 || time.Since(lastProgressUpdateAt) >= progressUpdateGap {
@@ -1199,16 +1201,6 @@ func (s *Scanner) emitStateChange(ctx context.Context) {
 	if s.onStateChange != nil {
 		s.onStateChange(ctx)
 	}
-}
-
-func (s *Scanner) shouldIndexPath(root RootRecord, path string, isDir bool) bool {
-	if shouldSkipSystemPath(path, isDir) {
-		return false
-	}
-	if s.policy == nil {
-		return true
-	}
-	return s.policy.shouldIndexPath(root, path, isDir)
 }
 
 func (s *Scanner) shouldProcessChange(root RootRecord, signal ChangeSignal) bool {
@@ -2225,12 +2217,14 @@ func newTransientSyncState(root RootRecord, rootIndex int, rootTotal int, batch 
 }
 
 type scanState struct {
-	path string
+	path   string
+	policy TraversalPolicyContext
 }
 
 type plannedDirectory struct {
 	path       string
 	childCount int
+	policy     TraversalPolicyContext
 }
 
 type scanPlan struct {

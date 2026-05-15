@@ -1,4 +1,4 @@
-.PHONY: clean build help woxmr-build filesearch-real-index
+.PHONY: clean build help woxmr-build filesearch-real-index filesearch-real-index-release
 
 SQLITE_BUILD_TAGS ?= sqlite_fts5
 FILESEARCH_REAL_INDEX_ROOT ?= ~/Projects
@@ -97,6 +97,11 @@ endif
 filesearch-real-index:
 	@echo "Capturing filesearch real-index comparison for $(FILESEARCH_REAL_INDEX_ROOT) with keyword $(FILESEARCH_REAL_INDEX_KEYWORD), gcflags=$(if $(strip $(FILESEARCH_REAL_INDEX_GCFLAGS)),$(FILESEARCH_REAL_INDEX_GCFLAGS),<default>)"
 	WOX_FILESEARCH_REAL_INDEX_GCFLAGS="$(FILESEARCH_REAL_INDEX_GCFLAGS)" go test $(FILESEARCH_REAL_INDEX_GOFLAGS) -tags "$(FILESEARCH_REAL_INDEX_TAGS)" ./util/filesearch -run TestCaptureFileSearchRealIndexForProjectsRoot -count=1 -v -args $(FILESEARCH_REAL_INDEX_ARGS)
+
+# Diagnostic addition: keep the optimized baseline explicit so performance work
+# can separate debugger overhead from release-shaped scanner behavior.
+filesearch-real-index-release:
+	$(MAKE) filesearch-real-index FILESEARCH_REAL_INDEX_GCFLAGS=
 
 # -----------------------------
 # MediaRemote XS (Perl) builder

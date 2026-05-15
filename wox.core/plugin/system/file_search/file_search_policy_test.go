@@ -25,10 +25,12 @@ func TestFileSearchPolicyUsesPolicyRootPathForDynamicRootGitIgnore(t *testing.T)
 		PolicyRootPath: parentRoot,
 	}
 
-	if policy.shouldIndexPath(root, ignoredFile, false) {
+	ignoredContext := policy.newTraversalContext(root, filepath.Dir(ignoredFile))
+	if ignoredContext.ShouldIndexPath(ignoredFile, false) {
 		t.Fatalf("expected dynamic root to inherit parent gitignore for %q", ignoredFile)
 	}
-	if !policy.shouldIndexPath(root, keptFile, false) {
+	keptContext := policy.newTraversalContext(root, filepath.Dir(keptFile))
+	if !keptContext.ShouldIndexPath(keptFile, false) {
 		t.Fatalf("expected dynamic root to keep non-ignored file %q", keptFile)
 	}
 }

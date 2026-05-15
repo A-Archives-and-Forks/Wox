@@ -142,6 +142,7 @@ func (b *SnapshotBuilder) BuildDirectFilesJobSnapshot(ctx context.Context, root 
 		return batch, fmt.Errorf("failed to read direct-files scope %s: %w", scopePath, err)
 	}
 
+	policyContext := b.policy.newTraversalContext(root, scopePath)
 	directFiles := make([]EntryRecord, 0, len(dirEntries))
 	for _, dirEntry := range dirEntries {
 		select {
@@ -164,7 +165,7 @@ func (b *SnapshotBuilder) BuildDirectFilesJobSnapshot(ctx context.Context, root 
 		if shouldSkipSystemPath(childPath, isDir) {
 			continue
 		}
-		if !b.shouldIndexPath(root, childPath, isDir) {
+		if !policyContext.ShouldIndexPath(childPath, isDir) {
 			continue
 		}
 		if isDir {
@@ -270,6 +271,7 @@ func (b *SnapshotBuilder) StreamDirectFilesJobBatches(ctx context.Context, root 
 		maxFilesPerBatch = 1024
 	}
 
+	policyContext := b.policy.newTraversalContext(root, scopePath)
 	for _, dirEntry := range dirEntries {
 		select {
 		case <-ctx.Done():
@@ -291,7 +293,7 @@ func (b *SnapshotBuilder) StreamDirectFilesJobBatches(ctx context.Context, root 
 		if shouldSkipSystemPath(childPath, isDir) {
 			continue
 		}
-		if !b.shouldIndexPath(root, childPath, isDir) {
+		if !policyContext.ShouldIndexPath(childPath, isDir) {
 			continue
 		}
 		if isDir {
@@ -351,13 +353,15 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 	}
 
 	type queueItem struct {
-		path string
-		info os.FileInfo
+		path   string
+		info   os.FileInfo
+		policy TraversalPolicyContext
 	}
 
 	queue := []queueItem{{
-		path: scopePath,
-		info: info,
+		path:   scopePath,
+		info:   info,
+		policy: b.policy.newTraversalContext(root, scopePath),
 	}}
 	scanTimestamp := time.Now().UnixMilli()
 
@@ -429,7 +433,7 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 			if shouldSkipSystemPath(childPath, isDir) {
 				continue
 			}
-			if !b.shouldIndexPath(root, childPath, isDir) {
+			if !current.policy.ShouldIndexPath(childPath, isDir) {
 				continue
 			}
 			if info == nil {
@@ -447,13 +451,14 @@ func (b *SnapshotBuilder) BuildSubtreeSnapshot(ctx context.Context, root RootRec
 				continue
 			}
 
-			// Snapshot execution never consults gitignore patterns here. The previous
-			// traversal still loaded every directory's .gitignore and copied pattern
-			// slices forward, which added filesystem reads and allocations to the
-			// dominant build_snapshot phase without changing which entries were kept.
+			// Optimization: recursive snapshots now carry the same traversal policy
+			// context as the streaming path. The previous per-path callback rebuilt
+			// ignore ancestors for every child, while the queued context keeps
+			// .gitignore/configured-rule state aligned with the accepted directory.
 			queue = append(queue, queueItem{
-				path: childPath,
-				info: info,
+				path:   childPath,
+				info:   info,
+				policy: current.policy.Descend(childPath),
 			})
 		}
 	}
@@ -493,8 +498,9 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 	defer diagnostics.log(ctx, scopePath)
 
 	type queueItem struct {
-		path string
-		info os.FileInfo
+		path   string
+		info   os.FileInfo
+		policy TraversalPolicyContext
 	}
 
 	scanTimestamp := time.Now().UnixMilli()
@@ -533,7 +539,7 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 		return len(batch.Directories)+len(batch.Entries) >= maxRecordsPerBatch
 	}
 
-	queue := []queueItem{{path: scopePath, info: info}}
+	queue := []queueItem{{path: scopePath, info: info, policy: b.policy.newTraversalContext(root, scopePath)}}
 	batch := newBatch()
 	for len(queue) > 0 {
 		select {
@@ -613,7 +619,7 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 				continue
 			}
 			policyStartedAt := time.Now()
-			shouldIndex := b.shouldIndexPath(root, childPath, isDir)
+			shouldIndex := current.policy.ShouldIndexPath(childPath, isDir)
 			diagnostics.recordPolicyCheck(time.Since(policyStartedAt))
 			if !shouldIndex {
 				continue
@@ -628,8 +634,9 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 			}
 			if isDir {
 				queue = append(queue, queueItem{
-					path: childPath,
-					info: childInfo,
+					path:   childPath,
+					info:   childInfo,
+					policy: current.policy.Descend(childPath),
 				})
 				continue
 			}
@@ -675,7 +682,7 @@ func (b *SnapshotBuilder) validateScopePath(root RootRecord, scopePath string) (
 		return nil, err
 	}
 
-	if scopePath != filepath.Clean(root.Path) && !b.shouldIndexPath(root, scopePath, info.IsDir()) {
+	if scopePath != filepath.Clean(root.Path) && !b.shouldIndexScopePath(root, scopePath, info.IsDir()) {
 		return nil, nil
 	}
 
@@ -694,12 +701,17 @@ func (b *SnapshotBuilder) isExcludedPath(rootID string, path string) bool {
 	return false
 }
 
-func (b *SnapshotBuilder) shouldIndexPath(root RootRecord, path string, isDir bool) bool {
+func (b *SnapshotBuilder) shouldIndexScopePath(root RootRecord, path string, isDir bool) bool {
 	if shouldSkipSystemPath(path, isDir) {
 		return false
 	}
 	if b == nil || b.policy == nil {
 		return true
 	}
-	return b.policy.shouldIndexPath(root, path, isDir)
+	cleanPath := filepath.Clean(path)
+	context := b.policy.newTraversalContext(root, filepath.Dir(cleanPath))
+	// Bug fix: dirty-scope validation now uses the same traversal policy as the
+	// subtree scanner. Keeping scope checks on the removed per-path callback would
+	// let ignored dirty paths enter execution through a different matcher.
+	return context.ShouldIndexPath(cleanPath, isDir)
 }

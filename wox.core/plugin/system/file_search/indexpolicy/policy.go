@@ -19,6 +19,31 @@ type Policy struct {
 	diagnostics   *Diagnostics
 }
 
+// TraversalContext is the ripgrep-style policy state carried by a directory
+// walker. The old per-path callback rebuilt configured-rule candidates and the
+// .gitignore ancestor chain for every entry; this context snapshots configured
+// rules once and keeps the active .gitignore stack with the directory currently
+// being read.
+type TraversalContext struct {
+	policy                    *Policy
+	rootPath                  string
+	policyRootPath            string
+	matchRootPath             string
+	dirPath                   string
+	dirRelSlash               string
+	hasDirRel                 bool
+	dirSegmentsLower          []string
+	ignoreRules               fileSearchIgnoreRules
+	configuredAncestorIgnored bool
+	gitIgnoreFrames           []traversalGitIgnoreFrame
+	diagnostics               *Diagnostics
+}
+
+type traversalGitIgnoreFrame struct {
+	dirRelSlash string
+	patterns    []gitIgnorePattern
+}
+
 // Diagnostics accumulates policy costs for the opt-in real-index benchmark.
 // The previous benchmark could report "scan is slow" without showing whether
 // the cost came from configured globs, ancestor .gitignore checks, or uncached
@@ -225,38 +250,48 @@ func New() *Policy {
 	}
 }
 
-func (p *Policy) ShouldIndexPath(rootPath string, policyRootPath string, path string, isDir bool) bool {
+func (p *Policy) NewTraversalContext(rootPath string, policyRootPath string, scopePath string) *TraversalContext {
 	if p == nil {
-		return true
-	}
-	diagnostics := p.diagnosticsRef()
-	startedAt := time.Now()
-	ignored := false
-	defer func() {
-		if diagnostics != nil {
-			diagnostics.recordPolicyCheck(time.Since(startedAt), ignored)
-		}
-	}()
-
-	cleanPath := filepath.Clean(strings.TrimSpace(path))
-	if cleanPath == "" {
-		return true
+		return nil
 	}
 
-	if p.shouldIgnoreByConfiguredPattern(rootPath, policyRootPath, cleanPath, diagnostics) {
-		ignored = true
-		return false
-	}
-
+	rootPath = filepath.Clean(strings.TrimSpace(rootPath))
 	policyRootPath = strings.TrimSpace(policyRootPath)
 	if policyRootPath == "" {
 		policyRootPath = rootPath
 	}
-	// Dynamic roots keep their own scan scope but must inherit the user's
-	// parent .gitignore chain. Using PolicyRootPath for ignore lookup preserves
-	// that policy without widening the scanner's ownership boundary.
-	ignored = p.shouldIgnoreByGitIgnore(filepath.Clean(policyRootPath), cleanPath, isDir, diagnostics)
-	return !ignored
+	policyRootPath = filepath.Clean(policyRootPath)
+	scopePath = filepath.Clean(strings.TrimSpace(scopePath))
+	if scopePath == "" || scopePath == "." {
+		scopePath = rootPath
+	}
+
+	rules := p.ignoreRulesSnapshot()
+	dirRelSlash, hasDirRel := relativePathForGitIgnoreMatch(policyRootPath, scopePath)
+	if dirRelSlash == "." {
+		dirRelSlash = ""
+	}
+	// Optimization: traversal starts from a sealed scope, not always from the
+	// policy root. A scope inside an ignored configured path must keep the old
+	// behavior where every descendant is ignored, but normal children only need
+	// to test their own basename because accepted ancestors were already checked.
+	configuredAncestorIgnored := configuredPatternMatchesPath(rules, policyRootPath, scopePath)
+
+	diagnostics := p.diagnosticsRef()
+	return &TraversalContext{
+		policy:                    p,
+		rootPath:                  rootPath,
+		policyRootPath:            policyRootPath,
+		matchRootPath:             policyRootPath,
+		dirPath:                   scopePath,
+		dirRelSlash:               dirRelSlash,
+		hasDirRel:                 hasDirRel,
+		dirSegmentsLower:          lowerPathSegments(scopePath),
+		ignoreRules:               rules,
+		configuredAncestorIgnored: configuredAncestorIgnored,
+		gitIgnoreFrames:           p.gitIgnoreFramesForDirectory(policyRootPath, scopePath, diagnostics),
+		diagnostics:               diagnostics,
+	}
 }
 
 func (p *Policy) SetIgnorePatterns(patterns []string) {
@@ -268,6 +303,189 @@ func (p *Policy) SetIgnorePatterns(patterns []string) {
 	p.mu.Lock()
 	p.ignoreRules = compiled
 	p.mu.Unlock()
+}
+
+func (p *Policy) ignoreRulesSnapshot() fileSearchIgnoreRules {
+	if p == nil {
+		return fileSearchIgnoreRules{segmentLiterals: map[string]struct{}{}}
+	}
+
+	p.mu.RLock()
+	rules := p.ignoreRules
+	p.mu.RUnlock()
+	return rules
+}
+
+func (c *TraversalContext) ShouldIndexPath(path string, isDir bool) bool {
+	if c == nil || c.policy == nil {
+		return true
+	}
+
+	cleanPath := filepath.Clean(strings.TrimSpace(path))
+	if cleanPath == "" || cleanPath == "." {
+		return true
+	}
+	if cleanPath == c.dirPath {
+		return true
+	}
+	if filepath.Dir(cleanPath) != c.dirPath {
+		// Safety fallback without resurrecting the old per-path matcher: traversal
+		// contexts are scoped to direct children, so unexpected callers are
+		// re-rooted at the path's parent and still evaluated through the same
+		// incremental matcher used by full indexing.
+		context := c.policy.NewTraversalContext(c.rootPath, c.policyRootPath, filepath.Dir(cleanPath))
+		if context == nil {
+			return true
+		}
+		return context.ShouldIndexPath(cleanPath, isDir)
+	}
+
+	diagnostics := c.diagnostics
+	startedAt := time.Now()
+	ignored := false
+	defer func() {
+		if diagnostics != nil {
+			diagnostics.recordPolicyCheck(time.Since(startedAt), ignored)
+		}
+	}()
+
+	name := filepath.Base(cleanPath)
+	if c.shouldIgnoreByConfiguredPattern(cleanPath, name, diagnostics) {
+		ignored = true
+		return false
+	}
+
+	ignored = c.shouldIgnoreByGitIgnore(name, isDir, diagnostics)
+	return !ignored
+}
+
+func (c *TraversalContext) Descend(directoryPath string) *TraversalContext {
+	if c == nil || c.policy == nil {
+		return c
+	}
+
+	cleanPath := filepath.Clean(strings.TrimSpace(directoryPath))
+	if cleanPath == "" || cleanPath == "." {
+		return c
+	}
+
+	name := filepath.Base(cleanPath)
+	childRelSlash, hasChildRel := c.childRelPath(name)
+	if filepath.Dir(cleanPath) != c.dirPath {
+		// This keeps manual callers correct even if they construct a child context
+		// from a non-direct descendant. The hot traversal path uses direct children
+		// and avoids this filepath.Rel fallback.
+		childRelSlash, hasChildRel = relativePathForGitIgnoreMatch(c.matchRootPath, cleanPath)
+		if childRelSlash == "." {
+			childRelSlash = ""
+		}
+	}
+
+	child := &TraversalContext{
+		policy:                    c.policy,
+		rootPath:                  c.rootPath,
+		policyRootPath:            c.policyRootPath,
+		matchRootPath:             c.matchRootPath,
+		dirPath:                   cleanPath,
+		dirRelSlash:               childRelSlash,
+		hasDirRel:                 hasChildRel,
+		dirSegmentsLower:          append(append([]string(nil), c.dirSegmentsLower...), strings.ToLower(name)),
+		ignoreRules:               c.ignoreRules,
+		configuredAncestorIgnored: c.configuredAncestorIgnored || configuredPatternMatchesPath(c.ignoreRules, c.matchRootPath, cleanPath),
+		gitIgnoreFrames:           append([]traversalGitIgnoreFrame(nil), c.gitIgnoreFrames...),
+		diagnostics:               c.diagnostics,
+	}
+	if !hasChildRel {
+		return child
+	}
+
+	patterns := c.policy.patternsForDirectory(cleanPath, c.diagnostics)
+	if len(patterns) > 0 {
+		// Optimization: .gitignore is loaded once when entering a directory and
+		// then carried with the queue item. Children no longer rebuild
+		// the ancestor directory list or call filepath.Rel for every ancestor.
+		child.gitIgnoreFrames = append(child.gitIgnoreFrames, traversalGitIgnoreFrame{
+			dirRelSlash: childRelSlash,
+			patterns:    patterns,
+		})
+	}
+	return child
+}
+
+func (c *TraversalContext) shouldIgnoreByConfiguredPattern(fullPath string, name string, diagnostics *Diagnostics) bool {
+	startedAt := time.Now()
+	ignored := c.configuredAncestorIgnored
+	defer func() {
+		if diagnostics != nil {
+			diagnostics.recordConfiguredPatternCheck(time.Since(startedAt), ignored)
+		}
+	}()
+	if ignored {
+		return true
+	}
+
+	childRelSlash, hasChildRel := c.childRelPath(name)
+	fullSlash := filepath.ToSlash(fullPath)
+	if c.ignoreRules.matchesTraversalChild(fullSlash, childRelSlash, hasChildRel, name, c.dirSegmentsLower) {
+		ignored = true
+		return true
+	}
+	return false
+}
+
+func (c *TraversalContext) shouldIgnoreByGitIgnore(name string, isDir bool, diagnostics *Diagnostics) bool {
+	startedAt := time.Now()
+	directoriesWithPatterns := int64(0)
+	patternComparisons := int64(0)
+	ignored := false
+	defer func() {
+		if diagnostics != nil {
+			diagnostics.recordGitIgnoreCheck(time.Since(startedAt), ignored, int64(len(c.gitIgnoreFrames)), directoriesWithPatterns, patternComparisons)
+		}
+	}()
+
+	childRelSlash, hasChildRel := c.childRelPath(name)
+	if !hasChildRel {
+		return false
+	}
+
+	for _, frame := range c.gitIgnoreFrames {
+		relPath, ok := traversalRelPathFromFrame(frame.dirRelSlash, childRelSlash)
+		if !ok {
+			continue
+		}
+		directoriesWithPatterns++
+		patternComparisons += int64(len(frame.patterns))
+		for _, pattern := range frame.patterns {
+			if pattern.matchesRelPath(relPath, isDir) {
+				ignored = !pattern.negate
+			}
+		}
+	}
+
+	return ignored
+}
+
+func (c *TraversalContext) childRelPath(name string) (string, bool) {
+	if !c.hasDirRel {
+		return "", false
+	}
+	name = filepath.ToSlash(name)
+	if c.dirRelSlash == "" {
+		return name, true
+	}
+	return c.dirRelSlash + "/" + name, true
+}
+
+func traversalRelPathFromFrame(frameDirRelSlash string, childRelSlash string) (string, bool) {
+	if frameDirRelSlash == "" {
+		return childRelSlash, true
+	}
+	prefix := frameDirRelSlash + "/"
+	if !strings.HasPrefix(childRelSlash, prefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(childRelSlash, prefix), true
 }
 
 func splitFileSearchPathSegments(fullPath string) []string {
@@ -292,10 +510,17 @@ func splitFileSearchPathSegments(fullPath string) []string {
 }
 
 type fileSearchIgnoreRule struct {
-	hasSlash       bool
-	segmentLiteral string
-	pathRegex      *regexp.Regexp
-	segmentRe      *regexp.Regexp
+	hasSlash          bool
+	segmentLiteral    string
+	segmentPattern    string
+	segmentSimpleGlob bool
+	segmentParts      []string
+	pathSegmentParts  []string
+	leadingStar       bool
+	trailingStar      bool
+	hasQuestion       bool
+	pathRegex         *regexp.Regexp
+	segmentRe         *regexp.Regexp
 }
 
 type fileSearchIgnoreRules struct {
@@ -343,15 +568,43 @@ func compileFileSearchIgnoreRule(pattern string) (fileSearchIgnoreRule, bool) {
 		return fileSearchIgnoreRule{}, false
 	}
 
+	// Optimization: the default list contains many recursive single-segment
+	// paths such as "**/cache/**". Treating them as path regexes made every
+	// visited entry run expensive regexp checks even though traversal only needs
+	// to reject the matching segment once and then prune the subtree.
+	if segmentPattern, ok := recursiveSingleSegmentPattern(pattern); ok {
+		pattern = segmentPattern
+	}
+
 	// Ignore patterns are user-facing, so they intentionally use Raycast-style
 	// path globs instead of Go regexes. Segment-only patterns such as
 	// "node_modules" match any path segment, while path patterns such as
-	// "**/cache/**" can prune a whole subtree before the scanner descends into it.
+	// "**/Library/Application Support/**" can prune a whole subtree before the
+	// scanner descends into it.
 	hasSlash := strings.Contains(pattern, "/")
 	if !hasSlash && !strings.ContainsAny(pattern, "*?[") {
 		return fileSearchIgnoreRule{
 			segmentLiteral: strings.ToLower(pattern),
 		}, true
+	}
+	if !hasSlash && isSimpleGitIgnoreGlob(pattern) {
+		normalized := strings.ToLower(pattern)
+		return fileSearchIgnoreRule{
+			segmentPattern:    normalized,
+			segmentSimpleGlob: true,
+			segmentParts:      strings.Split(normalized, "*"),
+			leadingStar:       strings.HasPrefix(normalized, "*"),
+			trailingStar:      strings.HasSuffix(normalized, "*"),
+			hasQuestion:       strings.Contains(normalized, "?"),
+		}, true
+	}
+	if hasSlash {
+		if parts, ok := recursivePathSegmentPattern(pattern); ok {
+			return fileSearchIgnoreRule{
+				hasSlash:         true,
+				pathSegmentParts: parts,
+			}, true
+		}
 	}
 	expr := globPatternToRegex(pattern, !hasSlash)
 	if expr == "" {
@@ -372,6 +625,132 @@ func compileFileSearchIgnoreRule(pattern string) (fileSearchIgnoreRule, bool) {
 		rule.segmentRe = compiled
 	}
 	return rule, true
+}
+
+func recursiveSingleSegmentPattern(pattern string) (string, bool) {
+	if !strings.HasPrefix(pattern, "**/") || !strings.HasSuffix(pattern, "/**") {
+		return "", false
+	}
+	segment := strings.TrimSuffix(strings.TrimPrefix(pattern, "**/"), "/**")
+	if segment == "" || strings.Contains(segment, "/") {
+		return "", false
+	}
+	return segment, true
+}
+
+func recursivePathSegmentPattern(pattern string) ([]string, bool) {
+	if !strings.HasSuffix(pattern, "/**") {
+		return nil, false
+	}
+	base := strings.TrimSuffix(pattern, "/**")
+	if strings.HasPrefix(base, "**/") {
+		base = strings.TrimPrefix(base, "**/")
+	}
+	if base == "" || !strings.Contains(base, "/") {
+		return nil, false
+	}
+
+	rawParts := strings.Split(base, "/")
+	parts := make([]string, 0, len(rawParts))
+	for _, part := range rawParts {
+		if part == "" {
+			return nil, false
+		}
+		if part == "**" {
+			parts = append(parts, part)
+			continue
+		}
+		if strings.ContainsAny(part, "*?[") {
+			return nil, false
+		}
+		parts = append(parts, strings.ToLower(part))
+	}
+	return parts, true
+}
+
+func lowerPathSegments(path string) []string {
+	return lowerSlashPathSegments(filepath.ToSlash(filepath.Clean(path)))
+}
+
+func lowerSlashPathSegments(path string) []string {
+	rawSegments := strings.Split(path, "/")
+	segments := make([]string, 0, len(rawSegments))
+	for _, segment := range rawSegments {
+		if segment == "" || segment == "." {
+			continue
+		}
+		segments = append(segments, strings.ToLower(segment))
+	}
+	return segments
+}
+
+func matchPathSegmentSequence(patternParts []string, pathSegments []string) bool {
+	for start := 0; start < len(pathSegments); start++ {
+		if matchPathSegmentSequenceFrom(patternParts, pathSegments[start:]) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchPathSegmentSequenceFrom(patternParts []string, pathSegments []string) bool {
+	if len(patternParts) == 0 {
+		return true
+	}
+	if patternParts[0] == "**" {
+		if len(patternParts) == 1 {
+			return true
+		}
+		for offset := 0; offset <= len(pathSegments); offset++ {
+			if matchPathSegmentSequenceFrom(patternParts[1:], pathSegments[offset:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(pathSegments) == 0 || patternParts[0] != pathSegments[0] {
+		return false
+	}
+	return matchPathSegmentSequenceFrom(patternParts[1:], pathSegments[1:])
+}
+
+func matchPathSegmentSequenceWithChild(patternParts []string, dirSegments []string, childSegment string) bool {
+	totalSegments := len(dirSegments) + 1
+	for start := 0; start < totalSegments; start++ {
+		if matchPathSegmentSequenceWithChildFrom(patternParts, dirSegments, childSegment, start) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchPathSegmentSequenceWithChildFrom(patternParts []string, dirSegments []string, childSegment string, segmentIndex int) bool {
+	if len(patternParts) == 0 {
+		return true
+	}
+	totalSegments := len(dirSegments) + 1
+	if patternParts[0] == "**" {
+		if len(patternParts) == 1 {
+			return true
+		}
+		for offset := segmentIndex; offset <= totalSegments; offset++ {
+			if matchPathSegmentSequenceWithChildFrom(patternParts[1:], dirSegments, childSegment, offset) {
+				return true
+			}
+		}
+		return false
+	}
+	if segmentIndex >= totalSegments || patternParts[0] != traversalSegmentAt(dirSegments, childSegment, segmentIndex) {
+		return false
+	}
+	return matchPathSegmentSequenceWithChildFrom(patternParts[1:], dirSegments, childSegment, segmentIndex+1)
+}
+
+func traversalSegmentAt(dirSegments []string, childSegment string, index int) string {
+	if index < len(dirSegments) {
+		return dirSegments[index]
+	}
+	return childSegment
 }
 
 func globPatternToRegex(pattern string, segmentOnly bool) string {
@@ -429,20 +808,7 @@ func globPatternToRegex(pattern string, segmentOnly bool) string {
 	return builder.String()
 }
 
-func (p *Policy) shouldIgnoreByConfiguredPattern(rootPath string, policyRootPath string, fullPath string, diagnostics *Diagnostics) bool {
-	startedAt := time.Now()
-	ignored := false
-	defer func() {
-		if diagnostics != nil {
-			diagnostics.recordConfiguredPatternCheck(time.Since(startedAt), ignored)
-		}
-	}()
-
-	matchRootPath := strings.TrimSpace(policyRootPath)
-	if matchRootPath == "" {
-		matchRootPath = strings.TrimSpace(rootPath)
-	}
-
+func configuredPatternMatchesPath(rules fileSearchIgnoreRules, matchRootPath string, fullPath string) bool {
 	relPath, hasRelPath := relativePathForGitIgnoreMatch(filepath.Clean(matchRootPath), fullPath)
 	fullSlash := filepath.ToSlash(filepath.Clean(fullPath))
 	candidates := []string{fullSlash}
@@ -450,18 +816,7 @@ func (p *Policy) shouldIgnoreByConfiguredPattern(rootPath string, policyRootPath
 		candidates = append(candidates, relPath)
 	}
 	segments := splitFileSearchPathSegments(fullSlash)
-
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	// Optimization: ignore rules are evaluated for every filesystem entry during
-	// full indexing. The first configurable implementation split the same path
-	// once per segment rule and ran regexes for literal names like "node_modules",
-	// which made the new ignore feature itself part of the slow index path.
-	if p.ignoreRules.matches(candidates, segments) {
-		ignored = true
-		return true
-	}
-	return false
+	return rules.matches(candidates, segments)
 }
 
 func (rules fileSearchIgnoreRules) matches(pathCandidates []string, segments []string) bool {
@@ -486,67 +841,74 @@ func (rules fileSearchIgnoreRules) matches(pathCandidates []string, segments []s
 	return false
 }
 
+func (rules fileSearchIgnoreRules) matchesTraversalChild(fullSlash string, relSlash string, hasRelSlash bool, segment string, dirSegmentsLower []string) bool {
+	normalizedSegment := strings.ToLower(segment)
+	for _, rule := range rules.pathRules {
+		if rule.matchesTraversalPathSegments(dirSegmentsLower, normalizedSegment) {
+			return true
+		}
+		if rule.matchesPathCandidate(fullSlash) {
+			return true
+		}
+		if hasRelSlash && rule.matchesPathCandidate(relSlash) {
+			return true
+		}
+	}
+
+	if _, ok := rules.segmentLiterals[normalizedSegment]; ok {
+		return true
+	}
+	for _, rule := range rules.segmentRules {
+		if rule.matchesSegment(segment) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (r fileSearchIgnoreRule) matchesPath(pathCandidates []string) bool {
-	if r.pathRegex == nil {
+	if r.pathRegex == nil && len(r.pathSegmentParts) == 0 {
 		return false
 	}
 	for _, candidate := range pathCandidates {
-		if candidate == "." || candidate == "" {
-			continue
-		}
-		if r.pathRegex.MatchString(strings.TrimPrefix(candidate, "/")) || r.pathRegex.MatchString(candidate) {
+		if r.matchesPathCandidate(candidate) {
 			return true
 		}
 	}
 	return false
 }
 
-func (r fileSearchIgnoreRule) matchesSegment(segment string) bool {
-	return r.segmentRe != nil && r.segmentRe.MatchString(segment)
-}
-
-func (p *Policy) shouldIgnoreByGitIgnore(rootPath string, fullPath string, isDir bool, diagnostics *Diagnostics) bool {
-	startedAt := time.Now()
-	directoriesVisited := int64(0)
-	directoriesWithPatterns := int64(0)
-	patternComparisons := int64(0)
-	ignored := false
-	defer func() {
-		if diagnostics != nil {
-			diagnostics.recordGitIgnoreCheck(time.Since(startedAt), ignored, directoriesVisited, directoriesWithPatterns, patternComparisons)
-		}
-	}()
-
-	rootPath = filepath.Clean(strings.TrimSpace(rootPath))
-	fullPath = filepath.Clean(strings.TrimSpace(fullPath))
-	if rootPath == "" || fullPath == "" || !pathWithinRoot(rootPath, fullPath) || fullPath == rootPath {
+func (r fileSearchIgnoreRule) matchesPathCandidate(candidate string) bool {
+	if len(r.pathSegmentParts) > 0 {
+		return matchPathSegmentSequence(r.pathSegmentParts, lowerSlashPathSegments(candidate))
+	}
+	if r.pathRegex == nil || candidate == "." || candidate == "" {
 		return false
 	}
+	return r.pathRegex.MatchString(strings.TrimPrefix(candidate, "/")) || r.pathRegex.MatchString(candidate)
+}
 
-	for _, directory := range patternDirectoriesForPath(rootPath, fullPath) {
-		directoriesVisited++
-		patterns := p.patternsForDirectory(directory, diagnostics)
-		if len(patterns) == 0 {
-			continue
-		}
-		directoriesWithPatterns++
-		patternComparisons += int64(len(patterns))
-		// CPU profiles showed incremental pre-scan spending nearly all time
-		// recalculating the same relative path once per .gitignore pattern. Compute
-		// it once for the directory's pattern set, then reuse it so ignore matching
-		// stays semantically identical while avoiding repeated filepath.Rel work.
-		relPath, ok := relativePathForGitIgnoreMatch(directory, fullPath)
-		if !ok {
-			continue
-		}
-		for _, pattern := range patterns {
-			if pattern.matchesRelPath(relPath, isDir) {
-				ignored = !pattern.negate
-			}
-		}
+func (r fileSearchIgnoreRule) matchesTraversalPathSegments(dirSegmentsLower []string, childSegmentLower string) bool {
+	if len(r.pathSegmentParts) == 0 {
+		return false
 	}
+	return matchPathSegmentSequenceWithChild(r.pathSegmentParts, dirSegmentsLower, childSegmentLower)
+}
 
-	return ignored
+func (r fileSearchIgnoreRule) matchesSegment(segment string) bool {
+	if r.segmentSimpleGlob {
+		// Optimization: simple configured globs such as "*.tmp" are checked for
+		// every file. Lowercase string matching preserves the previous
+		// case-insensitive regexp semantics without paying the regexp engine cost
+		// on the full-index hot path.
+		normalized := strings.ToLower(segment)
+		if !r.hasQuestion {
+			return matchSimpleGitIgnoreLiteralGlob(r.segmentParts, r.leadingStar, r.trailingStar, normalized)
+		}
+		return matchSimpleGitIgnoreGlob(r.segmentPattern, normalized)
+	}
+	return r.segmentRe != nil && r.segmentRe.MatchString(segment)
 }
 
 func (p *Policy) patternsForDirectory(directory string, diagnostics *Diagnostics) []gitIgnorePattern {
@@ -579,14 +941,42 @@ func (p *Policy) patternsForDirectory(directory string, diagnostics *Diagnostics
 	return loaded
 }
 
-func patternDirectoriesForPath(rootPath string, fullPath string) []string {
-	parent := filepath.Dir(fullPath)
-	if !pathWithinRoot(rootPath, parent) {
+func (p *Policy) gitIgnoreFramesForDirectory(rootPath string, directory string, diagnostics *Diagnostics) []traversalGitIgnoreFrame {
+	directories := directoriesFromRootToDirectory(rootPath, directory)
+	if len(directories) == 0 {
+		return nil
+	}
+
+	frames := make([]traversalGitIgnoreFrame, 0, len(directories))
+	for _, current := range directories {
+		patterns := p.patternsForDirectory(current, diagnostics)
+		if len(patterns) == 0 {
+			continue
+		}
+		relPath, ok := relativePathForGitIgnoreMatch(rootPath, current)
+		if !ok {
+			continue
+		}
+		if relPath == "." {
+			relPath = ""
+		}
+		frames = append(frames, traversalGitIgnoreFrame{
+			dirRelSlash: relPath,
+			patterns:    patterns,
+		})
+	}
+	return frames
+}
+
+func directoriesFromRootToDirectory(rootPath string, directory string) []string {
+	rootPath = filepath.Clean(strings.TrimSpace(rootPath))
+	directory = filepath.Clean(strings.TrimSpace(directory))
+	if rootPath == "" || directory == "" || !pathWithinRoot(rootPath, directory) {
 		return nil
 	}
 
 	reversed := make([]string, 0, 8)
-	for current := filepath.Clean(parent); ; current = filepath.Dir(current) {
+	for current := directory; ; current = filepath.Dir(current) {
 		reversed = append(reversed, current)
 		if current == rootPath {
 			break
@@ -601,7 +991,6 @@ func patternDirectoriesForPath(rootPath string, fullPath string) []string {
 	for index := len(reversed) - 1; index >= 0; index-- {
 		directories = append(directories, reversed[index])
 	}
-
 	return directories
 }
 
