@@ -27,6 +27,7 @@ import (
 var fileIcon = common.PluginFileIcon
 
 const fileRootsSettingKey = "roots"
+const fileIgnorePatternsSettingKey = "ignorePatterns"
 const fileSearchToolbarMsgID = "file-search-status"
 
 const (
@@ -54,6 +55,10 @@ type fileRootSetting struct {
 	Path string `json:"Path"`
 }
 
+type fileIgnorePatternSetting struct {
+	Pattern string `json:"Pattern"`
+}
+
 func init() {
 	plugin.AllSystemPlugin = append(plugin.AllSystemPlugin, &FileSearchPlugin{})
 }
@@ -61,6 +66,7 @@ func init() {
 type FileSearchPlugin struct {
 	api                     plugin.API
 	engine                  *filesearch.Engine
+	indexPolicy             *fileSearchIndexPolicy
 	unsubscribeStatusChange func()
 	toolbarMsgStateMu       sync.Mutex
 	lastToolbarMsgSignature string
@@ -120,15 +126,40 @@ func (c *FileSearchPlugin) GetMetadata() plugin.Metadata {
 					},
 				},
 			},
+			{
+				Type: definition.PluginSettingDefinitionTypeTable,
+				Value: &definition.PluginSettingValueTable{
+					Key:          fileIgnorePatternsSettingKey,
+					DefaultValue: defaultFileSearchIgnorePatternsJSON(),
+					Title:        "i18n:plugin_file_setting_ignore_patterns_title",
+					Tooltip:      "i18n:plugin_file_setting_ignore_patterns_tooltip",
+					Columns: []definition.PluginSettingValueTableColumn{
+						{
+							Key:     "Pattern",
+							Label:   "i18n:plugin_file_setting_ignore_pattern",
+							Tooltip: "i18n:plugin_file_setting_ignore_pattern_tooltip",
+							Type:    definition.PluginSettingValueTableColumnTypeText,
+							Validators: []validator.PluginSettingValidator{
+								{
+									Type:  validator.PluginSettingValidatorTypeNotEmpty,
+									Value: &validator.PluginSettingValidatorNotEmpty{},
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 }
 
 func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParams) {
 	c.api = initParams.API
+	c.indexPolicy = newFileSearchIndexPolicy()
+	c.indexPolicy.SetIgnorePatterns(c.getConfiguredIgnorePatternValues(ctx))
 
 	engine, initErr := filesearch.NewEngineWithOptions(ctx, filesearch.EngineOptions{
-		Policy: newFileSearchIndexPolicy().toFilesearchPolicy(),
+		Policy: c.indexPolicy.toFilesearchPolicy(),
 	})
 	if initErr != nil {
 		c.api.Log(ctx, plugin.LogLevelError, initErr.Error())
@@ -159,10 +190,14 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 	c.syncUserRoots(ctx)
 
 	c.api.OnSettingChanged(ctx, func(callbackCtx context.Context, key string, value string) {
-		if key != fileRootsSettingKey {
+		if key == fileRootsSettingKey {
+			c.syncUserRoots(callbackCtx)
 			return
 		}
-		c.syncUserRoots(callbackCtx)
+		if key == fileIgnorePatternsSettingKey {
+			c.syncIgnorePatterns(callbackCtx)
+			return
+		}
 	})
 
 	c.api.OnUnload(ctx, func(ctx context.Context) {
@@ -180,12 +215,11 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin
 	queryStartedAt := util.GetSystemTimestamp()
 	diagnostics := fileSearchQueryDiagnostics{}
 
-	// if query is empty, return empty result
-	if query.Search == "" {
+	if c.engine == nil {
 		return plugin.QueryResponse{}
 	}
 
-	if c.engine == nil {
+	if strings.TrimSpace(query.Search) == "" {
 		return plugin.QueryResponse{}
 	}
 
@@ -273,6 +307,11 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin
 					Hotkey:                 "ctrl+m",
 					PreventHideAfterAction: true,
 				},
+				// Feature addition: manual full reindex belongs in the action panel
+				// of file-search results instead of appearing as a separate result.
+				// Keeping it off the main result list avoids polluting empty queries
+				// and ordinary filename searches while still making recovery easy.
+				c.buildIndexFilesAction(),
 			},
 		})
 	}
@@ -282,6 +321,37 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin
 	response := plugin.NewQueryResponse(queryResults)
 	response.Refinements = c.buildFileSearchRefinements()
 	return response
+}
+
+func (c *FileSearchPlugin) buildIndexFilesAction() plugin.QueryResultAction {
+	return plugin.QueryResultAction{
+		Name:                   "i18n:plugin_file_index_files",
+		Icon:                   common.ExecuteRunIcon,
+		PreventHideAfterAction: true,
+		Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+			c.indexFilesFromScratch(ctx)
+		},
+	}
+}
+
+func (c *FileSearchPlugin) indexFilesFromScratch(ctx context.Context) {
+	if c.engine == nil {
+		return
+	}
+
+	c.api.Notify(ctx, "i18n:plugin_file_index_files_started")
+	util.Go(ctx, "filesearch reset index", func() {
+		// Feature addition: the visible action intentionally clears persisted
+		// index facts before scanning. A plain RequestRescan would still serve old
+		// results until replacement finished and would keep hidden dynamic roots
+		// from the previous run.
+		if err := c.engine.ResetIndex(ctx); err != nil {
+			c.api.Log(ctx, plugin.LogLevelError, "Failed to reset file search index: "+err.Error())
+			c.api.Notify(ctx, "i18n:plugin_file_index_files_failed")
+			return
+		}
+		c.syncToolbarMsg(ctx, true)
+	})
 }
 
 func (c *FileSearchPlugin) buildFileSearchRefinements() []plugin.QueryRefinement {
@@ -531,6 +601,57 @@ func (c *FileSearchPlugin) getConfiguredRootPaths(ctx context.Context) []string 
 	return paths
 }
 
+func (c *FileSearchPlugin) syncIgnorePatterns(ctx context.Context) {
+	if c.indexPolicy == nil {
+		return
+	}
+
+	patterns := c.getConfiguredIgnorePatternValues(ctx)
+	c.indexPolicy.SetIgnorePatterns(patterns)
+	c.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("Syncing file search ignore patterns: %d patterns", len(patterns)))
+	if c.engine != nil {
+		// Feature addition: ignore rules now come from plugin settings, so changing
+		// them must rebuild the index. Updating the shared policy alone would only
+		// affect future file-system events and would leave already-indexed ignored
+		// paths visible until some unrelated full scan happened.
+		c.engine.UpdatePolicy(c.indexPolicy.toFilesearchPolicy())
+	}
+}
+
+func (c *FileSearchPlugin) getConfiguredIgnorePatternValues(ctx context.Context) []string {
+	raw := strings.TrimSpace(c.api.GetSetting(ctx, fileIgnorePatternsSettingKey))
+	if raw == "" {
+		return append([]string(nil), defaultFileSearchIgnorePatterns...)
+	}
+
+	var patterns []fileIgnorePatternSetting
+	if err := json.Unmarshal([]byte(raw), &patterns); err != nil {
+		c.api.Log(ctx, plugin.LogLevelWarning, "Failed to parse file search ignore patterns setting: "+err.Error())
+		return append([]string(nil), defaultFileSearchIgnorePatterns...)
+	}
+
+	values := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		if value := strings.TrimSpace(pattern.Pattern); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func defaultFileSearchIgnorePatternsJSON() string {
+	rows := make([]fileIgnorePatternSetting, 0, len(defaultFileSearchIgnorePatterns))
+	for _, pattern := range defaultFileSearchIgnorePatterns {
+		rows = append(rows, fileIgnorePatternSetting{Pattern: pattern})
+	}
+
+	data, err := json.Marshal(rows)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
 func (c *FileSearchPlugin) syncToolbarMsg(ctx context.Context, includeReady bool) {
 	if c.engine == nil {
 		c.api.ClearToolbarMsg(ctx, fileSearchToolbarMsgID)
@@ -573,6 +694,14 @@ func (c *FileSearchPlugin) syncToolbarMsgWithStatus(ctx context.Context, status 
 }
 
 func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status filesearch.StatusSnapshot, includeReady bool) (plugin.ToolbarMsg, bool) {
+	if isFullIndexCompletionSummary(status) {
+		return plugin.ToolbarMsg{
+			Id:    fileSearchToolbarMsgID,
+			Title: c.buildFullIndexCompletedToolbarTitle(ctx, status),
+			Icon:  fileIcon,
+		}, true
+	}
+
 	hasPendingDirty := status.PendingDirtyRootCount > 0 || status.PendingDirtyPathCount > 0
 	if !includeReady && !status.IsIndexing && status.ErrorRootCount == 0 && !hasPendingDirty {
 		return plugin.ToolbarMsg{}, false
@@ -681,6 +810,74 @@ func (c *FileSearchPlugin) buildToolbarMsgFromStatus(ctx context.Context, status
 		Indeterminate: indeterminate,
 		Actions:       c.toolbarMsgActions(ctx, hasPermissionError),
 	}, true
+}
+
+func isFullIndexCompletionSummary(status filesearch.StatusSnapshot) bool {
+	return status.ActiveRunKind == filesearch.RunKindFull &&
+		status.ActiveRunStatus == filesearch.RunStatusCompleted &&
+		status.ActiveRunElapsedMs > 0
+}
+
+func (c *FileSearchPlugin) buildFullIndexCompletedToolbarTitle(ctx context.Context, status filesearch.StatusSnapshot) string {
+	fileCount := status.ActiveRunFileCount
+	if fileCount < 0 {
+		fileCount = 0
+	}
+
+	// Feature addition: full indexing now ends with a Raycast-style summary.
+	// The core emits this only after full-run bulk SQLite maintenance finishes,
+	// so the count and duration describe the complete persisted index rather
+	// than the earlier executor completion snapshot.
+	return fmt.Sprintf(
+		c.api.GetTranslation(ctx, "plugin_file_status_index_complete"),
+		formatFileSearchCount(fileCount),
+		c.formatFileSearchIndexDuration(ctx, status.ActiveRunElapsedMs),
+	)
+}
+
+func formatFileSearchCount(value int64) string {
+	if value < 0 {
+		value = 0
+	}
+	text := fmt.Sprintf("%d", value)
+	if len(text) <= 3 {
+		return text
+	}
+
+	var builder strings.Builder
+	prefixLen := len(text) % 3
+	if prefixLen == 0 {
+		prefixLen = 3
+	}
+	builder.WriteString(text[:prefixLen])
+	for index := prefixLen; index < len(text); index += 3 {
+		builder.WriteByte(',')
+		builder.WriteString(text[index : index+3])
+	}
+	return builder.String()
+}
+
+func (c *FileSearchPlugin) formatFileSearchIndexDuration(ctx context.Context, elapsedMs int64) string {
+	if elapsedMs < 0 {
+		elapsedMs = 0
+	}
+	seconds := (elapsedMs + 999) / 1000
+	if seconds <= 0 {
+		seconds = 1
+	}
+	if seconds < 60 {
+		return fmt.Sprintf(c.api.GetTranslation(ctx, "plugin_file_status_index_duration_seconds"), seconds)
+	}
+
+	minutes := seconds / 60
+	remainingSeconds := seconds % 60
+	if minutes < 60 {
+		return fmt.Sprintf(c.api.GetTranslation(ctx, "plugin_file_status_index_duration_minutes"), minutes, remainingSeconds)
+	}
+
+	hours := minutes / 60
+	remainingMinutes := minutes % 60
+	return fmt.Sprintf(c.api.GetTranslation(ctx, "plugin_file_status_index_duration_hours"), hours, remainingMinutes)
 }
 
 func (c *FileSearchPlugin) handleStatusChanged(status filesearch.StatusSnapshot) {

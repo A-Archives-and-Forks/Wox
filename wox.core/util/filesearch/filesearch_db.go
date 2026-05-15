@@ -251,6 +251,53 @@ func (d *FileSearchDB) DeleteRoot(ctx context.Context, rootID string) error {
 	return tx.Commit()
 }
 
+func (d *FileSearchDB) ResetIndex(ctx context.Context) error {
+	if d == nil || d.db == nil {
+		return nil
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Feature addition: manual "Index Files" must start from a clean search
+	// index, not just enqueue another full scan. Keep user roots because they
+	// are configuration, but drop all indexed facts and hidden dynamic roots so
+	// the next planner run rebuilds ownership and search artifacts from scratch.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM directories`); err != nil {
+		return fmt.Errorf("reset directories: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM entries`); err != nil {
+		return fmt.Errorf("reset entries: %w", err)
+	}
+	if err := rebuildAllSearchArtifactsTx(ctx, tx); err != nil {
+		return fmt.Errorf("reset search artifacts: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM roots WHERE kind = ?`, RootKindDynamic); err != nil {
+		return fmt.Errorf("reset dynamic roots: %w", err)
+	}
+	now := util.GetSystemTimestamp()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE roots
+		SET status = ?,
+		    feed_cursor = '',
+		    feed_state = '',
+		    last_reconcile_at = 0,
+		    last_full_scan_at = 0,
+		    progress_current = 0,
+		    progress_total = 0,
+		    last_error = NULL,
+		    updated_at = ?
+		WHERE kind <> ?
+	`, RootStatusPreparing, now, RootKindDynamic); err != nil {
+		return fmt.Errorf("reset user roots: %w", err)
+	}
+
+	return tx.Commit()
+}
+
 func (d *FileSearchDB) MoveScopedRowsToRoot(ctx context.Context, fromRootID string, toRootID string, scopePath string) error {
 	if strings.TrimSpace(fromRootID) == "" || strings.TrimSpace(toRootID) == "" {
 		return fmt.Errorf("move scoped rows requires both source and target root ids")

@@ -3,20 +3,81 @@ package system
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
-	"wox/util"
 	"wox/util/filesearch"
 )
 
 type fileSearchIndexPolicy struct {
 	mu            sync.RWMutex
 	patternsByDir map[string][]gitIgnorePattern
+	ignoreRules   fileSearchIgnoreRules
+}
+
+// Feature addition: seed the user-editable ignore table with the generated and
+// hidden folders that are expensive to traverse and noisy as launcher results.
+// The list remains plain glob text so settings can expose the same values that
+// the scanner uses.
+var defaultFileSearchIgnorePatterns = []string{
+	".*",
+	"*.tmp",
+	"*.temp",
+	".DS_Store",
+	".git",
+	".hg",
+	".svn",
+	"node_modules",
+	"build",
+	"dist",
+	".dart_tool",
+	".gradle",
+	".swiftpm",
+	".build",
+	"DerivedData",
+	"__pycache__",
+	".pytest_cache",
+	".mypy_cache",
+	".ruff_cache",
+	".venv",
+	"venv",
+	".cache",
+	".umi",
+	".umi-production",
+	".next",
+	".nuxt",
+	".vite",
+	".turbo",
+	".parcel-cache",
+	".output",
+	"out",
+	"output",
+	"outputs",
+	"coverage",
+	"target",
+	".idea",
+	".vscode",
+	".cursor",
+	"**/tmp/**",
+	"**/temp/**",
+	"**/Cache/**",
+	"**/Caches/**",
+	"**/cache/**",
+	"**/caches/**",
+	"**/Library/Application Support/**",
+	"**/Mobile Documents/**/PreferenceSync/**",
+	"**/Mobile Documents/**/Application Support/**",
+	"*.photoslibrary",
+	"*.lrlibrary",
+	"*.lrdata",
+	"**/_work/**",
+	"**/externals.*/**",
 }
 
 func newFileSearchIndexPolicy() *fileSearchIndexPolicy {
 	return &fileSearchIndexPolicy{
 		patternsByDir: map[string][]gitIgnorePattern{},
+		ignoreRules:   compileFileSearchIgnoreRules(defaultFileSearchIgnorePatterns),
 	}
 }
 
@@ -33,7 +94,7 @@ func (p *fileSearchIndexPolicy) shouldIndexPath(root filesearch.RootRecord, path
 		return true
 	}
 
-	if shouldIgnoreFileSearchSystemPath(cleanPath, isDir) {
+	if p.shouldIgnoreByConfiguredPattern(root, cleanPath) {
 		return false
 	}
 
@@ -45,6 +106,17 @@ func (p *fileSearchIndexPolicy) shouldIndexPath(root filesearch.RootRecord, path
 	// parent .gitignore chain. Using PolicyRootPath for ignore lookup preserves
 	// that policy without widening the scanner's ownership boundary.
 	return !p.shouldIgnoreByGitIgnore(filepath.Clean(policyRootPath), cleanPath, isDir)
+}
+
+func (p *fileSearchIndexPolicy) SetIgnorePatterns(patterns []string) {
+	// Feature addition: ignore rules moved from a fixed code list into user
+	// settings. Compile them once on setting changes so every visited path pays
+	// only cheap matcher checks during large file-index runs.
+	compiled := compileFileSearchIgnoreRules(patterns)
+
+	p.mu.Lock()
+	p.ignoreRules = compiled
+	p.mu.Unlock()
 }
 
 func (p *fileSearchIndexPolicy) shouldProcessChange(root filesearch.RootRecord, change filesearch.ChangeSignal) bool {
@@ -62,91 +134,230 @@ func (p *fileSearchIndexPolicy) shouldProcessChange(root filesearch.RootRecord, 
 	return p.shouldIndexPath(root, change.Path, isDir)
 }
 
-func shouldIgnoreFileSearchSystemPath(fullPath string, isDir bool) bool {
-	cleanPath := filepath.Clean(strings.TrimSpace(fullPath))
-	base := strings.ToLower(filepath.Base(cleanPath))
-	if base == ".ds_store" {
-		return true
-	}
-
-	if hasFileSearchSystemDirectorySegment(cleanPath) {
-		return true
-	}
-
-	if hasFileSearchGeneratedDirectorySegment(cleanPath) {
-		return true
-	}
-
-	if util.IsMacOS() && hasMacPackageDirectorySegment(cleanPath) {
-		return true
-	}
-
-	if !isDir {
-		return false
-	}
-
-	if !util.IsMacOS() {
-		return false
-	}
-
-	return strings.HasSuffix(base, ".photoslibrary") ||
-		strings.HasSuffix(base, ".lrlibrary") ||
-		strings.HasSuffix(base, ".lrdata")
-}
-
-func hasFileSearchSystemDirectorySegment(fullPath string) bool {
-	for _, segment := range splitFileSearchPathSegments(fullPath) {
-		switch strings.ToLower(segment) {
-		case ".git", ".hg", ".svn":
-			// macOS FSEvents can report descendants such as .git/objects/... without
-			// first reporting the .git directory itself. Checking every path segment
-			// keeps repository internals out of the dirty queue instead of only
-			// ignoring direct .git directory scan entries.
-			return true
-		}
-	}
-
-	return false
-}
-
-func hasFileSearchGeneratedDirectorySegment(fullPath string) bool {
-	for _, segment := range splitFileSearchPathSegments(fullPath) {
-		switch strings.ToLower(segment) {
-		case "build", "dist", "node_modules", ".dart_tool", ".gradle", ".swiftpm", ".build", "deriveddata":
-			// Optimization: build tools can emit hundreds of FSEvents per second under
-			// generated directories. These paths are noisy search results and were the
-			// main source of repeated incremental file-search runs on macOS, so ignore
-			// them at the segment level before they reach the dirty queue.
-			return true
-		}
-	}
-
-	return false
-}
-
-func hasMacPackageDirectorySegment(fullPath string) bool {
-	for _, segment := range splitFileSearchPathSegments(fullPath) {
-		lowerSegment := strings.ToLower(segment)
-		if strings.HasSuffix(lowerSegment, ".photoslibrary") ||
-			strings.HasSuffix(lowerSegment, ".lrlibrary") ||
-			strings.HasSuffix(lowerSegment, ".lrdata") {
-			// macOS package directories can also surface child paths directly through
-			// FSEvents. Segment-level matching prevents package internals from
-			// re-queueing scans after the top-level package directory was skipped.
-			return true
-		}
-	}
-
-	return false
-}
-
 func splitFileSearchPathSegments(fullPath string) []string {
 	normalized := filepath.ToSlash(filepath.Clean(strings.TrimSpace(fullPath)))
 	if normalized == "." || normalized == "" {
 		return nil
 	}
 
-	return strings.Split(normalized, "/")
+	// Bug fix: absolute paths start with "/", so strings.Split would emit an
+	// empty first segment. Segment ignore rules should only see real path
+	// components, otherwise generated empty segments add work to the hot path and
+	// make user-visible glob behavior harder to reason about.
+	rawSegments := strings.Split(normalized, "/")
+	segments := make([]string, 0, len(rawSegments))
+	for _, segment := range rawSegments {
+		if segment == "" {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+	return segments
+}
+
+type fileSearchIgnoreRule struct {
+	hasSlash       bool
+	segmentLiteral string
+	pathRegex      *regexp.Regexp
+	segmentRe      *regexp.Regexp
+}
+
+type fileSearchIgnoreRules struct {
+	pathRules       []fileSearchIgnoreRule
+	segmentLiterals map[string]struct{}
+	segmentRules    []fileSearchIgnoreRule
+}
+
+func compileFileSearchIgnoreRules(patterns []string) fileSearchIgnoreRules {
+	compiled := fileSearchIgnoreRules{segmentLiterals: map[string]struct{}{}}
+	seen := make(map[string]struct{}, len(patterns))
+	for _, pattern := range patterns {
+		raw := strings.TrimSpace(pattern)
+		if raw == "" {
+			continue
+		}
+
+		normalized := filepath.ToSlash(raw)
+		key := strings.ToLower(normalized)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		rule, ok := compileFileSearchIgnoreRule(normalized)
+		if ok {
+			if rule.hasSlash {
+				compiled.pathRules = append(compiled.pathRules, rule)
+				continue
+			}
+			if rule.segmentLiteral != "" {
+				compiled.segmentLiterals[rule.segmentLiteral] = struct{}{}
+				continue
+			}
+			compiled.segmentRules = append(compiled.segmentRules, rule)
+		}
+	}
+
+	return compiled
+}
+
+func compileFileSearchIgnoreRule(pattern string) (fileSearchIgnoreRule, bool) {
+	pattern = strings.TrimSpace(filepath.ToSlash(pattern))
+	if pattern == "" {
+		return fileSearchIgnoreRule{}, false
+	}
+
+	// Ignore patterns are user-facing, so they intentionally use Raycast-style
+	// path globs instead of Go regexes. Segment-only patterns such as
+	// "node_modules" match any path segment, while path patterns such as
+	// "**/cache/**" can prune a whole subtree before the scanner descends into it.
+	hasSlash := strings.Contains(pattern, "/")
+	if !hasSlash && !strings.ContainsAny(pattern, "*?[") {
+		return fileSearchIgnoreRule{
+			segmentLiteral: strings.ToLower(pattern),
+		}, true
+	}
+	expr := globPatternToRegex(pattern, !hasSlash)
+	if expr == "" {
+		return fileSearchIgnoreRule{}, false
+	}
+
+	compiled, err := regexp.Compile("(?i)^" + expr + "$")
+	if err != nil {
+		return fileSearchIgnoreRule{}, false
+	}
+
+	rule := fileSearchIgnoreRule{
+		hasSlash: hasSlash,
+	}
+	if hasSlash {
+		rule.pathRegex = compiled
+	} else {
+		rule.segmentRe = compiled
+	}
+	return rule, true
+}
+
+func globPatternToRegex(pattern string, segmentOnly bool) string {
+	if strings.HasSuffix(pattern, "/**") {
+		base := strings.TrimSuffix(pattern, "/**")
+		if base == "" {
+			return ".*"
+		}
+		return globPatternToRegex(base, segmentOnly) + "(?:/.*)?"
+	}
+
+	var builder strings.Builder
+	for index := 0; index < len(pattern); {
+		if strings.HasPrefix(pattern[index:], "**/") {
+			builder.WriteString("(?:.*/)?")
+			index += 3
+			continue
+		}
+		if strings.HasPrefix(pattern[index:], "**") {
+			builder.WriteString(".*")
+			index += 2
+			continue
+		}
+
+		character := pattern[index]
+		switch character {
+		case '*':
+			if segmentOnly {
+				builder.WriteString(".*")
+			} else {
+				builder.WriteString("[^/]*")
+			}
+		case '?':
+			if segmentOnly {
+				builder.WriteByte('.')
+			} else {
+				builder.WriteString("[^/]")
+			}
+		case '[':
+			end := strings.IndexByte(pattern[index+1:], ']')
+			if end < 0 {
+				builder.WriteString(regexp.QuoteMeta(string(character)))
+			} else {
+				class := pattern[index : index+end+2]
+				builder.WriteString(class)
+				index += end + 2
+				continue
+			}
+		default:
+			builder.WriteString(regexp.QuoteMeta(string(character)))
+		}
+		index++
+	}
+
+	return builder.String()
+}
+
+func (p *fileSearchIndexPolicy) shouldIgnoreByConfiguredPattern(root filesearch.RootRecord, fullPath string) bool {
+	rootPath := strings.TrimSpace(root.PolicyRootPath)
+	if rootPath == "" {
+		rootPath = root.Path
+	}
+
+	relPath, hasRelPath := relativePathForGitIgnoreMatch(filepath.Clean(rootPath), fullPath)
+	fullSlash := filepath.ToSlash(filepath.Clean(fullPath))
+	candidates := []string{fullSlash}
+	if hasRelPath {
+		candidates = append(candidates, relPath)
+	}
+	segments := splitFileSearchPathSegments(fullSlash)
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	// Optimization: ignore rules are evaluated for every filesystem entry during
+	// full indexing. The first configurable implementation split the same path
+	// once per segment rule and ran regexes for literal names like "node_modules",
+	// which made the new ignore feature itself part of the slow index path.
+	if p.ignoreRules.matches(candidates, segments) {
+		return true
+	}
+	return false
+}
+
+func (rules fileSearchIgnoreRules) matches(pathCandidates []string, segments []string) bool {
+	for _, rule := range rules.pathRules {
+		if rule.matchesPath(pathCandidates) {
+			return true
+		}
+	}
+
+	for _, segment := range segments {
+		normalizedSegment := strings.ToLower(segment)
+		if _, ok := rules.segmentLiterals[normalizedSegment]; ok {
+			return true
+		}
+		for _, rule := range rules.segmentRules {
+			if rule.matchesSegment(segment) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (r fileSearchIgnoreRule) matchesPath(pathCandidates []string) bool {
+	if r.pathRegex == nil {
+		return false
+	}
+	for _, candidate := range pathCandidates {
+		if candidate == "." || candidate == "" {
+			continue
+		}
+		if r.pathRegex.MatchString(strings.TrimPrefix(candidate, "/")) || r.pathRegex.MatchString(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r fileSearchIgnoreRule) matchesSegment(segment string) bool {
+	return r.segmentRe != nil && r.segmentRe.MatchString(segment)
 }
 
 func (p *fileSearchIndexPolicy) shouldIgnoreByGitIgnore(rootPath string, fullPath string, isDir bool) bool {

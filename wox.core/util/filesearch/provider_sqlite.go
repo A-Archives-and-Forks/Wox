@@ -167,6 +167,19 @@ func (p *SQLiteSearchProvider) collectGeneralCandidateIDs(ctx context.Context, q
 	}
 	ids = append(ids, nameIDs...)
 
+	if plan.asciiLettersDigits && len(plan.rawLettersDigits) >= 3 {
+		// Optimization: the indexer no longer stores ASCII-only filenames in the
+		// pinyin FTS tables, because that doubled derived-index maintenance for
+		// normal code trees. name_key is the cheap punctuation-insensitive recall
+		// path for queries like "maingo" against "main.go" without reintroducing
+		// the old ASCII pinyin payload.
+		nameKeyIDs, err := p.queryNameKeyPrefixIDs(ctx, plan.rawLettersDigits, limit)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, nameKeyIDs...)
+	}
+
 	// The indexed SQLite provider does not go through the generic plugin fuzzy
 	// matcher, so it must also honor SearchQuery.DisablePinyin before touching
 	// pinyin FTS tables. Otherwise disabling pinyin only affected non-file
@@ -194,6 +207,20 @@ func (p *SQLiteSearchProvider) collectGeneralCandidateIDs(ctx context.Context, q
 	}
 
 	return trimCandidateIDs(ids, limit), nil
+}
+
+func (p *SQLiteSearchProvider) queryNameKeyPrefixIDs(ctx context.Context, prefix string, limit int) ([]int64, error) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return nil, nil
+	}
+	return p.queryIDs(ctx, `
+		SELECT entry_id
+		FROM entries
+		WHERE name_key >= ? AND name_key < ?
+		ORDER BY name_key ASC, entry_id ASC
+		LIMIT ?
+	`, prefix, nextPrefixUpperBound(prefix), limit)
 }
 
 func (p *SQLiteSearchProvider) collectWildcardCandidateIDs(ctx context.Context, query SearchQuery, limit int) ([]int64, error) {

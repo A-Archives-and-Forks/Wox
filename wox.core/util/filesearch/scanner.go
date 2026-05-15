@@ -16,8 +16,10 @@ import (
 
 const (
 	defaultScanInterval               = 24 * time.Hour
-	defaultDirtyDebounceWindow        = 750 * time.Millisecond
-	defaultMaxDirtyDebounceWindow     = 3 * time.Minute
+	defaultDirtyDebounceWindow        = 30 * time.Second
+	defaultDirtyPressureLowWindow     = 2 * time.Minute
+	defaultDirtyPressureHighWindow    = 5 * time.Minute
+	defaultMaxDirtyDebounceWindow     = 15 * time.Minute
 	defaultDirtyBackpressurePathCount = 64
 	defaultDirtyBackpressureRootCount = 2
 	progressBatchSize                 = 256
@@ -56,8 +58,10 @@ type Scanner struct {
 }
 
 type scanRequest struct {
-	Reason  string
-	TraceID string
+	Reason     string
+	TraceID    string
+	ResetIndex bool
+	ResetReady chan error
 }
 
 // NewScanner builds the scanner against the persisted SQLite index only. The
@@ -128,8 +132,19 @@ func (s *Scanner) Start(ctx context.Context) {
 				rescanCtx := contextWithTraceID(util.NewTraceContext(), request.TraceID)
 				util.GetLogger().Info(rescanCtx, fmt.Sprintf("filesearch full rescan triggered: reason=%s", request.Reason))
 				s.resetDirtyQueueWithReason(rescanCtx, "full_rescan")
+				if request.ResetIndex {
+					// Feature addition: manual reindex requests are executed inside
+					// the scanner loop so reset and full-scan writes stay ordered.
+					// Resetting from the caller goroutine could race with an active
+					// scan and briefly repopulate rows that the user asked to drop.
+					if err := s.db.ResetIndex(rescanCtx); err != nil {
+						request.completeReset(err)
+						util.GetLogger().Warn(rescanCtx, "filesearch failed to reset index: "+err.Error())
+						continue
+					}
+					request.completeReset(nil)
+				}
 				s.scanAllRootsWithReason(rescanCtx, request.Reason)
-				s.refreshChangeFeed(rescanCtx)
 				if !fullScanTimer.Stop() {
 					select {
 					case <-fullScanTimer.C:
@@ -154,6 +169,13 @@ func (s *Scanner) Start(ctx context.Context) {
 	})
 }
 
+func (request scanRequest) completeReset(err error) {
+	if request.ResetReady == nil {
+		return
+	}
+	request.ResetReady <- err
+}
+
 func (s *Scanner) Stop() {
 	s.stopOnce.Do(func() {
 		close(s.stopCh)
@@ -169,6 +191,35 @@ func (s *Scanner) RequestRescan(ctx context.Context) {
 	case s.requestCh <- scanRequest{Reason: "request", TraceID: traceID}:
 		util.GetLogger().Debug(contextWithTraceID(ctx, traceID), "filesearch rescan requested")
 	default:
+	}
+}
+
+func (s *Scanner) RequestResetRescan(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	traceID := util.GetContextTraceId(ctx)
+	resetReady := make(chan error, 1)
+	request := scanRequest{Reason: "manual_reset", TraceID: traceID, ResetIndex: true, ResetReady: resetReady}
+	// Feature addition: the visible "Index Files" action must not be dropped
+	// just because a regular rescan request is already buffered. Wait in the
+	// background action goroutine until the scanner can serialize the reset.
+	select {
+	case s.requestCh <- request:
+		util.GetLogger().Debug(contextWithTraceID(ctx, traceID), "filesearch reset rescan requested")
+	case <-s.stopCh:
+		return fmt.Errorf("filesearch scanner stopped")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case err := <-resetReady:
+		return err
+	case <-s.stopCh:
+		return fmt.Errorf("filesearch scanner stopped")
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -239,7 +290,7 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		planner.budget = *s.plannerBudgetOverride
 	}
 	planner.SetProgressCallback(func(progress RunPlannerProgress) {
-		s.setTransientRunState(buildPlannerStatusSnapshot(progress))
+		s.setTransientRunState(buildPlannerStatusSnapshot(progress, kind))
 		s.emitStateChange(ctx)
 		logFilesearchRunStage(ctx, kind, progress.Stage, progress.Root, Job{}, progress.RootIndex, progress.RootTotal, 0, int64(progress.RootTotal))
 	})
@@ -301,6 +352,7 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 	})
 
 	bulkSyncStarted := false
+	runSucceeded := false
 	if kind == RunKindFull {
 		s.db.BeginBulkSync()
 		bulkSyncStarted = true
@@ -331,7 +383,11 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		// user-visible full-index attempt. Record that outer elapsed time here,
 		// after bulk finalize succeeds, so later optimizations can compare one
 		// stable end-to-end metric instead of manually summing phase logs.
-		logFilesearchFullIndexTotal(ctx, reason, util.GetSystemTimestamp()-totalStartedAt, len(plan.RootPlans), len(plan.Jobs), plan.TotalWorkUnits)
+		elapsedMs := util.GetSystemTimestamp() - totalStartedAt
+		logFilesearchFullIndexTotal(ctx, reason, elapsedMs, len(plan.RootPlans), len(plan.Jobs), plan.TotalWorkUnits)
+		if runSucceeded {
+			s.emitCompletedFullRunSummary(ctx, plan, elapsedMs)
+		}
 	}()
 
 	executionStartedAt := util.GetSystemTimestamp()
@@ -345,10 +401,46 @@ func (s *Scanner) executePlannedRun(ctx context.Context, kind RunKind, reason st
 		s.handleRunFailure(ctx, run, roots)
 		return err
 	}
+	runSucceeded = true
 
 	s.clearTransientRunState()
-	s.refreshChangeFeed(ctx)
+	if kind == RunKindFull {
+		// Bug fix: incremental dirty flushes should not restart the platform
+		// change feed. FSEvents replays from the oldest root cursor when a stream
+		// is recreated, so restarting after every small sync can replay the same
+		// event for a quiet root and keep the toolbar stuck in "Syncing file
+		// changes". Full scans update every root cursor first, which makes this
+		// refresh a safe handoff to the newest durable checkpoint.
+		s.refreshChangeFeed(ctx)
+	}
 	return nil
+}
+
+func (s *Scanner) emitCompletedFullRunSummary(ctx context.Context, plan RunPlan, elapsedMs int64) {
+	if plan.Kind != RunKindFull {
+		return
+	}
+
+	// Feature addition: the toolbar should receive one final full-index summary
+	// after SQLite bulk maintenance has completed. The executor's completed
+	// snapshot fires before deferred FTS rebuild/optimize work, so emitting this
+	// scanner-owned snapshot keeps the user-visible "Indexed ..." message aligned
+	// with the actual end of the full indexing run.
+	s.setTransientRunState(StatusSnapshot{
+		RootCount:           len(plan.RootPlans),
+		ProgressCurrent:     plan.TotalWorkUnits,
+		ProgressTotal:       plan.TotalWorkUnits,
+		ActiveRunStatus:     RunStatusCompleted,
+		ActiveRunKind:       RunKindFull,
+		RunProgressCurrent:  plan.TotalWorkUnits,
+		RunProgressTotal:    plan.TotalWorkUnits,
+		ActiveRunFileCount:  plan.PreScanTotals.FileCount,
+		ActiveRunEntryCount: plan.PreScanTotals.IndexableEntryCount,
+		ActiveRunElapsedMs:  elapsedMs,
+		IsIndexing:          false,
+	})
+	s.emitStateChange(ctx)
+	s.clearTransientRunState()
 }
 
 func (s *Scanner) applyRunJob(ctx context.Context, kind RunKind, root RootRecord, job Job, batch *SubtreeSnapshotBatch) error {
@@ -428,7 +520,7 @@ func (s *Scanner) handleRunFailure(ctx context.Context, run Run, roots []RootRec
 	s.emitStateChange(ctx)
 }
 
-func buildPlannerStatusSnapshot(progress RunPlannerProgress) StatusSnapshot {
+func buildPlannerStatusSnapshot(progress RunPlannerProgress, kind RunKind) StatusSnapshot {
 	current := int64(progress.RootIndex)
 	total := int64(progress.RootTotal)
 	if total <= 0 {
@@ -449,6 +541,7 @@ func buildPlannerStatusSnapshot(progress RunPlannerProgress) StatusSnapshot {
 		ActiveRootTotal:       progress.RootTotal,
 		ActiveRootPath:        filepath.Clean(progress.Root.Path),
 		ActiveRunStatus:       runStatusForPlannerStage(progress.Stage),
+		ActiveRunKind:         kind,
 		ActiveStage:           progress.Stage,
 		ActiveScopePath:       activePlannerScopePath(progress),
 		RunProgressCurrent:    0,
@@ -1793,19 +1886,20 @@ func (s *Scanner) dirtyBackpressureWindow(stats DirtyQueueStats, baseWindow time
 	if pathPressureMax || rootPressureMax {
 		window = maxDuration(window, maxWindow)
 	} else if pathPressureHigh || rootPressureHigh {
-		window = maxDuration(window, minDuration(30*time.Second, maxWindow))
+		window = maxDuration(window, minDuration(defaultDirtyPressureHighWindow, maxWindow))
 	} else if pathPressureLow || rootPressureLow {
-		// Optimization: keep small edits responsive, but once the queue crosses the
-		// first pressure threshold, wait long enough for build tools to finish a
-		// burst before starting another incremental run.
-		window = maxDuration(window, minDuration(10*time.Second, maxWindow))
+		// Optimization: keep file-search updates quiet under generated-output
+		// bursts. The base dirty flush now waits long enough for normal editor
+		// saves, so pressure tiers must move to minute-scale windows instead of
+		// the old sub-minute values that no longer increased the debounce.
+		window = maxDuration(window, minDuration(defaultDirtyPressureLowWindow, maxWindow))
 	}
 
 	lastElapsed := s.lastDirtyRunDuration()
 	if lastElapsed >= 15*time.Second {
-		window = maxDuration(window, minDuration(30*time.Second, maxWindow))
+		window = maxDuration(window, minDuration(defaultDirtyPressureHighWindow, maxWindow))
 	} else if lastElapsed >= 5*time.Second {
-		window = maxDuration(window, minDuration(10*time.Second, maxWindow))
+		window = maxDuration(window, minDuration(defaultDirtyPressureLowWindow, maxWindow))
 	}
 
 	if window > maxWindow {

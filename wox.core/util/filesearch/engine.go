@@ -89,6 +89,25 @@ func (e *Engine) UpdatePolicy(policy Policy) {
 	}
 }
 
+func (e *Engine) ResetIndex(ctx context.Context) error {
+	if e == nil || e.db == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if e.scanner != nil {
+		// Feature addition: full index resets need scanner-loop ordering so a
+		// running scan cannot repopulate rows after the manual clear. The scanner
+		// resets SQLite first and then immediately performs the fresh full scan.
+		return e.scanner.RequestResetRescan(ctx)
+	}
+	if err := e.db.ResetIndex(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (e *Engine) Close() error {
 	if e.scanner != nil {
 		e.scanner.Stop()
@@ -311,11 +330,15 @@ func mergeTransientRunStatus(status *StatusSnapshot, activeRun StatusSnapshot) {
 	status.ActiveItemTotal = activeRun.ActiveItemTotal
 	status.ActiveRootPath = activeRun.ActiveRootPath
 	status.ActiveRunStatus = activeRun.ActiveRunStatus
+	status.ActiveRunKind = activeRun.ActiveRunKind
 	status.ActiveJobKind = activeRun.ActiveJobKind
 	status.ActiveScopePath = activeRun.ActiveScopePath
 	status.ActiveStage = activeRun.ActiveStage
 	status.RunProgressCurrent = activeRun.RunProgressCurrent
 	status.RunProgressTotal = activeRun.RunProgressTotal
+	status.ActiveRunFileCount = activeRun.ActiveRunFileCount
+	status.ActiveRunEntryCount = activeRun.ActiveRunEntryCount
+	status.ActiveRunElapsedMs = activeRun.ActiveRunElapsedMs
 	status.IsIndexing = activeRun.IsIndexing
 	if strings.TrimSpace(activeRun.LastError) != "" {
 		status.LastError = activeRun.LastError

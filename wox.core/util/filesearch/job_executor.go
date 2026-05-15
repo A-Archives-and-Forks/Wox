@@ -7,10 +7,10 @@ import (
 )
 
 type JobExecutor struct {
-	snapshot          *SnapshotBuilder
-	apply             func(context.Context, RootRecord, Job, *SubtreeSnapshotBatch) error
-	applySubtreeBatch func(context.Context, RootRecord, []SubtreeSnapshotBatch) error
-	streamDirectFiles func(context.Context, RootRecord, Job, *SnapshotBuilder) error
+	snapshot           *SnapshotBuilder
+	apply              func(context.Context, RootRecord, Job, *SubtreeSnapshotBatch) error
+	applySubtreeBatch  func(context.Context, RootRecord, []SubtreeSnapshotBatch) error
+	streamDirectFiles  func(context.Context, RootRecord, Job, *SnapshotBuilder) error
 	subtreeBatchConfig subtreeApplyBatchConfig
 }
 
@@ -131,9 +131,9 @@ func (e *JobExecutor) ExecuteRun(ctx context.Context, plan RunPlan, roots []Root
 	copy(jobs, plan.Jobs)
 	var lastJob Job
 	type pendingSubtreeApply struct {
-		root      RootRecord
+		root       RootRecord
 		jobIndexes []int
-		batches   []SubtreeSnapshotBatch
+		batches    []SubtreeSnapshotBatch
 		totalUnits int64
 	}
 	var pending pendingSubtreeApply
@@ -409,11 +409,14 @@ func buildJobExecutorStatusSnapshot(run Run, plan RunPlan, rootOrder map[string]
 		ActiveRootTotal:       len(plan.RootPlans),
 		ActiveRootPath:        job.RootPath,
 		ActiveRunStatus:       run.Status,
+		ActiveRunKind:         plan.Kind,
 		ActiveJobKind:         job.Kind,
 		ActiveScopePath:       job.ScopePath,
 		ActiveStage:           run.Stage,
 		RunProgressCurrent:    run.CompletedWorkUnits,
 		RunProgressTotal:      run.TotalWorkUnits,
+		ActiveRunFileCount:    plan.PreScanTotals.FileCount,
+		ActiveRunEntryCount:   plan.PreScanTotals.IndexableEntryCount,
 		IsIndexing:            run.Status == RunStatusExecuting || run.Status == RunStatusFinalizing,
 		LastError:             run.LastError,
 	}

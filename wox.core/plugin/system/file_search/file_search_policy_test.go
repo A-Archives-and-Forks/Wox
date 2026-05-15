@@ -9,7 +9,7 @@ import (
 
 func TestFileSearchPolicyUsesPolicyRootPathForDynamicRootGitIgnore(t *testing.T) {
 	parentRoot := filepath.Join(t.TempDir(), "root-policy-parent")
-	dynamicRoot := filepath.Join(parentRoot, "workspace", "target")
+	dynamicRoot := filepath.Join(parentRoot, "workspace", "content")
 	ignoredFile := filepath.Join(dynamicRoot, "ignored.log")
 	keptFile := filepath.Join(dynamicRoot, "kept.txt")
 
