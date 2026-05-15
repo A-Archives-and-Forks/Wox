@@ -15,6 +15,7 @@ const (
 	slowFilesearchRunExecutionThresholdMs   int64 = 500
 	slowFilesearchJobPhaseThresholdMs       int64 = 150
 	slowFilesearchSQLiteMaintenanceMs       int64 = 250
+	slowFilesearchScanDiagnosticMs          int64 = 250
 )
 
 func summarizeLogPath(path string) string {
@@ -221,6 +222,29 @@ func logFilesearchSQLiteMaintenance(ctx context.Context, operation string, scope
 	)
 	if elapsedMs >= slowFilesearchSQLiteMaintenanceMs {
 		util.GetLogger().Info(ctx, "filesearch slow sqlite maintenance: "+msg)
+		return
+	}
+	util.GetLogger().Debug(ctx, msg)
+}
+
+func logFilesearchScanDiagnostic(ctx context.Context, operation string, scope string, elapsedMs int64, workCount int) {
+	if !fileSearchDiagnosticLoggingEnabled {
+		return
+	}
+
+	msg := fmt.Sprintf(
+		"filesearch scan diagnostic: operation=%s scope=%s elapsed=%dms work_count=%d",
+		strings.TrimSpace(operation),
+		summarizeLogPath(scope),
+		elapsedMs,
+		workCount,
+	)
+	// Diagnostic addition: stream_scan_build used to be one opaque phase, so a
+	// 7s root crawl could not distinguish filesystem reads from policy checks or
+	// metadata fallback. Emit the same compact operation shape as SQLite timings
+	// so the real-index artifact can rank scan costs beside write costs.
+	if elapsedMs >= slowFilesearchScanDiagnosticMs {
+		util.GetLogger().Info(ctx, "filesearch slow scan diagnostic: "+msg)
 		return
 	}
 	util.GetLogger().Debug(ctx, msg)

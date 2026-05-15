@@ -4,10 +4,18 @@ SQLITE_BUILD_TAGS ?= sqlite_fts5
 FILESEARCH_REAL_INDEX_ROOT ?= ~/Projects
 FILESEARCH_REAL_INDEX_KEYWORD ?= default-cover
 FILESEARCH_REAL_INDEX_ARTIFACT ?=
+# Default to the same no-optimization flags used by the debugger-launched Wox
+# core. That makes the local benchmark match the development app's real full
+# index latency; use filesearch-real-index-release for an optimized baseline.
+FILESEARCH_REAL_INDEX_GCFLAGS ?= all=-N -l
 FILESEARCH_REAL_INDEX_TAGS := $(strip $(SQLITE_BUILD_TAGS) filesearch_real_index)
 FILESEARCH_REAL_INDEX_ARGS := -filesearch-real-index -filesearch-real-index-root "$(FILESEARCH_REAL_INDEX_ROOT)" -filesearch-real-index-keyword "$(FILESEARCH_REAL_INDEX_KEYWORD)"
 ifneq ($(strip $(FILESEARCH_REAL_INDEX_ARTIFACT)),)
 FILESEARCH_REAL_INDEX_ARGS += -filesearch-real-index-artifact "$(FILESEARCH_REAL_INDEX_ARTIFACT)"
+endif
+FILESEARCH_REAL_INDEX_GOFLAGS :=
+ifneq ($(strip $(FILESEARCH_REAL_INDEX_GCFLAGS)),)
+FILESEARCH_REAL_INDEX_GOFLAGS += -gcflags="$(FILESEARCH_REAL_INDEX_GCFLAGS)"
 endif
 
 # Determine the current platform
@@ -54,7 +62,8 @@ help:
 	@echo "Available commands:"
 	@echo "  make clean         - Clean build artifacts"
 	@echo "  make build         - Build Flutter UI for current platform ($(PLATFORM))"
-	@echo "  make filesearch-real-index - Capture local filesearch/fd/rg comparison for $(FILESEARCH_REAL_INDEX_ROOT), keyword $(FILESEARCH_REAL_INDEX_KEYWORD)"
+	@echo "  make filesearch-real-index - Capture debugger-aligned filesearch/fd/rg comparison for $(FILESEARCH_REAL_INDEX_ROOT), keyword $(FILESEARCH_REAL_INDEX_KEYWORD)"
+	@echo "  make filesearch-real-index-release - Capture optimized filesearch/fd/rg comparison for $(FILESEARCH_REAL_INDEX_ROOT), keyword $(FILESEARCH_REAL_INDEX_KEYWORD)"
 	@echo "  make woxmr-build   - Build and install WoxMR.bundle for current platform ($(PLATFORM))"
 
 clean:
@@ -82,10 +91,12 @@ endif
 # Feature addition: real-root filesearch comparisons are intentionally exposed
 # through a local Make target instead of the normal test surface, so CI keeps
 # running deterministic tests while developers can opt into the expensive
-# workstation-sized scan with one command and a Makefile-controlled root.
+# workstation-sized scan with one command and a Makefile-controlled root. The
+# default target mirrors debugger-launched Wox because that is the app runtime
+# developers are comparing against during local profiling.
 filesearch-real-index:
-	@echo "Capturing filesearch real-index comparison for $(FILESEARCH_REAL_INDEX_ROOT) with keyword $(FILESEARCH_REAL_INDEX_KEYWORD)"
-	go test -tags "$(FILESEARCH_REAL_INDEX_TAGS)" ./util/filesearch -run TestCaptureFileSearchRealIndexForProjectsRoot -count=1 -v -args $(FILESEARCH_REAL_INDEX_ARGS)
+	@echo "Capturing filesearch real-index comparison for $(FILESEARCH_REAL_INDEX_ROOT) with keyword $(FILESEARCH_REAL_INDEX_KEYWORD), gcflags=$(if $(strip $(FILESEARCH_REAL_INDEX_GCFLAGS)),$(FILESEARCH_REAL_INDEX_GCFLAGS),<default>)"
+	WOX_FILESEARCH_REAL_INDEX_GCFLAGS="$(FILESEARCH_REAL_INDEX_GCFLAGS)" go test $(FILESEARCH_REAL_INDEX_GOFLAGS) -tags "$(FILESEARCH_REAL_INDEX_TAGS)" ./util/filesearch -run TestCaptureFileSearchRealIndexForProjectsRoot -count=1 -v -args $(FILESEARCH_REAL_INDEX_ARGS)
 
 # -----------------------------
 # MediaRemote XS (Perl) builder

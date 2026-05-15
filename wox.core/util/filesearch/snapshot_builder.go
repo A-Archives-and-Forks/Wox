@@ -17,6 +17,61 @@ type SnapshotBuilder struct {
 	rootExclusions      map[string][]string
 }
 
+// Diagnostic addition: the real-index artifact needs the dominant streaming
+// traversal split into filesystem read, entry type, policy, and metadata costs.
+// Keeping this accumulator local to one subtree stream avoids cross-job locking
+// while preserving the existing single-goroutine traversal semantics.
+type subtreeStreamDiagnostics struct {
+	readDirNanos      int64
+	readDirCount      int
+	dirEntryTypeNanos int64
+	dirEntryTypeCount int
+	policyCheckNanos  int64
+	policyCheckCount  int
+	dirEntryInfoNanos int64
+	dirEntryInfoCount int
+}
+
+func (d *subtreeStreamDiagnostics) recordReadDir(elapsed time.Duration) {
+	d.readDirNanos += elapsed.Nanoseconds()
+	d.readDirCount++
+}
+
+func (d *subtreeStreamDiagnostics) recordDirEntryType(elapsed time.Duration) {
+	d.dirEntryTypeNanos += elapsed.Nanoseconds()
+	d.dirEntryTypeCount++
+}
+
+func (d *subtreeStreamDiagnostics) recordPolicyCheck(elapsed time.Duration) {
+	d.policyCheckNanos += elapsed.Nanoseconds()
+	d.policyCheckCount++
+}
+
+func (d *subtreeStreamDiagnostics) recordDirEntryInfo(elapsed time.Duration) {
+	d.dirEntryInfoNanos += elapsed.Nanoseconds()
+	d.dirEntryInfoCount++
+}
+
+func (d *subtreeStreamDiagnostics) log(ctx context.Context, scope string) {
+	if d == nil {
+		return
+	}
+	// Bug fix: this must read the accumulator at function exit. A value receiver
+	// on a deferred method copied the zero-value counters at defer time, which
+	// made the real-index artifact show scan timings with work_count=0.
+	logFilesearchScanDiagnostic(ctx, "subtree_stream_readdir", scope, scanDiagnosticMillis(d.readDirNanos), d.readDirCount)
+	logFilesearchScanDiagnostic(ctx, "subtree_stream_direntry_type", scope, scanDiagnosticMillis(d.dirEntryTypeNanos), d.dirEntryTypeCount)
+	logFilesearchScanDiagnostic(ctx, "subtree_stream_policy_check", scope, scanDiagnosticMillis(d.policyCheckNanos), d.policyCheckCount)
+	logFilesearchScanDiagnostic(ctx, "subtree_stream_direntry_info", scope, scanDiagnosticMillis(d.dirEntryInfoNanos), d.dirEntryInfoCount)
+}
+
+func scanDiagnosticMillis(nanos int64) int64 {
+	if nanos <= 0 {
+		return 0
+	}
+	return (nanos + int64(time.Millisecond) - 1) / int64(time.Millisecond)
+}
+
 func NewSnapshotBuilder(policy *policyState) *SnapshotBuilder {
 	if policy == nil {
 		policy = newPolicyState(Policy{})
@@ -434,6 +489,9 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 		})
 	}
 
+	diagnostics := &subtreeStreamDiagnostics{}
+	defer diagnostics.log(ctx, scopePath)
+
 	type queueItem struct {
 		path string
 		info os.FileInfo
@@ -490,7 +548,9 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 			continue
 		}
 
+		readStartedAt := time.Now()
 		dirEntries, readErr := os.ReadDir(current.path)
+		diagnostics.recordReadDir(time.Since(readStartedAt))
 		if readErr != nil {
 			if errors.Is(readErr, os.ErrNotExist) {
 				if current.path == scopePath {
@@ -540,7 +600,9 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 			}
 
 			childPath := filepath.Join(current.path, dirEntry.Name())
+			typeStartedAt := time.Now()
 			isDir, childInfo, infoErr := strictDirEntryType(current.path, dirEntry)
+			diagnostics.recordDirEntryType(time.Since(typeStartedAt))
 			if infoErr != nil {
 				continue
 			}
@@ -550,11 +612,16 @@ func (b *SnapshotBuilder) StreamSubtreeJobBatches(ctx context.Context, root Root
 			if shouldSkipSystemPath(childPath, isDir) {
 				continue
 			}
-			if !b.shouldIndexPath(root, childPath, isDir) {
+			policyStartedAt := time.Now()
+			shouldIndex := b.shouldIndexPath(root, childPath, isDir)
+			diagnostics.recordPolicyCheck(time.Since(policyStartedAt))
+			if !shouldIndex {
 				continue
 			}
 			if childInfo == nil {
+				infoStartedAt := time.Now()
 				childInfo, infoErr = strictDirEntryInfo(current.path, dirEntry)
+				diagnostics.recordDirEntryInfo(time.Since(infoStartedAt))
 				if infoErr != nil {
 					continue
 				}

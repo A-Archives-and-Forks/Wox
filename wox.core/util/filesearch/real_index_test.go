@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"wox/plugin/system/file_search/indexpolicy"
 	"wox/util"
 )
 
@@ -29,6 +30,7 @@ const (
 	actualIndexSearchKeywordEnv = "WOX_FILESEARCH_REAL_INDEX_KEYWORD"
 	actualIndexFdPathEnv        = "WOX_FILESEARCH_REAL_INDEX_FD"
 	actualIndexRgPathEnv        = "WOX_FILESEARCH_REAL_INDEX_RG"
+	actualIndexGCFlagsEnv       = "WOX_FILESEARCH_REAL_INDEX_GCFLAGS"
 	actualIndexDefaultRootPath  = "~/Projects"
 	actualIndexDefaultKeyword   = "default-cover"
 	actualIndexTimeout          = 30 * time.Minute
@@ -76,12 +78,14 @@ type realIndexRootArtifact struct {
 
 type realIndexPolicyArtifact struct {
 	Mode                string   `json:"mode"`
-	IgnoredSegmentCount int      `json:"ignored_segment_count"`
-	IgnoredSegments     []string `json:"ignored_segments"`
+	IgnoredPatternCount int      `json:"ignored_pattern_count"`
+	IgnoredPatterns     []string `json:"ignored_patterns"`
+	DiagnosticsEnabled  bool     `json:"diagnostics_enabled"`
 }
 
 type realIndexArtifact struct {
 	CapturedAt         string                   `json:"captured_at"`
+	GoGCFlags          string                   `json:"go_gcflags,omitempty"`
 	Root               realIndexRootArtifact    `json:"root"`
 	IndexPolicy        realIndexPolicyArtifact  `json:"index_policy"`
 	FdBaseline         realIndexToolBaseline    `json:"fd_baseline"`
@@ -138,15 +142,16 @@ type realIndexSearchResult struct {
 }
 
 type realIndexExecutionStats struct {
-	JobCount                   int                  `json:"job_count"`
-	SubtreeApplyTotalP50Millis int64                `json:"subtree_apply_total_p50_millis"`
-	SubtreeApplyTotalP95Millis int64                `json:"subtree_apply_total_p95_millis"`
-	StreamApplyP50Millis       int64                `json:"stream_apply_p50_millis"`
-	StreamApplyP95Millis       int64                `json:"stream_apply_p95_millis"`
-	ApplySnapshotP50Millis     int64                `json:"apply_snapshot_p50_millis"`
-	ApplySnapshotP95Millis     int64                `json:"apply_snapshot_p95_millis"`
-	OperationMetrics           []realIndexOperation `json:"operation_metrics"`
-	SlowestScopes              []realIndexSlowScope `json:"slowest_scopes"`
+	JobCount                   int                             `json:"job_count"`
+	SubtreeApplyTotalP50Millis int64                           `json:"subtree_apply_total_p50_millis"`
+	SubtreeApplyTotalP95Millis int64                           `json:"subtree_apply_total_p95_millis"`
+	StreamApplyP50Millis       int64                           `json:"stream_apply_p50_millis"`
+	StreamApplyP95Millis       int64                           `json:"stream_apply_p95_millis"`
+	ApplySnapshotP50Millis     int64                           `json:"apply_snapshot_p50_millis"`
+	ApplySnapshotP95Millis     int64                           `json:"apply_snapshot_p95_millis"`
+	OperationMetrics           []realIndexOperation            `json:"operation_metrics"`
+	SlowestScopes              []realIndexSlowScope            `json:"slowest_scopes"`
+	PolicyDiagnostics          indexpolicy.DiagnosticsSnapshot `json:"policy_diagnostics"`
 }
 
 type realIndexOperation struct {
@@ -179,47 +184,8 @@ type realIndexTimelineEvent struct {
 var (
 	realIndexJobPhasePattern          = regexp.MustCompile(`filesearch job phase: phase=([^ ]+) elapsed=(\d+)ms .* scope=(.+) units=\d+$`)
 	realIndexSQLiteMaintenancePattern = regexp.MustCompile(`filesearch sqlite maintenance: operation=([^ ]+) scope=.* elapsed=(\d+)ms work_count=(\d+)$`)
+	realIndexScanDiagnosticPattern    = regexp.MustCompile(`filesearch scan diagnostic: operation=([^ ]+) scope=.* elapsed=(\d+)ms work_count=(\d+)$`)
 )
-
-// realIndexBenchmarkIgnoredSegments mirrors the plugin's default segment-level
-// ignore rules for this local benchmark. The scanner core stays policy-neutral;
-// the benchmark opts into these skips through Policy just like the plugin does.
-var realIndexBenchmarkIgnoredSegments = []string{
-	".build",
-	".cache",
-	".cursor",
-	".dart_tool",
-	".git",
-	".gradle",
-	".hg",
-	".idea",
-	".mypy_cache",
-	".next",
-	".nuxt",
-	".output",
-	".parcel-cache",
-	".pytest_cache",
-	".ruff_cache",
-	".svn",
-	".swiftpm",
-	".turbo",
-	".umi",
-	".umi-production",
-	".venv",
-	".vite",
-	".vscode",
-	"__pycache__",
-	"build",
-	"coverage",
-	"DerivedData",
-	"dist",
-	"node_modules",
-	"out",
-	"output",
-	"outputs",
-	"target",
-	"venv",
-}
 
 func TestSummarizeRealIndexExecutionLog(t *testing.T) {
 	logContent := strings.Join([]string{
@@ -297,7 +263,7 @@ func TestCaptureFileSearchRealIndexForProjectsRoot(t *testing.T) {
 	mustInsertRoot(t, scanCtx, db, root)
 
 	scanner := NewScanner(db)
-	indexPolicy, indexPolicyArtifact := realIndexBenchmarkPolicy()
+	indexPolicy, indexPolicyArtifact, policyDiagnostics := realIndexBenchmarkPolicy()
 	scanner.policy.Set(indexPolicy)
 	engine := &Engine{db: db, scanner: scanner}
 
@@ -346,18 +312,20 @@ func TestCaptureFileSearchRealIndexForProjectsRoot(t *testing.T) {
 	})
 
 	searchKeyword := realIndexSearchKeyword()
-	// Optimization baselines are not part of Wox indexing, but they give the
-	// artifact same-machine keyword lookup costs for the selected root. fd is the
-	// primary comparator because it searches filesystem entries without reading
-	// file contents; rg --files with a glob stays as a secondary file-only
-	// walker reference for the same keyword.
-	fdBaseline := captureRealIndexFdBaseline(t, baseCtx, rootPath, searchKeyword)
-	rgBaseline := captureRealIndexRgBaseline(t, baseCtx, rootPath, searchKeyword)
-
+	// Diagnostic correction: run Wox before fd/rg so the comparison does not let
+	// external walkers pre-warm the filesystem cache. The previous order made the
+	// benchmark much faster than an app-triggered full index and hid the cold
+	// traversal cost that users actually feel.
 	scanStartedAt := time.Now()
 	scanner.scanAllRoots(scanCtx)
 	scanFinishedAt := time.Now()
 	searchBenchmark := captureRealIndexSearchBenchmark(t, baseCtx, db, searchKeyword, scanStartedAt, scanFinishedAt)
+
+	// External baselines still belong in the artifact, but after Wox has already
+	// paid the real index cost. Their run_order explicitly records that they are
+	// lookup references, not cache warmers for the Wox scan.
+	fdBaseline := captureRealIndexFdBaseline(t, baseCtx, rootPath, searchKeyword)
+	rgBaseline := captureRealIndexRgBaseline(t, baseCtx, rootPath, searchKeyword)
 
 	rootAfter, err := db.FindRootByID(scanCtx, root.ID)
 	if err != nil {
@@ -387,10 +355,12 @@ func TestCaptureFileSearchRealIndexForProjectsRoot(t *testing.T) {
 		t.Fatalf("capture sqlite snapshot after real index capture: %v", err)
 	}
 	executionStats := loadRealIndexExecutionStats(t)
+	executionStats.PolicyDiagnostics = policyDiagnostics.Snapshot()
 
 	timelineMu.Lock()
 	artifact := realIndexArtifact{
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),
+		GoGCFlags:  strings.TrimSpace(os.Getenv(actualIndexGCFlagsEnv)),
 		Root: realIndexRootArtifact{
 			Path:            rootAfter.Path,
 			Status:          string(rootAfter.Status),
@@ -417,73 +387,44 @@ func TestCaptureFileSearchRealIndexForProjectsRoot(t *testing.T) {
 	writeRealIndexArtifact(t, artifact)
 }
 
-func realIndexBenchmarkPolicy() (Policy, realIndexPolicyArtifact) {
-	ignoredSegments := make(map[string]struct{}, len(realIndexBenchmarkIgnoredSegments))
-	for _, segment := range realIndexBenchmarkIgnoredSegments {
-		ignoredSegments[strings.ToLower(segment)] = struct{}{}
-	}
+func realIndexBenchmarkPolicy() (Policy, realIndexPolicyArtifact, *indexpolicy.Diagnostics) {
+	pluginPolicy := indexpolicy.New()
+	diagnostics := indexpolicy.NewDiagnostics()
+	pluginPolicy.SetDiagnostics(diagnostics)
 
-	// Benchmark policy: the real-index capture compares Wox with fd/rg on a
-	// developer root, so it must use the same policy extension point that the
-	// file-search plugin uses in production. Keeping this filter local preserves
-	// the core scanner contract while still avoiding generated dependencies and
-	// hidden project metadata during the workstation-sized benchmark.
+	// Benchmark policy: the real-index capture now uses the same plugin-owned
+	// ignore matcher as production. The old segment-only mirror under-reported
+	// full-index cost because it skipped configured glob rules and ancestor
+	// .gitignore evaluation, which are exactly the paths this benchmark needs to
+	// expose.
 	shouldIndex := func(root RootRecord, path string, isDir bool) bool {
-		_ = isDir
-
-		cleanPath := filepath.Clean(strings.TrimSpace(path))
-		if cleanPath == "" || cleanPath == "." {
-			return true
-		}
-
-		cleanRoot := filepath.Clean(strings.TrimSpace(root.PolicyRootPath))
-		if cleanRoot == "" || cleanRoot == "." {
-			cleanRoot = filepath.Clean(strings.TrimSpace(root.Path))
-		}
-		if cleanRoot == "" || cleanRoot == "." || cleanPath == cleanRoot {
-			return true
-		}
-
-		relPath, err := filepath.Rel(cleanRoot, cleanPath)
-		if err != nil {
-			return true
-		}
-		normalizedRelPath := filepath.ToSlash(filepath.Clean(relPath))
-		if normalizedRelPath == "." || normalizedRelPath == ".." || strings.HasPrefix(normalizedRelPath, "../") {
-			return true
-		}
-
-		for _, segment := range strings.Split(normalizedRelPath, "/") {
-			if segment == "" || segment == "." {
-				continue
-			}
-			if strings.HasPrefix(segment, ".") {
-				return false
-			}
-			if _, ignored := ignoredSegments[strings.ToLower(segment)]; ignored {
-				return false
-			}
-		}
-		return true
+		return pluginPolicy.ShouldIndexPath(root.Path, root.PolicyRootPath, path, isDir)
 	}
 
-	artifactSegments := append([]string(nil), realIndexBenchmarkIgnoredSegments...)
-	sort.Strings(artifactSegments)
+	ignoredPatterns := indexpolicy.DefaultIgnorePatterns()
+	sort.Strings(ignoredPatterns)
 	policy := Policy{
 		ShouldIndexPath: shouldIndex,
 		ShouldProcessChange: func(root RootRecord, change ChangeSignal) bool {
 			if strings.TrimSpace(change.Path) == "" {
 				return true
 			}
-			return shouldIndex(root, change.Path, change.PathIsDir)
+			isDir := change.PathIsDir
+			if !change.PathTypeKnown {
+				if info, err := os.Stat(change.Path); err == nil {
+					isDir = info.IsDir()
+				}
+			}
+			return shouldIndex(root, change.Path, isDir)
 		},
 	}
 	artifact := realIndexPolicyArtifact{
-		Mode:                "plugin-default-segment-policy",
-		IgnoredSegmentCount: len(artifactSegments),
-		IgnoredSegments:     artifactSegments,
+		Mode:                "plugin-default-policy",
+		IgnoredPatternCount: len(ignoredPatterns),
+		IgnoredPatterns:     ignoredPatterns,
+		DiagnosticsEnabled:  true,
 	}
-	return policy, artifact
+	return policy, artifact, diagnostics
 }
 
 func shouldCaptureRealIndex() bool {
@@ -683,6 +624,7 @@ type realIndexToolCapture struct {
 	Mode          string
 	ResultKind    string
 	SearchKeyword string
+	RunOrder      string
 }
 
 func captureRealIndexToolBaseline(t *testing.T, parentCtx context.Context, capture realIndexToolCapture) realIndexToolBaseline {
@@ -709,7 +651,10 @@ func captureRealIndexToolBaseline(t *testing.T, parentCtx context.Context, captu
 	}
 
 	baseline.Available = true
-	baseline.RunOrder = "before_wox_scan"
+	baseline.RunOrder = strings.TrimSpace(capture.RunOrder)
+	if baseline.RunOrder == "" {
+		baseline.RunOrder = "after_wox_scan"
+	}
 	baseline.Executable = executable
 	baseline.Args = append([]string(nil), capture.Args...)
 	baseline.StartedAt = time.Now().UTC().Format(time.RFC3339)
@@ -972,6 +917,15 @@ func summarizeRealIndexExecutionLog(logContent string) realIndexExecutionStats {
 			if operation == "subtree_apply_total" {
 				subtreeApplyTotals = append(subtreeApplyTotals, elapsed)
 			}
+		}
+
+		if matches := realIndexScanDiagnosticPattern.FindStringSubmatch(line); len(matches) == 4 {
+			operation := strings.TrimSpace(matches[1])
+			elapsed := mustParseRealIndexMillis(matches[2])
+			workCount := mustParseRealIndexInt(matches[3])
+			metricName := "scan:" + operation
+			operationSamples[metricName] = append(operationSamples[metricName], elapsed)
+			operationWorkCounts[metricName] = append(operationWorkCounts[metricName], workCount)
 		}
 	}
 
