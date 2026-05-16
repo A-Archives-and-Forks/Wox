@@ -280,59 +280,69 @@ func (c *FileSearchPlugin) Query(ctx context.Context, query plugin.Query) plugin
 	queryResults := make([]plugin.QueryResult, 0, len(results))
 	for _, item := range results {
 		icon := resolveFileSearchResultIcon(ctx, item, fileTypeIcons, &diagnostics)
+		actions := []plugin.QueryResultAction{
+			{
+				Name: "i18n:plugin_file_open",
+				Icon: common.PreviewIcon,
+				Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+					shell.Open(item.Path)
+				},
+			},
+			{
+				Name: "i18n:plugin_file_open_containing_folder",
+				Icon: common.OpenContainingFolderIcon,
+				Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+					shell.OpenFileInFolder(item.Path)
+				},
+				Hotkey: "ctrl+enter",
+			},
+			{
+				Name: "i18n:plugin_clipboard_delete",
+				Icon: common.TrashIcon,
+				Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+					err := trash.MoveToTrash(item.Path)
+					if err != nil {
+						c.api.Log(ctx, plugin.LogLevelError, err.Error())
+						c.api.Notify(ctx, err.Error())
+						return
+					}
+				},
+			},
+		}
+
+		// Bug fix: Linux only has file-manager-specific fallbacks here, not a true
+		// native system context menu. Hide the action when the platform cannot
+		// deliver the behavior promised by the label instead of showing a no-op.
+		if nativecontextmenu.IsSupported() {
+			actions = append(actions, plugin.QueryResultAction{
+				Name: "i18n:plugin_file_show_context_menu",
+				Icon: common.PluginMenusIcon,
+				Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+					c.api.Log(ctx, plugin.LogLevelInfo, "Showing context menu for: "+item.Path)
+					err := nativecontextmenu.ShowContextMenu(item.Path)
+					if err != nil {
+						c.api.Log(ctx, plugin.LogLevelError, err.Error())
+						c.api.Notify(ctx, err.Error())
+					}
+				},
+				Hotkey:                 "ctrl+m",
+				PreventHideAfterAction: true,
+			})
+		}
+
+		actions = append(actions,
+			// Feature addition: manual full reindex belongs in the action panel
+			// of file-search results instead of appearing as a separate result.
+			// Keeping it off the main result list avoids polluting empty queries
+			// and ordinary filename searches while still making recovery easy.
+			c.buildIndexFilesAction(),
+		)
 
 		queryResults = append(queryResults, plugin.QueryResult{
 			Title:    item.Name,
 			SubTitle: item.Path,
 			Icon:     icon,
-			Actions: []plugin.QueryResultAction{
-				{
-					Name: "i18n:plugin_file_open",
-					Icon: common.PreviewIcon,
-					Action: func(ctx context.Context, actionContext plugin.ActionContext) {
-						shell.Open(item.Path)
-					},
-				},
-				{
-					Name: "i18n:plugin_file_open_containing_folder",
-					Icon: common.OpenContainingFolderIcon,
-					Action: func(ctx context.Context, actionContext plugin.ActionContext) {
-						shell.OpenFileInFolder(item.Path)
-					},
-					Hotkey: "ctrl+enter",
-				},
-				{
-					Name: "i18n:plugin_clipboard_delete",
-					Icon: common.TrashIcon,
-					Action: func(ctx context.Context, actionContext plugin.ActionContext) {
-						err := trash.MoveToTrash(item.Path)
-						if err != nil {
-							c.api.Log(ctx, plugin.LogLevelError, err.Error())
-							c.api.Notify(ctx, err.Error())
-							return
-						}
-					},
-				},
-				{
-					Name: "i18n:plugin_file_show_context_menu",
-					Icon: common.PluginMenusIcon,
-					Action: func(ctx context.Context, actionContext plugin.ActionContext) {
-						c.api.Log(ctx, plugin.LogLevelInfo, "Showing context menu for: "+item.Path)
-						err := nativecontextmenu.ShowContextMenu(item.Path)
-						if err != nil {
-							c.api.Log(ctx, plugin.LogLevelError, err.Error())
-							c.api.Notify(ctx, err.Error())
-						}
-					},
-					Hotkey:                 "ctrl+m",
-					PreventHideAfterAction: true,
-				},
-				// Feature addition: manual full reindex belongs in the action panel
-				// of file-search results instead of appearing as a separate result.
-				// Keeping it off the main result list avoids polluting empty queries
-				// and ordinary filename searches while still making recovery easy.
-				c.buildIndexFilesAction(),
-			},
+			Actions:  actions,
 		})
 	}
 	diagnostics.buildElapsedMs = util.GetSystemTimestamp() - buildStartedAt

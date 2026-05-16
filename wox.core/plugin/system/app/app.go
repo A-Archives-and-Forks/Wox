@@ -589,8 +589,10 @@ func (a *ApplicationPlugin) buildAppActions(info appInfo, displayName string, co
 		},
 	})
 
-	// Only desktop-style apps have a file path suitable for OS context menu.
-	if info.Type != AppTypeUWP && info.Type != AppTypeWindowsSetting {
+	// Bug fix: Linux cannot show the true system context menu behind this action,
+	// so keep the entry only on platforms where nativecontextmenu can honor the
+	// label instead of exposing a file-manager fallback as if it were equivalent.
+	if info.Type != AppTypeUWP && info.Type != AppTypeWindowsSetting && nativecontextmenu.IsSupported() {
 		actions = append(actions, plugin.QueryResultAction{
 			Name:        "i18n:plugin_file_show_context_menu",
 			Icon:        common.PluginMenusIcon,
