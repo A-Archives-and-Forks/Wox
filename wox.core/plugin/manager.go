@@ -2151,11 +2151,36 @@ func (m *Manager) Query(ctx context.Context, query Query) (resultsChan chan Quer
 	m.startSessionQueryCache(query)
 
 	tracker := newQueryTracker(fallbackReadyChan, doneChan)
+	scheduleStart := util.GetSystemTimestamp()
+	totalPlugins := len(m.instances)
+	var checkedPlugins atomic.Int32
+	var scheduledPlugins atomic.Int32
+	var scheduleComplete atomic.Bool
+	var lastCheckedPlugin atomic.Value
+	lastCheckedPlugin.Store("")
+	// Bug diagnostics: an intermittent launcher spinner can happen before the
+	// caller receives result/done channels. Track the scheduler scan separately
+	// so the next log capture can tell whether eligibility checks got stuck on a
+	// specific plugin instead of blaming the plugin that already finished.
+	scheduleWatchdog := time.AfterFunc(250*time.Millisecond, func() {
+		if scheduleComplete.Load() {
+			return
+		}
+		lastPlugin, _ := lastCheckedPlugin.Load().(string)
+		logger.Warn(ctx, fmt.Sprintf("query scheduler still scanning plugins: query=%s checked=%d/%d scheduled=%d last_plugin=%s elapsed=%dms", query.String(), checkedPlugins.Load(), totalPlugins, scheduledPlugins.Load(), lastPlugin, util.GetSystemTimestamp()-scheduleStart))
+	})
+	defer func() {
+		scheduleComplete.Store(true)
+		scheduleWatchdog.Stop()
+	}()
 
 	for _, pluginInstance := range m.instances {
+		checkedPlugins.Add(1)
+		lastCheckedPlugin.Store(queryDiagnosticPluginLabel(pluginInstance))
 		if !m.canOperateQuery(ctx, pluginInstance, query) {
 			continue
 		}
+		scheduledPlugins.Add(1)
 
 		// Debounced plugins are treated as late work: they still participate in the
 		// final query completion, but they do not delay fallback.
@@ -2196,6 +2221,7 @@ func (m *Manager) Query(ctx context.Context, query Query) (resultsChan chan Quer
 
 	// Queries with no runnable plugins should still notify both phases immediately.
 	tracker.notifyIfEmpty()
+	logger.Debug(ctx, fmt.Sprintf("query scheduler finished: query=%s checked=%d/%d scheduled=%d elapsed=%dms", query.String(), checkedPlugins.Load(), totalPlugins, scheduledPlugins.Load(), util.GetSystemTimestamp()-scheduleStart))
 
 	return
 }
@@ -2344,11 +2370,31 @@ func (m *Manager) queryParallel(ctx context.Context, pluginInstance *Instance, q
 		// Sending one normalized response through the query pipeline prevents the
 		// UI from applying refinements or layout from a different query execution.
 		queryResponse := m.queryForPlugin(ctx, pluginInstance, query)
-		results <- queryResponse.ToUI()
+		// Bug diagnostics: queryForPlugin logs before response conversion and
+		// tracker completion. These boundaries make it clear whether a future
+		// spinner is stuck while converting/sending results or while marking the
+		// plugin as finished for the query lifecycle.
+		queryResponseUI := queryResponse.ToUI()
+		logger.Debug(ctx, fmt.Sprintf("<%s> query response converted for UI, result count: %d", pluginInstance.GetName(ctx), len(queryResponseUI.Results)))
+		results <- queryResponseUI
+		logger.Debug(ctx, fmt.Sprintf("<%s> query response delivered to query pipeline", pluginInstance.GetName(ctx)))
 		tracker.finish(blocksFallback)
+		logger.Debug(ctx, fmt.Sprintf("<%s> query tracker finished, blocks fallback: %v", pluginInstance.GetName(ctx), blocksFallback))
 	}, func() {
+		logger.Warn(ctx, fmt.Sprintf("<%s> query goroutine recovered, force finishing tracker", pluginInstance.GetName(ctx)))
 		tracker.finish(blocksFallback)
 	})
+}
+
+func queryDiagnosticPluginLabel(pluginInstance *Instance) string {
+	if pluginInstance == nil {
+		return "<nil>"
+	}
+	name := string(pluginInstance.Metadata.Name)
+	if name == "" {
+		name = pluginInstance.Metadata.Id
+	}
+	return fmt.Sprintf("%s(%s)", name, pluginInstance.Metadata.Id)
 }
 
 func (m *Manager) translatePlugin(ctx context.Context, pluginInstance *Instance, key string) string {

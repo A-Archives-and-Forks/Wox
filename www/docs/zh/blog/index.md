@@ -9,4 +9,4 @@ description: 记录 Wox 开发过程中的知识点、取舍与实现过程。
 
 ## 文章
 
-- [发布前的 Smoke Test](./automated-smoke-test-gate-keeper.md) - 2026-03-20
+- [你知道吗：Wox 可以用快捷键查询快速浏览网页](./did-you-know-wox-query-hotkey-webview.md) - 2026-05-16

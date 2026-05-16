@@ -1387,7 +1387,12 @@ func (a *ApplicationPlugin) resolveQueryEntryDisplay(ctx context.Context, entry 
 }
 
 func normalizeQueryCacheKey(search string) string {
-	return strings.ToLower(strings.TrimSpace(search))
+	// Bug fix: query-cache reuse must preserve whitespace because fuzzy matching
+	// treats spaces as real pattern characters. The previous TrimSpace-based key
+	// made "qqyy " and "qqyy" identical, so deleting the trailing space reused the
+	// empty match set from the spaced query instead of rescanning apps. Lowercase
+	// normalization keeps case-insensitive reuse while respecting real search text.
+	return strings.ToLower(search)
 }
 
 func (a *ApplicationPlugin) getReusableQueryMatches(query plugin.Query, generation uint64) ([]int, bool) {

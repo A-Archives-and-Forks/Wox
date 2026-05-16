@@ -16,6 +16,7 @@ import (
 	"wox/i18n"
 	"wox/plugin"
 	"wox/util"
+	"wox/util/clipboard"
 	"wox/util/keyboard"
 	"wox/util/window"
 
@@ -193,19 +194,8 @@ func GetPasteToActiveWindowAction(ctx context.Context, api plugin.API, windowNam
 				actionCallback()
 			}
 			util.Go(ctx, "ai command paste", func() {
-				if windowPid > 0 {
-					if !window.ActivateWindowByPid(windowPid) {
-						api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("activate window failed, pid=%d", windowPid))
-					}
-					time.Sleep(time.Millisecond * 150)
-				} else {
-					time.Sleep(time.Millisecond * 150)
-				}
-				err := keyboard.SimulatePaste()
-				if err != nil {
-					api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("simulate paste clipboard failed, err=%s", err.Error()))
-				} else {
-					api.Log(ctx, plugin.LogLevelInfo, "simulate paste clipboard success")
+				if err := pasteToActiveWindow(ctx, api, windowPid); err != nil {
+					api.Log(ctx, plugin.LogLevelError, err.Error())
 				}
 			})
 		},
@@ -216,4 +206,37 @@ func GetPasteToActiveWindowAction(ctx context.Context, api plugin.API, windowNam
 	}
 
 	return action, nil
+}
+
+func pasteTextToActiveWindow(ctx context.Context, api plugin.API, windowName string, windowPid int, text string) error {
+	if windowName == "" && windowPid <= 0 {
+		return fmt.Errorf("no active window")
+	}
+	if text == "" {
+		return fmt.Errorf("paste text is empty")
+	}
+	if err := clipboard.WriteText(text); err != nil {
+		return fmt.Errorf("write ai command answer to clipboard failed: %w", err)
+	}
+	return pasteToActiveWindow(ctx, api, windowPid)
+}
+
+func pasteToActiveWindow(ctx context.Context, api plugin.API, windowPid int) error {
+	// Shared paste helper: AI command Run And Paste needs the same activation
+	// delay as the existing paste action, but it must prepare clipboard content
+	// only after the model has produced a final answer.
+	if windowPid > 0 {
+		if !window.ActivateWindowByPid(windowPid) {
+			api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("activate window failed, pid=%d", windowPid))
+		}
+		time.Sleep(time.Millisecond * 150)
+	} else {
+		time.Sleep(time.Millisecond * 150)
+	}
+	if err := keyboard.SimulatePaste(); err != nil {
+		return fmt.Errorf("simulate paste clipboard failed, err=%s", err.Error())
+	}
+
+	api.Log(ctx, plugin.LogLevelInfo, "simulate paste clipboard success")
+	return nil
 }

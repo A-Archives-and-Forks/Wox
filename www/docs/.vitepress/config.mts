@@ -90,7 +90,7 @@ export default defineConfig({
               text: "Blog",
               items: [
                 { text: "Overview", link: "/blog/" },
-                { text: "Smoke Tests as the Last Gatekeeper", link: "/blog/smoke-tests-as-the-last-gatekeeper" },
+                { text: "Did You Know: Wox Can Browse Websites with Query Hotkeys", link: "/blog/did-you-know-wox-query-hotkey-webview" },
               ],
             },
           ],
@@ -195,7 +195,7 @@ export default defineConfig({
               text: "博客",
               items: [
                 { text: "总览", link: "/zh/blog/" },
-                { text: "自动化 Smoke Test：AI 时代最后的 Gate Keeper", link: "/zh/blog/automated-smoke-test-gate-keeper" },
+                { text: "你知道吗：Wox 可以用快捷键查询快速浏览网页", link: "/zh/blog/did-you-know-wox-query-hotkey-webview" },
               ],
             },
           ],

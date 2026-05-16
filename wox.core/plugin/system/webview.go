@@ -52,6 +52,7 @@ func (p *WebViewPlugin) GetMetadata() plugin.Metadata {
 		},
 		Commands: []plugin.MetadataCommand{},
 		SupportedOS: []string{
+			"Windows",
 			"Macos",
 		},
 		Features: []plugin.MetadataFeature{

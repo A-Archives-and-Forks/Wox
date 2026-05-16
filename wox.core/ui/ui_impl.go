@@ -661,6 +661,10 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 		responseUIError(ctx, request, queryErr.Error())
 		return
 	}
+	// Bug diagnostics: the UI can show an endless pending placeholder when the
+	// backend never reaches its final flush. Logging the parsed query here gives
+	// the next capture a stable boundary before plugin lifecycle and scheduling.
+	logger.Debug(ctx, fmt.Sprintf("query parsed: queryId=%s query=%s trigger=%s command=%s search=%s plugin=%s", queryId, query.String(), query.TriggerKeyword, query.Command, query.Search, queryPipelinePluginLabel(ctx, queryPlugin)))
 
 	plugin.GetPluginManager().HandleQueryLifecycle(ctx, query, queryPlugin)
 
@@ -700,7 +704,13 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 	})
 	resultDebouncer.Start(ctx)
 	logger.Info(ctx, fmt.Sprintf("query %s: %s, result flushed (new start)", query.Type, query.String()))
+	// Bug diagnostics: Manager.Query starts plugin work and returns the result
+	// channels used by the select loop below. If a future log has "query pipeline
+	// starting" but not "ready", the stall is inside scheduler setup rather than
+	// UI result handling.
+	logger.Debug(ctx, fmt.Sprintf("query pipeline starting: queryId=%s query=%s plugin=%s", queryId, query.String(), queryPipelinePluginLabel(ctx, queryPlugin)))
 	resultChan, fallbackReadyChan, doneChan := plugin.GetPluginManager().Query(ctx, query)
+	logger.Debug(ctx, fmt.Sprintf("query pipeline ready: queryId=%s query=%s plugin=%s", queryId, query.String(), queryPipelinePluginLabel(ctx, queryPlugin)))
 	// Once fallback is shown or definitively checked, do not evaluate it again.
 	fallbackHandled := false
 
@@ -796,6 +806,17 @@ func handleWebsocketQuery(ctx context.Context, request WebsocketMsg) {
 			return
 		}
 	}
+}
+
+func queryPipelinePluginLabel(ctx context.Context, pluginInstance *plugin.Instance) string {
+	if pluginInstance == nil {
+		return "<global>"
+	}
+	name := pluginInstance.GetName(ctx)
+	if name == "" {
+		name = pluginInstance.Metadata.Id
+	}
+	return fmt.Sprintf("%s(%s)", name, pluginInstance.Metadata.Id)
 }
 
 func appendQueryDebugTails(ctx context.Context, sessionId string, queryId string, snapshot []plugin.QueryResultUI) []plugin.QueryResultUI {

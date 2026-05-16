@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"wox/common"
 	"wox/i18n"
 	"wox/plugin"
@@ -22,12 +23,18 @@ import (
 
 var aiCommandIcon = common.PluginAICommandIcon
 
+const (
+	aiCommandDefaultActionRun         = "run"
+	aiCommandDefaultActionRunAndPaste = "run_and_paste"
+)
+
 type commandSetting struct {
-	Name    string `json:"name"`
-	Command string `json:"command"`
-	Model   string `json:"model"`
-	Prompt  string `json:"prompt"`
-	Vision  bool   `json:"vision"` // does the command interact with vision
+	Name          string `json:"name"`
+	Command       string `json:"command"`
+	Model         string `json:"model"`
+	Prompt        string `json:"prompt"`
+	DefaultAction string `json:"defaultAction"`
+	Vision        bool   `json:"vision"` // does the command interact with vision
 }
 
 type aiStreamPreviewData struct {
@@ -39,6 +46,16 @@ type aiStreamPreviewData struct {
 	AnswerTitle    string `json:"answerTitle"`
 }
 
+type aiCommandFinalResult struct {
+	Answer string
+	Err    error
+}
+
+type aiCommandStreamOptions struct {
+	updateVisibleResult bool
+	onStreamingStarted  func(ctx context.Context)
+}
+
 func (c *commandSetting) AIModel() (model common.Model) {
 	err := json.Unmarshal([]byte(c.Model), &model)
 	if err != nil {
@@ -46,6 +63,17 @@ func (c *commandSetting) AIModel() (model common.Model) {
 	}
 
 	return model
+}
+
+func (c *commandSetting) NormalizedDefaultAction(allowPaste bool) string {
+	// Feature addition: old command rows do not have defaultAction. Treat missing
+	// or unknown values as Run so existing commands keep their previous safe
+	// "show result in Wox" behavior after the new explicit action setting lands.
+	if allowPaste && c.DefaultAction == aiCommandDefaultActionRunAndPaste {
+		return aiCommandDefaultActionRunAndPaste
+	}
+
+	return aiCommandDefaultActionRun
 }
 
 func init() {
@@ -143,6 +171,17 @@ func (c *Plugin) GetMetadata() plugin.Metadata {
 							Width:   60,
 							Tooltip: "i18n:plugin_ai_command_vision_tooltip",
 						},
+						{
+							Key:     "defaultAction",
+							Label:   "i18n:plugin_ai_command_default_action",
+							Type:    definition.PluginSettingValueTableColumnTypeSelect,
+							Width:   120,
+							Tooltip: "i18n:plugin_ai_command_default_action_tooltip",
+							SelectOptions: []definition.PluginSettingValueSelectOption{
+								{Label: "i18n:plugin_ai_command_default_action_run", Value: aiCommandDefaultActionRun},
+								{Label: "i18n:plugin_ai_command_default_action_run_and_paste", Value: aiCommandDefaultActionRunAndPaste},
+							},
+						},
 					},
 				},
 			},
@@ -153,6 +192,18 @@ func (c *Plugin) GetMetadata() plugin.Metadata {
 			},
 			{
 				Name: plugin.MetadataFeatureAI,
+			},
+			{
+				Name: plugin.MetadataFeatureQueryEnv,
+				Params: map[string]any{
+					// Bug fix: QueryEnv is filtered by declared params before the
+					// plugin receives it. Run And Paste needs the window captured
+					// before Wox opened, so request the same identity fields used by
+					// paste actions instead of accepting an empty QueryEnv.
+					"requireActiveWindowName": true,
+					"requireActiveWindowPid":  true,
+					"requireActiveWindowIcon": true,
+				},
 			},
 		},
 	}
@@ -200,6 +251,188 @@ func (c *Plugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResp
 	}
 
 	return plugin.NewQueryResponse(c.queryCommand(ctx, query))
+}
+
+func (c *Plugin) buildAICommandConversations(command commandSetting, input string) []common.Conversation {
+	var conversations []common.Conversation
+	prompts := strings.Split(command.Prompt, "{wox:new_ai_conversation}")
+	for index, message := range prompts {
+		msg := fmt.Sprintf(message, input)
+		if index%2 == 0 {
+			conversations = append(conversations, common.Conversation{
+				Role: common.ConversationRoleUser,
+				Text: msg,
+			})
+		} else {
+			conversations = append(conversations, common.Conversation{
+				Role: common.ConversationRoleAssistant,
+				Text: msg,
+			})
+		}
+	}
+	return conversations
+}
+
+func (c *Plugin) buildCopyAnswerAction(answer string) plugin.QueryResultAction {
+	return plugin.QueryResultAction{
+		Name: "i18n:plugin_ai_command_copy",
+		Icon: common.CopyIcon,
+		Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+			if err := clipboard.WriteText(answer); err != nil {
+				c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("failed to copy ai command answer: %s", err.Error()))
+				c.api.Notify(ctx, "plugin_ai_command_copy_failed")
+			}
+		},
+	}
+}
+
+func (c *Plugin) notifyAICommandActionError(ctx context.Context, err error) {
+	c.api.Log(ctx, plugin.LogLevelError, fmt.Sprintf("ai command action failed: %s", err.Error()))
+	c.api.Notify(ctx, fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_action_failed_with_error"), err.Error()))
+}
+
+func (c *Plugin) startAICommandStream(ctx context.Context, command commandSetting, conversations []common.Conversation, modelLabel string, resultId string, options aiCommandStreamOptions) <-chan aiCommandFinalResult {
+	finalCh := make(chan aiCommandFinalResult, 1)
+
+	util.Go(ctx, "ai command stream", func() {
+		startAnsweringTime := util.GetSystemTimestamp()
+		var finalOnce sync.Once
+		var streamingStartedOnce sync.Once
+		sendFinal := func(final aiCommandFinalResult) {
+			finalOnce.Do(func() {
+				finalCh <- final
+				close(finalCh)
+			})
+		}
+
+		if options.updateVisibleResult {
+			// Behavior change: input AI commands no longer run during query. The
+			// action now owns the expensive model request, so this preparing state
+			// is emitted only after the user explicitly runs the command.
+			if updatable := c.api.GetUpdatableResult(ctx, resultId); updatable != nil {
+				subTitle := "i18n:plugin_ai_command_answering"
+				preview := c.buildAIStreamPreview(ctx, common.ChatStreamData{Status: common.ChatStreamStatusStreaming}, modelLabel)
+				updatable.Preview = &preview
+				updatable.SubTitle = &subTitle
+				if !c.api.UpdateResult(ctx, *updatable) {
+					sendFinal(aiCommandFinalResult{Err: fmt.Errorf("result is no longer available")})
+					return
+				}
+			}
+		}
+
+		err := c.api.AIChatStream(ctx, command.AIModel(), conversations, common.EmptyChatOptions, func(streamResult common.ChatStreamData) {
+			if streamResult.Status == common.ChatStreamStatusStreaming && options.onStreamingStarted != nil {
+				// UX fix: silent Run And Paste hides the launcher while the model is
+				// working. Notify only after the first streaming event so the user
+				// gets real progress feedback without a premature success signal.
+				streamingStartedOnce.Do(func() {
+					options.onStreamingStarted(ctx)
+				})
+			}
+
+			if options.updateVisibleResult {
+				if updatable := c.api.GetUpdatableResult(ctx, resultId); updatable != nil {
+					switch streamResult.Status {
+					case common.ChatStreamStatusStreaming:
+						subTitle := "i18n:plugin_ai_command_answering"
+						preview := c.buildAIStreamPreview(ctx, streamResult, modelLabel)
+						updatable.SubTitle = &subTitle
+						updatable.Preview = &preview
+						c.api.UpdateResult(ctx, *updatable)
+
+					case common.ChatStreamStatusFinished:
+						subTitle := fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_answered_cost"), util.GetSystemTimestamp()-startAnsweringTime)
+						preview := c.buildAIStreamPreview(ctx, streamResult, modelLabel)
+						actions := []plugin.QueryResultAction{c.buildCopyAnswerAction(streamResult.Data)}
+						updatable.SubTitle = &subTitle
+						updatable.Preview = &preview
+						updatable.Actions = &actions
+						c.api.UpdateResult(ctx, *updatable)
+
+					case common.ChatStreamStatusError:
+						preview := c.buildAIStreamPreview(ctx, streamResult, modelLabel)
+						updatable.Preview = &preview
+						c.api.UpdateResult(ctx, *updatable)
+					}
+				}
+			}
+
+			switch streamResult.Status {
+			case common.ChatStreamStatusFinished:
+				sendFinal(aiCommandFinalResult{Answer: streamResult.Data})
+			case common.ChatStreamStatusError:
+				if streamResult.Data == "" {
+					streamResult.Data = i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_preview_error")
+				}
+				sendFinal(aiCommandFinalResult{Err: fmt.Errorf("%s", streamResult.Data)})
+			}
+		})
+		if err != nil {
+			if options.updateVisibleResult {
+				if updatable := c.api.GetUpdatableResult(ctx, resultId); updatable != nil && updatable.Preview != nil {
+					preview := c.buildAIStreamPreview(ctx, common.ChatStreamData{Status: common.ChatStreamStatusError, Data: err.Error()}, modelLabel)
+					updatable.Preview = &preview
+					c.api.UpdateResult(ctx, *updatable)
+				}
+			}
+			sendFinal(aiCommandFinalResult{Err: err})
+		}
+	})
+
+	return finalCh
+}
+
+func (c *Plugin) buildAICommandActions(ctx context.Context, command commandSetting, conversations []common.Conversation, modelLabel string, query plugin.Query) []plugin.QueryResultAction {
+	allowRunAndPaste := !command.Vision
+	defaultAction := command.NormalizedDefaultAction(allowRunAndPaste)
+
+	actions := []plugin.QueryResultAction{
+		{
+			Name:                   "i18n:plugin_ai_command_run",
+			IsDefault:              defaultAction == aiCommandDefaultActionRun,
+			PreventHideAfterAction: true,
+			Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+				c.startAICommandStream(ctx, command, conversations, modelLabel, actionContext.ResultId, aiCommandStreamOptions{updateVisibleResult: true})
+			},
+		},
+	}
+
+	if allowRunAndPaste {
+		actions = append(actions, plugin.QueryResultAction{
+			Name:      "i18n:plugin_ai_command_run_and_paste",
+			IsDefault: defaultAction == aiCommandDefaultActionRunAndPaste,
+			Action: func(ctx context.Context, actionContext plugin.ActionContext) {
+				util.Go(ctx, "ai command run and paste", func() {
+					// Feature addition: Run And Paste is a first-class action instead
+					// of a hidden query-hotkey mode. Silent query hotkeys simply execute
+					// this default action and wait here for the final model answer before
+					// touching the clipboard, so no empty or partial text is pasted.
+					final := <-c.startAICommandStream(ctx, command, conversations, modelLabel, actionContext.ResultId, aiCommandStreamOptions{
+						onStreamingStarted: func(ctx context.Context) {
+							c.api.Notify(ctx, "plugin_ai_command_run_and_paste_started")
+						},
+					})
+					if final.Err != nil {
+						// Error handling stays in the hidden action worker because the
+						// launcher has already closed in silent mode; every failed stream,
+						// empty answer, or paste failure must surface through notification.
+						c.notifyAICommandActionError(ctx, final.Err)
+						return
+					}
+					if strings.TrimSpace(final.Answer) == "" {
+						c.notifyAICommandActionError(ctx, fmt.Errorf("ai command returned empty answer"))
+						return
+					}
+					if err := pasteTextToActiveWindow(ctx, c.api, query.Env.ActiveWindowTitle, query.Env.ActiveWindowPid, final.Answer); err != nil {
+						c.notifyAICommandActionError(ctx, err)
+					}
+				})
+			},
+		})
+	}
+
+	return actions
 }
 
 func (c *Plugin) buildAIStreamPreview(ctx context.Context, streamResult common.ChatStreamData, modelLabel string) plugin.WoxPreview {
@@ -337,82 +570,7 @@ func (c *Plugin) querySelection(ctx context.Context, query plugin.Query) []plugi
 			SubTitle: modelLabel,
 			Icon:     aiCommandIcon,
 			Preview:  c.buildSelectionPreview(ctx, command, query),
-			Actions: []plugin.QueryResultAction{
-				{
-					Name:                   "i18n:plugin_ai_command_run",
-					PreventHideAfterAction: true,
-					Action: func(ctx context.Context, actionContext plugin.ActionContext) {
-						util.Go(ctx, "ai command stream", func() {
-							var startAnsweringTime int64
-
-							// Show preparing state
-							if updatable := c.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil {
-								subTitle := "i18n:plugin_ai_command_answering"
-								preview := c.buildAIStreamPreview(ctx, common.ChatStreamData{Status: common.ChatStreamStatusStreaming}, modelLabel)
-								updatable.Preview = &preview
-								updatable.SubTitle = &subTitle
-								startAnsweringTime = util.GetSystemTimestamp()
-								if !c.api.UpdateResult(ctx, *updatable) {
-									return
-								}
-							}
-
-							// Start streaming
-							err := c.api.AIChatStream(ctx, command.AIModel(), conversations, common.EmptyChatOptions, func(streamResult common.ChatStreamData) {
-								updatable := c.api.GetUpdatableResult(ctx, actionContext.ResultId)
-								if updatable == nil {
-									return
-								}
-
-								switch streamResult.Status {
-								case common.ChatStreamStatusStreaming:
-									subTitle := "i18n:plugin_ai_command_answering"
-									preview := c.buildAIStreamPreview(ctx, streamResult, modelLabel)
-									updatable.SubTitle = &subTitle
-									updatable.Preview = &preview
-									c.api.UpdateResult(ctx, *updatable)
-
-								case common.ChatStreamStatusFinished:
-									subTitle := fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_answered_cost"), util.GetSystemTimestamp()-startAnsweringTime)
-									preview := c.buildAIStreamPreview(ctx, streamResult, modelLabel)
-									actions := []plugin.QueryResultAction{
-										{
-											Name: "i18n:plugin_ai_command_copy",
-											Icon: common.CopyIcon,
-											Action: func(ctx context.Context, actionContext plugin.ActionContext) {
-												clipboard.WriteText(streamResult.Data)
-											},
-										},
-									}
-									pasteToActiveWindowAction, pasteToActiveWindowErr := GetPasteToActiveWindowAction(ctx, c.api, query.Env.ActiveWindowTitle, query.Env.ActiveWindowPid, query.Env.ActiveWindowIcon, func() {
-										clipboard.WriteText(streamResult.Data)
-									})
-									if pasteToActiveWindowErr == nil {
-										actions = append(actions, pasteToActiveWindowAction)
-									}
-									updatable.SubTitle = &subTitle
-									updatable.Preview = &preview
-									updatable.Actions = &actions
-									c.api.UpdateResult(ctx, *updatable)
-
-								case common.ChatStreamStatusError:
-									preview := c.buildAIStreamPreview(ctx, streamResult, modelLabel)
-									updatable.Preview = &preview
-									c.api.UpdateResult(ctx, *updatable)
-								}
-							})
-
-							if err != nil {
-								if updatable := c.api.GetUpdatableResult(ctx, actionContext.ResultId); updatable != nil && updatable.Preview != nil {
-									preview := c.buildAIStreamPreview(ctx, common.ChatStreamData{Status: common.ChatStreamStatusError, Data: err.Error()}, modelLabel)
-									updatable.Preview = &preview
-									c.api.UpdateResult(ctx, *updatable)
-								}
-							}
-						})
-					},
-				},
-			},
+			Actions:  c.buildAICommandActions(ctx, command, conversations, modelLabel, query),
 		}
 		results = append(results, result)
 	}
@@ -523,88 +681,24 @@ func (c *Plugin) queryCommand(ctx context.Context, query plugin.Query) []plugin.
 		}
 	}
 
-	var prompts = strings.Split(aiCommandSetting.Prompt, "{wox:new_ai_conversation}")
-	var conversations []common.Conversation
-	for index, message := range prompts {
-		msg := fmt.Sprintf(message, query.Search)
-		if index%2 == 0 {
-			conversations = append(conversations, common.Conversation{
-				Role: common.ConversationRoleUser,
-				Text: msg,
-			})
-		} else {
-			conversations = append(conversations, common.Conversation{
-				Role: common.ConversationRoleAssistant,
-				Text: msg,
-			})
-		}
-	}
-
-	var contextData string
-	chatModelLabel := fmt.Sprintf("%s - %s", aiCommandSetting.AIModel().Provider, aiCommandSetting.AIModel().Name)
+	conversations := c.buildAICommandConversations(aiCommandSetting, query.Search)
+	model := aiCommandSetting.AIModel()
+	chatModelLabel := fmt.Sprintf("%s - %s", model.ProviderName(), model.Name)
 	result := plugin.QueryResult{
 		Id:       uuid.NewString(),
 		Title:    fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_chat_with"), aiCommandSetting.Name),
 		SubTitle: chatModelLabel,
-		Preview:  plugin.WoxPreview{PreviewType: plugin.WoxPreviewTypeMarkdown, PreviewData: ""},
-		Icon:     aiCommandIcon,
-		Actions: []plugin.QueryResultAction{
-			{
-				Name: "i18n:plugin_ai_command_copy",
-				Icon: common.CopyIcon,
-				Action: func(ctx context.Context, actionContext plugin.ActionContext) {
-					// contextData is pure content (Reasoning is separated)
-					clipboard.WriteText(contextData)
-				},
-			},
+		// Behavior change: input AI command queries are now lazy. The preview shows
+		// the exact text that will be sent when the user chooses Run or Run And Paste,
+		// avoiding the previous expensive request on every query refresh.
+		Preview: plugin.WoxPreview{
+			PreviewType:       plugin.WoxPreviewTypeText,
+			PreviewData:       query.Search,
+			PreviewProperties: map[string]string{"i18n:plugin_ai_command_model": chatModelLabel},
 		},
+		Icon:    aiCommandIcon,
+		Actions: c.buildAICommandActions(ctx, aiCommandSetting, conversations, chatModelLabel, query),
 	}
-
-	// paste to active window
-	pasteToActiveWindowAction, pasteToActiveWindowErr := GetPasteToActiveWindowAction(ctx, c.api, query.Env.ActiveWindowTitle, query.Env.ActiveWindowPid, query.Env.ActiveWindowIcon, func() {
-		// contextData is pure content (Reasoning is separated)
-		clipboard.WriteText(contextData)
-	})
-	if pasteToActiveWindowErr == nil {
-		result.Actions = append(result.Actions, pasteToActiveWindowAction)
-	}
-
-	// Start LLM stream immediately when result is displayed
-	util.Go(ctx, "ai chat stream", func() {
-		err := c.api.AIChatStream(ctx, aiCommandSetting.AIModel(), conversations, common.EmptyChatOptions, func(streamResult common.ChatStreamData) {
-			updatable := c.api.GetUpdatableResult(ctx, result.Id)
-			if updatable == nil {
-				return
-			}
-
-			switch streamResult.Status {
-			case common.ChatStreamStatusStreaming:
-				contextData = streamResult.Data
-				preview := c.buildAIStreamPreview(ctx, streamResult, chatModelLabel)
-				updatable.Preview = &preview
-				c.api.UpdateResult(ctx, *updatable)
-
-			case common.ChatStreamStatusFinished:
-				contextData = streamResult.Data
-				preview := c.buildAIStreamPreview(ctx, streamResult, chatModelLabel)
-				updatable.Preview = &preview
-				c.api.UpdateResult(ctx, *updatable)
-
-			case common.ChatStreamStatusError:
-				preview := c.buildAIStreamPreview(ctx, streamResult, chatModelLabel)
-				updatable.Preview = &preview
-				c.api.UpdateResult(ctx, *updatable)
-			}
-		})
-
-		if err != nil {
-			if updatable := c.api.GetUpdatableResult(ctx, result.Id); updatable != nil && updatable.Preview != nil {
-				preview := c.buildAIStreamPreview(ctx, common.ChatStreamData{Status: common.ChatStreamStatusError, Data: err.Error()}, chatModelLabel)
-				updatable.Preview = &preview
-				c.api.UpdateResult(ctx, *updatable)
-			}
-		}
-	})
 
 	return []plugin.QueryResult{result}
 }

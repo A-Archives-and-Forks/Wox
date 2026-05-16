@@ -9,4 +9,4 @@ This section records engineering notes, tradeoffs, and implementation stories fr
 
 ## Posts
 
-- [Smoke Tests Before Release](./smoke-tests-as-the-last-gatekeeper.md) - 2026-03-20
+- [Did You Know: Wox Can Browse Websites with Query Hotkeys](./did-you-know-wox-query-hotkey-webview.md) - 2026-05-16
