@@ -80,6 +80,7 @@ type realIndexPolicyArtifact struct {
 	Mode                string   `json:"mode"`
 	IgnoredPatternCount int      `json:"ignored_pattern_count"`
 	IgnoredPatterns     []string `json:"ignored_patterns"`
+	SkipHiddenFiles     bool     `json:"skip_hidden_files"`
 	DiagnosticsEnabled  bool     `json:"diagnostics_enabled"`
 }
 
@@ -151,6 +152,8 @@ type realIndexExecutionStats struct {
 	ApplySnapshotP95Millis     int64                           `json:"apply_snapshot_p95_millis"`
 	OperationMetrics           []realIndexOperation            `json:"operation_metrics"`
 	SlowestScopes              []realIndexSlowScope            `json:"slowest_scopes"`
+	ScopeMetrics               []realIndexScopeMetric          `json:"scope_metrics"`
+	Unreadable                 realIndexUnreadableSummary      `json:"unreadable"`
 	PolicyDiagnostics          indexpolicy.DiagnosticsSnapshot `json:"policy_diagnostics"`
 }
 
@@ -171,6 +174,20 @@ type realIndexSlowScope struct {
 	ElapsedMillis int64  `json:"elapsed_millis"`
 }
 
+type realIndexScopeMetric struct {
+	Scope            string `json:"scope"`
+	ElapsedMillis    int64  `json:"elapsed_millis"`
+	EntryCount       int    `json:"entry_count,omitempty"`
+	DirectoryCount   int    `json:"directory_count,omitempty"`
+	UnreadableCount  int64  `json:"unreadable_count,omitempty"`
+	OperationSamples int    `json:"operation_samples,omitempty"`
+}
+
+type realIndexUnreadableSummary struct {
+	Count    int64    `json:"count"`
+	Examples []string `json:"examples,omitempty"`
+}
+
 type realIndexTimelineEvent struct {
 	recordedAt         time.Time
 	stage              RunStage
@@ -183,8 +200,9 @@ type realIndexTimelineEvent struct {
 
 var (
 	realIndexJobPhasePattern          = regexp.MustCompile(`filesearch job phase: phase=([^ ]+) elapsed=(\d+)ms .* scope=(.+) units=\d+$`)
-	realIndexSQLiteMaintenancePattern = regexp.MustCompile(`filesearch sqlite maintenance: operation=([^ ]+) scope=.* elapsed=(\d+)ms work_count=(\d+)$`)
-	realIndexScanDiagnosticPattern    = regexp.MustCompile(`filesearch scan diagnostic: operation=([^ ]+) scope=.* elapsed=(\d+)ms work_count=(\d+)$`)
+	realIndexSQLiteMaintenancePattern = regexp.MustCompile(`filesearch sqlite maintenance: operation=([^ ]+) scope=(.+) elapsed=(\d+)ms work_count=(\d+)$`)
+	realIndexScanDiagnosticPattern    = regexp.MustCompile(`filesearch scan diagnostic: operation=([^ ]+) scope=(.+) elapsed=(\d+)ms work_count=(\d+)$`)
+	realIndexUnreadablePattern        = regexp.MustCompile(`filesearch unreadable traversal summary: scope=(.+) count=(\d+) examples=(.*)$`)
 )
 
 func TestSummarizeRealIndexExecutionLog(t *testing.T) {
@@ -396,7 +414,10 @@ func realIndexBenchmarkPolicy() (Policy, realIndexPolicyArtifact, *indexpolicy.D
 		// Benchmark alignment: production full indexing carries ignore state
 		// through traversal, so the benchmark exposes that path directly instead
 		// of keeping a second per-path matcher alive.
-		return realIndexTraversalPolicyContext{inner: pluginPolicy.NewTraversalContext(root.Path, root.PolicyRootPath, scopePath)}
+		return realIndexTraversalPolicyContext{
+			inner:           pluginPolicy.NewTraversalContext(root.Path, root.PolicyRootPath, scopePath),
+			skipHiddenFiles: true,
+		}
 	}
 
 	ignoredPatterns := indexpolicy.DefaultIgnorePatterns()
@@ -421,18 +442,23 @@ func realIndexBenchmarkPolicy() (Policy, realIndexPolicyArtifact, *indexpolicy.D
 		Mode:                "plugin-default-policy",
 		IgnoredPatternCount: len(ignoredPatterns),
 		IgnoredPatterns:     ignoredPatterns,
+		SkipHiddenFiles:     true,
 		DiagnosticsEnabled:  true,
 	}
 	return policy, artifact, diagnostics
 }
 
 type realIndexTraversalPolicyContext struct {
-	inner *indexpolicy.TraversalContext
+	inner           *indexpolicy.TraversalContext
+	skipHiddenFiles bool
 }
 
 func (c realIndexTraversalPolicyContext) ShouldIndexPath(path string, isDir bool) bool {
 	if c.inner == nil {
 		return true
+	}
+	if c.skipHiddenFiles && isHiddenRealIndexPath(path) {
+		return false
 	}
 	return c.inner.ShouldIndexPath(path, isDir)
 }
@@ -443,7 +469,15 @@ func (c realIndexTraversalPolicyContext) Descend(directoryPath string) Traversal
 	}
 	// Benchmark adapter mirrors the production plugin wrapper so the real-index
 	// capture exercises the same traversal policy contract as the app.
-	return realIndexTraversalPolicyContext{inner: c.inner.Descend(directoryPath)}
+	return realIndexTraversalPolicyContext{
+		inner:           c.inner.Descend(directoryPath),
+		skipHiddenFiles: c.skipHiddenFiles,
+	}
+}
+
+func isHiddenRealIndexPath(path string) bool {
+	name := filepath.Base(filepath.Clean(strings.TrimSpace(path)))
+	return strings.HasPrefix(name, ".") && name != "." && name != ".."
 }
 
 func shouldCaptureRealIndex() bool {
@@ -900,6 +934,8 @@ func summarizeRealIndexExecutionLog(logContent string) realIndexExecutionStats {
 	slowestScopeByPath := map[string]int64{}
 	operationSamples := map[string][]int64{}
 	operationWorkCounts := map[string][]int{}
+	scopeMetricsByPath := map[string]*realIndexScopeMetric{}
+	unreadable := realIndexUnreadableSummary{}
 	jobPhaseCount := 0
 
 	for _, line := range lines {
@@ -924,27 +960,47 @@ func summarizeRealIndexExecutionLog(logContent string) realIndexExecutionStats {
 			if elapsed > slowestScopeByPath[scope] {
 				slowestScopeByPath[scope] = elapsed
 			}
+			scopeMetric := ensureRealIndexScopeMetric(scopeMetricsByPath, scope)
+			if elapsed > scopeMetric.ElapsedMillis {
+				scopeMetric.ElapsedMillis = elapsed
+			}
 		}
 
-		if matches := realIndexSQLiteMaintenancePattern.FindStringSubmatch(line); len(matches) == 4 {
+		if matches := realIndexSQLiteMaintenancePattern.FindStringSubmatch(line); len(matches) == 5 {
 			operation := strings.TrimSpace(matches[1])
-			elapsed := mustParseRealIndexMillis(matches[2])
-			workCount := mustParseRealIndexInt(matches[3])
+			scope := strings.TrimSpace(matches[2])
+			elapsed := mustParseRealIndexMillis(matches[3])
+			workCount := mustParseRealIndexInt(matches[4])
 			metricName := "sqlite:" + operation
 			operationSamples[metricName] = append(operationSamples[metricName], elapsed)
 			operationWorkCounts[metricName] = append(operationWorkCounts[metricName], workCount)
 			if operation == "subtree_apply_total" {
 				subtreeApplyTotals = append(subtreeApplyTotals, elapsed)
 			}
+			recordRealIndexScopeSQLiteMetric(scopeMetricsByPath, scope, operation, elapsed, workCount)
 		}
 
-		if matches := realIndexScanDiagnosticPattern.FindStringSubmatch(line); len(matches) == 4 {
+		if matches := realIndexScanDiagnosticPattern.FindStringSubmatch(line); len(matches) == 5 {
 			operation := strings.TrimSpace(matches[1])
-			elapsed := mustParseRealIndexMillis(matches[2])
-			workCount := mustParseRealIndexInt(matches[3])
+			scope := strings.TrimSpace(matches[2])
+			elapsed := mustParseRealIndexMillis(matches[3])
+			workCount := mustParseRealIndexInt(matches[4])
 			metricName := "scan:" + operation
 			operationSamples[metricName] = append(operationSamples[metricName], elapsed)
 			operationWorkCounts[metricName] = append(operationWorkCounts[metricName], workCount)
+			if strings.HasPrefix(operation, "subtree_stream_") {
+				ensureRealIndexScopeMetric(scopeMetricsByPath, scope).OperationSamples++
+			}
+		}
+
+		if matches := realIndexUnreadablePattern.FindStringSubmatch(line); len(matches) == 4 {
+			scope := strings.TrimSpace(matches[1])
+			count := mustParseRealIndexMillis(matches[2])
+			examples := parseRealIndexUnreadableExamples(matches[3])
+			unreadable.Count += count
+			unreadable.Examples = appendLimitedRealIndexExamples(unreadable.Examples, examples, 20)
+			scopeMetric := ensureRealIndexScopeMetric(scopeMetricsByPath, scope)
+			scopeMetric.UnreadableCount += count
 		}
 	}
 
@@ -957,6 +1013,7 @@ func summarizeRealIndexExecutionLog(logContent string) realIndexExecutionStats {
 		ApplySnapshotP50Millis:     percentileMillis(applySnapshots, 0.50),
 		ApplySnapshotP95Millis:     percentileMillis(applySnapshots, 0.95),
 		OperationMetrics:           buildRealIndexOperationMetrics(operationSamples, operationWorkCounts),
+		Unreadable:                 unreadable,
 	}
 
 	slowestScopes := make([]realIndexSlowScope, 0, len(slowestScopeByPath))
@@ -977,8 +1034,99 @@ func summarizeRealIndexExecutionLog(logContent string) realIndexExecutionStats {
 		slowestScopes = slowestScopes[:20]
 	}
 	stats.SlowestScopes = slowestScopes
+	stats.ScopeMetrics = buildRealIndexScopeMetrics(scopeMetricsByPath)
 
 	return stats
+}
+
+func ensureRealIndexScopeMetric(metrics map[string]*realIndexScopeMetric, scope string) *realIndexScopeMetric {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = "<empty>"
+	}
+	if existing := metrics[scope]; existing != nil {
+		return existing
+	}
+	metric := &realIndexScopeMetric{Scope: scope}
+	metrics[scope] = metric
+	return metric
+}
+
+func recordRealIndexScopeSQLiteMetric(metrics map[string]*realIndexScopeMetric, scope string, operation string, elapsed int64, workCount int) {
+	if !strings.HasPrefix(operation, "subtree_stream_") && !strings.HasPrefix(operation, "direct_files_") {
+		return
+	}
+	metric := ensureRealIndexScopeMetric(metrics, scope)
+	metric.OperationSamples++
+	if elapsed > metric.ElapsedMillis {
+		metric.ElapsedMillis = elapsed
+	}
+	switch operation {
+	case "subtree_stream_fresh_entries":
+		metric.EntryCount += workCount
+	case "subtree_stream_fresh_directories":
+		metric.DirectoryCount += workCount
+	case "direct_files_bulk_fresh_root_insert", "direct_files_bulk_empty_scope_insert":
+		metric.EntryCount += workCount
+	case "direct_files_stage_entries":
+		if metric.EntryCount == 0 {
+			metric.EntryCount = workCount
+		}
+	}
+}
+
+func buildRealIndexScopeMetrics(metricsByPath map[string]*realIndexScopeMetric) []realIndexScopeMetric {
+	metrics := make([]realIndexScopeMetric, 0, len(metricsByPath))
+	for _, metric := range metricsByPath {
+		if metric == nil {
+			continue
+		}
+		metrics = append(metrics, *metric)
+	}
+	sort.Slice(metrics, func(left int, right int) bool {
+		if metrics[left].ElapsedMillis == metrics[right].ElapsedMillis {
+			return metrics[left].Scope < metrics[right].Scope
+		}
+		return metrics[left].ElapsedMillis > metrics[right].ElapsedMillis
+	})
+	if len(metrics) > 40 {
+		metrics = metrics[:40]
+	}
+	return metrics
+}
+
+func parseRealIndexUnreadableExamples(raw string) []string {
+	parts := strings.Split(raw, " || ")
+	examples := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		examples = append(examples, part)
+	}
+	return examples
+}
+
+func appendLimitedRealIndexExamples(existing []string, examples []string, limit int) []string {
+	if limit <= 0 {
+		return existing
+	}
+	seen := make(map[string]struct{}, len(existing)+len(examples))
+	for _, example := range existing {
+		seen[example] = struct{}{}
+	}
+	for _, example := range examples {
+		if len(existing) >= limit {
+			return existing
+		}
+		if _, ok := seen[example]; ok {
+			continue
+		}
+		seen[example] = struct{}{}
+		existing = append(existing, example)
+	}
+	return existing
 }
 
 func buildRealIndexOperationMetrics(samples map[string][]int64, workCounts map[string][]int) []realIndexOperation {

@@ -250,6 +250,23 @@ func logFilesearchScanDiagnostic(ctx context.Context, operation string, scope st
 	util.GetLogger().Debug(ctx, msg)
 }
 
+func logFilesearchUnreadableSummary(ctx context.Context, scope string, count int64, examples []string) {
+	if !fileSearchDiagnosticLoggingEnabled || count <= 0 {
+		return
+	}
+
+	// Diagnostic fix: real home-root runs can hit many macOS privacy-protected
+	// folders. One summary keeps the artifact actionable without filling logs with
+	// repeated permission-denied warnings for every protected child directory.
+	msg := fmt.Sprintf(
+		"filesearch unreadable traversal summary: scope=%s count=%d examples=%s",
+		summarizeLogPath(scope),
+		count,
+		strings.Join(examples, " || "),
+	)
+	util.GetLogger().Warn(ctx, msg)
+}
+
 func formatSQLiteIndexSnapshotSummary(stage string, snapshot sqliteIndexSnapshot) string {
 	return fmt.Sprintf(
 		"filesearch sqlite snapshot: stage=%s roots=%d entries=%d files=%d bigram_rows=%d name_fts_vocab=%d path_fts_vocab=%d pinyin_full_fts_vocab=%d initials_fts_vocab=%d fact_bytes_est=%d fts_source_bytes_est=%d bigram_bytes_est=%d total_bytes_est=%d db_main_file_bytes=%d db_wal_file_bytes=%d db_shm_file_bytes=%d db_total_file_bytes=%d",

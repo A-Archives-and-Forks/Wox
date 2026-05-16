@@ -178,12 +178,11 @@ func diagnosticMillis(nanos int64) int64 {
 	return (nanos + int64(time.Millisecond) - 1) / int64(time.Millisecond)
 }
 
-// Feature addition: seed the user-editable ignore table with the generated and
-// hidden folders that are expensive to traverse and noisy as launcher results.
-// The list remains plain glob text so settings can expose the same values that
-// the scanner uses.
+// Feature addition: seed the user-editable ignore table with generated and
+// application-noise folders that are expensive to traverse and noisy as launcher
+// results. Hidden-file skipping moved to its own checkbox, so this editable list
+// no longer carries a broad `.*` rule that would make that checkbox ineffective.
 var defaultIgnorePatterns = []string{
-	".*",
 	"*.tmp",
 	"*.temp",
 	".DS_Store",

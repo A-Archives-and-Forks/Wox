@@ -1014,7 +1014,7 @@ func (s *Scanner) buildScanPlan(ctx context.Context, root RootRecord, rootIndex 
 		for _, dirEntry := range dirEntries {
 			fullPath := filepath.Join(state.path, dirEntry.Name())
 			isDir := dirEntry.IsDir()
-			if shouldSkipSystemPath(fullPath, isDir) {
+			if shouldSkipSystemPathForRoot(root, fullPath, isDir) {
 				continue
 			}
 			if !state.policy.ShouldIndexPath(fullPath, isDir) {
@@ -1098,7 +1098,7 @@ func (s *Scanner) collectEntries(ctx context.Context, root RootRecord, plan scan
 			}
 
 			isDir := info.IsDir()
-			if shouldSkipSystemPath(fullPath, isDir) {
+			if shouldSkipSystemPathForRoot(root, fullPath, isDir) {
 				processedItems++
 				count++
 				if count%progressBatchSize == 0 || time.Since(lastProgressUpdateAt) >= progressUpdateGap {

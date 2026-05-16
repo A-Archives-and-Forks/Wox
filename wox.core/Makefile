@@ -1,7 +1,7 @@
 .PHONY: clean build help woxmr-build filesearch-real-index filesearch-real-index-release
 
 SQLITE_BUILD_TAGS ?= sqlite_fts5
-FILESEARCH_REAL_INDEX_ROOT ?= ~/Projects
+FILESEARCH_REAL_INDEX_ROOT ?= ~/
 FILESEARCH_REAL_INDEX_KEYWORD ?= default-cover
 FILESEARCH_REAL_INDEX_ARTIFACT ?=
 # Default to the same no-optimization flags used by the debugger-launched Wox

@@ -160,22 +160,34 @@ func (c *Plugin) GetMetadata() plugin.Metadata {
 
 func (c *Plugin) Init(ctx context.Context, initParams plugin.InitParams) {
 	c.api = initParams.API
+	// Bug fix: runtime query commands live only in the current process. Registering
+	// them only after a settings edit made persisted AI commands degrade into plain
+	// search text after restart, so queries like "ai translate hello" never reached
+	// queryCommand and could not start the preview stream.
+	c.registerQueryCommands(ctx, c.api.GetSetting(ctx, "commands"))
 	c.api.OnSettingChanged(ctx, func(callbackCtx context.Context, key string, value string) {
 		if key == "commands" {
 			c.api.Log(callbackCtx, plugin.LogLevelInfo, fmt.Sprintf("ai command setting changed: %s", value))
-			var commands []plugin.MetadataCommand
-			gjson.Parse(value).ForEach(func(_, command gjson.Result) bool {
-				commands = append(commands, plugin.MetadataCommand{
-					Command:     command.Get("command").String(),
-					Description: common.I18nString(command.Get("name").String()),
-				})
-
-				return true
-			})
-			c.api.Log(callbackCtx, plugin.LogLevelInfo, fmt.Sprintf("registering query commands: %v", commands))
-			c.api.RegisterQueryCommands(callbackCtx, commands)
+			c.registerQueryCommands(callbackCtx, value)
 		}
 	})
+}
+
+// registerQueryCommands converts the persisted table setting into parser commands.
+// Sharing it between Init and OnSettingChanged keeps startup and live-edit behavior
+// identical, instead of maintaining two subtly different registration paths.
+func (c *Plugin) registerQueryCommands(ctx context.Context, value string) {
+	var commands []plugin.MetadataCommand
+	gjson.Parse(value).ForEach(func(_, command gjson.Result) bool {
+		commands = append(commands, plugin.MetadataCommand{
+			Command:     command.Get("command").String(),
+			Description: common.I18nString(command.Get("name").String()),
+		})
+
+		return true
+	})
+	c.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("registering query commands: %v", commands))
+	c.api.RegisterQueryCommands(ctx, commands)
 }
 
 func (c *Plugin) Query(ctx context.Context, query plugin.Query) plugin.QueryResponse {

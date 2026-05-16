@@ -2290,14 +2290,19 @@ func populateFreshFTSTablesTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 		{table: "entries_initials_fts", column: "pinyin_initials"},
 	}
 	for _, statement := range statements {
+		statementStartedAt := util.GetSystemTimestamp()
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
-			INSERT INTO %s(rowid, %s)
-			SELECT entry_id, %s
-			FROM entries
-			WHERE %s <> ''
-		`, statement.table, statement.column, statement.column, statement.column)); err != nil {
+				INSERT INTO %s(rowid, %s)
+				SELECT entry_id, %s
+				FROM entries
+				WHERE %s <> ''
+			`, statement.table, statement.column, statement.column, statement.column)); err != nil {
 			return 0, fmt.Errorf("populate %s: %w", statement.table, err)
 		}
+		// Diagnostic addition: populate_fts used to hide which derived token table
+		// was expensive. Keep FTS semantics unchanged, but expose each table so the
+		// real-index artifact can decide whether pinyin/initials need a later design.
+		logFilesearchSQLiteMaintenance(ctx, "populate_fts_"+statement.table, statement.table, util.GetSystemTimestamp()-statementStartedAt, 1)
 	}
 	return util.GetSystemTimestamp() - startedAt, nil
 }

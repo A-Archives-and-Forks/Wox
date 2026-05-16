@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ var fileIcon = common.PluginFileIcon
 
 const fileRootsSettingKey = "roots"
 const fileIgnorePatternsSettingKey = "ignorePatterns"
+const fileSkipHiddenFilesSettingKey = "skipHiddenFiles"
 const fileSearchToolbarMsgID = "file-search-status"
 
 const (
@@ -112,7 +114,7 @@ func (c *FileSearchPlugin) GetMetadata() plugin.Metadata {
 				Type: definition.PluginSettingDefinitionTypeTable,
 				Value: &definition.PluginSettingValueTable{
 					Key:          fileRootsSettingKey,
-					DefaultValue: "[]",
+					DefaultValue: defaultFileSearchRootPathsJSON(),
 					Title:        "i18n:plugin_file_setting_roots_title",
 					Tooltip:      "i18n:plugin_file_setting_roots_tooltip",
 					Columns: []definition.PluginSettingValueTableColumn{
@@ -128,6 +130,15 @@ func (c *FileSearchPlugin) GetMetadata() plugin.Metadata {
 							},
 						},
 					},
+				},
+			},
+			{
+				Type: definition.PluginSettingDefinitionTypeCheckBox,
+				Value: &definition.PluginSettingValueCheckBox{
+					Key:          fileSkipHiddenFilesSettingKey,
+					Label:        "i18n:plugin_file_setting_skip_hidden_files_label",
+					Tooltip:      "i18n:plugin_file_setting_skip_hidden_files_tooltip",
+					DefaultValue: "true",
 				},
 			},
 			{
@@ -161,6 +172,7 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 	c.api = initParams.API
 	c.indexPolicy = newFileSearchIndexPolicy()
 	c.indexPolicy.SetIgnorePatterns(c.getConfiguredIgnorePatternValues(ctx))
+	c.indexPolicy.SetSkipHiddenFiles(c.getConfiguredSkipHiddenFiles(ctx))
 
 	engine, initErr := filesearch.NewEngineWithOptions(ctx, filesearch.EngineOptions{
 		Policy: c.indexPolicy.toFilesearchPolicy(),
@@ -200,6 +212,10 @@ func (c *FileSearchPlugin) Init(ctx context.Context, initParams plugin.InitParam
 		}
 		if key == fileIgnorePatternsSettingKey {
 			c.syncIgnorePatterns(callbackCtx)
+			return
+		}
+		if key == fileSkipHiddenFilesSettingKey {
+			c.syncSkipHiddenFiles(callbackCtx)
 			return
 		}
 	})
@@ -535,7 +551,7 @@ func (c *FileSearchPlugin) syncUserRoots(ctx context.Context) {
 }
 
 func (c *FileSearchPlugin) getEffectiveRootPaths(ctx context.Context) []string {
-	paths := append(c.defaultRootPaths(), c.getConfiguredRootPaths(ctx)...)
+	paths := c.getConfiguredRootPaths(ctx)
 
 	uniquePaths := make([]string, 0, len(paths))
 	seen := map[string]struct{}{}
@@ -554,36 +570,6 @@ func (c *FileSearchPlugin) getEffectiveRootPaths(ctx context.Context) []string {
 	return uniquePaths
 }
 
-func (c *FileSearchPlugin) defaultRootPaths() []string {
-	// Integration tests provide explicit roots and should not inherit the
-	// developer machine's personal folders, which can keep the scanner busy
-	// and make file search assertions race with unrelated indexing work.
-	if util.IsTestMode() {
-		return nil
-	}
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-
-	candidates := []string{
-		filepath.Join(homeDir, "Desktop"),
-		filepath.Join(homeDir, "Documents"),
-		filepath.Join(homeDir, "Downloads"),
-		filepath.Join(homeDir, "Pictures"),
-	}
-
-	paths := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			paths = append(paths, candidate)
-		}
-	}
-
-	return paths
-}
-
 func (c *FileSearchPlugin) getConfiguredRootPaths(ctx context.Context) []string {
 	raw := strings.TrimSpace(c.api.GetSetting(ctx, fileRootsSettingKey))
 	if raw == "" {
@@ -598,7 +584,7 @@ func (c *FileSearchPlugin) getConfiguredRootPaths(ctx context.Context) []string 
 
 	paths := make([]string, 0, len(roots))
 	for _, root := range roots {
-		if path := strings.TrimSpace(root.Path); path != "" {
+		if path := expandFileSearchRootPath(root.Path); path != "" {
 			paths = append(paths, path)
 		}
 	}
@@ -623,6 +609,22 @@ func (c *FileSearchPlugin) syncIgnorePatterns(ctx context.Context) {
 	}
 }
 
+func (c *FileSearchPlugin) syncSkipHiddenFiles(ctx context.Context) {
+	if c.indexPolicy == nil {
+		return
+	}
+
+	enabled := c.getConfiguredSkipHiddenFiles(ctx)
+	c.indexPolicy.SetSkipHiddenFiles(enabled)
+	c.api.Log(ctx, plugin.LogLevelInfo, fmt.Sprintf("Syncing file search hidden-file policy: skipHiddenFiles=%t", enabled))
+	if c.engine != nil {
+		// Feature addition: hidden-file behavior is now controlled independently
+		// from user glob patterns. Updating it must request a rescan so rows that
+		// became included or excluded are reconciled with the new policy.
+		c.engine.UpdatePolicy(c.indexPolicy.toFilesearchPolicy())
+	}
+}
+
 func (c *FileSearchPlugin) getConfiguredIgnorePatternValues(ctx context.Context) []string {
 	raw := strings.TrimSpace(c.api.GetSetting(ctx, fileIgnorePatternsSettingKey))
 	if raw == "" {
@@ -642,6 +644,65 @@ func (c *FileSearchPlugin) getConfiguredIgnorePatternValues(ctx context.Context)
 		}
 	}
 	return values
+}
+
+func (c *FileSearchPlugin) getConfiguredSkipHiddenFiles(ctx context.Context) bool {
+	raw := strings.TrimSpace(c.api.GetSetting(ctx, fileSkipHiddenFilesSettingKey))
+	if raw == "" {
+		return true
+	}
+
+	enabled, err := strconv.ParseBool(raw)
+	if err != nil {
+		c.api.Log(ctx, plugin.LogLevelWarning, "Failed to parse file search skip hidden files setting: "+err.Error())
+		return true
+	}
+	return enabled
+}
+
+func defaultFileSearchRootPathsJSON() string {
+	// Feature change: search roots are now fully visible configuration. The old
+	// implementation appended hidden Desktop/Documents/Downloads/Pictures roots,
+	// which made the table look optional while the engine still indexed paths the
+	// user could not see or remove. New installs show the home directory as the
+	// default row, and migration backfills the same visible root for existing users.
+	if util.IsTestMode() {
+		return "[]"
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(homeDir) == "" {
+		return "[]"
+	}
+
+	data, err := json.Marshal([]fileRootSetting{{Path: filepath.Clean(homeDir)}})
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func expandFileSearchRootPath(rawPath string) string {
+	path := strings.TrimSpace(rawPath)
+	if path == "" {
+		return ""
+	}
+
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil || strings.TrimSpace(homeDir) == "" {
+			return filepath.Clean(path)
+		}
+		if path == "~" {
+			return filepath.Clean(homeDir)
+		}
+		// Bug fix: users and migrations can store a home-relative root. Expanding it
+		// before SyncUserRoots keeps the engine's persisted root identity absolute,
+		// so duplicate checks and change-feed paths compare the same representation.
+		return filepath.Clean(filepath.Join(homeDir, strings.TrimPrefix(path, "~/")))
+	}
+
+	return filepath.Clean(path)
 }
 
 func defaultFileSearchIgnorePatternsJSON() string {

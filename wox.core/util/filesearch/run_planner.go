@@ -110,12 +110,11 @@ func (p *RunPlanner) PlanFullRun(ctx context.Context, roots []RootRecord) (RunPl
 		if rootBuffer == nil || rootBuffer.rootScope == nil {
 			continue
 		}
-		// Optimization: full indexing used to walk every large root once in
-		// pre-scan to compute exact totals, then walk it again during execution.
-		// Real ~/Projects captures showed that this duplicate traversal alone can
-		// dominate the run, so full scans now keep one root-level streaming job and
-		// accept approximate progress totals.
-		rootBuffer.rootScope.totals = streamingFullRunEstimatedTotals()
+		// Optimization: full indexing used to keep one huge root-level streaming
+		// job when exact pre-scan was disabled. Splitting the root into direct
+		// files plus top-level subtree leaves keeps execution diagnostics useful
+		// while still avoiding the duplicate count-then-apply filesystem walk.
+		applyStreamingEstimatedTotals(rootBuffer.rootScope)
 	}
 
 	// Phase 2: seal. We convert the planner-owned buffers into immutable plan
@@ -337,11 +336,80 @@ func (p *RunPlanner) planRoot(ctx context.Context, root RootRecord) (*runPlanner
 		scopePath: cleanRootPath,
 		scopeKind: ScopeKindSubtree,
 	}
+	children, err := p.planRootTopLevelScopes(ctx, root, cleanRootPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(children) > 0 {
+		// Optimization: a default home root should not execute as one opaque
+		// /Users/name job. Top-level leaves expose which folders are slow and let the
+		// streaming walker process each accepted subtree independently.
+		rootScope.splitRequired = true
+		rootScope.children = children
+	}
 
 	return &runPlannerRootBuffer{
 		root:      root,
 		rootScope: rootScope,
 	}, nil
+}
+
+func (p *RunPlanner) planRootTopLevelScopes(ctx context.Context, root RootRecord, cleanRootPath string) ([]*runPlannerScopeBuffer, error) {
+	children := []*runPlannerScopeBuffer{{
+		scopePath:       cleanRootPath,
+		scopeKind:       ScopeKindDirectFiles,
+		parentScopePath: cleanRootPath,
+	}}
+
+	dirEntries, err := os.ReadDir(cleanRootPath)
+	if err != nil {
+		return nil, fmt.Errorf("read root top-level scopes %q: %w", cleanRootPath, err)
+	}
+
+	policyContext := p.policy.newTraversalContext(root, cleanRootPath)
+	for _, dirEntry := range dirEntries {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		childPath := filepath.Join(cleanRootPath, dirEntry.Name())
+		isDir, _, infoErr := strictDirEntryType(cleanRootPath, dirEntry)
+		if infoErr != nil {
+			if os.IsNotExist(infoErr) {
+				continue
+			}
+			if shouldSkipUnreadableTraversalError(infoErr) {
+				util.GetLogger().Warn(ctx, "filesearch skipped unreadable root child "+childPath+": "+infoErr.Error())
+				continue
+			}
+			return nil, infoErr
+		}
+		if !isDir {
+			continue
+		}
+		if p.isExcludedPath(root.ID, childPath) {
+			continue
+		}
+		// Optimization: the launcher's default ~/ root should not behave like
+		// find(1) over protected app databases. The root-aware system path policy
+		// prunes noisy home directories here, while explicit custom roots under the
+		// same paths still produce their own top-level plan.
+		if shouldSkipSystemPathForRoot(root, childPath, true) {
+			continue
+		}
+		if !policyContext.ShouldIndexPath(childPath, true) {
+			continue
+		}
+
+		children = append(children, &runPlannerScopeBuffer{
+			scopePath:       childPath,
+			scopeKind:       ScopeKindSubtree,
+			parentScopePath: cleanRootPath,
+		})
+	}
+	return children, nil
 }
 
 func (p *RunPlanner) preScanRoot(ctx context.Context, rootBuffer *runPlannerRootBuffer, budget splitBudget, rootIndex int, rootTotal int) error {
@@ -516,12 +584,12 @@ func (p *RunPlanner) scanDirectFilesScope(ctx context.Context, root RootRecord, 
 			continue
 		}
 		if isDir {
-			if shouldSkipSystemPath(childPath, true) || !policyContext.ShouldIndexPath(childPath, true) {
+			if shouldSkipSystemPathForRoot(root, childPath, true) || !policyContext.ShouldIndexPath(childPath, true) {
 				totals.SkippedCount++
 			}
 			continue
 		}
-		if shouldSkipSystemPath(childPath, false) {
+		if shouldSkipSystemPathForRoot(root, childPath, false) {
 			totals.SkippedCount++
 			continue
 		}
@@ -671,7 +739,7 @@ func (p *RunPlanner) scanSubtreeScope(ctx context.Context, root RootRecord, scop
 				continue
 			}
 
-			if shouldSkipSystemPath(childPath, isDir) {
+			if shouldSkipSystemPathForRoot(root, childPath, isDir) {
 				totals.SkippedCount++
 				if current.childScope != "" {
 					childTotals := rootChildTotals[current.childScope]
