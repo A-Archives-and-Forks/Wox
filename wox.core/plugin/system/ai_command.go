@@ -14,6 +14,8 @@ import (
 	"wox/setting/validator"
 	"wox/util"
 	"wox/util/clipboard"
+	"wox/util/mouse"
+	"wox/util/overlay"
 	"wox/util/selection"
 
 	"github.com/google/uuid"
@@ -23,9 +25,21 @@ import (
 
 var aiCommandIcon = common.PluginAICommandIcon
 
+var (
+	// Native overlays require the app main thread. Keeping the calls replaceable
+	// lets package tests cover stream/error behavior without opening UI, while
+	// production still uses the real overlay backend.
+	aiCommandShowOverlay  = overlay.Show
+	aiCommandCloseOverlay = overlay.Close
+)
+
 const (
 	aiCommandDefaultActionRun         = "run"
 	aiCommandDefaultActionRunAndPaste = "run_and_paste"
+	aiCommandLoadingOverlayOffsetX    = 18
+	aiCommandLoadingOverlayOffsetY    = 18
+	aiCommandLoadingOverlayMinWidth   = 128
+	aiCommandLoadingOverlayMaxWidth   = 220
 )
 
 type commandSetting struct {
@@ -291,6 +305,66 @@ func (c *Plugin) notifyAICommandActionError(ctx context.Context, err error) {
 	c.api.Notify(ctx, fmt.Sprintf(i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_action_failed_with_error"), err.Error()))
 }
 
+func buildAICommandLoadingOverlayOptions(name string, position mouse.Point, message string) overlay.OverlayOptions {
+	// UX change: Run And Paste no longer asks the selection API for text bounds.
+	// Accessibility geometry is inconsistent across source apps, while the
+	// pointer position is cheap, stable, and still tells the user that the hidden
+	// AI action is running near the place they just invoked it. The label is
+	// resolved before building options so the native overlay stays language
+	// agnostic and only receives display-ready text.
+	return overlay.OverlayOptions{
+		Name:             name,
+		Message:          message,
+		Loading:          true,
+		Topmost:          true,
+		AbsolutePosition: true,
+		Anchor:           overlay.AnchorTopLeft,
+		OffsetX:          position.X + aiCommandLoadingOverlayOffsetX,
+		OffsetY:          position.Y + aiCommandLoadingOverlayOffsetY,
+		Width:            estimateAICommandLoadingOverlayWidth(message),
+		FontSize:         12,
+	}
+}
+
+func estimateAICommandLoadingOverlayWidth(message string) float64 {
+	// Bug fix: the old fixed width was sized for "AI". Localized labels such as
+	// "Thinking..." need enough room after the spinner and padding are reserved,
+	// otherwise the native text view wraps into unreadable fragments.
+	textWidth := 0.0
+	for _, r := range message {
+		if r <= 0x7f {
+			textWidth += 7
+		} else {
+			textWidth += 12
+		}
+	}
+	width := 12 + 16 + 8 + textWidth + 12
+	if width < aiCommandLoadingOverlayMinWidth {
+		return aiCommandLoadingOverlayMinWidth
+	}
+	if width > aiCommandLoadingOverlayMaxWidth {
+		return aiCommandLoadingOverlayMaxWidth
+	}
+	return width
+}
+
+func (c *Plugin) showAICommandLoadingOverlay(ctx context.Context, name string) bool {
+	position, ok := mouse.CurrentPosition()
+	if !ok {
+		// Best-effort UI: loading feedback must never block the paste action.
+		// Platforms without a pointer-position backend keep the existing error
+		// notifications and simply skip the transient progress overlay.
+		c.api.Log(ctx, plugin.LogLevelDebug, "skip ai command loading overlay: mouse position is unavailable")
+		return false
+	}
+
+	message := i18n.GetI18nManager().TranslateWox(ctx, "plugin_ai_command_thinking")
+	opts := buildAICommandLoadingOverlayOptions(name, position, message)
+	c.api.Log(ctx, plugin.LogLevelDebug, fmt.Sprintf("show ai command loading overlay: name=%s mouse=(%.1f,%.1f) offset=(%.1f,%.1f)", name, position.X, position.Y, opts.OffsetX, opts.OffsetY))
+	aiCommandShowOverlay(opts)
+	return true
+}
+
 func (c *Plugin) startAICommandStream(ctx context.Context, command commandSetting, conversations []common.Conversation, modelLabel string, resultId string, options aiCommandStreamOptions) <-chan aiCommandFinalResult {
 	finalCh := make(chan aiCommandFinalResult, 1)
 
@@ -324,8 +398,9 @@ func (c *Plugin) startAICommandStream(ctx context.Context, command commandSettin
 		err := c.api.AIChatStream(ctx, command.AIModel(), conversations, common.EmptyChatOptions, func(streamResult common.ChatStreamData) {
 			if streamResult.Status == common.ChatStreamStatusStreaming && options.onStreamingStarted != nil {
 				// UX fix: silent Run And Paste hides the launcher while the model is
-				// working. Notify only after the first streaming event so the user
-				// gets real progress feedback without a premature success signal.
+				// working. Start progress feedback only after the first streaming
+				// event so the UI reflects real model activity without a premature
+				// success signal.
 				streamingStartedOnce.Do(func() {
 					options.onStreamingStarted(ctx)
 				})
@@ -404,13 +479,15 @@ func (c *Plugin) buildAICommandActions(ctx context.Context, command commandSetti
 			IsDefault: defaultAction == aiCommandDefaultActionRunAndPaste,
 			Action: func(ctx context.Context, actionContext plugin.ActionContext) {
 				util.Go(ctx, "ai command run and paste", func() {
+					overlayName := fmt.Sprintf("ai_command_run_and_paste_loading_%s", actionContext.ResultId)
+					defer aiCommandCloseOverlay(overlayName)
 					// Feature addition: Run And Paste is a first-class action instead
 					// of a hidden query-hotkey mode. Silent query hotkeys simply execute
 					// this default action and wait here for the final model answer before
 					// touching the clipboard, so no empty or partial text is pasted.
 					final := <-c.startAICommandStream(ctx, command, conversations, modelLabel, actionContext.ResultId, aiCommandStreamOptions{
 						onStreamingStarted: func(ctx context.Context) {
-							c.api.Notify(ctx, "plugin_ai_command_run_and_paste_started")
+							c.showAICommandLoadingOverlay(ctx, overlayName)
 						},
 					})
 					if final.Err != nil {
@@ -424,6 +501,10 @@ func (c *Plugin) buildAICommandActions(ctx context.Context, command commandSetti
 						c.notifyAICommandActionError(ctx, fmt.Errorf("ai command returned empty answer"))
 						return
 					}
+					// Close the progress surface before activating the target app and
+					// simulating paste so the overlay cannot sit above the destination
+					// while the replacement keystroke is delivered.
+					aiCommandCloseOverlay(overlayName)
 					if err := pasteTextToActiveWindow(ctx, c.api, query.Env.ActiveWindowTitle, query.Env.ActiveWindowPid, final.Answer); err != nil {
 						c.notifyAICommandActionError(ctx, err)
 					}

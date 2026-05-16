@@ -99,8 +99,8 @@ type OverlayOptions struct {
 	// level. Use it for user-requested pinned/preview surfaces, not transient notifications.
 	Topmost bool
 	// AbsolutePosition treats OffsetX/OffsetY as desktop-absolute coordinates for AnchorTopLeft.
-	// It is used by screenshot pinning, where Flutter already converted the selected region into
-	// the screenshot workspace coordinate system and the native layer must not re-anchor to the
+	// It is used when callers already resolved their own anchor, such as screenshot pins or
+	// pointer-following progress overlays, and the native layer must not re-anchor to the
 	// primary work area like a notification.
 	AbsolutePosition bool
 	// StickyWindowPid determines the positioning context.

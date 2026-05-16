@@ -930,6 +930,7 @@
   "plugin_ai_command_run": "Executar",
   "plugin_ai_command_run_and_paste": "Executar e colar",
   "plugin_ai_command_run_and_paste_started": "O comando de IA está respondendo. O resultado será colado quando terminar.",
+  "plugin_ai_command_thinking": "Pensando...",
   "plugin_ai_command_answering": "Respondendo...",
   "plugin_ai_command_answered_cost": "Respondido, custo de %d ms",
   "plugin_ai_command_copy": "Copiar",

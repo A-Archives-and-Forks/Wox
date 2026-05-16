@@ -1034,6 +1034,7 @@
   "plugin_ai_command_run": "Run",
   "plugin_ai_command_run_and_paste": "Run And Paste",
   "plugin_ai_command_run_and_paste_started": "AI command is answering. The result will be pasted when it finishes.",
+  "plugin_ai_command_thinking": "Thinking...",
   "plugin_ai_command_answering": "Answering...",
   "plugin_ai_command_answered_cost": "Answered, cost %d ms",
   "plugin_ai_command_copy": "Copy",

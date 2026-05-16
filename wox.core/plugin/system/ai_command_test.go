@@ -9,6 +9,7 @@ import (
 	"wox/common"
 	"wox/plugin"
 	"wox/setting/definition"
+	"wox/util/overlay"
 	"wox/util/selection"
 
 	"github.com/stretchr/testify/require"
@@ -228,7 +229,16 @@ func TestAICommandRequestsActiveWindowQueryEnv(t *testing.T) {
 	require.True(t, params.RequireActiveWindowIcon)
 }
 
-func TestAICommandRunAndPasteNotifiesStreamingAndErrors(t *testing.T) {
+func TestAICommandRunAndPasteNotifiesStreamErrors(t *testing.T) {
+	previousShowOverlay := aiCommandShowOverlay
+	previousCloseOverlay := aiCommandCloseOverlay
+	aiCommandShowOverlay = func(opts overlay.OverlayOptions) {}
+	aiCommandCloseOverlay = func(name string) {}
+	t.Cleanup(func() {
+		aiCommandShowOverlay = previousShowOverlay
+		aiCommandCloseOverlay = previousCloseOverlay
+	})
+
 	api := newAICommandTestAPI(t, []map[string]any{aiCommandTestCommand("run_and_paste")})
 	api.streamEvents = []common.ChatStreamData{
 		{Status: common.ChatStreamStatusStreaming, Data: "partial answer"},
@@ -242,7 +252,6 @@ func TestAICommandRunAndPasteNotifiesStreamingAndErrors(t *testing.T) {
 	runAndPasteAction := findAICommandAction(t, results[0].Actions, "i18n:plugin_ai_command_run_and_paste")
 	runAndPasteAction.Action(context.Background(), plugin.ActionContext{ResultId: results[0].Id})
 
-	require.Equal(t, "plugin_ai_command_run_and_paste_started", api.waitForNotification(t))
 	require.Equal(t, "AI command action failed: model failed", api.waitForNotification(t))
 }
 

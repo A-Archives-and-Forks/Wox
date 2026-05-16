@@ -26,6 +26,7 @@ typedef struct {
     bool closeOnEscape;
     bool loading;
     bool topmost;
+    bool absolutePosition;
     int stickyWindowPid; // 0 = Screen, >0 = Window
     int anchor;          // 0-8: TL,TC,TR, LC,C,RC, BL,BC,BR
     int autoCloseSeconds;
@@ -1266,7 +1267,15 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
     BOOL preserveLiveFollowFrame = opts.stickyWindowPid > 0 && self.stickyLiveFollowTimer != nil;
     NSPoint liveFollowOrigin = self.frame.origin;
     
-    if (preserveLiveFollowFrame) {
+    if (opts.absolutePosition) {
+        // Feature addition: pointer-anchored progress overlays and pinned
+        // surfaces already pass desktop-absolute top-left coordinates from Go.
+        // Keep them independent from the primary screen work-area anchor used
+        // by notifications.
+        self.stickyWindowNumber = 0;
+        targetRect = CGRectZero;
+        targetSource = @"absolute";
+    } else if (preserveLiveFollowFrame) {
         // Bug fix: content refreshes can arrive while a sticky overlay is being
         // live-followed. Re-anchoring from AX here can use stale geometry and pull
         // the overlay behind the dragged window, so preserve the live-followed
@@ -1369,6 +1378,11 @@ static NSMutableDictionary<NSString*, OverlayWindow*> *gOverlayWindows = nil;
 
     CGFloat finalX = px + ox + opts.offsetX;
     CGFloat finalY = py + oy + opts.offsetY;
+    if (opts.absolutePosition) {
+        CGFloat mainScreenH = [NSScreen mainScreen].frame.size.height;
+        finalX = opts.offsetX;
+        finalY = mainScreenH - opts.offsetY - windowHeight;
+    }
     if (preserveLiveFollowFrame) {
         finalX = liveFollowOrigin.x;
         finalY = liveFollowOrigin.y;

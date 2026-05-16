@@ -23,6 +23,7 @@ typedef struct {
     bool closeOnEscape;
     bool loading;
     bool topmost;
+    bool absolutePosition;
     int stickyWindowPid;
     int anchor;
     int autoCloseSeconds;
@@ -139,6 +140,11 @@ func Show(opts OverlayOptions) {
 			cTooltipIconLen = C.int(len(tooltipPngBytes))
 		}
 
+		offsetY := opts.OffsetY
+		if !opts.AbsolutePosition {
+			offsetY = -opts.OffsetY // Invert Y for MacOS to match Y-Down semantics requested
+		}
+
 		cOpts := C.OverlayOptions{
 			name:             cName,
 			title:            cTitle,
@@ -156,6 +162,7 @@ func Show(opts OverlayOptions) {
 			closeOnEscape:    C.bool(opts.CloseOnEscape),
 			loading:          C.bool(opts.Loading),
 			topmost:          C.bool(opts.Topmost),
+			absolutePosition: C.bool(opts.AbsolutePosition),
 			stickyWindowPid:  C.int(opts.StickyWindowPid),
 			anchor:           C.int(opts.Anchor),
 			autoCloseSeconds: C.int(opts.AutoCloseSeconds),
@@ -164,7 +171,7 @@ func Show(opts OverlayOptions) {
 			cornerRadius:     C.float(opts.CornerRadius),
 			aspectRatio:      C.float(opts.AspectRatio),
 			offsetX:          C.float(opts.OffsetX),
-			offsetY:          C.float(-opts.OffsetY), // Invert Y for MacOS to match Y-Down semantics requested
+			offsetY:          C.float(offsetY),
 			width:            C.float(opts.Width),
 			height:           C.float(opts.Height),
 			fontSize:         C.float(opts.FontSize),

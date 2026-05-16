@@ -932,6 +932,7 @@
   "plugin_ai_command_run": "Запустить",
   "plugin_ai_command_run_and_paste": "Запустить и вставить",
   "plugin_ai_command_run_and_paste_started": "Команда ИИ отвечает. Результат будет вставлен после завершения.",
+  "plugin_ai_command_thinking": "Думаю...",
   "plugin_ai_command_answering": "Отвечаю...",
   "plugin_ai_command_answered_cost": "Ответил, затрачено %d мс",
   "plugin_ai_command_copy": "Копировать",

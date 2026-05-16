@@ -1035,6 +1035,7 @@
   "plugin_ai_command_run": "运行",
   "plugin_ai_command_run_and_paste": "运行并粘贴",
   "plugin_ai_command_run_and_paste_started": "AI 命令正在回答，完成后会自动粘贴结果。",
+  "plugin_ai_command_thinking": "思考中...",
   "plugin_ai_command_answering": "正在回答...",
   "plugin_ai_command_answered_cost": "已回答，耗时 %d 毫秒",
   "plugin_ai_command_copy": "复制",
