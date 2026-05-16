@@ -502,15 +502,32 @@ func TestFilePlugin_PolicyUpdateRemovesIndexedPath(t *testing.T) {
 		t.Fatalf("failed to get file search engine: %v", err)
 	}
 
+	targetFilePathClean := filepath.Clean(targetFilePath)
 	engine.UpdatePolicy(filesearch.Policy{
-		ShouldIndexPath: func(root filesearch.RootRecord, path string, isDir bool) bool {
-			return filepath.Clean(path) != filepath.Clean(targetFilePath)
+		NewTraversalContext: func(root filesearch.RootRecord, scopePath string) filesearch.TraversalPolicyContext {
+			// Bug fix: Policy no longer supports the old per-path callback, so this
+			// fixture now exposes the denial rule through the traversal context used
+			// by full rescans. That keeps the smoke focused on policy-update eviction
+			// without reintroducing a second matching path into filesearch.Policy.
+			return fileSearchDenyPathPolicyContext{targetPath: targetFilePathClean}
 		},
 	})
 
 	if err := ensureFileSearchResultAbsent(ctx, "f "+targetFileName, targetFileName, targetFilePath, 30*time.Second); err != nil {
 		t.Fatalf("target file should be evicted after policy update: %v", err)
 	}
+}
+
+type fileSearchDenyPathPolicyContext struct {
+	targetPath string
+}
+
+func (c fileSearchDenyPathPolicyContext) ShouldIndexPath(path string, isDir bool) bool {
+	return filepath.Clean(path) != c.targetPath
+}
+
+func (c fileSearchDenyPathPolicyContext) Descend(directoryPath string) filesearch.TraversalPolicyContext {
+	return c
 }
 
 func TestFilePlugin_CustomRootsIncrementalSync(t *testing.T) {
